@@ -203,3 +203,31 @@ describe('normalizeDestination: lecturas del OCR (Dynasty 10-14 y 10-18)', () =>
         expect(normalizeDestination('LOLA2024')).toBe('LOLA2024');
     });
 });
+
+// ─── Caracterización (plan B4 §5, 2026-10-30) ───────────────────────────────
+describe('caracterización: destinos que hoy ya se normalizan', () => {
+    it.each([
+        ['OO89455111', '0089455111'],
+        ['@3204298969', '3204298969'],
+        ['**** 6942', '****6942'],
+        ['319 450 5150', '3194505150'],
+        ['478-170-006942', '478170006942'],
+        ['XJI669', 'XJI669'],
+    ])('«%s» → %s', (entrada, salida) => {
+        expect(normalizeDestination(entrada)).toBe(salida);
+    });
+});
+
+describe('celular con indicativo (Monster 2026-10-30)', () => {
+    it('«+57 319 450 5150» es el mismo Nequi que «3194505150»', () => {
+        expect(normalizeDestination('+57 319 450 5150')).toBe('3194505150');
+        expect(normalizeDestination('+573194505150')).toBe('3194505150');
+        expect(normalizeDestination('57 319 450 5150')).toBe('3194505150');
+        expect(destinationMatchesRegistered(normalizeDestination('+57 319 450 5150'), [normalizeDestination('3194505150')!])).toBe(true);
+    });
+
+    it('12 dígitos seguidos que empiezan por 573 pueden ser una cuenta: no se tocan', () => {
+        expect(normalizeDestination('573194505150')).toBe('573194505150');
+        expect(normalizeDestination('+57 601 234 5678')).toBe('+576012345678');
+    });
+});

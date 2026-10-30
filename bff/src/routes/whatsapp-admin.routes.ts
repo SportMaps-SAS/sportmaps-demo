@@ -930,7 +930,26 @@ const PlantillaSchema = z.object({
     body: z.string().min(10).max(1024),
     // Los ejemplos de cada {{n}}: Meta los EXIGE si el texto trae variables.
     ejemplos: z.array(z.string()).default([]),
+    // Campañas (plan B5 T5): pie y hasta 3 botones de respuesta rápida
+    // («Sí, cuéntame», «Más adelante», «No recibir más»). Opcionales: sin ellos
+    // el cuerpo que va a Meta es idéntico al de siempre.
+    pie: z.string().trim().min(1).max(60).optional(),
+    botones_rapidos: z.array(z.string().trim().min(1).max(25)).min(1).max(3).optional(),
 });
+
+/** El cuerpo del POST a Meta. Puro: lo fija la prueba de «sin campos nuevos, idéntico». */
+export function cuerpoDePlantilla(p: z.infer<typeof PlantillaSchema>): any {
+    const components: any[] = [{
+        type: 'BODY',
+        text: p.body,
+        ...(p.ejemplos.length ? { example: { body_text: [p.ejemplos] } } : {}),
+    }];
+    if (p.pie) components.push({ type: 'FOOTER', text: p.pie });
+    if (p.botones_rapidos?.length) {
+        components.push({ type: 'BUTTONS', buttons: p.botones_rapidos.map((text) => ({ type: 'QUICK_REPLY', text })) });
+    }
+    return { name: p.name, language: p.language, category: p.category, components };
+}
 
 router.post('/:schoolId/plantillas', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { schoolId } = req.params as { schoolId: string };
@@ -978,16 +997,7 @@ router.post('/:schoolId/plantillas', requireAuth, async (req: AuthenticatedReque
     const token = tokenDe(integracion as any);
     if (!token) return res.status(409).json({ error: 'sin_token' });
 
-    const cuerpo: any = {
-        name: p.name,
-        language: p.language,
-        category: p.category,
-        components: [{
-            type: 'BODY',
-            text: p.body,
-            ...(p.ejemplos.length ? { example: { body_text: [p.ejemplos] } } : {}),
-        }],
-    };
+    const cuerpo = cuerpoDePlantilla(p);
 
     const r = await fetch(`${GRAPH}/${integracion.waba_id}/message_templates`, {
         method: 'POST',

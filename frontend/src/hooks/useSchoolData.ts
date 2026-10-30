@@ -4,6 +4,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
 import { bffClient } from '@/lib/api/bffClient';
+import { camposUbicacion, type UbicacionCancha } from '@/components/school/canchaUbicacion';
 
 // Types for staff and facilities
 interface Staff {
@@ -33,6 +34,10 @@ interface Facility {
   description: string | null;
   min_booking_advance_hours: number | null;
   min_cancellation_hours: number | null;
+  /** Cómo llegar (mig. embudo_y_agenda_clase_prueba); no llegan sin la migración. */
+  address?: string | null;
+  maps_url?: string | null;
+  indicaciones?: string | null;
   status: string;
   created_at: string;
   updated_at: string;
@@ -51,7 +56,7 @@ interface StaffInput {
   send_invitation?: boolean;
 }
 
-interface FacilityInput {
+interface FacilityInput extends UbicacionCancha {
   name: string;
   type: string;
   capacity: number;
@@ -217,17 +222,20 @@ export function useSchoolFacilities() {
   // Create facility
   const createMutation = useMutation({
     mutationFn: async (input: FacilityInput) => {
+      const fila = {
+        school_id: schoolId,
+        name: input.name,
+        type: input.type,
+        capacity: input.capacity,
+        description: input.description || null,
+        min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
+        min_cancellation_hours: input.min_cancellation_hours ?? 0,
+      };
       const { data, error } = await supabase
         .from('facilities')
-        .insert({
-          school_id: schoolId,
-          name: input.name,
-          type: input.type,
-          capacity: input.capacity,
-          description: input.description || null,
-          min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
-          min_cancellation_hours: input.min_cancellation_hours ?? 0,
-        })
+        // «Cómo llegar» solo si el formulario lo mostró (la base ya tiene las
+        // columnas); todavía no están en types.ts.
+        .insert({ ...fila, ...camposUbicacion(input) } as typeof fila)
         .select()
         .single();
 
@@ -275,16 +283,17 @@ export function useSchoolFacilities() {
   // Update facility
   const updateMutation = useMutation({
     mutationFn: async ({ id, ...input }: FacilityInput & { id: string }) => {
+      const cambios = {
+        name: input.name,
+        type: input.type,
+        capacity: input.capacity,
+        description: input.description || null,
+        min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
+        min_cancellation_hours: input.min_cancellation_hours ?? 0,
+      };
       const { data, error } = await supabase
         .from('facilities')
-        .update({
-          name: input.name,
-          type: input.type,
-          capacity: input.capacity,
-          description: input.description || null,
-          min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
-          min_cancellation_hours: input.min_cancellation_hours ?? 0,
-        })
+        .update({ ...cambios, ...camposUbicacion(input) } as typeof cambios)
         .eq('id', id)
         .select()
         .single();

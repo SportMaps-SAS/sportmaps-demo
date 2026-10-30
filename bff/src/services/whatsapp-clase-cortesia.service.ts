@@ -48,19 +48,32 @@
  *     que el formulario sin elegir horario) → la escuela lo contacta.
  *   «cancelar mi clase» (solo si ESE número tiene una reserva futura)
  *     → «¿Cancelo…?» → wa_cancelar_clase_de_prueba → aviso a la escuela.
+ *
+ * NOMBRE Y VALOR POR ESCUELA (Monster, 2026-10-30): «clase de cortesía» y
+ * «gratis» salen de textos-clase-prueba (`school_trial_class_settings.nombre_clase`
+ * y `trial_price`). Con trial_price > 0 el flujo NUNCA dice «gratis» ni
+ * «cortesía»; sin ajustes, los textos de siempre letra por letra.
+ * Las franjas traen además la sede, los profes, el enlace de Maps y las
+ * indicaciones de la cancha (facilities, migración M1), y no se ofrece una
+ * sesión que el profe canceló o movió en «Mi semana» (semana-equipo).
  */
 
 import { supabase } from '../config/supabase';
 import type { BotonInteractivo } from './whatsapp.service';
-import { esSinLimite } from './franjas-cortesia.service';
+import { esSinLimite, diasSemanaValidos } from './franjas-cortesia.service';
 import { liberarLeadParaReserva } from './whatsapp-prospecto-lead.service';
 import { celular10 } from './factura-pagador.service';
 import {
     rangosDeEscuela, elegirGrupo, textoGrupoParaEdad, textoDesdeQueEdad, preguntaGrupoPorEdad,
-    type RangoGrupo, type FuenteEdad, type Genero,
+    lugaresDeEscuela, direccionDeLugar,
+    type RangoGrupo, type FuenteEdad, type Genero, type LugarDeEscuela,
 } from './grupos-por-edad.service';
 import { leadSinCupoParaReserva, telefonoAlterno, fusionarReservaEnLead } from './whatsapp-prospecto-lead.service';
 import { indicacionesCortesiaDeEscuela } from './whatsapp-ajustes-escuela.service';
+import {
+    textosClaseDeEscuela, TEXTOS_POR_DEFECTO, presentacionDeClase, ofertaDeReserva, fraseDeValor, type TextosClase,
+} from './textos-clase-prueba';
+import { excepcionesDeEscuela, ajusteDeSesion, diaDeLaSemana, type ExcepcionSemana } from './semana-equipo.service';
 
 export const FLUJO_CORTESIA = 'clase_cortesia';
 /** Misma ventana de atención de Meta: pasada, el papá ya no recuerda la pregunta. */
@@ -109,6 +122,20 @@ export interface FranjaCortesia {
     edadFuente?: FuenteEdad | null;
     /** Género del grupo cuando el nombre no lo dice (categoría o atletas, ≥ 95 %). */
     generoGrupo?: Genero | null;
+    // ── Enriquecido para el embudo (2026-10-30). Ningún texto de este flujo los
+    //    imprime, salvo Maps e indicaciones de la cancha en la confirmación. ──
+    /** Sede del equipo (`school_branches.id`). */
+    branchId?: string | null;
+    /** Entrenadores del equipo (team_coaches ∪ teams.coach_id) y sus nombres. */
+    coachIds?: string[];
+    coaches?: string[];
+    /** Años de nacimiento que recibe el grupo (categoría). */
+    anioMin?: number | null;
+    anioMax?: number | null;
+    /** Enlace de Google Maps de la cancha (`facilities.maps_url`). */
+    mapsUrl?: string | null;
+    /** Por dónde se entra, qué pasa si llueve (`facilities.indicaciones`). */
+    indicacionesLugar?: string | null;
 }
 
 /** Para quién es la clase, según lo que escribió la familia. Nada se adivina. */
@@ -228,6 +255,21 @@ export interface CtxCortesia {
     rangos?: (schoolId: string) => Promise<RangoGrupo[]>;
     /** Qué llevar / a quién buscar, de la escuela (por defecto, school_settings). */
     indicaciones?: (schoolId: string) => Promise<string | null>;
+    /**
+     * Nombre de la clase y si se cobra (por defecto, `textosClaseDeEscuela`:
+     * school_trial_class_settings, cacheado 10 min). Sin ajustes, «clase de
+     * cortesía» gratis, como siempre.
+     */
+    textos?: (schoolId: string) => Promise<TextosClase>;
+}
+
+/** Los textos de la clase de esta escuela. Nunca lanza: ante cualquier falla, los de siempre. */
+async function textosDe(ctx: CtxCortesia): Promise<TextosClase> {
+    try {
+        return (await (ctx.textos ?? textosClaseDeEscuela)(ctx.schoolId)) ?? TEXTOS_POR_DEFECTO;
+    } catch {
+        return TEXTOS_POR_DEFECTO;
+    }
 }
 
 // ─── Botones (ids = contrato con el webhook; títulos ≤ 20) ─────────────────
@@ -725,12 +767,29 @@ export const QUE_LLEVAR = 'ropa deportiva cómoda, tenis, una botella de agua y 
  * mig. 20261007183601) van tal cual en lugar del texto genérico. Dynasty
  * 2026-10-07: «Ropa de entrenamiento. Al llegar, la administración está en el
  * ingreso por la parte derecha del coliseo, segundo piso.» Pura.
+ * Con `textos` de una escuela que cobra la clase, el cierre dice su valor y
+ * nunca «gratis» (Monster 2026-10-30: «La clase es *gratis*» salía igual).
  */
-export function lineasQueLlevar(indicaciones: string | null | undefined): string {
+export function lineasQueLlevar(indicaciones: string | null | undefined, textos: TextosClase = TEXTOS_POR_DEFECTO): string {
     const propias = String(indicaciones ?? '').trim();
-    if (propias) return `🎒 ${propias}\n⏰ Llega 10 minutos antes. La clase es *gratis*.\n\n`;
+    if (propias) return `🎒 ${propias}\n⏰ Llega 10 minutos antes. ${fraseDeValor(textos, 'la_clase')}\n\n`;
     return `🎒 Qué llevar: ${QUE_LLEVAR}.\n` +
-        '⏰ Llega 10 minutos antes y dile al entrenador que vienes a la clase de cortesía. Es *gratis*.\n\n';
+        `⏰ Llega 10 minutos antes y dile al entrenador que vienes a la ${textos.nombre}. ${fraseDeValor(textos, 'es')}\n\n`;
+}
+
+/**
+ * Cómo llegar a la cancha, si la escuela lo cargó (facilities.maps_url e
+ * indicaciones, migración M1): «🗺️ Cómo llegar: …» y «ℹ️ Entrada por…». Vacío
+ * sin esos datos, así que la confirmación de siempre no cambia. Pura.
+ */
+export function lineasDeCancha(f: FranjaCortesia | null | undefined): string {
+    if (!f) return '';
+    const l: string[] = [];
+    const maps = String(f.mapsUrl ?? '').trim();
+    const indicaciones = String(f.indicacionesLugar ?? '').trim();
+    if (maps) l.push(`🗺️ Cómo llegar: ${maps}`);
+    if (indicaciones) l.push(`ℹ️ ${indicaciones}`);
+    return l.length ? `${l.join('\n')}\n\n` : '';
 }
 
 export function bloqueFranja(f: FranjaCortesia): string {
@@ -740,15 +799,16 @@ export function bloqueFranja(f: FranjaCortesia): string {
         (sede ? `\n📍 ${sede}` : '') + `\n👥 Grupo: ${f.grupo}`;
 }
 
-function textoResumen(d: DatosCortesia): string {
+function textoResumen(d: DatosCortesia, t: TextosClase = TEXTOS_POR_DEFECTO): string {
     const lineas = ['Revisa que esté todo bien:', ''];
     if (d.franja) {
         lineas.push(`• Clase: *${d.franja.grupo}* — ${fechaLegible(d.franja.fecha)}, ${horaLegible(d.franja.horaInicio)}`);
         const sede = sedeConDireccion(d.franja);
         if (sede) lineas.push(`• Sede: ${sede}`);
     } else {
-        lineas.push('• Clase de cortesía: *la escuela te contacta para agendarla*');
+        lineas.push(`• ${t.nombreInicial}: *la escuela te contacta para agendarla*`);
     }
+    if (!t.gratis) lineas.push(`• Valor de la clase: *${t.precio}*`);
     lineas.push(`• Deportista: *${d.nombre ?? ''}* (${d.edad ?? '?'} años)`);
     if (d.acudiente) lineas.push(`• Acudiente: *${d.acudiente}*`);
     lineas.push('• Teléfono: este WhatsApp');
@@ -910,14 +970,15 @@ export async function atenderTurnoCortesia(
     // Botón «Cancelar mi clase», o lo pide escrito: SOLO si hay reserva.
     if (botonId === BOTON_CC.CANCELAR || (!estado && quiereCancelarClase(texto))) {
         const reserva = await d.reservaVigente(ctx.schoolId, ctx.contactWaId);
+        const t = await textosDe(ctx);
         if (!reserva) {
             if (botonId !== BOTON_CC.CANCELAR) return false;
-            await ctx.enviar('No encuentro una clase de cortesía reservada desde este número. 🤔',
+            await ctx.enviar(`No encuentro una ${t.nombre} reservada desde este número. 🤔`,
                 'cortesia_sin_reserva', null);
             return true;
         }
         await ctx.enviar(
-            `¿Cancelo la clase de cortesía de *${reserva.nombre}*?\n\n${bloqueFranja(reserva.franja)}`,
+            `¿Cancelo la ${t.nombre} de *${reserva.nombre}*?\n\n${bloqueFranja(reserva.franja)}`,
             'cortesia_confirmar_cancelacion',
             { paso: 'confirmar_cancelacion', datos: { franja: reserva.franja, nombre: reserva.nombre } },
             BOTONES_CANCELAR, 'Responde *Sí, cancelar* o *No, la mantengo*.');
@@ -965,12 +1026,13 @@ export async function iniciarCortesia(
 ): Promise<void> {
     const d = deps(ctx);
     const cabeza = opciones.encabezado ? `${opciones.encabezado}\n\n` : '';
+    const t = await textosDe(ctx);
 
     // Ya tiene una reservada: se le recuerda en vez de reservarle otra.
     const reserva = await d.reservaVigente(ctx.schoolId, ctx.contactWaId);
     if (reserva) {
         await ctx.enviar(
-            cabeza + `Ya tienes una clase de cortesía reservada para *${reserva.nombre}*:\n\n${bloqueFranja(reserva.franja)}\n\n` +
+            cabeza + `Ya tienes una ${t.nombre} reservada para *${reserva.nombre}*:\n\n${bloqueFranja(reserva.franja)}\n\n` +
             'Si no puedes ir, toca *Cancelar mi clase* para liberar el cupo.',
             opciones.step ?? 'cortesia_ya_reservada', null,
             BOTON_CANCELAR_MI_CLASE, 'Si no puedes ir, escríbeme *cancelar mi clase*.');
@@ -980,7 +1042,7 @@ export async function iniciarCortesia(
     const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
     if (!franjas.length) {
         await ctx.enviar(
-            cabeza + 'Por ahora no tengo horarios de *clase de cortesía* publicados para agendarla por aquí. 🙏\n\n' +
+            cabeza + `Por ahora no tengo horarios de *${t.nombre}* publicados para agendarla por aquí. 🙏\n\n` +
             '¿Quieres dejarme tus datos para que la escuela te contacte y te agende una?',
             opciones.step ?? 'cortesia_sin_franjas',
             { paso: 'dejar_datos', datos: { sinFranja: true } },
@@ -998,7 +1060,7 @@ export async function iniciarCortesia(
     const dia = leerDia(opciones.texto);
     // La lista completa ya salió en las últimas 24 h: no se repite.
     const yaListado = !grupo && await listadoRecienteSeguro(ctx);
-    const base = '¡Claro! 🙌 La *clase de cortesía* es *gratis* y sirve para conocer la escuela.';
+    const base = presentacionDeClase(t);
     if (!grupo && !perfil && (gruposFiltrables(franjas) || yaListado)) {
         // El intro de quien llama dice «estos son los horarios:»; aquí todavía no
         // se muestran, así que va el texto base.
@@ -1102,8 +1164,9 @@ export async function responderGrupoPorEdad(
     if (!linea || !eleccion.principal) return false;
     const delGrupo = eleccion.porGenero ? [] : franjasDelGrupo(franjas, eleccion.principal);
     if (delGrupo.length) {
+        const t = await textosDe(ctx);
         await ofrecerFranjas(ctx, delGrupo, 0, { perfil, ...edadDelPerfil(perfil) },
-            cabeza + `${linea}\n\n¿Te reservo una *clase de cortesía* gratis? Estos son los próximos horarios:`,
+            cabeza + `${linea}\n\n${ofertaDeReserva(t)} Estos son los próximos horarios:`,
             opciones.step, { yaFiltradas: true, maximo: MAX_BOTONES });
         return true;
     }
@@ -1309,7 +1372,8 @@ async function continuar(
     }
 
     if (!botonId && abandona(texto) && estado.paso !== 'confirmar_cancelacion') {
-        await ctx.enviar('Listo, lo dejamos así. Si quieres agendar después, escríbeme *clase de cortesía*. 🙌',
+        const t = await textosDe(ctx);
+        await ctx.enviar(`Listo, lo dejamos así. Si quieres agendar después, escríbeme *${t.nombre}*. 🙌`,
             'cortesia_abandonada', null);
         return true;
     }
@@ -1320,7 +1384,8 @@ async function continuar(
         case 'dejar_datos': {
             const r = siNo(texto, botonId, BOTON_CC.DATOS_SI, BOTON_CC.DATOS_NO);
             if (r === 'no') {
-                await ctx.enviar('Sin problema. Si después quieres agendar, escríbeme *clase de cortesía*. 🙌',
+                const t = await textosDe(ctx);
+                await ctx.enviar(`Sin problema. Si después quieres agendar, escríbeme *${t.nombre}*. 🙌`,
                     'cortesia_no_deja_datos', null);
                 return true;
             }
@@ -1465,7 +1530,8 @@ async function reintentar(
 ): Promise<boolean> {
     const intentos = (estado.datos?.intentos ?? 0) + 1;
     if (intentos >= MAX_INTENTOS) {
-        await ctx.enviar('Dejémoslo acá por ahora. Cuando quieras retomarlo, escríbeme *clase de cortesía*. 🙌',
+        const t = await textosDe(ctx);
+        await ctx.enviar(`Dejémoslo acá por ahora. Cuando quieras retomarlo, escríbeme *${t.nombre}*. 🙌`,
             'cortesia_demasiados_intentos', null);
         return true;
     }
@@ -1481,7 +1547,7 @@ async function pedirNombre(ctx: CtxCortesia, datos: DatosCortesia): Promise<bool
 }
 
 async function confirmar(ctx: CtxCortesia, datos: DatosCortesia): Promise<boolean> {
-    await ctx.enviar(textoResumen(datos), 'cortesia_confirmar',
+    await ctx.enviar(textoResumen(datos, await textosDe(ctx)), 'cortesia_confirmar',
         { paso: 'confirmar', datos: { ...datos, intentos: 0 } },
         BOTONES_CONFIRMAR, 'Responde *Confirmar* o *Cambiar*.');
     return true;
@@ -1566,8 +1632,9 @@ async function elegirFranja(
 }
 
 async function sinFranjasDisponibles(ctx: CtxCortesia): Promise<boolean> {
+    const t = await textosDe(ctx);
     await ctx.enviar(
-        'En este momento no quedan franjas de clase de cortesía con cupo. 😕\n\n' +
+        `En este momento no quedan franjas de ${t.nombre} con cupo. 😕\n\n` +
         '¿Quieres dejarme tus datos para que la escuela te contacte y te agende?',
         'cortesia_sin_franjas', { paso: 'dejar_datos', datos: { sinFranja: true } },
         BOTONES_DATOS, 'Responde *Sí* para dejar tus datos o *No, gracias*.');
@@ -1635,18 +1702,20 @@ async function reservar(ctx: CtxCortesia, d: Deps, datos: DatosCortesia): Promis
         return true;
     }
 
+    const t = await textosDe(ctx);
     if (!franja) {
         await ctx.enviar(
             `¡Listo! ✅ Pasé los datos de *${datos.nombre}* a la escuela. Te van a contactar por aquí para ` +
-            'agendar la clase de cortesía.', 'cortesia_datos_dejados', null);
+            `agendar la ${t.nombre}.`, 'cortesia_datos_dejados', null);
         void d.avisar({ ...base, leadId: r.leadId, tipo: 'datos' }).catch(() => {});
         return true;
     }
 
     const indicaciones = await d.indicaciones(ctx.schoolId).catch(() => null);
     await ctx.enviar(
-        `✅ ¡Listo! Quedó reservada la clase de cortesía de *${datos.nombre}*:\n\n${bloqueFranja(franja)}\n\n` +
-        lineasQueLlevar(indicaciones) +
+        `✅ ¡Listo! Quedó reservada la ${t.nombre} de *${datos.nombre}*:\n\n${bloqueFranja(franja)}\n\n` +
+        lineasDeCancha(franja) +
+        lineasQueLlevar(indicaciones, t) +
         'Si no puedes ir, escríbeme *cancelar mi clase* para liberar el cupo.',
         'cortesia_reservada', null);
     void d.avisar({ ...base, leadId: r.leadId, tipo: 'reservada' }).catch(() => {});
@@ -1661,10 +1730,11 @@ async function cancelarReserva(ctx: CtxCortesia, d: Deps, datos: DatosCortesia):
     };
     if (r.ok) {
         const f = r.franja ?? datos.franja ?? null;
+        const t = await textosDe(ctx);
         await ctx.enviar(
-            'Listo, cancelé tu clase de cortesía' +
+            `Listo, cancelé tu ${t.nombre}` +
             (f ? ` del ${fechaLegible(f.fecha)} a las ${horaLegible(f.horaInicio)}` : '') +
-            ' y el cupo quedó libre. Si quieres otra fecha, escríbeme *clase de cortesía*. 🙌',
+            ` y el cupo quedó libre. Si quieres otra fecha, escríbeme *${t.nombre}*. 🙌`,
             'cortesia_cancelada', null);
         void d.avisar({ ...base, franja: f, tipo: 'cancelada' }).catch(() => {});
         return true;
@@ -1760,6 +1830,8 @@ function aFranja(r: any): FranjaCortesia {
  * Dirección de la sede: la de la sede registrada (school_branches) cuyo nombre
  * coincide con el lugar de la franja («Coliseo Dynasty» ↔ «Coliseo Dynasty DC»).
  * Sin coincidencia → null: no se inventa una dirección.
+ * Compara por «contiene»: sirve para la SEDE, no para las canchas («Pinar» ↔
+ * «Pinar 2»). La cancha se busca antes con `direccionDeLugar` (exacta).
  */
 export function direccionDeSede(sede: string | null, sedes: { name: string | null; address: string | null }[]): string | null {
     const s = normalizar(sede);
@@ -1779,48 +1851,75 @@ export function direccionDeSede(sede: string | null, sedes: { name: string | nul
  * semana en Dynasty) las 20 más cercanas son 2–3 días, y al filtrar por grupo
  * quedaban 1 o 2 opciones. Suma el rango de edad del equipo y la dirección de
  * la sede. Si la lectura directa falla, cae a la RPC pública de siempre.
+ *
+ * Desde la migración M1 (2026-10-30), y sin cambiar nada donde no hay datos:
+ *   · solo los días de `dias_semana` (si la escuela los puso);
+ *   · sin las sesiones que el profe canceló o movió en «Mi semana»
+ *     (`team_schedule_exceptions`; la movida al mismo horario cambia el lugar).
+ *     Red de seguridad: el generador ya no las crea, pero corre una vez al día;
+ *   · sin los equipos con `recibe_clase_prueba = false`;
+ *   · sede, profes, años, y dirección/Maps/indicaciones de la cancha
+ *     (`facilities`, coincidencia exacta con `direccionDeLugar`; si el horario
+ *     no dice el lugar, la cancha del equipo; si no, la sede como antes).
  */
 export async function franjasDeSupabase(schoolId: string): Promise<FranjaCortesia[]> {
     // Configuración única de clases de prueba (mig. 20261026155701): con el
     // interruptor general o el de WhatsApp apagado, el bot no ofrece cupos
     // (el prospecto se sigue guardando). Sin fila = prendido, como siempre.
+    // `dias_semana` llega con M1: si la columna no existe se lee como antes.
+    let diasSemana: number[] | null = null;
     try {
-        const { data: cfg } = await supabase.from('school_trial_class_settings')
-            .select('enabled, whatsapp_enabled').eq('school_id', schoolId).maybeSingle();
-        if (cfg && (cfg.enabled === false || (cfg as any).whatsapp_enabled === false)) return [];
+        let r: any = await supabase.from('school_trial_class_settings')
+            .select('enabled, whatsapp_enabled, dias_semana').eq('school_id', schoolId).maybeSingle();
+        if (r?.error) {
+            r = await supabase.from('school_trial_class_settings')
+                .select('enabled, whatsapp_enabled').eq('school_id', schoolId).maybeSingle();
+        }
+        const cfg = r?.data;
+        if (cfg && (cfg.enabled === false || cfg.whatsapp_enabled === false)) return [];
+        diasSemana = diasSemanaValidos(cfg?.dias_semana);
     } catch { /* sin config legible: se comporta como antes */ }
     try {
+        const hoy = hoyBogota(new Date()).iso;
         const { data, error } = await supabase.from('school_trial_slots')
             .select('id, label, slot_date, start_time, end_time, location, max_capacity, reserved_count, team_id')
             .eq('school_id', schoolId)
             .eq('is_open', true)
-            .gte('slot_date', hoyBogota(new Date()).iso)
+            .gte('slot_date', hoy)
             .order('slot_date', { ascending: true })
             .order('start_time', { ascending: true })
             .limit(300);
         if (!error && Array.isArray(data) && data.length) {
             const filas = (data as any[]).filter((r) => Number(r.reserved_count ?? 0) < Number(r.max_capacity ?? 0));
+            const ultima = filas.reduce((m, r) => (String(r.slot_date).slice(0, 10) > m ? String(r.slot_date).slice(0, 10) : m), hoy);
             // Rango de edad y género de cada grupo: equipo → categoría → edades
             // reales de sus atletas activos → año en el nombre (cacheado 1 h).
-            const [rangos, sedes] = await Promise.all([
+            const [rangos, sedes, lugares, excepciones] = await Promise.all([
                 rangosDeEscuela(schoolId).catch(() => [] as RangoGrupo[]),
                 supabase.from('school_branches').select('name, address').eq('school_id', schoolId).limit(50),
+                lugaresDeEscuela(schoolId).catch(() => [] as LugarDeEscuela[]),
+                excepcionesDeEscuela(schoolId, hoy, ultima).catch(() => [] as ExcepcionSemana[]),
             ]);
             const edades = new Map<string, RangoGrupo>(rangos.map((t) => [t.teamId, t]));
             const listaSedes = (((sedes as any)?.data ?? []) as any[]);
-            return filas.map((r) => {
+            const salida: FranjaCortesia[] = [];
+            for (const r of filas) {
+                const fecha = String(r.slot_date).slice(0, 10);
+                if (diasSemana && !diasSemana.includes(diaDeLaSemana(fecha))) continue;
                 const t = r.team_id ? edades.get(r.team_id) : null;
+                if (t?.recibeClasePrueba === false) continue;
+                const ajuste = r.team_id
+                    ? ajusteDeSesion(excepciones.filter((e) => e.team_id === r.team_id), fecha, String(r.start_time))
+                    : null;
                 const f = aFranja({ ...r, spots_left: Number(r.max_capacity) - Number(r.reserved_count ?? 0) });
-                return {
-                    ...f,
-                    teamId: r.team_id ?? null,
-                    edadMin: t?.edadMin ?? null,
-                    edadMax: t?.edadMax ?? null,
-                    edadFuente: t?.fuenteEdad ?? null,
-                    generoGrupo: t?.genero ?? null,
-                    direccion: direccionDeSede(f.sede, listaSedes),
-                };
-            });
+                if (ajuste?.tipo === 'cancelada') continue;
+                if (ajuste?.tipo === 'movida' && ajuste.inicio !== f.horaInicio) continue;
+                salida.push(enriquecerFranja(f, {
+                    teamId: r.team_id ?? null, rango: t ?? null, lugares, sedes: listaSedes,
+                    lugarMovido: ajuste?.tipo === 'movida' ? ajuste.lugar : null,
+                }));
+            }
+            return salida;
         }
     } catch { /* cae a la RPC */ }
     try {
@@ -1832,6 +1931,49 @@ export async function franjasDeSupabase(schoolId: string): Promise<FranjaCortesi
     } catch {
         return [];
     }
+}
+
+/**
+ * La franja con lo que se sabe de su grupo y de su cancha. Pura.
+ *   · lugar: el de «Mi semana» si la sesión se movió de cancha; si no, el de la franja.
+ *   · cancha: `direccionDeLugar` (exacta). Si la franja no dice lugar, la cancha
+ *     del equipo (`teams.facility_id`) cuando tiene dirección o Maps.
+ *   · dirección: la de la cancha; si no tiene, la de la sede como siempre.
+ */
+export function enriquecerFranja(f: FranjaCortesia, c: {
+    teamId: string | null;
+    rango: RangoGrupo | null;
+    lugares: LugarDeEscuela[];
+    sedes: { name: string | null; address: string | null }[];
+    lugarMovido?: string | null;
+}): FranjaCortesia {
+    let sede = c.lugarMovido || f.sede;
+    let cancha = direccionDeLugar(sede, c.lugares);
+    if (!sede && c.rango?.facilityId) {
+        const delEquipo = c.lugares.find((l) => l.id === c.rango!.facilityId);
+        if (delEquipo && (delEquipo.direccion || delEquipo.mapsUrl)) {
+            sede = delEquipo.nombre;
+            cancha = direccionDeLugar(delEquipo.nombre, [delEquipo]);
+        }
+    }
+    const t = c.rango;
+    return {
+        ...f,
+        sede,
+        teamId: c.teamId,
+        edadMin: t?.edadMin ?? null,
+        edadMax: t?.edadMax ?? null,
+        edadFuente: t?.fuenteEdad ?? null,
+        generoGrupo: t?.genero ?? null,
+        direccion: cancha?.direccion ?? direccionDeSede(sede, c.sedes),
+        branchId: t?.branchId ?? null,
+        coachIds: t?.coachIds ?? [],
+        coaches: t?.coachNombres ?? [],
+        anioMin: t?.anioMin ?? null,
+        anioMax: t?.anioMax ?? null,
+        mapsUrl: cancha?.mapsUrl ?? null,
+        indicacionesLugar: cancha?.indicaciones ?? null,
+    };
 }
 
 /**

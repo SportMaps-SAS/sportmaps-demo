@@ -152,3 +152,48 @@ describe('informe de cartera: el seguro va en «otros»', () => {
         expect(esMensualidadCartera({ ...base, payment_category: null, payment_type: 'subscription', concept: 'Plan PRO — Mensualidad completa' })).toBe(true);
     });
 });
+
+// ─── Caracterización (plan B4 §5, 2026-10-30) ───────────────────────────────
+// El catálogo único de motivos (motivos-de-cobro.ts) reemplaza las listas de
+// acá: las 10 categorías del CHECK viejo tienen que salir EXACTAMENTE igual.
+describe('caracterización: nombres de HOY de las categorías viejas', () => {
+    const HOY: [string, string, string][] = [
+        // [categoría, etiquetaDelCobro, etiquetaCortaDelCobro]
+        ['inscripcion', 'Inscripción', 'Inscrip.'],
+        ['articulos', 'Artículos', 'Artículos'],
+        ['torneo', 'Torneo', 'Torneo'],
+        ['seguro', 'Seguro de accidentes', 'Seguro'],
+        ['excedente', 'Horas adicionales', 'Horas'],
+        ['clase_extra', 'Clase extra', 'Clase'],
+        ['vacacional', 'Vacacional', 'Vacac.'],
+        ['viaje', 'Viaje', 'Viaje'],
+    ];
+    it.each(HOY)('%s → «%s» / «%s»', (cat, larga, corta) => {
+        expect(etiquetaDelCobro({ payment_category: cat })).toBe(larga);
+        expect(etiquetaCortaDelCobro({ payment_category: cat })).toBe(corta);
+    });
+
+    it('mensualidad (por periodo) y otro (por concepto) como hoy', () => {
+        expect(etiquetaDelCobro({ payment_category: 'mensualidad', period_year: 2026, period_month: 10 })).toBe('Mensualidad octubre 2026');
+        expect(etiquetaCortaDelCobro({ payment_category: 'mensualidad', period_year: 2026, period_month: 10 })).toBe('Oct');
+        expect(etiquetaDelCobro({ payment_category: 'otro', concept: 'Rifa navideña — Atleta Uno' })).toBe('Rifa navideña');
+        expect(etiquetaCortaDelCobro({ payment_category: 'otro', concept: 'Rifa navideña' })).toBe('Otro');
+        expect(etiquetaDelCobro({ payment_category: 'otro', concept: null })).toBe('Otro cobro');
+        expect(etiquetaDelCobro({ payment_category: 'uniforme_gala' })).toBe('Uniforme gala');
+        expect(etiquetaCortaDelCobro({ payment_category: 'uniforme_gala' })).toBe('Uniforme');
+    });
+});
+
+describe('motivos nuevos del catálogo único (2026-10-30)', () => {
+    it('clase de prueba: «Clase de prueba» / «Prueba» (antes «Clase», igual que la clase extra)', () => {
+        expect(etiquetaDelCobro({ payment_category: 'clase_prueba' })).toBe('Clase de prueba');
+        expect(etiquetaCortaDelCobro({ payment_category: 'clase_prueba' })).toBe('Prueba');
+        expect(etiquetaCortaDelCobro({ payment_category: 'clase_extra' })).toBe('Clase');
+    });
+
+    it('reserva: «Reserva»', () => {
+        expect(etiquetaDelCobro({ payment_category: 'reserva' })).toBe('Reserva');
+        expect(etiquetaCortaDelCobro({ payment_category: 'reserva' })).toBe('Reserva');
+        expect(esPagoUnico({ payment_category: 'reserva' })).toBe(true);
+    });
+});

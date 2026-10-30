@@ -1109,6 +1109,73 @@ export function initMaintenanceJobs() {
     console.log('[CRON] Ciclo de la clase de cortesía registrado (seguimiento 20:00-21:45 COT; cruce de inscripciones 21:30 COT).');
 
     // ────────────────────────────────────────────────────────────────────────
+    // Clase de prueba del embudo (B2/B3, Monster 2026-10-30) — cada 15 min:
+    //  · cupos separados: a las ~22 h «tu cupo vence en 2 h» (ventana abierta o
+    //    plantilla) y a las `separar_horas` se libera con aviso a la escuela; si
+    //    ya hay pago, confirma en vez de soltar. Una sola RPC por lote.
+    //  · clases reprogramadas: red de seguridad del aviso de «Mi semana» (sesión
+    //    cancelada o movida en las últimas 48 h → «clase reprogramada»).
+    // Las dos escriben por WhatsApp: solo el BFF de la cola (prod). Idempotentes
+    // entre los 3 BFF por marcas en source_detail del lead. Sin escuelas con
+    // embudo o sin la migración M1, no hacen nada. Kill-switch propio de los
+    // cupos: DISABLE_CUPOS_SEPARADOS=true.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/15 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runCuposSeparados, runClasesReprogramadas } = await import('../services/clase-prueba-agenda.service');
+            const c = await runCuposSeparados();
+            if (c.avisados || c.liberados || c.confirmados || c.errores) {
+                console.log(`[CRON] Clase de prueba: ${c.avisados} aviso(s) de cupo por vencer, ${c.liberados} liberado(s), ${c.confirmados} confirmado(s), ${c.errores} error(es).`);
+            }
+            const r = await runClasesReprogramadas();
+            if (r.avisos) console.log(`[CRON] Clase de prueba: ${r.avisos} aviso(s) de clase reprogramada en ${r.escuelas} escuela(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en los cupos de la clase de prueba:', err?.message || err);
+        }
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Campañas de WhatsApp (plan B5) — cada 10 min. Sin campañas aprobadas o
+    // enviando, una sola lectura a una tabla chica (cero IO para las demás
+    // escuelas). Horario, tope diario, piloto, cupo de Meta y freno por calidad
+    // los decide el motor. Mismo interruptor que la cola: solo prod.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/10 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runCampanas } = await import('../services/whatsapp-campanas.service');
+            const r = await runCampanas();
+            if (r.enviados || r.fallidos || r.pausadas || r.terminadas) {
+                console.log(`[CRON] Campañas de WhatsApp: ${r.enviados} enviado(s), ${r.fallidos} fallido(s), ${r.pausadas} pausada(s), ${r.terminadas} terminada(s).`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en las campañas de WhatsApp:', err?.message || err);
+        }
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // «Sigue en fila» (B6) — cada 15 min, lun–sáb en horario hábil. A quien el
+    // bot pasó a una persona y la escuela no le ha contestado en 2 h hábiles
+    // (lun–sáb 8:00–18:00 Bogotá) se le confirma UNA vez que su mensaje sigue en
+    // fila. Solo escuelas con `wa_temas_a_persona` configurado (Dynasty no
+    // cambia). Escribe por WhatsApp: solo prod.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('5,20,35,50 8-18 * * 1-6', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runSigueEnFila } = await import('../services/whatsapp-sigue-en-fila.service');
+            const r = await runSigueEnFila();
+            if (r.avisados || r.errores) console.log(`[CRON] WhatsApp «sigue en fila»: ${r.avisados} aviso(s), ${r.errores} error(es).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el aviso «sigue en fila»:', err?.message || err);
+        }
+    }, { timezone: 'America/Bogota' });
+
+    // ────────────────────────────────────────────────────────────────────────
     // Detector de cambio de plan: la familia paga el valor de otro plan sin avisar.
     // Cambia el plan solo con dos periodos seguidos al mismo valor de UN único plan;
     // si no, avisa a la dueña una vez. Solo para las escuelas de

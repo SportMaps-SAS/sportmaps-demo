@@ -23,7 +23,7 @@ import {
 describe('categorías de cobro', () => {
     it('la lista es la del CHECK de payments.payment_category y todas tienen etiqueta', () => {
         expect([...CHARGE_CATEGORIES].sort()).toEqual(
-            ['articulos', 'clase_extra', 'excedente', 'inscripcion', 'mensualidad', 'otro', 'seguro', 'torneo', 'vacacional', 'viaje'],
+            ['articulos', 'clase_extra', 'clase_prueba', 'excedente', 'inscripcion', 'mensualidad', 'otro', 'reserva', 'seguro', 'torneo', 'vacacional', 'viaje'],
         );
         for (const c of CHARGE_CATEGORIES) expect(CHARGE_CATEGORY_LABEL[c]).toBeTruthy();
         expect(isChargeCategory('viaje')).toBe(true);

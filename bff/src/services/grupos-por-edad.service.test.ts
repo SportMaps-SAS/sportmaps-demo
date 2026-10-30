@@ -298,3 +298,146 @@ describe('clase de cortesía con la edad de antes', () => {
         expect(enviados[0].estado?.paso).toBe('perfil');
     });
 });
+
+// ─── Embudo del interesado (Monster, 2026-10-30) ───────────────────────────
+// Años de D2: U7-U13 Proyección 2013-2020, U15 2011-2012, Mayores Mixto
+// Proyección ≤2012. Sede Suba y Sede Norte.
+
+import { elegirGrupoEmbudo, direccionDeLugar, type LugarDeEscuela } from './grupos-por-edad.service';
+
+describe('construirRangos: campos del embudo', () => {
+    const [conTodo, sinNada] = construirRangos([
+        {
+            id: 'u9', name: 'U9 Y U11 MIXTO', branch_id: null, facility_id: 'pinar2', coach_id: 'c1',
+            coachIds: ['c1', 'c2'], coachNombres: ['Iván', 'Laura'],
+            categoria: { birth_year_min: 2013, birth_year_max: 2020, rama: 'Mixto', branch_id: 'suba' },
+        },
+        { id: 'x', name: 'SIN DATOS', coach_id: 'c9' },
+    ], [], AHORA);
+
+    it('sede (del equipo o de su categoría), años exactos, profes y cancha', () => {
+        expect(conTodo).toMatchObject({
+            branchId: 'suba', anioMin: 2013, anioMax: 2020, coachIds: ['c1', 'c2'], coachNombres: ['Iván', 'Laura'],
+            recibeClasePrueba: true, facilityId: 'pinar2', genero: 'mixto',
+        });
+    });
+
+    it('sin la columna recibe_clase_prueba = recibe; sin team_coaches = coach_id', () => {
+        expect(sinNada).toMatchObject({ branchId: null, anioMin: null, anioMax: null, coachIds: ['c9'], coachNombres: [], recibeClasePrueba: true });
+        const [no] = construirRangos([{ id: 'c', name: 'COMPETENCIA', recibe_clase_prueba: false }], [], AHORA);
+        expect(no.recibeClasePrueba).toBe(false);
+    });
+
+    it('elegirGrupo da lo mismo que antes con los campos nuevos (misma tabla de casos)', () => {
+        const sinCamposNuevos = RANGOS.map(({ branchId, anioMin, anioMax, coachIds, coachNombres, recibeClasePrueba, facilityId, ...r }) => r);
+        const casos = [
+            { edad: 12, genero: 'f' as const }, { edad: 8, genero: 'm' as const }, { edad: 23, genero: 'f' as const, adulto: true },
+            { edad: 12 }, { edad: 4 }, { edad: 16, genero: 'f' as const }, { adulto: true },
+        ];
+        for (const p of casos) {
+            const a = elegirGrupo(RANGOS, p);
+            const b = elegirGrupo(sinCamposNuevos as RangoGrupo[], p);
+            expect(a.principal?.teamId ?? null, JSON.stringify(p)).toBe(b.principal?.teamId ?? null);
+            expect(a.cercano).toBe(b.cercano);
+            expect([a.porGenero?.f.teamId, a.porGenero?.m.teamId]).toEqual([b.porGenero?.f.teamId, b.porGenero?.m.teamId]);
+        }
+    });
+});
+
+describe('elegirGrupoEmbudo (sede → año exacto → rama, sin nivel)', () => {
+    const MONSTER = construirRangos([
+        { id: 'suba-u9', name: 'U9 Y U11 MIXTO', branch_id: 'suba', categoria: { birth_year_min: 2013, birth_year_max: 2020, rama: 'Mixto' } },
+        { id: 'suba-may', name: 'MIXTO MAYORES PROFUNDIZACION', branch_id: 'suba', categoria: { birth_year_min: null, birth_year_max: 2012, rama: 'Mixto' } },
+        { id: 'suba-u15', name: 'U15 FEMENINO COMPETENCIA', branch_id: 'suba', recibe_clase_prueba: false,
+            categoria: { birth_year_min: 2011, birth_year_max: 2012, rama: 'Femenino' } },
+        { id: 'norte-u15f', name: 'U15 FEMENINO', branch_id: 'norte', categoria: { birth_year_min: 2011, birth_year_max: 2012, rama: 'Femenino' } },
+        { id: 'norte-u15m', name: 'U15 MASCULINO', branch_id: 'norte', categoria: { birth_year_min: 2011, birth_year_max: 2012, rama: 'Masculino' } },
+        { id: 'norte-mix', name: 'NORTE MIXTO', branch_id: 'norte', categoria: { birth_year_min: 2005, birth_year_max: 2012, rama: 'Mixto' } },
+        { id: 'norte-cerrado', name: 'U13 NORTE', branch_id: 'norte', admite_nuevos: false, categoria: { birth_year_min: 2013, birth_year_max: 2014 } },
+        { id: 'sin-anios', name: 'ESCUELA NORTE', branch_id: 'norte' },
+    ], [], AHORA);
+
+    it('2011 en Suba → Mayores Mixto (el de Competencia no recibe clase de prueba)', () => {
+        const e = elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: 2011, genero: 'f' });
+        expect(e.principal?.teamId).toBe('suba-may');
+        expect(e.candidatos.map((r) => r.teamId)).toEqual(['suba-may']);
+        expect(e.motivo).toBeNull();
+    });
+
+    it('bordes del rango incluidos: 2013 y 2020 → U9 y U11; 2021 → ninguno', () => {
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: 2013, genero: 'm' }).principal?.teamId).toBe('suba-u9');
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: 2020, genero: 'f' }).principal?.teamId).toBe('suba-u9');
+        const nadie = elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: 2021, genero: 'f' });
+        expect(nadie).toMatchObject({ principal: null, candidatos: [], otraSede: null, motivo: 'sin_grupo' });
+    });
+
+    it('rama: niña 2011 en Norte → U15 Femenino (antes que el mixto); niño 2012 → U15 Masculino', () => {
+        const f = elegirGrupoEmbudo(MONSTER, { branchId: 'norte', anio: 2011, genero: 'f' });
+        expect(f.principal?.teamId).toBe('norte-u15f');
+        expect(f.candidatos.map((r) => r.teamId)).toEqual(['norte-u15f', 'norte-mix']);
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'norte', anio: 2012, genero: 'm' }).principal?.teamId).toBe('norte-u15m');
+    });
+
+    it('Mixto acepta F y M', () => {
+        for (const genero of ['f', 'm'] as const) {
+            expect(elegirGrupoEmbudo(MONSTER, { branchId: 'norte', anio: 2008, genero }).principal?.teamId).toBe('norte-mix');
+        }
+    });
+
+    it('sin rama dicha: primero el mixto', () => {
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'norte', anio: 2011 }).principal?.teamId).toBe('norte-mix');
+    });
+
+    it('sin grupo en la sede pedida: ofrece el de la otra sede (botón «Ver Sede X»)', () => {
+        const sinMayoresSuba = MONSTER.filter((r) => r.teamId !== 'suba-may');
+        const e = elegirGrupoEmbudo(sinMayoresSuba, { branchId: 'suba', anio: 2006, genero: 'm' });
+        expect(e).toMatchObject({ principal: null, motivo: 'sin_grupo' });
+        expect(e.otraSede?.teamId).toBe('norte-mix');
+    });
+
+    it('sin sede: busca en todas; los que no admiten nuevos y los que no tienen años no se eligen', () => {
+        const e = elegirGrupoEmbudo(MONSTER, { anio: 2014, genero: 'f' });
+        expect(e.candidatos.map((r) => r.teamId)).toEqual(['suba-u9']);
+    });
+
+    it('sin año (o no entero): no elige nada', () => {
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: null })).toMatchObject({ principal: null, motivo: 'sin_anio' });
+        expect(elegirGrupoEmbudo(MONSTER, { branchId: 'suba', anio: 2011.5 }).motivo).toBe('sin_anio');
+    });
+});
+
+describe('direccionDeLugar (coincidencia exacta con facilities.name)', () => {
+    const CANCHAS: LugarDeEscuela[] = [
+        { id: 'p2', nombre: 'Parque Pinar de Suba 2', direccion: 'Cl. 145 #91-19', mapsUrl: 'https://maps.app.goo.gl/p2', indicaciones: 'Si llueve, te avisamos por aquí.' },
+        { id: 'oxxo', nombre: 'Parque Oxxo Pinar', direccion: null, mapsUrl: 'https://maps.app.goo.gl/oxxo' },
+        { id: 'les', nombre: 'Colegio Lestonnac', direccion: 'Cra. 58 #128-50', mapsUrl: null, indicaciones: 'Entrada de deportistas' },
+        { id: 'pinar', nombre: 'Pinar', direccion: 'Cl. 152' },
+        { id: 'pinar-2', nombre: 'Pinar 2', direccion: 'Cl. 145' },
+    ];
+
+    it('«Pinar» es Pinar, no Pinar 2 ni Parque Pinar de Suba 2', () => {
+        expect(direccionDeLugar('Pinar', CANCHAS)?.lugarId).toBe('pinar');
+        expect(direccionDeLugar('pinar 2', CANCHAS)?.lugarId).toBe('pinar-2');
+        expect(direccionDeLugar('PARQUE PINAR DE SUBA 2', CANCHAS)).toEqual({
+            lugarId: 'p2', nombre: 'Parque Pinar de Suba 2', direccion: 'Cl. 145 #91-19',
+            mapsUrl: 'https://maps.app.goo.gl/p2', indicaciones: 'Si llueve, te avisamos por aquí.',
+        });
+    });
+
+    it('sin la cancha «Pinar» cargada, «Pinar» no se confunde con ninguna', () => {
+        const sinPinar = CANCHAS.filter((c) => c.id !== 'pinar' && c.id !== 'pinar-2');
+        expect(direccionDeLugar('Pinar', sinPinar)).toBeNull();
+    });
+
+    it('el lugar nombra la cancha entera: la más larga', () => {
+        expect(direccionDeLugar('Colegio Lestonnac - cancha 2', CANCHAS)?.lugarId).toBe('les');
+        expect(direccionDeLugar('Coliseo Pinar 2 cubierto', CANCHAS)?.lugarId).toBe('pinar-2');
+    });
+
+    it('nada que coincida, vacío, o dos canchas iguales con datos distintos → null', () => {
+        expect(direccionDeLugar('Coliseo Dynasty DC', CANCHAS)).toBeNull();
+        expect(direccionDeLugar(null, CANCHAS)).toBeNull();
+        expect(direccionDeLugar('  ', CANCHAS)).toBeNull();
+        expect(direccionDeLugar('Sede', [{ id: 'a', nombre: 'Sede', direccion: 'X' }, { id: 'b', nombre: 'sede', direccion: 'Y' }])).toBeNull();
+    });
+});

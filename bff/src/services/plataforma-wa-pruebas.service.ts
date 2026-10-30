@@ -31,6 +31,10 @@ import { integracionDePlataforma, registrarMensaje, soloDigitos, type CanalPlata
 import { uuidDeClave } from './avisos-correo.service';
 import { debeAtender } from './whatsapp-atencion.service';
 import { runBotTurn, atenderDesconocido, simularEnvios, type SalidaSimulada } from './whatsapp-bot.service';
+import {
+    esAdjuntoDeComprobante, bajarAdjuntoDePrueba, comprobanteSimulado, plantillaSimulada, textoListaPlantillas,
+    avanzarSimulado, trabajoDeAvanzar, TEXTO_AYUDA_AVANZAR, type EscenarioPrueba,
+} from './plataforma-wa-pruebas-simular.service';
 
 // ─── Comandos (puros) ────────────────────────────────────────────────────────
 
@@ -42,6 +46,9 @@ export type ComandoPrueba =
     | { cmd: 'estado' }
     | { cmd: 'salir' }
     | { cmd: 'ayuda' }
+    | { cmd: 'plantillas' }
+    | { cmd: 'plantilla'; arg: string }
+    | { cmd: 'avanzar'; arg: string }
     | { cmd: 'desconocido'; texto: string };
 
 export function parsearComandoPrueba(texto: string | null | undefined): ComandoPrueba | null {
@@ -65,6 +72,9 @@ export function parsearComandoPrueba(texto: string | null | undefined): ComandoP
     if (c === 'estado') return { cmd: 'estado' };
     if (c === 'salir') return { cmd: 'salir' };
     if (c === 'ayuda' || c === 'help') return { cmd: 'ayuda' };
+    if (c === 'plantillas') return { cmd: 'plantillas' };
+    if (c === 'plantilla') return arg ? { cmd: 'plantilla', arg } : { cmd: 'plantillas' };
+    if (c === 'avanzar') return { cmd: 'avanzar', arg };
     return { cmd: 'desconocido', texto: t };
 }
 
@@ -78,11 +88,20 @@ export const TEXTO_AYUDA_PRUEBAS = [
     '/reiniciar — borrar la memoria de la conversación',
     '/estado — escuela, rol y lo que se bloqueó',
     '/salir',
+    '',
+    '📎 Foto o PDF de un comprobante — qué haría el bot (OCR real; no se guarda ni se registra nada)',
+    '/plantillas — catálogo de plantillas · /plantilla <nombre> — cómo se vería con datos de la escuela',
+    '/avanzar <recordatorio | mismo-dia | seguimiento | post-clase> — lo que mandaría ese job (3d / 7d todavía no existen: B5)',
 ].join('\n');
 
 /** El contacto sintético con que el bot ve al tester. Puro. */
 export function contactoSintetico(tester: string): string {
     return `57399${soloDigitos(tester).slice(-7).padStart(7, '0')}`;
+}
+
+/** La conversación simulada de la sesión (la misma en todos los turnos con esa escuela). */
+export function conversacionDePrueba(sesion: Pick<SesionPrueba, 'contact_wa_id' | 'school_id' | 'estado'>): string {
+    return sesion.estado.conversationId ?? uuidDeClave(`sim-conversacion:${sesion.contact_wa_id}:${sesion.school_id}`);
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -228,7 +247,7 @@ export async function turnoSimulado(
     const integ = await integracionParaSimular(schoolId);
     const ajustes = await ajustesParaSimular(integ);
     const contacto = contactoSintetico(sesion.contact_wa_id);
-    const conversationId = sesion.estado.conversationId ?? uuidDeClave(`sim-conversacion:${sesion.contact_wa_id}:${schoolId}`);
+    const conversationId = conversacionDePrueba(sesion);
     const ahoraIso = new Date(ahora).toISOString();
     const texto = msg.textBody ?? '';
 
@@ -297,7 +316,7 @@ export async function turnoSimulado(
         (enMemoria.whatsapp_messages ??= []).push({
             id: randomUUID(), conversation_id: conversationId, integration_id: integ.id, direction: 'outbound',
             type: s.opciones?.length ? 'interactive' : 'text', text_body: s.texto,
-            payload: { step: s.step, ...(s.opciones?.length ? { botones: s.opciones.map((o) => o.id) } : {}) },
+            payload: { ...(s.payload ?? {}), step: s.step, ...(s.opciones?.length ? { botones: s.opciones.map((o) => o.id) } : {}) },
             ai_generated: true, wa_message_id: `sim-${randomUUID()}`, from_wa_id: null, to_wa_id: contacto,
             wa_timestamp: new Date().toISOString(), created_at: new Date().toISOString(), status: 'sent',
         });
@@ -317,15 +336,31 @@ export async function atenderPrueba(canal: CanalPlataforma, msg: ParsedInboundMe
 
     try {
         if (comando) {
-            await ejecutarComando(canal, numero, sesion, comando);
+            await ejecutarComando(canal, numero, sesion, comando, ahora);
             return;
         }
         if (!sesion?.school_id) {
             await decir(canal, numero, `${TEXTO_AYUDA_PRUEBAS}\n\nPrimero elige una escuela: /escuela <slug>`, 'prueba_ayuda');
             return;
         }
+        // B7: foto o PDF → la lectura y la decisión de la cola de comprobantes,
+        // sin escribir (plataforma-wa-pruebas-simular). El archivo se baja con el
+        // token del canal de SportMaps, que es a donde lo mandó el tester.
+        if (esAdjuntoDeComprobante(msg)) {
+            const bajada = await bajarAdjuntoDePrueba(canal, msg.mediaId as string);
+            if (!bajada.ok) {
+                await decir(canal, numero, `🧪 No pude bajar el archivo de Meta: ${bajada.error}`, 'prueba_comprobante');
+                return;
+            }
+            const r = await comprobanteSimulado(await escenarioDe(sesion, ahora), bajada,
+                msg.mediaCaption ?? null, msg.waTimestamp || new Date(ahora).toISOString());
+            sesion.estado = { ...sesion.estado, bloqueadas: r.bloqueadas.slice(0, 50) };
+            await guardarSesion(sesion);
+            await decir(canal, numero, r.texto, 'prueba_comprobante');
+            return;
+        }
         if (!['text', 'interactive', 'button'].includes(msg.type)) {
-            await decir(canal, numero, '🧪 En pruebas solo texto y botones: las fotos, audios y documentos no se procesan (la cola de comprobantes escribe en la escuela).', 'prueba_tipo');
+            await decir(canal, numero, '🧪 En pruebas: texto, botones, fotos y PDF. Los audios, videos y stickers no se procesan.', 'prueba_tipo');
             return;
         }
         const r = await turnoSimulado(sesion, msg, ahora);
@@ -338,11 +373,24 @@ export async function atenderPrueba(canal: CanalPlataforma, msg: ParsedInboundMe
     }
 }
 
-async function ejecutarComando(canal: CanalPlataforma, numero: string, sesion: SesionPrueba | null, c: ComandoPrueba): Promise<void> {
+/** La sesión con lo que necesitan las simulaciones de B7 (integración sin token y conversación). */
+async function escenarioDe(sesion: SesionPrueba, ahora: number): Promise<EscenarioPrueba> {
+    return {
+        sesion, integ: await integracionParaSimular(sesion.school_id as string),
+        conversationId: conversacionDePrueba(sesion), ahora,
+    };
+}
+
+async function ejecutarComando(
+    canal: CanalPlataforma, numero: string, sesion: SesionPrueba | null, c: ComandoPrueba, ahora = Date.now(),
+): Promise<void> {
     switch (c.cmd) {
         case 'ayuda':
         case 'desconocido':
             await decir(canal, numero, TEXTO_AYUDA_PRUEBAS, 'prueba_ayuda');
+            return;
+        case 'plantillas':
+            await decir(canal, numero, textoListaPlantillas(), 'prueba_plantillas');
             return;
         case 'salir':
             await supabase.from('platform_wa_sesiones_prueba').delete().eq('contact_wa_id', numero);
@@ -367,12 +415,38 @@ async function ejecutarComando(canal: CanalPlataforma, numero: string, sesion: S
         case 'como_papa':
         case 'reiniciar':
         case 'estado':
+        case 'plantilla':
+        case 'avanzar':
             if (!sesion?.school_id) {
                 await decir(canal, numero, '🧪 Primero elige una escuela: /escuela <slug>', 'prueba_ayuda');
                 return;
             }
     }
     const s = sesion!;
+    if (c.cmd === 'plantilla') {
+        const r = await plantillaSimulada(await escenarioDe(s, ahora), c.arg);
+        await decir(canal, numero, r.texto, 'prueba_plantilla');
+        return;
+    }
+    if (c.cmd === 'avanzar') {
+        const trabajo = trabajoDeAvanzar(c.arg);
+        if (!trabajo) {
+            await decir(canal, numero, TEXTO_AYUDA_AVANZAR, 'prueba_avanzar');
+            return;
+        }
+        const r = await avanzarSimulado(await escenarioDe(s, ahora), trabajo);
+        // Lo que el job deja en la conversación (p. ej. el recordatorio, para
+        // que «CANCELAR» se lea contra él) queda en la memoria de la sesión.
+        const tablas = { ...(s.estado.tablas ?? {}) };
+        if (r.enMemoria) {
+            tablas.whatsapp_messages = [...(tablas.whatsapp_messages ?? []), r.enMemoria].slice(-MAX_MENSAJES_MEMORIA);
+        }
+        s.estado = { ...s.estado, conversationId: conversacionDePrueba(s), tablas, bloqueadas: r.bloqueadas.slice(0, 50) };
+        await guardarSesion(s);
+        await decir(canal, numero, r.texto, 'prueba_avanzar');
+        if (r.salida) await mandarSalidas(canal, numero, [r.salida]);
+        return;
+    }
     if (c.cmd === 'como_prospecto') {
         await guardarSesion({ ...s, rol: 'prospecto', child_id: null, parent_id: null, estado: {} });
         await decir(canal, numero, '🧪 Ahora eres un *prospecto* (número desconocido para la escuela). Memoria reiniciada.', 'prueba_rol');

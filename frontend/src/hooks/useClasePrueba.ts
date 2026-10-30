@@ -8,6 +8,7 @@
  */
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { faltaEnLaBase } from '@/lib/esquemaPendiente';
 
 export interface ConfigClasePrueba {
   enabled: boolean;
@@ -38,6 +39,29 @@ export interface ProspectoClasePrueba {
   fecha_clase: string | null;
   cupo_label: string | null;
   cupo_hora: string | null;
+  // Embudo del bot (mig. embudo_y_agenda_clase_prueba: `listar_clase_prueba` solo
+  // AGREGA estas claves). Opcionales: sin la migración no llegan y la fila se ve
+  // como siempre. Ver ProspectoDetalleEmbudo.
+  /** Sede elegida en el chat (school_branches.name). */
+  sede?: string | null;
+  /** Grupo de la franja (teams.name). */
+  grupo?: string | null;
+  /** Profe del grupo. */
+  profe?: string | null;
+  /** Respuestas del embudo (posición, trayectoria y su detalle…). */
+  respuestas?: Record<string, unknown> | null;
+  /** 'separado' = eligió horario y falta el comprobante; 'agendada' = clase confirmada. */
+  estado_cupo?: 'separado' | 'agendada' | null;
+  /** Hasta cuándo se le guarda el cupo separado. */
+  separado_hasta?: string | null;
+  /** Franja del cupo separado (la agendada sigue en fecha_clase / cupo_hora). */
+  separado_fecha?: string | null;
+  separado_hora?: string | null;
+  separado_label?: string | null;
+  sede_id?: string | null;
+  grupo_id?: string | null;
+  /** Pago de la clase (payments.signup_lead_id). `awaiting_approval` = comprobante en revisión. */
+  pago?: { monto?: number | null; estado?: string | null; metodo?: string | null; fecha?: string | null } | null;
 }
 
 export interface CupoClasePrueba {
@@ -160,4 +184,107 @@ export function useCuposClasePrueba(schoolId: string | null | undefined, enabled
   });
 
   return { cupos: query.data ?? [], isLoading: query.isLoading, crear, cerrar };
+}
+
+// ── Agenda de la clase de prueba del bot (mig. embudo_y_agenda_clase_prueba) ──
+
+/**
+ * Cómo agenda el bot la clase de prueba. Columnas nuevas de
+ * `school_trial_class_settings`; todas en NULL/false = el comportamiento de hoy.
+ *  · nombre_clase: cómo la llama el bot («clase de prueba» o «clase de cortesía»; NULL = cortesía).
+ *  · dias_semana: días con clase de prueba, 0 = domingo … 6 = sábado (igual que teams.schedule). NULL = todos.
+ *  · separar_horas: horas que se guarda el cupo mientras llega el comprobante (1–72). NULL = el bot no separa cupos.
+ *  · cupos_por_sesion: cupos de clase de prueba por entreno (1–500). NULL = sin límite.
+ *  · avisar_entrenador: aviso al profe del grupo cuando se agenda.
+ */
+export interface AgendaClasePrueba {
+  nombre_clase: 'cortesia' | 'prueba' | null;
+  dias_semana: number[] | null;
+  separar_horas: number | null;
+  cupos_por_sesion: number | null;
+  avisar_entrenador: boolean;
+}
+
+export const AGENDA_POR_DEFECTO: AgendaClasePrueba = {
+  nombre_clase: null, dias_semana: null, separar_horas: null, cupos_por_sesion: null, avisar_entrenador: false,
+};
+
+const entero = (v: unknown, min: number, max: number): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= min && n <= max ? n : null;
+};
+
+/** Fila de la base → agenda (lo que no se entiende queda como hoy). */
+export function leerAgenda(raw: unknown): AgendaClasePrueba {
+  if (!raw || typeof raw !== 'object') return AGENDA_POR_DEFECTO;
+  const r = raw as Record<string, unknown>;
+  const dias = Array.isArray(r.dias_semana)
+    ? [...new Set((r.dias_semana as unknown[]).map((d) => entero(d, 0, 6)).filter((d): d is number => d != null))].sort((a, b) => a - b)
+    : null;
+  return {
+    nombre_clase: r.nombre_clase === 'prueba' || r.nombre_clase === 'cortesia' ? r.nombre_clase : null,
+    dias_semana: dias && dias.length > 0 && dias.length < 7 ? dias : null,
+    separar_horas: entero(r.separar_horas, 1, 72),
+    cupos_por_sesion: entero(r.cupos_por_sesion, 1, 500),
+    avisar_entrenador: r.avisar_entrenador === true,
+  };
+}
+
+/**
+ * Lee la agenda con la RLS (la tabla solo tiene policy de SELECT, para la
+ * administración) y la guarda con la RPC `guardar_ajustes_clase_prueba(p_school_id,
+ * p_ajustes jsonb)` (mig. 20261030123543), que cambia solo las claves que llegan.
+ * Se mandan las cinco y NULL significa «como hoy» (todos los días, sin separar,
+ * sin límite). Sin las columnas, `disponible` es false y la pantalla no muestra
+ * la sección; sin la RPC, el guardado dice «todavía no está activa».
+ */
+export function useAgendaClasePrueba(schoolId: string | null | undefined, enabled = true) {
+  const qc = useQueryClient();
+  const key = ['clase-prueba-agenda', schoolId];
+
+  const query = useQuery({
+    queryKey: key,
+    enabled: !!schoolId && enabled,
+    queryFn: async (): Promise<{ disponible: boolean; agenda: AgendaClasePrueba }> => {
+      const { data, error, status } = await (supabase as any)
+        .from('school_trial_class_settings')
+        .select('nombre_clase, dias_semana, separar_horas, cupos_por_sesion, avisar_entrenador')
+        .eq('school_id', schoolId)
+        .maybeSingle();
+      if (error) {
+        if (faltaEnLaBase(error, status)) return { disponible: false, agenda: AGENDA_POR_DEFECTO };
+        throw new Error(error.message);
+      }
+      return { disponible: true, agenda: leerAgenda(data) };
+    },
+  });
+
+  const guardar = useMutation({
+    mutationFn: async (a: AgendaClasePrueba) => {
+      const { error, status } = await (supabase as any).rpc('guardar_ajustes_clase_prueba', {
+        p_school_id: schoolId,
+        p_ajustes: {
+          nombre_clase: a.nombre_clase,
+          dias_semana: a.dias_semana,
+          separar_horas: a.separar_horas,
+          cupos_por_sesion: a.cupos_por_sesion,
+          avisar_entrenador: a.avisar_entrenador,
+        },
+      });
+      if (error) {
+        if (faltaEnLaBase(error, status)) throw new Error('Esta opción todavía no está activa.');
+        if (error.code === '42501') throw new Error('Solo la administración de la escuela cambia esto.');
+        throw new Error('No se pudo guardar. Revisa los datos e inténtalo otra vez.');
+      }
+      return a;
+    },
+    onSuccess: (a) => qc.setQueryData(key, { disponible: true, agenda: a }),
+  });
+
+  return {
+    disponible: query.data?.disponible === true,
+    agenda: query.data?.agenda ?? AGENDA_POR_DEFECTO,
+    isLoading: query.isLoading,
+    guardar,
+  };
 }

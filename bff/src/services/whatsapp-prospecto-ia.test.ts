@@ -181,3 +181,63 @@ describe('redactarRespuestaDeProspecto', () => {
         expect(await redactarRespuestaDeProspecto(base)).toBeNull();
     });
 });
+
+// ─── Nombre y valor de la clase por escuela (Monster, 2026-10-30) ──────────
+
+import { INSTRUCCION_SEGUIMIENTO, instruccionSeguimiento } from './whatsapp-prospecto-ia.service';
+import { textosDeClase } from './textos-clase-prueba';
+
+describe('prompt del prospecto con los textos de la clase', () => {
+    const P = { escuela: 'X', ficha: 'f', estilo: null, grupos: null, precios: null, enlace: null, atencion: null };
+    const MONSTER = textosDeClase({ nombre_clase: 'prueba', trial_price: 15000 });
+
+    it('sin textos: las líneas de siempre, letra por letra (golden)', () => {
+        const s = promptDeProspecto(P);
+        expect(s).toContain('\n- Clase de cortesía: que te escriba el día que quiere venir (por ejemplo «miércoles») y le muestras los horarios de ese día. No reserves ni prometas cupo.\n');
+        expect(s).toContain('\n- Cierra, cuando tenga sentido, invitando al siguiente paso (clase de cortesía o inscripción), sin presionar.\n');
+        expect(promptDeProspecto({ ...P, textos: textosDeClase({}) })).toBe(s);
+        expect(INSTRUCCION_SEGUIMIENTO).toBe(
+            'El interesado dejó de escribir hace casi un día. Escríbele UN mensaje corto (máximo 2 frases, 300 caracteres) ' +
+            'que retome lo último que preguntó o lo último que se le ofreció, y lo invite con calma al siguiente paso ' +
+            '(decirte el día para su clase de cortesía, o inscribirse). Sin repetir listas ni precios ya enviados, sin presionar, ' +
+            'sin volver a presentarte. Si en la conversación dijo que no le interesa o que ya lo resolvió, responde solo: NADA');
+    });
+
+    it('Monster: «clase de prueba», su valor y la prohibición de «gratis»/«cortesía»', () => {
+        const s = promptDeProspecto({ ...P, textos: MONSTER });
+        expect(s).toContain('- Clase de prueba: que te escriba el día que quiere venir');
+        expect(s).toContain('La clase de prueba tiene un valor de *$15.000*: nunca digas que es gratis ni la llames «clase de cortesía».');
+        expect(s).toContain('(clase de prueba o inscripción)');
+        expect(s).not.toMatch(/- Clase de cortesía:/);
+        expect(instruccionSeguimiento(MONSTER)).toContain('(decirte el día para su clase de prueba, o inscribirse)');
+        expect(instruccionSeguimiento(MONSTER)).not.toMatch(/cortes[ií]a|gratis/i);
+    });
+
+    it('redactarRespuestaDeProspecto usa los textos que le pasan (respuesta y seguimiento)', async () => {
+        fila.settings = { wa_ficha_prospectos: 'Ficha de Monster.' };
+        llm.chatWithTools.mockReset();
+        llm.chatWithTools.mockResolvedValue({ text: 'La clase de prueba vale $15.000.', provider: 'claude' });
+        const base = {
+            schoolId: 'monster', conversationId: 'c1', escuela: 'MONSTER', nuevo: '¿Cuánto vale?',
+            recientes: [{ direction: 'inbound', text_body: '¿Cuánto vale?', created_at: new Date().toISOString() }] as any[],
+            grupos: null, precios: null, enlace: null, textos: MONSTER,
+        };
+        await redactarRespuestaDeProspecto(base);
+        expect(llm.chatWithTools.mock.calls[0][0].system).toContain('*$15.000*');
+        await redactarRespuestaDeProspecto({ ...base, seguimiento: true });
+        const seguimiento = llm.chatWithTools.mock.calls[1][0];
+        expect(seguimiento.system).toContain('- Clase de prueba:');
+        expect(seguimiento.messages[0].content).toContain('para su clase de prueba');
+    });
+
+    it('sin textos lee la escuela; sin fila, los de siempre', async () => {
+        fila.settings = { wa_ficha_prospectos: 'Ficha.' };
+        llm.chatWithTools.mockReset();
+        llm.chatWithTools.mockResolvedValue({ text: 'Hola', provider: 'claude' });
+        await redactarRespuestaDeProspecto({
+            schoolId: 'sin-fila', conversationId: 'c1', escuela: 'X', nuevo: 'hola',
+            recientes: [] as any[], grupos: null, precios: null, enlace: null,
+        });
+        expect(llm.chatWithTools.mock.calls[0][0].system).toContain('- Clase de cortesía:');
+    });
+});

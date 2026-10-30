@@ -1,0 +1,12 @@
+{
+  "name": "clase_prueba_cupo_por_vencer",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, el cupo que separaste para la clase de prueba de {{2}} ({{3}} a las {{4}}) vence {{5}}. Para confirmarlo, envía por este chat el comprobante de pago por {{6}}.",
+      "example": { "body_text": [["Carolina", "Mariana", "sábado 31 de octubre", "8:00 a. m.", "hoy a las 6:45 p. m.", "$15.000"]] }
+    }
+  ]
+}

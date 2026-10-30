@@ -43,10 +43,33 @@
  *     exige el JWT de un admin y este proceso no tiene uno. Por eso se repite
  *     aquí la misma validación de esa RPC (label no vacío, fecha ≥ hoy) y
  *     `created_by` = owner de la escuela, que es quien «publica» la franja.
+ *
+ * AJUSTES POR ESCUELA (migración M1, Monster 2026-10-30). Sin ellos, el plan es
+ * idéntico al de antes (prueba con el horario de Dynasty):
+ *
+ *   · Semana del profe (`team_schedule_exceptions`, semana-equipo.service):
+ *     un día cancelado no tiene franja, la sesión movida va a su hora nueva y
+ *     el entreno extra tiene la suya — también en festivo: alguien lo agregó
+ *     a propósito.
+ *   · `school_trial_class_settings.dias_semana` (0 = domingo … 6 = sábado):
+ *     solo esos días. Monster: sábado y domingo.
+ *   · `cupos_por_sesion`: el cupo de cada franja nueva, y el de las abiertas
+ *     que ya existen si sus reservas caben (CHECK reserved_count ≤ max_capacity).
+ *     NULL = sin límite, y las existentes no se tocan.
+ *   · `teams.recibe_clase_prueba = false`: el equipo no tiene franjas.
+ *   · Al cerrar una obsoleta se anota `cerrada_por = 'horario'`; solo esas se
+ *     reabren si la sesión vuelve (el profe deshace la cancelación). Las que
+ *     cerró la escuela, o las cerradas antes de la migración (NULL), nunca.
+ *   · `soloEquipo`: sincroniza un equipo (lo pide «Mi semana» al guardar).
  */
 
 import { supabase } from '../config/supabase';
 import { esFestivoColombia } from '../utils/festivos-colombia';
+import {
+    excepcionesDeEscuela, excepcionesDelEquipo, normalizarHora, sesionesDelDia, sesionesValidas, type ExcepcionSemana,
+} from './semana-equipo.service';
+
+export { normalizarHora };
 
 /**
  * «Sin límite» de cupos. `max_capacity` no admite NULL ni 0, así que se usa un
@@ -69,6 +92,8 @@ export interface EquipoParaFranjas {
     name: string | null;
     active?: boolean | null;
     admite_nuevos?: boolean | null;
+    /** Mig. M1; ausente o null = recibe (como antes). */
+    recibe_clase_prueba?: boolean | null;
     schedule: unknown;
 }
 
@@ -91,6 +116,9 @@ export interface FranjaExistente {
     reserved_count: number;
     is_open: boolean;
     generated_from_schedule?: boolean | null;
+    max_capacity?: number | null;
+    /** Mig. M1: 'escuela' | 'horario' | null (cerrada antes de la migración o abierta). */
+    cerrada_por?: string | null;
 }
 
 export interface PlanDeFranjas {
@@ -110,23 +138,22 @@ export function hoyBogota(ahora = new Date()): string {
     return ahora.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
-/** «7:00», «07:00», «07:00:00» → «07:00». null si no es una hora. */
-export function normalizarHora(h: unknown): string | null {
-    const m = String(h ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-    if (!m) return null;
-    const hh = Number(m[1]); const mm = Number(m[2]);
-    if (hh > 23 || mm > 59) return null;
-    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
-}
-
 export const claveFranja = (teamId: string, fecha: string, hora: string) =>
     `${teamId}|${fecha.slice(0, 10)}|${normalizarHora(hora) ?? hora}`;
 
-function leerHorario(raw: unknown): any[] {
-    try {
-        const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        return Array.isArray(v) ? v : [];
-    } catch { return []; }
+export interface OpcionesPlan {
+    incluirFestivos?: boolean;
+    /** Ajustes de la semana de la escuela (se filtran por equipo). [] o ausente = horario base. */
+    excepciones?: ExcepcionSemana[] | null;
+    /** Días con clase de prueba (0 = domingo … 6 = sábado). null o vacío = todos. */
+    diasSemana?: number[] | null;
+}
+
+/** `dias_semana` válido (enteros 0–6, sin repetir) o null = todos los días. Pura. */
+export function diasSemanaValidos(raw: unknown): number[] | null {
+    if (!Array.isArray(raw)) return null;
+    const dias = [...new Set(raw.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))];
+    return dias.length ? dias : null;
 }
 
 /**
@@ -137,11 +164,12 @@ export function planificarFranjas(
     equipos: EquipoParaFranjas[],
     desde: string,
     semanas = SEMANAS_POR_DEFECTO,
-    opciones: { incluirFestivos?: boolean } = {},
+    opciones: OpcionesPlan = {},
 ): PlanDeFranjas {
     const plan: PlanDeFranjas = { franjas: [], festivosOmitidos: [], excluidos: [], choques: [] };
     const dias = Math.max(1, Math.floor(semanas)) * 7;
     const inicio = diaUTC(desde);
+    const diasSemana = diasSemanaValidos(opciones.diasSemana);
 
     for (const t of equipos) {
         const nombre = String(t.name ?? '').trim();
@@ -149,23 +177,29 @@ export function planificarFranjas(
         if (t.active === false) { plan.excluidos.push({ equipo: nombre, motivo: 'inactivo' }); continue; }
         if (MARCADO_NO_USAR.test(nombre)) { plan.excluidos.push({ equipo: nombre, motivo: 'marcado NO USAR' }); continue; }
         if (t.admite_nuevos === false) { plan.excluidos.push({ equipo: nombre, motivo: 'no admite nuevos' }); continue; }
+        if (t.recibe_clase_prueba === false) { plan.excluidos.push({ equipo: nombre, motivo: 'no recibe clase de prueba' }); continue; }
 
-        const sesiones = leerHorario(t.schedule)
-            .filter((f) => f && Number.isInteger(f.day) && f.day >= 0 && f.day <= 6 && normalizarHora(f.time));
-        if (!sesiones.length) { plan.excluidos.push({ equipo: nombre, motivo: 'sin horario cargado' }); continue; }
+        const excepciones = excepcionesDelEquipo(opciones.excepciones, t.id);
+        const conExtras = excepciones.some((e) => e.tipo === 'extra');
+        if (!sesionesValidas(t.schedule).length && !conExtras) {
+            plan.excluidos.push({ equipo: nombre, motivo: 'sin horario cargado' });
+            continue;
+        }
 
         const vistas = new Map<string, FranjaPlaneada>();
         for (let i = 0; i < dias; i++) {
             const fecha = isoDe(inicio + i * DIA_MS);
             const dow = new Date(inicio + i * DIA_MS).getUTCDay();
-            for (const s of sesiones.filter((x) => x.day === dow)) {
-                const grupo = String(s.group ?? '').trim();
+            if (diasSemana && !diasSemana.includes(dow)) continue;
+            for (const s of sesionesDelDia(t.schedule, excepciones, fecha)) {
                 // El subgrupo va en el label: Dynasty divide «INTERMEDIO» en
                 // Origen y Evolución con horarios y sedes distintas; sin él, la
                 // familia no sabe a cuál de los dos va.
-                const label = grupo ? `${nombre} · ${grupo}` : nombre;
-                const hora = normalizarHora(s.time)!;
-                if (!opciones.incluirFestivos && esFestivoColombia(fecha)) {
+                const label = s.grupo ? `${nombre} · ${s.grupo}` : nombre;
+                const hora = s.inicio;
+                // El festivo se salta salvo el entreno extra: ese lo agregó el
+                // profe para ese día, sabiendo que es festivo.
+                if (!opciones.incluirFestivos && s.origen !== 'extra' && esFestivoColombia(fecha)) {
                     plan.festivosOmitidos.push({ fecha, label });
                     continue;
                 }
@@ -184,8 +218,8 @@ export function planificarFranjas(
                     label,
                     slot_date: fecha,
                     start_time: hora,
-                    end_time: normalizarHora(s.end),
-                    location: String(s.place ?? '').trim() || null,
+                    end_time: s.fin,
+                    location: s.lugar,
                 };
                 vistas.set(clave, franja);
                 plan.franjas.push(franja);
@@ -205,32 +239,54 @@ export function planificarFranjas(
  *   cerrar  = generadas por este servicio, abiertas, futuras dentro de la
  *             ventana, SIN reservas, que ya no están en el plan.
  *   conservadasConReserva = las mismas pero con reservas: no se tocan.
+ *   reabrir = generadas, CERRADAS POR EL HORARIO (`cerrada_por = 'horario'`),
+ *             que vuelven a estar en el plan (el profe deshizo la cancelación).
+ *             Las que cerró la escuela o las de antes de la migración, nunca.
+ *   ajustarCupo = con `cupos` (cupos_por_sesion): generadas, abiertas (o por
+ *             reabrir) y planeadas cuyo max_capacity no es ese, si sus
+ *             reservas caben (CHECK reserved_count ≤ max_capacity). Sin
+ *             `cupos` no se toca ninguna (como antes).
  */
 export function compararConExistentes(
     plan: FranjaPlaneada[],
     existentes: FranjaExistente[],
     ventana: { desde: string; hasta: string },
-): { crear: FranjaPlaneada[]; yaExistian: number; cerrar: FranjaExistente[]; conservadasConReserva: FranjaExistente[] } {
+    opciones: { cupos?: number | null } = {},
+): {
+    crear: FranjaPlaneada[]; yaExistian: number; cerrar: FranjaExistente[]; conservadasConReserva: FranjaExistente[];
+    reabrir: FranjaExistente[]; ajustarCupo: FranjaExistente[];
+} {
     const hay = new Set(existentes.filter((e) => e.team_id)
         .map((e) => claveFranja(e.team_id!, e.slot_date, e.start_time)));
     const planeadas = new Set(plan.map((p) => claveFranja(p.team_id, p.slot_date, p.start_time)));
+    const enVentana = (e: FranjaExistente) => e.slot_date.slice(0, 10) >= ventana.desde && e.slot_date.slice(0, 10) < ventana.hasta;
+    const planeada = (e: FranjaExistente) => !!e.team_id && planeadas.has(claveFranja(e.team_id, e.slot_date, e.start_time));
 
     const crear = plan.filter((p) => !hay.has(claveFranja(p.team_id, p.slot_date, p.start_time)));
     const obsoletas = existentes.filter((e) =>
-        e.generated_from_schedule === true && e.is_open && e.team_id
-        && e.slot_date.slice(0, 10) >= ventana.desde && e.slot_date.slice(0, 10) < ventana.hasta
-        && !planeadas.has(claveFranja(e.team_id, e.slot_date, e.start_time)));
+        e.generated_from_schedule === true && e.is_open && e.team_id && enVentana(e) && !planeada(e));
+    const reabrir = existentes.filter((e) =>
+        e.generated_from_schedule === true && !e.is_open && e.cerrada_por === 'horario' && enVentana(e) && planeada(e));
+    const cupos = opciones.cupos != null && Number.isInteger(opciones.cupos) && opciones.cupos > 0 ? opciones.cupos : null;
+    const ajustarCupo = cupos == null ? [] : existentes.filter((e) =>
+        e.generated_from_schedule === true && (e.is_open || reabrir.includes(e)) && enVentana(e) && planeada(e)
+        && e.max_capacity != null && Number(e.max_capacity) !== cupos && (e.reserved_count ?? 0) <= cupos);
 
     return {
         crear,
         yaExistian: plan.length - crear.length,
         cerrar: obsoletas.filter((e) => (e.reserved_count ?? 0) === 0),
         conservadasConReserva: obsoletas.filter((e) => (e.reserved_count ?? 0) > 0),
+        reabrir,
+        ajustarCupo,
     };
 }
 
-/** Fila lista para insertar. Repite la validación de `create_school_trial_slot`. */
-export function filaParaInsertar(f: FranjaPlaneada, schoolId: string, ownerId: string | null, hoy: string) {
+/**
+ * Fila lista para insertar. Repite la validación de `create_school_trial_slot`.
+ * `cupos` = cupos_por_sesion de la escuela; sin él, sin límite (como antes).
+ */
+export function filaParaInsertar(f: FranjaPlaneada, schoolId: string, ownerId: string | null, hoy: string, cupos?: number | null) {
     const label = f.label.trim();
     if (!label) throw new Error('Label requerido');
     if (f.slot_date < hoy) throw new Error('La fecha debe ser futura');
@@ -242,7 +298,7 @@ export function filaParaInsertar(f: FranjaPlaneada, schoolId: string, ownerId: s
         start_time: f.start_time,
         end_time: f.end_time,
         location: f.location,
-        max_capacity: CUPOS_SIN_LIMITE,
+        max_capacity: cupos != null && Number.isInteger(cupos) && cupos > 0 ? cupos : CUPOS_SIN_LIMITE,
         is_open: true,
         created_by: ownerId,
         generated_from_schedule: true,
@@ -260,6 +316,10 @@ export interface ReporteFranjas {
     /** Insert que chocó con el índice único (otro BFF ganó la carrera). */
     duplicadasEnCarrera: number;
     cerradas: number;
+    /** Cerradas por el horario que volvieron (sin aplicar: «se reabrirían»). */
+    reabiertas: number;
+    /** Franjas abiertas a las que se les puso `cupos_por_sesion`. */
+    cuposAjustados: number;
     conservadasConReserva: { id: string; label?: string; slot_date: string; start_time: string }[];
     errores: string[];
     /** Lo que se crearía/creó, para el reporte por grupo. */
@@ -269,26 +329,62 @@ export interface ReporteFranjas {
 const esDuplicado = (e: any) => e?.code === '23505' || /duplicate key/i.test(String(e?.message ?? ''));
 
 /**
+ * `cupos_por_sesion` y `dias_semana` de la escuela (migración M1). Sin las
+ * columnas, sin fila o con error → null los dos (= como antes). Nunca lanza.
+ */
+export async function ajustesDelGenerador(schoolId: string): Promise<{ cupos: number | null; diasSemana: number[] | null }> {
+    try {
+        const { data, error } = await supabase.from('school_trial_class_settings')
+            .select('cupos_por_sesion, dias_semana').eq('school_id', schoolId).maybeSingle();
+        if (error || !data) return { cupos: null, diasSemana: null };
+        const cupos = Number((data as any).cupos_por_sesion);
+        return {
+            cupos: Number.isInteger(cupos) && cupos > 0 ? cupos : null,
+            diasSemana: diasSemanaValidos((data as any).dias_semana),
+        };
+    } catch {
+        return { cupos: null, diasSemana: null };
+    }
+}
+
+/**
  * Sincroniza la ventana rodante de una escuela. Sin `aplicar` no escribe nada
  * (simulación). Nunca lanza por errores de la base: los devuelve en `errores`.
+ * `soloEquipo`: solo las franjas de ese equipo (las demás ni se leen ni se
+ * tocan) — lo pide «Mi semana» después de que el profe ajusta su semana.
  */
 export async function sincronizarFranjasDeEscuela(
     schoolId: string,
-    opciones: { semanas?: number; aplicar?: boolean; incluirFestivos?: boolean; hoy?: string } = {},
+    opciones: { semanas?: number; aplicar?: boolean; incluirFestivos?: boolean; hoy?: string; soloEquipo?: string | null } = {},
 ): Promise<ReporteFranjas> {
     const semanas = opciones.semanas ?? SEMANAS_POR_DEFECTO;
     const hoy = opciones.hoy ?? hoyBogota();
     const hasta = isoDe(diaUTC(hoy) + semanas * 7 * DIA_MS);
+    const soloEquipo = opciones.soloEquipo || null;
     const reporte: ReporteFranjas = {
         schoolId, escuela: schoolId, aplicado: !!opciones.aplicar, ventana: { desde: hoy, hasta },
         plan: { franjas: [], festivosOmitidos: [], excluidos: [], choques: [] },
-        creadas: 0, yaExistian: 0, duplicadasEnCarrera: 0, cerradas: 0, conservadasConReserva: [], errores: [], nuevas: [],
+        creadas: 0, yaExistian: 0, duplicadasEnCarrera: 0, cerradas: 0, reabiertas: 0, cuposAjustados: 0,
+        conservadasConReserva: [], errores: [], nuevas: [],
     };
 
-    const [escuela, equipos] = await Promise.all([
+    // `recibe_clase_prueba` llega con la migración M1: sin ella, todos reciben.
+    const leerEquipos = (columnas: string) => {
+        let q = supabase.from('teams').select(columnas).eq('school_id', schoolId);
+        if (soloEquipo) q = q.eq('id', soloEquipo);
+        return q.limit(500);
+    };
+    const [escuela, equiposConColumna, ajustes, excepciones] = await Promise.all([
         supabase.from('schools').select('name, owner_id').eq('id', schoolId).maybeSingle(),
-        supabase.from('teams').select('id, name, active, admite_nuevos, schedule').eq('school_id', schoolId).limit(500),
+        leerEquipos('id, name, active, admite_nuevos, schedule, recibe_clase_prueba'),
+        ajustesDelGenerador(schoolId),
+        // Sin caché: corre justo después de que el profe cambió su semana.
+        excepcionesDeEscuela(schoolId, hoy, hasta, { sinCache: true }),
     ]);
+    let equipos: any = equiposConColumna;
+    if (equipos.error && /recibe_clase_prueba/.test(String(equipos.error.message ?? ''))) {
+        equipos = await leerEquipos('id, name, active, admite_nuevos, schedule');
+    }
     if (escuela.error || !escuela.data) {
         reporte.errores.push(`escuela: ${escuela.error?.message ?? 'no existe'}`);
         return reporte;
@@ -301,20 +397,28 @@ export async function sincronizarFranjasDeEscuela(
     const ownerId: string | null = (escuela.data as any).owner_id ?? null;
 
     reporte.plan = planificarFranjas((equipos.data ?? []) as EquipoParaFranjas[], hoy, semanas,
-        { incluirFestivos: opciones.incluirFestivos });
+        { incluirFestivos: opciones.incluirFestivos, excepciones, diasSemana: ajustes.diasSemana });
 
-    // `generated_from_schedule` llega con la migración 20261006084303. Si no
-    // está aplicada se lee sin ella: la simulación sirve igual, y como ninguna
-    // franja figura como generada, no se cierra nada por error.
-    let existentes = await supabase.from('school_trial_slots')
-        .select('id, team_id, label, slot_date, start_time, reserved_count, is_open, generated_from_schedule')
-        .eq('school_id', schoolId).gte('slot_date', hoy).limit(5000);
+    // `generated_from_schedule` llega con la migración 20261006084303 y
+    // `cerrada_por` con M1. Si faltan se lee sin ellas: la simulación sirve
+    // igual; sin `generated_from_schedule` ninguna franja figura como generada
+    // (no se cierra nada por error) y sin `cerrada_por` no se reabre ninguna.
+    const leerExistentes = (columnas: string) => {
+        let q = supabase.from('school_trial_slots').select(columnas).eq('school_id', schoolId).gte('slot_date', hoy);
+        if (soloEquipo) q = q.eq('team_id', soloEquipo);
+        return q.limit(5000);
+    };
+    const BASE = 'id, team_id, label, slot_date, start_time, reserved_count, is_open';
+    let existentes: any = await leerExistentes(`${BASE}, generated_from_schedule, max_capacity, cerrada_por`);
+    let conCerradaPor = true;
+    if (existentes.error && /cerrada_por/.test(String(existentes.error.message ?? ''))) {
+        conCerradaPor = false;
+        existentes = await leerExistentes(`${BASE}, generated_from_schedule, max_capacity`);
+    }
     let sinMigracion = false;
-    if (existentes.error && /generated_from_schedule/.test(existentes.error.message)) {
+    if (existentes.error && /generated_from_schedule/.test(String(existentes.error.message ?? ''))) {
         sinMigracion = true;
-        existentes = await supabase.from('school_trial_slots')
-            .select('id, team_id, label, slot_date, start_time, reserved_count, is_open')
-            .eq('school_id', schoolId).gte('slot_date', hoy).limit(5000) as any;
+        existentes = await leerExistentes(BASE);
     }
     if (existentes.error) {
         reporte.errores.push(`franjas existentes: ${existentes.error.message}`);
@@ -322,7 +426,8 @@ export async function sincronizarFranjasDeEscuela(
     }
 
     const filas = (existentes.data ?? []) as any[];
-    const cmp = compararConExistentes(reporte.plan.franjas, filas as FranjaExistente[], reporte.ventana);
+    const cmp = compararConExistentes(reporte.plan.franjas, filas as FranjaExistente[], reporte.ventana,
+        { cupos: ajustes.cupos });
     reporte.yaExistian = cmp.yaExistian;
     reporte.nuevas = cmp.crear;
     reporte.conservadasConReserva = cmp.conservadasConReserva.map((e: any) => ({
@@ -330,7 +435,10 @@ export async function sincronizarFranjasDeEscuela(
     }));
 
     if (!opciones.aplicar) {
-        reporte.cerradas = cmp.cerrar.length; // «se cerrarían»
+        // «se cerrarían / se reabrirían / se ajustarían»
+        reporte.cerradas = cmp.cerrar.length;
+        reporte.reabiertas = cmp.reabrir.length;
+        reporte.cuposAjustados = cmp.ajustarCupo.length;
         return reporte;
     }
     if (sinMigracion) {
@@ -346,7 +454,7 @@ export async function sincronizarFranjasDeEscuela(
         const lote = cmp.crear.slice(i, i + LOTE);
         let filasLote: ReturnType<typeof filaParaInsertar>[];
         try {
-            filasLote = lote.map((f) => filaParaInsertar(f, schoolId, ownerId, hoy));
+            filasLote = lote.map((f) => filaParaInsertar(f, schoolId, ownerId, hoy, ajustes.cupos));
         } catch (e: any) {
             reporte.errores.push(`validación: ${e?.message}`);
             continue;
@@ -364,15 +472,42 @@ export async function sincronizarFranjasDeEscuela(
 
     if (cmp.cerrar.length) {
         // El filtro reserved_count = 0 se repite en el UPDATE: si alguien
-        // reservó entre la lectura y ahora, esa franja NO se cierra.
+        // reservó entre la lectura y ahora, esa franja NO se cierra. Con M1 se
+        // anota que la cerró el horario: así se puede reabrir si vuelve.
         const { data, error } = await supabase.from('school_trial_slots')
-            .update({ is_open: false })
+            .update(conCerradaPor ? { is_open: false, cerrada_por: 'horario' } : { is_open: false })
             .in('id', cmp.cerrar.map((e) => e.id))
             .eq('generated_from_schedule', true)
             .eq('reserved_count', 0)
             .select('id');
         if (error) reporte.errores.push(`cerrar obsoletas: ${error.message}`);
         else reporte.cerradas = (data ?? []).length;
+    }
+
+    if (conCerradaPor && cmp.reabrir.length) {
+        // Solo las que cerró el horario: los filtros se repiten en el UPDATE.
+        const { data, error } = await supabase.from('school_trial_slots')
+            .update({ is_open: true, cerrada_por: null })
+            .in('id', cmp.reabrir.map((e) => e.id))
+            .eq('generated_from_schedule', true)
+            .eq('cerrada_por', 'horario')
+            .eq('is_open', false)
+            .select('id');
+        if (error) reporte.errores.push(`reabrir: ${error.message}`);
+        else reporte.reabiertas = (data ?? []).length;
+    }
+
+    if (ajustes.cupos != null && cmp.ajustarCupo.length) {
+        // reserved_count ≤ cupos se repite en el UPDATE (CHECK de la tabla, y
+        // una reserva que entre entre la lectura y ahora).
+        const { data, error } = await supabase.from('school_trial_slots')
+            .update({ max_capacity: ajustes.cupos })
+            .in('id', cmp.ajustarCupo.map((e) => e.id))
+            .eq('generated_from_schedule', true)
+            .lte('reserved_count', ajustes.cupos)
+            .select('id');
+        if (error) reporte.errores.push(`ajustar cupos: ${error.message}`);
+        else reporte.cuposAjustados = (data ?? []).length;
     }
 
     return reporte;

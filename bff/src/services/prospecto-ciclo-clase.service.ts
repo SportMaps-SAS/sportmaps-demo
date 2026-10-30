@@ -178,10 +178,13 @@ export function claseTerminada(horaInicio: string, horaFin: string | null, ahora
 /** «¿Cómo le fue?» + el enlace de inscripción. Pura. */
 export function textoSeguimientoClase(a: {
     saludo: string; atleta: string | null; esAcudiente: boolean; enlace: string | null; asistio: boolean;
+    /** Nombre de la clase de la escuela (B3, textos-clase-prueba). Por defecto, «clase de cortesía». */
+    nombreClase?: string;
 }): string {
+    const clase = a.nombreClase || 'clase de cortesía';
     const pregunta = a.esAcudiente && a.atleta
-        ? `¿Cómo le fue a *${a.atleta}* en la clase de cortesía de hoy?`
-        : '¿Cómo te fue en la clase de cortesía de hoy?';
+        ? `¿Cómo le fue a *${a.atleta}* en la ${clase} de hoy?`
+        : `¿Cómo te fue en la ${clase} de hoy?`;
     const cierre = a.enlace
         ? `Si quieren seguir entrenando con nosotros, aquí pueden hacer la inscripción: ${a.enlace}`
         : 'Si quieren seguir entrenando con nosotros, respóndeme por aquí y la escuela les ayuda con la inscripción.';
@@ -212,6 +215,8 @@ export interface DepsSeguimiento {
     /** Lo que escribió el contacto en las últimas 24 h (para no preguntarle «¿cómo te fue?» a quien canceló). */
     entrantesDelDia: (conversationId: string) => Promise<string[]>;
     enlace: (schoolId: string) => Promise<string | null>;
+    /** Nombre de la clase de la escuela («clase de cortesía» | «clase de prueba»). */
+    nombreClase?: (schoolId: string) => Promise<string>;
     /** true = este BFF lo tomó (nadie lo había mandado). */
     reclamar: (r: ReservaParaSeguimiento, iso: string) => Promise<boolean>;
     /** Devuelve el reclamo si el envío falló (otro tick lo intenta). */
@@ -220,7 +225,7 @@ export interface DepsSeguimiento {
     enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, payload: Record<string, unknown>) => Promise<boolean>;
 }
 
-const PASO_SEGUIMIENTO_CLASE = 'cortesia_seguimiento_noche';
+export const PASO_SEGUIMIENTO_CLASE = 'cortesia_seguimiento_noche';
 
 const DEPS_SEGUIMIENTO: DepsSeguimiento = {
     async reservasDelDia(fecha) {
@@ -280,6 +285,10 @@ const DEPS_SEGUIMIENTO: DepsSeguimiento = {
     async enlace(schoolId) {
         const { enlaceDeInscripcion } = await import('./whatsapp-bot.service');
         return enlaceDeInscripcion(schoolId);
+    },
+    async nombreClase(schoolId) {
+        const { textosClaseDeEscuela } = await import('./textos-clase-prueba');
+        return (await textosClaseDeEscuela(schoolId)).nombre;
     },
     async reclamar(r, iso) {
         // UPDATE condicional: entre los 3 BFF, solo uno encuentra la marca vacía.
@@ -347,6 +356,7 @@ export async function runSeguimientoNocheCortesia(
             const texto = textoSeguimientoClase({
                 saludo, atleta, esAcudiente: !!r.acudiente, enlace: await d.enlace(r.schoolId).catch(() => null),
                 asistio: r.etapa === 'asistio',
+                nombreClase: d.nombreClase ? await d.nombreClase(r.schoolId).catch(() => undefined) : undefined,
             });
             const env = await d.enviar(integ, conv.id, waId, texto, {
                 step: PASO_SEGUIMIENTO_CLASE, lead_id: r.leadId, trial_slot_id: r.slot.id,

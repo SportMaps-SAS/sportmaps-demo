@@ -14,11 +14,12 @@
  *   tiene id propio se le asigna y se guarda antes de abrirla (mismo criterio que
  *   openBlockTacticalBoard de TrainingPlansPage).
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, Maximize2, Presentation, Sun, X, Loader2 } from 'lucide-react';
+import { toast as aviso } from 'sonner';
+import { CalendarPlus, ChevronLeft, ChevronRight, Maximize2, MoreHorizontal, Presentation, Repeat, Sun, X, Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
@@ -34,10 +35,17 @@ import { SessionViewer } from '@/components/school/SessionViewer';
 import { fechaHumana } from './asistenciaModel';
 import { registrosPorEquipoYDia } from './useAsistenciaV2Data';
 import {
-  bloquesDeSesion, cargaDeSemana, entrenosDelHorario, estadoDelDia, etiquetaDia, listasEntre, mesDelPlan, nombreMes, objetivoTexto,
-  planVigente, rangoSemana, rutaPlanear, semanaActual, semanaDe, textoSemana, type BloqueV2, type EquipoConHorario, type EstadoDia, type SemanaPlan,
+  bloquesDeSesion, cargaDeSemana, entrenosDelHorario, estadoDelDia, etiquetaDia, horaCorta, listasEntre, mesDelPlan, nombreMes, objetivoTexto,
+  planVigente, rangoSemana, rutaPlanear, semanaActual, semanaDe, textoSemana, type BloqueV2, type EstadoDia, type SemanaPlan,
 } from './sesionesModel';
 import { useWakeLock, wakeLockDisponible } from './useCoachV2Senal';
+import {
+  entrenosDelDia, entrenosDelHorarioConAjustes, esFechaIso, etiquetaEstado, horarioTexto, semanasHasta,
+  type EquipoSemana, type EstadoEntreno,
+} from './semana/semanaAjustesModel';
+import { useSemanaAjustes } from './semana/useSemanaAjustes';
+import { AjustarEntrenoSheet, type AbrirAjuste } from './semana/AjustarEntrenoSheet';
+import { ClasesPruebaDelDia } from './semana/ClasesPruebaDelDia';
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- tablas del plan sin tipar en types.ts (igual que MesocycleSection) */
 
@@ -174,6 +182,7 @@ function usePlanDelMes(teamId: string | null) {
 // ── Pantalla ─────────────────────────────────────────────────────────────────
 
 export interface CoachSessionsV2Props {
+  /** `?tab=semana&fecha=YYYY-MM-DD` (link del aviso de clase de prueba) manda sobre esto. */
   tabInicial?: 'hoy' | 'semana' | 'plan';
   /** Donde se crean y editan sesiones y el plan (la planificación completa). */
   rutaPlanificacion?: string;
@@ -185,7 +194,16 @@ export default function CoachSessionsV2({ tabInicial = 'hoy', rutaPlanificacion 
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const hoy = todayColombia();
-  const [tab, setTab] = useState<'hoy' | 'semana' | 'plan'>(tabInicial);
+  // El aviso al profe («Nueva clase de prueba») abre la Semana en ese día.
+  const [params] = useSearchParams();
+  const fechaUrl = esFechaIso(params.get('fecha')) ? params.get('fecha') : null;
+  const [tab, setTab] = useState<'hoy' | 'semana' | 'plan'>(() => {
+    const t = params.get('tab');
+    if (t === 'hoy' || t === 'semana' || t === 'plan') return t;
+    return fechaUrl ? 'semana' : tabInicial;
+  });
+  // Otro aviso con la pantalla ya abierta: vuelve a la Semana de ese día.
+  useEffect(() => { if (fechaUrl) setTab('semana'); }, [fechaUrl]);
   const [cancha, setCancha] = useState<{ sesion: SesionS; equipo: EquipoS } | null>(null);
   const [pizarra, setPizarra] = useState<{ teamId: string; teamName: string; blockId: string; label: string } | null>(null);
   const [verSesion, setVerSesion] = useState<{ id: string; teamId: string; teamName: string } | null>(null);
@@ -256,7 +274,8 @@ export default function CoachSessionsV2({ tabInicial = 'hoy', rutaPlanificacion 
         />
       ) : tab === 'semana' ? (
         <TabSemana
-          hoy={hoy} teamIds={teamIds} equipoPorId={equipoPorId} rutaPlanificacion={rutaPlanificacion}
+          key={fechaUrl ?? 'semana'}
+          hoy={hoy} teamIds={teamIds} equipoPorId={equipoPorId} rutaPlanificacion={rutaPlanificacion} fechaInicial={fechaUrl}
           onVer={(s) => setVerSesion({ id: s.id, teamId: s.team_id, teamName: equipoPorId.get(s.team_id)?.name ?? 'Equipo' })}
           onCancha={(s) => { const e = equipoPorId.get(s.team_id); if (e) setCancha({ sesion: s, equipo: e }); }}
         />
@@ -395,20 +414,49 @@ const ESTILO_DIA: Record<Exclude<EstadoDia, ''>, string> = {
   Planeado: 'bg-muted text-muted-foreground',
 };
 
-function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCancha }: {
+/** Etiqueta del entreno ajustado (cancelado / cambiado / extra). */
+const ESTILO_ENTRENO: Record<Exclude<EstadoEntreno, 'normal'>, string> = {
+  cancelada: 'bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300',
+  movida: 'bg-amber-100 text-amber-900 dark:bg-amber-950/60 dark:text-amber-300',
+  extra: 'bg-sky-100 text-sky-900 dark:bg-sky-950/60 dark:text-sky-300',
+};
+
+function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, fechaInicial, onVer, onCancha }: {
   hoy: string; teamIds: string[]; equipoPorId: Map<string, EquipoS>; rutaPlanificacion: string;
+  /** Día que abre el link del aviso (`?fecha=`): la semana de ese día, marcado. */
+  fechaInicial?: string | null;
   onVer: (s: SesionS) => void; onCancha: (s: SesionS) => void;
 }) {
   // El horario del equipo (teams.schedule): un día con horario y sin sesión planeada no es «Día libre».
-  const conHorario: EquipoConHorario[] = useMemo(
+  const conHorario: EquipoSemana[] = useMemo(
     () => [...equipoPorId.values()].map((e) => ({ id: e.id, name: e.name, franjas: leerFranjas(e.schedule) })),
     [equipoPorId],
   );
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(() => (fechaInicial ? semanasHasta(hoy, fechaInicial) : 0));
   const dias = useMemo(() => semanaDe(hoy, offset), [hoy, offset]);
   const sesQ = useSesionesRango(teamIds, dias[0], dias[6]);
   const listasQ = useListasRango(teamIds, dias[0], dias[6]);
-  const [abierto, setAbierto] = useState<string | null>(hoy);
+  const [abierto, setAbierto] = useState<string | null>(fechaInicial ?? hoy);
+
+  // «Mi semana»: cancelar, mover o agregar un entreno solo esa fecha, y las clases
+  // de prueba. Sin la migración (tabla o RPC inexistente) la pestaña es la de siempre.
+  const semana = useSemanaAjustes({ teamIds, lunes: dias[0] });
+  const [ajustando, setAjustando] = useState<AbrirAjuste | null>(null);
+  const equiposLista = useMemo(() => conHorario.map((e) => ({ id: e.id, name: e.name })), [conHorario]);
+  const lugares = useMemo(
+    () => [...new Set(conHorario.flatMap((e) => e.franjas.map((f) => f.place?.trim() ?? '').filter(Boolean)))],
+    [conHorario],
+  );
+  const marcado = useRef<HTMLLIElement | null>(null);
+  useEffect(() => { marcado.current?.scrollIntoView?.({ block: 'center' }); }, []);
+
+  const repetir = async () => {
+    const r = await semana.repetir();
+    if (!r.ok) { aviso.error(r.error ?? 'No se pudo copiar.'); return; }
+    aviso.success((r.copiadas ?? 0) > 0
+      ? `Listo: ${r.copiadas} ${r.copiadas === 1 ? 'ajuste copiado' : 'ajustes copiados'} a esta semana.`
+      : 'Esta semana ya tenía esos ajustes.');
+  };
 
   return (
     <div className="space-y-3">
@@ -418,6 +466,20 @@ function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCanc
         <Button variant="ghost" size="icon" className="h-touch w-touch" aria-label="Semana siguiente" onClick={() => setOffset((o) => o + 1)}><ChevronRight className="h-5 w-5" /></Button>
       </div>
       {offset !== 0 && <Button variant="outline" size="sm" className="min-h-touch w-full" onClick={() => setOffset(0)}>Volver a esta semana</Button>}
+
+      {semana.disponible && (
+        <div className="flex flex-wrap gap-2">
+          {semana.repetirPlan.total > 0 && (
+            <Button variant="outline" size="sm" className="min-h-touch flex-1 gap-1.5" disabled={semana.guardando} onClick={() => void repetir()} data-testid="repetir-semana">
+              <Repeat className="h-4 w-4" aria-hidden /> Repetir ajustes de la semana pasada
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="min-h-touch flex-1 gap-1.5" data-testid="entreno-extra"
+            onClick={() => setAjustando({ entreno: null, fecha: dias.includes(hoy) ? hoy : dias[0] })}>
+            <CalendarPlus className="h-4 w-4" aria-hidden /> Entreno extra
+          </Button>
+        </div>
+      )}
 
       {sesQ.isLoading ? (
         <div className="space-y-2" role="status" aria-label="Cargando la semana">
@@ -431,8 +493,12 @@ function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCanc
             const delDia = (sesQ.data ?? []).filter((s) => s.session_date === d);
             const { dia, num } = etiquetaDia(d);
             const listas = delDia.map((s) => listasQ.data?.get(`${s.team_id}|${d}`));
-            // Entrenos del horario sin sesión planeada ese día.
-            const sinPlan = entrenosDelHorario(d, conHorario).filter((p) => !delDia.some((s) => s.team_id === p.teamId));
+            // Entrenos del horario (con los ajustes de esa fecha) sin sesión planeada ese día.
+            const delHorario = semana.disponible ? entrenosDelHorarioConAjustes(d, conHorario, semana.ajustes) : entrenosDelHorario(d, conHorario);
+            const sinPlan = delHorario.filter((p) => !delDia.some((s) => s.team_id === p.teamId));
+            const entrenosDia = semana.disponible ? entrenosDelDia(d, conHorario, semana.ajustes) : [];
+            const cancelados = entrenosDia.filter((e) => e.estado === 'cancelada');
+            const clasesDia = semana.clases.filter((c) => c.fecha === d);
             const listaSinPlan = sinPlan.some((p) => !!listasQ.data?.get(`${p.teamId}|${d}`));
             const hayEntreno = delDia.length > 0 || sinPlan.length > 0;
             const est = hayEntreno
@@ -440,14 +506,16 @@ function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCanc
               : '';
             const titulo = hayEntreno
               ? [...delDia.map((s) => equipoPorId.get(s.team_id)?.name ?? 'Equipo'), ...sinPlan.map((p) => p.nombre)].join(' · ')
-              : 'Sin entrenos';
+              : cancelados.length ? [...new Set(cancelados.map((c) => c.nombre))].join(' · ') : 'Sin entrenos';
             const horas = sinPlan.map((p) => p.hora).filter(Boolean).join(' · ');
             const sub = delDia.length
               ? delDia.map((s) => objetivoTexto(s.objectives)).filter(Boolean).join(' · ')
-              : sinPlan.length ? `Entreno${horas ? ` ${horas}` : ''} · sin plan` : 'Día libre';
+              : sinPlan.length ? `Entreno${horas ? ` ${horas}` : ''} · sin plan`
+              : cancelados.length ? `Entreno cancelado${cancelados[0].motivo ? ` por ${cancelados[0].motivo}` : ''}` : 'Día libre';
             const open = abierto === d && delDia.length > 0;
             return (
-              <li key={d} className={cn('overflow-hidden rounded-2xl border', d === hoy ? 'bg-primary/5' : 'bg-card')} data-testid="dia-semana">
+              <li key={d} ref={d === fechaInicial ? marcado : undefined}
+                className={cn('overflow-hidden rounded-2xl border', d === hoy ? 'bg-primary/5' : 'bg-card', d === fechaInicial && 'ring-2 ring-primary')} data-testid="dia-semana">
                 <div className="flex items-center">
                 <button type="button" className="flex min-h-touch min-w-0 flex-1 items-center gap-3 px-3 py-2 text-left" onClick={() => setAbierto(open ? null : d)} aria-expanded={open} disabled={delDia.length === 0}>
                   <span className="w-10 shrink-0 text-center">
@@ -464,6 +532,25 @@ function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCanc
                   <Button asChild variant="outline" size="sm" className="mr-3 min-h-touch shrink-0"><Link to={rutaPlanear(rutaPlanificacion, { equipo: sinPlan[0].teamId, fecha: d })}>Planear</Link></Button>
                 )}
                 </div>
+                {entrenosDia.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-3 pb-2" aria-label={`Entrenos del ${dia} ${num}`}>
+                    {entrenosDia.map((en) => {
+                      const etiqueta = etiquetaEstado(en);
+                      return (
+                        <button key={en.clave} type="button" onClick={() => setAjustando({ entreno: en, fecha: d })} data-testid="entreno-ajustable"
+                          aria-label={`Ajustar ${en.nombre}, ${horarioTexto(en)}${etiqueta ? `, ${etiqueta}` : ''}`}
+                          className={cn('flex min-h-touch items-center gap-1.5 rounded-full border px-3 text-xs', en.estado === 'cancelada' ? 'border-dashed text-muted-foreground' : 'bg-background')}>
+                          <span className={cn('tabular-nums', en.estado === 'cancelada' && 'line-through')}>
+                            {en.hora ? horaCorta(en.hora) : 'Sin hora'}{conHorario.length > 1 ? ` · ${en.nombre}` : ''}
+                          </span>
+                          {en.estado !== 'normal' && etiqueta && <span className={cn('rounded-full px-1.5 py-0.5 font-semibold', ESTILO_ENTRENO[en.estado])}>{etiqueta}</span>}
+                          <MoreHorizontal className="h-4 w-4 shrink-0" aria-hidden />
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <ClasesPruebaDelDia clases={clasesDia} hoy={hoy} equiposEscuela={semana.equiposEscuela} guardando={semana.guardando} onMarcar={semana.marcar} />
                 {open && (
                   <div className="space-y-3 border-t px-3 py-3">
                     {sinPlan.map((p) => (
@@ -500,7 +587,12 @@ function TabSemana({ hoy, teamIds, equipoPorId, rutaPlanificacion, onVer, onCanc
           })}
         </ul>
       )}
-      <p className="px-1 text-xs text-muted-foreground">Ves tus equipos. La escuela ve la semana de todos los profes.</p>
+      <p className="px-1 text-xs text-muted-foreground">
+        Ves tus equipos. La escuela ve la semana de todos los profes.
+        {semana.disponible && ' Toca la hora de un entreno para cancelarlo o moverlo solo ese día.'}
+      </p>
+      <AjustarEntrenoSheet abierto={ajustando} equipos={equiposLista} lugares={lugares} guardando={semana.guardando}
+        onAplicar={semana.aplicar} onClose={() => setAjustando(null)} />
     </div>
   );
 }

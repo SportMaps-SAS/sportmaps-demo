@@ -51,6 +51,7 @@ import { atenderEntrantePlataforma } from '../services/plataforma-wa-entrante.se
 import {
     identificarStaffPorTelefono, procesarMensajeStaff, esDisparadorDeLista, type StaffIdentificado,
 } from '../services/whatsapp-asistencia-staff.service';
+import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
 
 /**
  * Corre en segundo plano lo que espera (la ráfaga, el acuse): el webhook
@@ -543,6 +544,21 @@ async function handleBotTurn(
     // acaba de escribir: la ventana de 24 h está abierta). Con la baja pedida
     // (optedOut) no se sigue. Si no es de asistencia, el flujo normal sigue igual.
     if (!optedOut && await atenderAsistenciaDeStaff(req, integration, conversationId, msg)) return;
+
+    // Respuesta a una campaña de marketing de la escuela (plan B5 T4): los
+    // botones de su plantilla (`smc:<campaña>:si|luego|baja`) o un «no me
+    // interesa» corto justo después de ella. El filtro es gratis (prefijo o
+    // frase) y no depende del asistente: la campaña la aprobó la escuela. Sin
+    // campaña detrás, el mensaje sigue el camino de siempre. Un STOP que la
+    // ingesta ya registró (optedOut) lo confirma el bot como siempre.
+    if (esPosibleRespuestaDeCampana(msg) && !(optedOut && !msg.botonId)) {
+        const r = await atenderRespuestaDeCampana({ integration, conversationId, msg })
+            .catch(() => 'no_aplica' as const);
+        if (r !== 'no_aplica') {
+            req.log?.info({ conversationId, campana: r }, 'WhatsApp: respuesta a una campaña');
+            return;
+        }
+    }
 
     // ¿A este contacto el asistente le contesta? Se pregunta ANTES de cualquier
     // respuesta, del modelo y de cualquier borrador.

@@ -20,12 +20,16 @@
  *    cadena normal de `chatWithTools` (Gemini → Groq).
  *  - Tope de respuestas por hora por conversación: un prospecto no puede
  *    convertir el número de la escuela en un chat infinito con el modelo.
+ *  - Nombre y valor de la clase por escuela (textos-clase-prueba, 2026-10-30):
+ *    si la escuela cobra la clase, el prompt dice su valor y prohíbe «gratis»
+ *    y «cortesía». Sin ajustes, el prompt de siempre letra por letra.
  */
 import { supabase } from '../config/supabase';
 import { chatWithTools } from './llm.service';
 import { textoDeEscuela } from './whatsapp-ajustes-escuela.service';
 import { filtrarSalidaDelModelo, enlacesNoPermitidos } from './whatsapp-salida-segura';
 import type { FilaReciente } from './whatsapp-reglas-turno';
+import { textosClaseDeEscuela, reglaDeClaseParaPrompt, TEXTOS_POR_DEFECTO, type TextosClase } from './textos-clase-prueba';
 
 export const PASO_PROSPECTO_IA = 'prospecto_ia';
 export const MODELO_PROSPECTO_DEFAULT = 'claude-haiku-5-5';
@@ -144,7 +148,11 @@ export function promptDeProspecto(p: {
     precios: string | null;
     enlace: string | null;
     atencion: string | null;
+    /** Nombre y valor de la clase de esta escuela. Sin él, «clase de cortesía» (como siempre). */
+    textos?: TextosClase | null;
 }): string {
+    const t = p.textos ?? TEXTOS_POR_DEFECTO;
+    const regla = reglaDeClaseParaPrompt(t);
     return [
         `Eres el asistente AUTOMÁTICO del WhatsApp de *${p.escuela}*. Le respondes a una persona INTERESADA que todavía no es de la escuela. Hoy es ${hoyLegible()} (hora de Colombia).`,
         '',
@@ -164,10 +172,10 @@ export function promptDeProspecto(p: {
         '- Grupos: el nombre tal cual, sin traducirlo a edades. Si un grupo dice «sin cupos», di «por ahora no recibe deportistas nuevos», no «está lleno».',
         '- Horarios: solo los de <grupos>, sin redondear ni completar con otro grupo.',
         '- Si pregunta por un deporte que no aparece en <grupos>, dile con amabilidad cuál es el deporte de la escuela.',
-        '- Clase de cortesía: que te escriba el día que quiere venir (por ejemplo «miércoles») y le muestras los horarios de ese día. No reserves ni prometas cupo.',
+        `- ${t.nombreInicial}: que te escriba el día que quiere venir (por ejemplo «miércoles») y le muestras los horarios de ese día. No reserves ni prometas cupo.${regla ? ` ${regla}` : ''}`,
         '- Inscripción: explica los pasos de la ficha y comparte el enlace de <enlace>.',
         '- No repitas lo que ya se le dijo en <conversacion>, salvo que lo pida. Si ya hay conversación, no vuelvas a saludar.',
-        '- Cierra, cuando tenga sentido, invitando al siguiente paso (clase de cortesía o inscripción), sin presionar.',
+        `- Cierra, cuando tenga sentido, invitando al siguiente paso (${t.nombre} o inscripción), sin presionar.`,
         '',
         'TONO',
         p.estilo || 'Cálido, cercano y breve, en español de Colombia, tratando de «tú».',
@@ -201,18 +209,21 @@ export async function redactarRespuestaDeProspecto(p: {
      * El modelo escribe UN recordatorio corto que retoma lo último que preguntó.
      */
     seguimiento?: boolean;
+    /** Nombre y valor de la clase. Sin él se leen de la escuela (school_trial_class_settings). */
+    textos?: TextosClase | null;
 }): Promise<string | null> {
     try {
         const ficha = await fichaDeProspectos(p.schoolId);
         if (!ficha) return null;
         if (topeDeRespuestasIa(p.recientes)) return null;
-        if (p.seguimiento) return await redactarSeguimiento(p, ficha);
+        const textos = p.textos ?? await textosClaseDeEscuela(p.schoolId);
+        if (p.seguimiento) return await redactarSeguimiento({ ...p, textos }, ficha);
         const [estilo, atencion] = await Promise.all([
             estiloDeRespuesta(p.schoolId),
             textoDeEscuela(p.schoolId, 'wa_atencion_presencial'),
         ]);
         const system = promptDeProspecto({
-            escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion,
+            escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion, textos,
         });
         // Lo que escribió después de la última respuesta ya viene en `nuevo`:
         // se saca de la transcripción para no duplicarlo.
@@ -237,26 +248,31 @@ export async function redactarRespuestaDeProspecto(p: {
     }
 }
 
-/** Instrucción del seguimiento de ~20 h (va como mensaje del sistema de la escuela, no del interesado). */
-export const INSTRUCCION_SEGUIMIENTO =
-    'El interesado dejó de escribir hace casi un día. Escríbele UN mensaje corto (máximo 2 frases, 300 caracteres) ' +
-    'que retome lo último que preguntó o lo último que se le ofreció, y lo invite con calma al siguiente paso ' +
-    '(decirte el día para su clase de cortesía, o inscribirse). Sin repetir listas ni precios ya enviados, sin presionar, ' +
-    'sin volver a presentarte. Si en la conversación dijo que no le interesa o que ya lo resolvió, responde solo: NADA';
+/** Instrucción del seguimiento de ~20 h (va como mensaje del sistema de la escuela, no del interesado). Pura. */
+export function instruccionSeguimiento(t: TextosClase = TEXTOS_POR_DEFECTO): string {
+    return 'El interesado dejó de escribir hace casi un día. Escríbele UN mensaje corto (máximo 2 frases, 300 caracteres) ' +
+        'que retome lo último que preguntó o lo último que se le ofreció, y lo invite con calma al siguiente paso ' +
+        `(decirte el día para su ${t.nombre}, o inscribirse). Sin repetir listas ni precios ya enviados, sin presionar, ` +
+        'sin volver a presentarte. Si en la conversación dijo que no le interesa o que ya lo resolvió, responde solo: NADA';
+}
+
+/** La de siempre («clase de cortesía»). */
+export const INSTRUCCION_SEGUIMIENTO = instruccionSeguimiento();
 
 async function redactarSeguimiento(p: Parameters<typeof redactarRespuestaDeProspecto>[0], ficha: string): Promise<string | null> {
+    const textos = p.textos ?? TEXTOS_POR_DEFECTO;
     const [estilo, atencion] = await Promise.all([
         estiloDeRespuesta(p.schoolId),
         textoDeEscuela(p.schoolId, 'wa_atencion_presencial'),
     ]);
     const system = promptDeProspecto({
-        escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion,
+        escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion, textos,
     });
     const historial = transcripcion(p.recientes, 20);
     if (!historial) return null;
     const r = await chatWithTools({
         system,
-        messages: [{ role: 'user', content: `<conversacion>\n${historial}\n</conversacion>\n\n<instruccion_de_la_escuela>${INSTRUCCION_SEGUIMIENTO}</instruccion_de_la_escuela>` }],
+        messages: [{ role: 'user', content: `<conversacion>\n${historial}\n</conversacion>\n\n<instruccion_de_la_escuela>${instruccionSeguimiento(textos)}</instruccion_de_la_escuela>` }],
         modeloClaude: process.env.WHATSAPP_PROSPECTO_MODEL || MODELO_PROSPECTO_DEFAULT,
         uso: { schoolId: p.schoolId, conversationId: p.conversationId, feature: 'bot' },
     });

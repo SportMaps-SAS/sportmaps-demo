@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 852,
-  "head": "20261029222300",
+  "count": 857,
+  "head": "20261030173727",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -855,6 +855,11 @@
     {"v":"20261029190407","file":"20261029190407_platform_wa_canal_interruptor_y_auditoria.sql","sha256":"e4fa4cd8328355bef50037f3fac2a09afe622b927cc39ec3be65b28b0d135605","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029211413","file":"20261029211413_post_entreno_plazo_dia_siguiente.sql","sha256":"45fba9c5f2fcdd334ae0e3109397522b0c6b352ac3be57f8eef4957019454eaa","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029215003","file":"20261029215003_cobro_clase_prueba.sql","sha256":"40c71260f89c02fcfed5a9e5880ec383d978ac28218533db1104403942b01fb0","added":"2026-10-30","by":"Brayan Steven Lopez"},
-    {"v":"20261029222300","file":"20261029222300_open_month_ignora_clase_prueba.sql","sha256":"7d8408e7c6381be7cd1d6a6d25e3e887e54bfec7ac788a8aa68d0ce4cb2fb888","added":"2026-10-30","by":"Brayan Steven Lopez"}
+    {"v":"20261029222300","file":"20261029222300_open_month_ignora_clase_prueba.sql","sha256":"7d8408e7c6381be7cd1d6a6d25e3e887e54bfec7ac788a8aa68d0ce4cb2fb888","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261030123543","file":"20261030123543_embudo_y_agenda_clase_prueba.sql","sha256":"88cfcb33ecf4fc95ccae5da29cbac15316a5db2352e479ed02e948050d0b7938","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261030123549","file":"20261030123549_comprobantes_con_motivo.sql","sha256":"6bc753a1bdf54c7039d9ed48de0cf5b911034d1c4bd161bb95808944a225c525","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261030123555","file":"20261030123555_campanas_whatsapp.sql","sha256":"8aa46542f1d710a1f371dbfde128f95f6d2830f67cd6d827d3b93583ee0c5298","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261030123604","file":"20261030123604_whatsapp_numero_proposito.sql","sha256":"2edc79ad3b54ce2b6f4557af2326948b1cf553aed44fc625e21b1b941274b8e9","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261030173727","file":"20261030173727_team_schedule_exceptions_motivo.sql","sha256":"192e175ec7d391af5e6dfd27534a8403e0451b58bf5709bcdb0c30cf1b06fd30","added":"2026-10-30","by":"Brayan Steven Lopez"}
   ]
 }

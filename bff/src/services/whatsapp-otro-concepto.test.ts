@@ -8,7 +8,7 @@ vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
     conceptoNombrado, conceptoDelCobro, detectarOtroConcepto, decidirOtroConcepto,
-    mensajeOtroConcepto, motivoOtroConcepto,
+    mensajeOtroConcepto, motivoOtroConcepto, conceptoDePago,
 } from './whatsapp-otro-concepto.service';
 
 const P = (id: string, amount: number, concept: string) =>
@@ -112,5 +112,76 @@ describe('mensajes', () => {
     it('a la escuela: el motivo empieza por otro_concepto y lleva la evidencia', () => {
         const s = detectarOtroConcepto({ pie: 'Clase perfeccionamiento Luis' })!;
         expect(motivoOtroConcepto(s)).toMatch(/^otro_concepto: clase de perfeccionamiento \(pie: «Clase perfeccionamiento Luis»\)/);
+    });
+});
+
+// ─── Caracterización (plan B4 §5, 2026-10-30) ───────────────────────────────
+// Los patrones pasan a vivir en el catálogo único (motivos-de-cobro.ts): lo
+// que hoy se detecta se sigue detectando igual, con el mismo nombre.
+describe('caracterización: lo que se detecta hoy', () => {
+    it.each([
+        ['Clase perfeccionamiento Luis', 'clase_extra'],
+        ['clases particulares de la semana', 'clase_extra'],
+        ['mira aquí lo de los uniformes', 'uniforme'],
+        ['la sudadera de Sofía', 'uniforme'],
+        ['pago torneo interclubes', 'torneo'],
+        ['inscripción al torneo', 'torneo'],
+        ['tiquetes del viaje', 'viaje'],
+        ['boletas de la rifa', 'rifa'],
+        ['seguro', 'seguro'],
+        ['póliza de accidentes', 'seguro'],
+        ['matrícula de Sofía', 'inscripcion'],
+        ['plan vacaciones diciembre', 'vacacional'],
+        ['mensualidad octubre', null],
+        ['hola buenos días', null],
+    ])('«%s» → %s', (texto, concepto) => {
+        expect(conceptoNombrado(texto)).toBe(concepto);
+    });
+
+    it('nombres y mapa categoría → concepto como hoy', () => {
+        const s = (concepto: any) => ({ concepto, fuente: 'pie' as const, evidencia: 'x' });
+        expect(mensajeOtroConcepto(s('clase_extra'))).toContain('*clase de perfeccionamiento*');
+        expect(mensajeOtroConcepto(s('uniforme'))).toContain('*uniforme*');
+        expect(mensajeOtroConcepto(s('seguro'))).toContain('*seguro de accidentes*');
+        expect(mensajeOtroConcepto(s('vacacional'))).toContain('*vacacionales*');
+        expect(mensajeOtroConcepto(s('inscripcion'))).toContain('*inscripción*');
+        const p = (categoria: string | null, concept = 'Cobro') => conceptoDePago({ concept, categoria });
+        expect(p('inscripcion')).toBe('inscripcion');
+        expect(p('articulos')).toBe('uniforme');
+        expect(p('torneo')).toBe('torneo');
+        expect(p('clase_extra')).toBe('clase_extra');
+        expect(p('mensualidad', 'Uniforme')).toBeNull();
+        expect(p('otro', 'Rifa navideña')).toBe('rifa');
+        expect(p(null, 'Mensualidad 10/2026')).toBeNull();
+    });
+});
+
+describe('«clínica» y «clase de prueba» en todas las escuelas (plan B4, 2026-10-30)', () => {
+    it.each([
+        ['Clínica de armadores y atacantes', 'clase_extra'],
+        ['pago clinica Mariana', 'clase_extra'],
+        ['pago de la clase de prueba', 'clase_prueba'],
+        ['clase de cortesía del sábado', 'clase_prueba'],
+    ])('«%s» → %s', (texto, concepto) => {
+        expect(conceptoNombrado(texto)).toBe(concepto);
+    });
+
+    it('a quien escribió «clínica» se le dice «clínica», no «clase de perfeccionamiento»', () => {
+        const s = detectarOtroConcepto({ pie: 'Clínica de armadores — Mariana' })!;
+        expect(s.concepto).toBe('clase_extra');
+        expect(mensajeOtroConcepto(s)).toBe(
+            'Recibí tu comprobante de *clínica* 📄 Se lo paso a la escuela para que lo registre; no lo apliqué a la mensualidad.');
+        expect(motivoOtroConcepto(s)).toMatch(/^otro_concepto: clínica \(pie: «Clínica de armadores — Mariana»\)/);
+    });
+
+    it('la clase de prueba sale de la mensualidad: va a su cobro si cuadra, si no a la escuela', () => {
+        const s = detectarOtroConcepto({ pie: 'pago clase de prueba' });
+        expect(s?.concepto).toBe('clase_prueba');
+        const prueba = { ...P('cp', 15000, 'Clase de prueba — Mariana'), categoria: 'clase_prueba' };
+        expect(decidirOtroConcepto(s, [P('m', 180000, 'Mensualidad 10/2026'), prueba], 15000))
+            .toMatchObject({ tipo: 'aplicar', pago: { id: 'cp' } });
+        expect(decidirOtroConcepto(s, [P('m', 180000, 'Mensualidad 10/2026')], 15000)).toMatchObject({ tipo: 'a_la_escuela' });
+        expect(mensajeOtroConcepto(s!)).toContain('*clase de prueba*');
+        expect(conceptoDePago({ concept: 'Cobro', categoria: 'clase_prueba' })).toBe('clase_prueba');
     });
 });

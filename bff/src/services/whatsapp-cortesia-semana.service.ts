@@ -127,10 +127,15 @@ export function textoDeLaCortesia(dias: number): string {
 }
 
 /** El paso a paso. Los nombres de los botones son los de /join/:slug. */
-export function textoSemanaDeCortesia(p: { enlace: string; dias: number; horarios: string | null }): string {
+export function textoSemanaDeCortesia(p: {
+    enlace: string; dias: number; horarios: string | null;
+    /** false = la escuela cobra la clase de prueba (`trial_price > 0`): nunca «gratis» (B3). */
+    gratis?: boolean;
+}): string {
     const periodo = textoDeLaCortesia(p.dias);
     return [
-        `¡Tu hijo/a puede entrenar *gratis durante ${periodo}*! 🙌`,
+        p.gratis === false ? `¡Tu hijo/a puede entrenar *durante ${periodo}* para conocernos! 🙌`
+            : `¡Tu hijo/a puede entrenar *gratis durante ${periodo}*! 🙌`,
         '',
         'Así lo inscribes en la app para tomar la cortesía:',
         `1️⃣ Abre este enlace: ${p.enlace}`,
@@ -190,5 +195,8 @@ export async function mensajeSemanaDeCortesia(
     } catch {
         horarios = null;
     }
-    return textoSemanaDeCortesia({ enlace, dias: ajustes.cortesiaDias, horarios });
+    // Con valor de la clase de prueba (B3) no se dice «gratis»; sin ajustes, el texto de siempre.
+    const { textosClaseDeEscuela } = await import('./textos-clase-prueba');
+    const t = await textosClaseDeEscuela(schoolId);
+    return textoSemanaDeCortesia({ enlace, dias: ajustes.cortesiaDias, horarios, gratis: t.gratis });
 }

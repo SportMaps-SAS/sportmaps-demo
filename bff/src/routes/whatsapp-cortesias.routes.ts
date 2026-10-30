@@ -4,17 +4,20 @@
  *
  *   GET   /api/v1/whatsapp/:schoolId/cortesias?desde=YYYY-MM-DD&hasta=YYYY-MM-DD
  *   PATCH /api/v1/whatsapp/:schoolId/cortesias/:leadId/asistencia   { asistencia: 'asistio'|'no_vino'|null }
+ *   POST  /api/v1/whatsapp/:schoolId/cortesias/sincronizar-franjas  { teamId? }   (staff: ver abajo)
  *
  * Autorización: administración REAL de esa escuela (owner, admin,
  * school_admin activos, o el dueño en schools.owner_id; platform_admins pasa).
  * Mismo criterio que whatsapp-admin.routes; se replica porque ese archivo lo
  * edita otro frente. Coaches, padres y atletas: 403. Todo filtra por school_id.
+ * La sincronización de franjas la puede pedir además el STAFF de la escuela.
  */
 
 import { Router, Response } from 'express';
 import { supabase } from '../config/supabase';
 import { requireAuth, type AuthenticatedRequest } from '../middlewares/authMiddleware';
 import { listarCortesias, marcarAsistencia, type Asistencia } from '../services/cortesia-reservas.service';
+import { esStaffDeEscuela, type ClienteAlcance } from './athlete/biomechAlcance';
 
 const router = Router();
 
@@ -67,6 +70,58 @@ router.patch('/:schoolId/cortesias/:leadId/asistencia', requireAuth, async (req:
     } catch (e: any) {
         console.error('[cortesias] asistencia falló', { schoolId, leadId, err: e?.message });
         return res.status(500).json({ error: 'No se pudo guardar la asistencia' });
+    }
+});
+
+/**
+ * POST /api/v1/whatsapp/:schoolId/cortesias/sincronizar-franjas   { teamId?: uuid }  (o team_id)
+ *
+ * Lo llama «Mi semana» del entrenador (fire-and-forget) después de cancelar,
+ * mover o agregar un entreno (plan B2/B3 §3, T7). Dos cosas, en este orden:
+ *   1. A quien tenía una clase de prueba en una sesión cancelada o movida se le
+ *      escribe «clase reprogramada» con el botón para elegir otro horario (sin
+ *      volver a cobrar). Idempotente por lead y franja.
+ *   2. Las franjas del generador se ajustan a la semana del profe — solo si la
+ *      escuela las genera desde los entrenamientos (`courtesy_from_training`).
+ *
+ * Autorización: STAFF de esa escuela (el coach que ajusta su semana, además de
+ * la administración). Padres y atletas: 403.
+ */
+router.post('/:schoolId/cortesias/sincronizar-franjas', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const { schoolId } = req.params as { schoolId: string };
+    if (!UUID.test(schoolId)) return res.status(400).json({ error: 'school_id inválido' });
+    // «Mi semana» manda `{ teamId }`; también vale `{ team_id }`.
+    const teamId = (req.body ?? {}).teamId ?? (req.body ?? {}).team_id ?? null;
+    if (teamId !== null && (typeof teamId !== 'string' || !UUID.test(teamId))) {
+        return res.status(400).json({ error: 'team_id inválido' });
+    }
+    try {
+        const permitido = (await administraEstaEscuela(req.user.id, schoolId))
+            || (await esStaffDeEscuela(supabase as unknown as ClienteAlcance, req.user.id, schoolId));
+        if (!permitido) return res.status(403).json({ error: 'forbidden' });
+        if (teamId) {
+            const { data: equipo } = await supabase.from('teams').select('id').eq('id', teamId).eq('school_id', schoolId).maybeSingle();
+            if (!equipo) return res.status(404).json({ error: 'Ese equipo no es de esta escuela' });
+        }
+
+        const { avisarClasesCanceladas } = await import('../services/clase-prueba-agenda.service');
+        const reprogramadas = await avisarClasesCanceladas({ schoolId, teamId });
+
+        const { data: ajustes } = await supabase.from('school_settings')
+            .select('courtesy_from_training').eq('school_id', schoolId).maybeSingle();
+        if ((ajustes as any)?.courtesy_from_training !== true) {
+            return res.json({ ok: true, reprogramadas, franjas: null, motivo: 'franjas_desde_entrenamientos_apagadas' });
+        }
+        const { sincronizarFranjasDeEscuela } = await import('../services/franjas-cortesia.service');
+        // Con `teamId` solo se rehacen las franjas de ese equipo (B3: `soloEquipo`).
+        const r = await sincronizarFranjasDeEscuela(schoolId, { aplicar: true, soloEquipo: teamId });
+        return res.json({
+            ok: true, reprogramadas,
+            franjas: { creadas: r.creadas, cerradas: r.cerradas, conservadasConReserva: r.conservadasConReserva.length, errores: r.errores.length },
+        });
+    } catch (e: any) {
+        console.error('[cortesias] sincronizar franjas falló', { schoolId, err: e?.message });
+        return res.status(500).json({ error: 'No se pudieron sincronizar las franjas' });
     }
 });
 

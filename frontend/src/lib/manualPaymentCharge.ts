@@ -23,20 +23,17 @@
  * conserva el comportamiento anterior.
  */
 import { chargeCategoryOf, type PaymentChargeCategory } from '@/lib/payment-accounts';
+import { exentoDeUnicidadDePeriodo, motivosEnPantalla } from '@/lib/motivosDeCobro';
 
-/** Opciones del selector «Tipo de cobro», en el orden en que se muestran. */
-export const MANUAL_CHARGE_CATEGORY_OPTIONS: readonly { value: PaymentChargeCategory; label: string }[] = [
-    { value: 'mensualidad', label: 'Mensualidad' },
-    { value: 'inscripcion', label: 'Inscripción' },
-    { value: 'seguro', label: 'Seguro' },
-    { value: 'articulos', label: 'Artículos / uniformes' },
-    { value: 'torneo', label: 'Torneo' },
-    { value: 'clase_extra', label: 'Clase extra' },
-    { value: 'vacacional', label: 'Vacacional' },
-    { value: 'viaje', label: 'Viaje' },
-    { value: 'excedente', label: 'Horas adicionales' },
-    { value: 'otro', label: 'Otro cobro' },
-];
+/**
+ * Opciones del selector «Tipo de cobro», en el orden en que se muestran: los
+ * motivos del catálogo único con `enRegistroManual` (reserva y clase de prueba
+ * tienen su propio flujo y no salen aquí).
+ */
+export const MANUAL_CHARGE_CATEGORY_OPTIONS: readonly { value: PaymentChargeCategory; label: string }[] =
+    motivosEnPantalla()
+        .filter((m) => m.enRegistroManual)
+        .map((m) => ({ value: m.clave, label: m.etiquetaManual ?? m.etiqueta }));
 
 /** Categoría efectiva: la que eligió la escuela o, si no eligió, la del concepto. */
 export function effectiveManualCategory(
@@ -61,7 +58,7 @@ export function manualChargeInsertFields(
     category: PaymentChargeCategory | null,
     offeringPlanId: string | null | undefined,
 ): ManualChargeInsertFields {
-    const oneOff = category !== null && category !== 'mensualidad';
+    const oneOff = category !== null && exentoDeUnicidadDePeriodo(category);
     return {
         payment_category: category,
         period_uniqueness_exempt: oneOff,

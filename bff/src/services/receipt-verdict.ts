@@ -186,6 +186,12 @@ export function normalizeDestination(destination: string | null | undefined): st
     // La llave Bre-B / Nequi se imprime con «@» delante («@3204298969»): es el mismo
     // número que la cuenta registrada (Dynasty 10-18).
     norm = norm.replace(/^@+/, '');
+    // Un celular con indicativo («+57 319 450 5150», Monster 10-30) es el mismo
+    // Nequi/Daviplata que «3194505150». Con «+» siempre; el «57» pelado solo si
+    // viene separado del número («57 319…»): 12 dígitos seguidos que empiezan por
+    // 573 pueden ser una cuenta de banco y no se tocan.
+    const celular = /^\+?57(3\d{9})$/.exec(norm);
+    if (celular && (norm.startsWith('+') || /^\s*57[\s.-]+3/.test(destination))) norm = celular[1];
     // El OCR confunde la O con el 0 (y la I/L con el 1) en una cuenta numérica:
     // «OO89455111» es la 0089455111 (Dynasty 10-14). Solo si son todo dígitos y
     // esas letras; una llave alfanumérica («XJI669») no se toca.

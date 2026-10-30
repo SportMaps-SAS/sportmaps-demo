@@ -17,8 +17,16 @@
  * matrícula de mensualidad (ver memoria project_payment_type_not_reliable).
  */
 
-export const CATEGORIAS_COBRO = ['mensualidad', 'inscripcion', 'articulos', 'torneo', 'otro', 'seguro', 'excedente', 'clase_extra', 'vacacional', 'viaje'] as const;
-export type CategoriaCobro = (typeof CATEGORIAS_COBRO)[number];
+import { CLAVES_MOTIVO, esMotivo, mapaDeMotivos, type Motivo } from './motivos-de-cobro';
+
+/**
+ * Las categorías del CHECK de `payments`, del catálogo único (motivos-de-cobro.ts).
+ * Desde 2026-10-30 incluye `reserva` y `clase_prueba`: antes
+ * `categoriaDeCobro('clase_prueba')` daba null y ni `only_for` ni el contexto del
+ * veredicto la conocían.
+ */
+export const CATEGORIAS_COBRO = CLAVES_MOTIVO;
+export type CategoriaCobro = Motivo;
 
 export interface CuentaDePago {
     id: string | null;
@@ -39,8 +47,7 @@ export interface CuentaDePago {
     fueraDeSportmaps: boolean;
 }
 
-const esCategoria = (v: unknown): v is CategoriaCobro =>
-    typeof v === 'string' && (CATEGORIAS_COBRO as readonly string[]).includes(v);
+const esCategoria = (v: unknown): v is CategoriaCobro => esMotivo(v);
 
 /**
  * Tipo de entrada que NO es una cuenta: un link de pago (p.ej. el link de Wompi
@@ -167,18 +174,7 @@ export function cuentaAplicaA(cuenta: Pick<CuentaDePago, 'onlyFor'>, categoria: 
     return categoria !== null && cuenta.onlyFor.includes(categoria);
 }
 
-const NOMBRE_CATEGORIA: Record<CategoriaCobro, string> = {
-    mensualidad: 'mensualidades',
-    inscripcion: 'inscripciones',
-    articulos: 'artículos',
-    torneo: 'torneos',
-    otro: 'otros cobros',
-    seguro: 'seguros',
-    excedente: 'horas adicionales',
-    clase_extra: 'clases extra',
-    vacacional: 'vacacionales',
-    viaje: 'viajes',
-};
+const NOMBRE_CATEGORIA: Record<CategoriaCobro, string> = mapaDeMotivos('plural');
 
 /** "inscripciones", "inscripciones y torneos" — para mensajes. */
 export function describirCategorias(cats: readonly string[]): string {
@@ -188,18 +184,7 @@ export function describirCategorias(cats: readonly string[]): string {
 }
 
 /** Nombre singular del cobro para la familia («Seguro de accidentes»). Igual que CHARGE_CATEGORY_LABEL del frontend. */
-export const ETIQUETA_COBRO: Record<CategoriaCobro, string> = {
-    mensualidad: 'Mensualidad',
-    inscripcion: 'Inscripción',
-    articulos: 'Artículos',
-    torneo: 'Torneo',
-    otro: 'Otro cobro',
-    seguro: 'Seguro de accidentes',
-    excedente: 'Horas adicionales',
-    clase_extra: 'Clase extra',
-    vacacional: 'Vacacional',
-    viaje: 'Viaje',
-};
+export const ETIQUETA_COBRO: Record<CategoriaCobro, string> = mapaDeMotivos('etiqueta');
 
 /**
  * ¿Es un cobro ÚNICO (no la mensualidad del período)? Solo por la categoría

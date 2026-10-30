@@ -326,9 +326,13 @@ function frontend(): string {
     return (process.env.FRONTEND_URL || 'https://app.sportmaps.co').replace(/\/$/, '');
 }
 
-/** Todo lo que dice el aviso. Pura: se prueba sin base. */
-export function contenidoAviso(a: AvisoCortesia, contacto: string | null = null): ContenidoAviso {
-    const titulo = TITULO[a.tipo];
+/**
+ * Todo lo que dice el aviso. Pura: se prueba sin base. `nombreClase`: el de la
+ * escuela (B3, «clase de prueba»); por defecto, los títulos de siempre.
+ */
+export function contenidoAviso(a: AvisoCortesia, contacto: string | null = null, nombreClase = 'clase de cortesía'): ContenidoAviso {
+    const titulo = nombreClase === 'clase de cortesía' ? TITULO[a.tipo]
+        : TITULO[a.tipo].replace(/clase de cortesía/g, nombreClase).replace(/Clase de cortesía/g, nombreClase[0].toUpperCase() + nombreClase.slice(1));
     const nombre = a.nombre?.trim() || contacto?.trim() || 'Un prospecto';
     const edad = typeof a.edad === 'number' ? a.edad : null;
     const quien = paraQuien(edad, a.acudiente);
@@ -381,7 +385,8 @@ export async function avisarCortesia(a: AvisoCortesia): Promise<{ inApp: number;
     try {
         const { data: conv } = await supabase.from('whatsapp_conversations')
             .select('contact_name').eq('id', a.conversationId).maybeSingle();
-        const c = contenidoAviso(a, (conv as any)?.contact_name ?? null);
+        const { textosClaseDeEscuela } = await import('./textos-clase-prueba');
+        const c = contenidoAviso(a, (conv as any)?.contact_name ?? null, (await textosClaseDeEscuela(a.schoolId)).nombre);
         const clave = claveAviso(a);
         const ids = await destinatariosIds(a.schoolId);
         // Canal de plataforma (WhatsApp personal de la dueña con opt-in). Flag apagado = nada.

@@ -24,6 +24,7 @@ import { generateMpReference } from '../services/mercadopago.service';
 import { resolveProvider, type PaymentProvider } from '../services/payment-provider.resolver';
 import { extractReceipt } from '../services/ocr.service';
 import { evaluateVerdict, normalizeReference } from '../services/receipt-verdict';
+import { CLAVES_MOTIVO } from '../services/motivos-de-cobro';
 import { buildVerdictContext } from '../services/receipt-context.service';
 import { debitoEnCurso, MENSAJE_DEBITO_EN_CURSO } from '../services/autopay.service';
 import { saldoPorCobrar, ESTADOS_PAGABLES_EN_LINEA } from '../utils/saldo-cobro';
@@ -522,7 +523,9 @@ const ExtractSchema = z.object({
     // Categoría del cobro que se está pagando: decide qué llaves restringidas
     // (`payment_accounts[].only_for`) valen como destino. Con paymentId se lee
     // del pago; sin ninguno de los dos, las llaves restringidas dan amarillo.
-    paymentCategory: z.enum(['mensualidad', 'inscripcion', 'articulos', 'torneo', 'otro', 'seguro', 'excedente', 'clase_extra', 'vacacional', 'viaje']).optional(),
+    // Del catálogo único (motivos-de-cobro.ts): antes eran 10 a mano y un
+    // `clase_prueba` desde la app daba 400 (2026-10-30).
+    paymentCategory: z.enum(CLAVES_MOTIVO).optional(),
     concept: z.string().max(300).optional(),
 });
 

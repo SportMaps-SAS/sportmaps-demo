@@ -1,0 +1,20 @@
+{
+  "name": "recordatorio_clase_prueba",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te recordamos la clase de prueba de {{2}} en {{3}}: {{4}} a las {{5}}, en {{6}}. Si no pueden asistir, toquen «Cambiar horario» y eligen otro día.",
+      "example": { "body_text": [["Carolina", "Mariana", "Club Monsters Volley", "sábado 31 de octubre", "8:00 a. m.", "Sede Norte (Calle 201 #67-12)"]] }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Ahí estaremos" },
+        { "type": "QUICK_REPLY", "text": "Cambiar horario" },
+        { "type": "QUICK_REPLY", "text": "No puedo ir" }
+      ]
+    }
+  ]
+}

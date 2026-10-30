@@ -95,6 +95,33 @@ export interface DepsSeguimiento20h {
     enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string) => Promise<void>;
 }
 
+/**
+ * El texto del seguimiento: lo redacta el modelo con la ficha y el tono de la
+ * escuela. null = sin ficha, tope de respuestas o el modelo dijo NADA.
+ * Exportada para el número de pruebas (`/avanzar seguimiento`).
+ */
+export async function redactarSeguimiento20h(
+    integ: WhatsAppIntegration, conversationId: string, recientes: FilaReciente[],
+): Promise<string | null> {
+    const bot = await import('./whatsapp-bot.service');
+    const { infoDeEscuela, fallbackInfoEscuela } = await import('./whatsapp-info-escuela.service');
+    const { preciosParaProspecto } = await import('./whatsapp-precios.service');
+    const { ajustesWhatsAppDeEscuela } = await import('./whatsapp-ajustes-escuela.service');
+    const { redactarRespuestaDeProspecto } = await import('./whatsapp-prospecto-ia.service');
+    const schoolId = integ.school_id;
+    const ajustes = await ajustesWhatsAppDeEscuela(schoolId);
+    const [escuela, info, precios, enlace] = await Promise.all([
+        bot.nombreDeEscuela(schoolId),
+        infoDeEscuela(schoolId).catch(() => null),
+        preciosParaProspecto(schoolId, ajustes.responderPrecios).catch(() => null),
+        bot.enlaceDeInscripcion(schoolId).catch(() => null),
+    ]);
+    return redactarRespuestaDeProspecto({
+        schoolId, conversationId, escuela, nuevo: '', recientes, seguimiento: true,
+        grupos: info ? fallbackInfoEscuela(info) : null, precios, enlace,
+    });
+}
+
 const DEPS: DepsSeguimiento20h = {
     async candidatos() {
         const desde = new Date(Date.now() - 3 * 24 * 3600_000).toISOString();
@@ -145,25 +172,7 @@ const DEPS: DepsSeguimiento20h = {
     async soltar(lead) {
         await supabase.from('school_signup_leads').update({ source_detail: { ...lead.sourceDetail } }).eq('id', lead.id);
     },
-    async redactar(integ, conversationId, recientes) {
-        const bot = await import('./whatsapp-bot.service');
-        const { infoDeEscuela, fallbackInfoEscuela } = await import('./whatsapp-info-escuela.service');
-        const { preciosParaProspecto } = await import('./whatsapp-precios.service');
-        const { ajustesWhatsAppDeEscuela } = await import('./whatsapp-ajustes-escuela.service');
-        const { redactarRespuestaDeProspecto } = await import('./whatsapp-prospecto-ia.service');
-        const schoolId = integ.school_id;
-        const ajustes = await ajustesWhatsAppDeEscuela(schoolId);
-        const [escuela, info, precios, enlace] = await Promise.all([
-            bot.nombreDeEscuela(schoolId),
-            infoDeEscuela(schoolId).catch(() => null),
-            preciosParaProspecto(schoolId, ajustes.responderPrecios).catch(() => null),
-            bot.enlaceDeInscripcion(schoolId).catch(() => null),
-        ]);
-        return redactarRespuestaDeProspecto({
-            schoolId, conversationId, escuela, nuevo: '', recientes, seguimiento: true,
-            grupos: info ? fallbackInfoEscuela(info) : null, precios, enlace,
-        });
-    },
+    redactar: redactarSeguimiento20h,
     async enviar(integ, conversationId, waId, texto) {
         const { deliver } = await import('./whatsapp-bot.service');
         await deliver(integ, conversationId, waId, texto, { step: PASO_SEGUIMIENTO_20H });

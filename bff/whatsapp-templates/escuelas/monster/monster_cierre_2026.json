@@ -1,0 +1,24 @@
+{
+  "name": "monster_cierre_2026",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! 🏐 Hace un tiempo nos escribiste a Monster´s Volley Club preguntando por clases. Dos novedades: si te matriculas antes del 30 de noviembre, noviembre te sale gratis 🎁, y el 21 y 22 de noviembre es nuestra Clínica de Voleibol (preventa hasta el 9 de noviembre). ¿Te enviamos la información?",
+      "example": { "body_text": [["Carolina"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir promociones cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, cuéntame" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

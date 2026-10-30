@@ -64,7 +64,7 @@ import {
     llamaAPersonaSinPedir,
 } from './whatsapp-desconocido-reglas';
 import {
-    FLUJO_PUERTA, atenderTurnoPuerta, iniciarPuerta, esBotonPuerta, PASO_PUERTA_MENU,
+    FLUJO_PUERTA, atenderTurnoPuerta, iniciarPuerta, esBotonPuerta, PASO_PUERTA_MENU, BOTON_PUERTA,
     type CtxPuerta,
 } from './whatsapp-puerta-desconocido';
 import { resolverRespuestaDeCobro } from './whatsapp-respuesta-de-cobro.service';
@@ -90,7 +90,7 @@ import {
     FLUJO_CORTESIA, type CtxCortesia, ofrecerHorariosDeCortesia, leerPerfil, normalizar as normalizarCortesia,
     responderGrupoPorEdad, perfilReciente, listadoDeHorariosReciente,
 } from './whatsapp-clase-cortesia.service';
-import { preguntaGrupoPorEdad, rangosDeEscuela, elegirGrupo, textoGrupoParaEdad, tituloGrupo } from './grupos-por-edad.service';
+import { preguntaGrupoPorEdad, rangosDeEscuela, elegirGrupo, elegirGrupoEmbudo, textoGrupoParaEdad, tituloGrupo } from './grupos-por-edad.service';
 import {
     anunciaComprobante, nombreDelCobroAnunciado, yaPagoYReclama, textoYaPague, pideALaPersona,
     vocativosDelEquipo, esCierreSuelto, esAutoRespuesta, rutaSinModelo, humanoReciente,
@@ -103,7 +103,10 @@ import {
 } from './whatsapp-reglas-turno';
 import { atenderAusenciaEnBot } from './whatsapp-ausencias.service';
 import { modoDiscreto, escuelaActiva, escuelaActivaEn, revisarPendientesSinRespuesta } from './whatsapp-modo-discreto';
-import { ajustesWhatsAppDeEscuela, atencionPresencialDeEscuela, type AjustesWhatsAppEscuela } from './whatsapp-ajustes-escuela.service';
+import {
+    ajustesWhatsAppDeEscuela, atencionPresencialDeEscuela, embudoActivo, modoDiscretoDeEscuela, temasAPersonaDeEscuela,
+    type AjustesWhatsAppEscuela,
+} from './whatsapp-ajustes-escuela.service';
 import { mensajeSemanaDeCortesia } from './whatsapp-cortesia-semana.service';
 import { atenderTurnoVenta, esSi } from './whatsapp-venta-servicios.service';
 import { PASO_SEGUIMIENTO_20H } from './whatsapp-prospecto-seguimiento.service';
@@ -117,6 +120,13 @@ import { pideAyudaDeApp, textoAyudaApp } from './whatsapp-ayuda-app.service';
 import {
     reclamaValor, cobrosAbiertos, textoReclamoDeValor, motivoReclamoDeValor,
 } from './whatsapp-reclamo-valor.service';
+import {
+    iniciarEmbudo, atenderTurnoEmbudo, depsEmbudoDeSupabase, payloadDeEstado, leadCompletoDeEmbudo,
+    registrarOptInProspecto, type CtxEmbudo,
+} from './whatsapp-embudo-prospecto';
+import {
+    textosClaseDeEscuela, textosDeClase, reglaDeClaseParaPrompt, TEXTOS_POR_DEFECTO, type TextosClase,
+} from './textos-clase-prueba';
 
 const OTP_TTL_MIN = 10;
 
@@ -153,6 +163,74 @@ interface ContextoDeTurno {
 
 const turnoEnCurso = new AsyncLocalStorage<ContextoDeTurno>();
 
+// ─── Ajustes de la escuela del turno (B6, Monster 2026-10-30) ────────────────
+//
+// El modo discreto era una variable de entorno global (pensada para Dynasty).
+// Ahora cada escuela puede fijarlo en `school_settings.wa_modo_discreto`
+// ('global' | 'si' | 'no'); sin la columna o en 'global' manda la variable de
+// siempre. Los ajustes se leen UNA vez por turno (o por atención al desconocido)
+// y quedan acá: de ellos salen el modo discreto efectivo, los temas que pasan a
+// una persona y si la escuela tiene el embudo del interesado. Fuera de un turno
+// (jobs del webhook) se usa la global, como antes.
+interface EscuelaDelTurno {
+    schoolId: string;
+    ajustes: AjustesWhatsAppEscuela | null;
+    discreto: boolean | null;
+    /** El embudo ya dijo «no es mío» en este turno: no se vuelve a leer su estado. */
+    embudoProbado?: boolean;
+}
+const escuelaDelTurno = new AsyncLocalStorage<EscuelaDelTurno>();
+
+/** Modo discreto efectivo: el de la escuela del turno; fuera de un turno, el global. */
+function discretoEnBot(): boolean {
+    return escuelaDelTurno.getStore()?.discreto ?? modoDiscreto();
+}
+
+/** Ajustes de la escuela, leídos una vez por turno. Nunca lanza (`ajustesWhatsAppDeEscuela` no lanza). */
+async function ajustesDeLaEscuela(schoolId: string): Promise<AjustesWhatsAppEscuela> {
+    const s = escuelaDelTurno.getStore();
+    if (s && s.schoolId === schoolId && s.ajustes) return s.ajustes;
+    const ajustes = await ajustesWhatsAppDeEscuela(schoolId);
+    if (s && s.schoolId === schoolId) {
+        s.ajustes = ajustes;
+        s.discreto = modoDiscretoDeEscuela(ajustes, modoDiscreto());
+    }
+    return ajustes;
+}
+
+/** Corre `fn` con la escuela del turno puesta (si ya hay un turno de esa escuela, lo reutiliza). */
+function conEscuela<T>(schoolId: string, fn: () => Promise<T>): Promise<T> {
+    const s = escuelaDelTurno.getStore();
+    if (s && s.schoolId === schoolId) return fn();
+    return escuelaDelTurno.run({ schoolId, ajustes: null, discreto: null }, fn);
+}
+
+/** Textos de la clase de prueba de la escuela (B3: nombre y valor). Nunca lanza: los de siempre. */
+async function textosClase(schoolId: string): Promise<TextosClase> {
+    try {
+        return await textosClaseDeEscuela(schoolId);
+    } catch {
+        return TEXTOS_POR_DEFECTO;
+    }
+}
+
+/**
+ * «*clase de cortesía* gratis» (lo de siempre) | «*clase de prueba* (*$15.000*)» |
+ * «*clase de prueba* gratis». Con valor nunca dice «gratis». Pura.
+ */
+export function claseConValor(t: TextosClase = TEXTOS_POR_DEFECTO): string {
+    return t.gratis ? `*${t.nombre}* gratis` : `*${t.nombre}* (*${t.precio}*)`;
+}
+
+/** La línea «La primera clase es de cortesía (gratis)…» de la lista de precios. Por defecto, la de siempre. Pura. */
+export function lineaPrimeraClase(t: TextosClase = TEXTOS_POR_DEFECTO): string {
+    if (t.tipo === 'cortesia' && t.gratis) {
+        return '\n\nLa primera clase es de *cortesía* (gratis): escríbeme el día que quieres venir y te muestro los horarios.';
+    }
+    return `\n\nLa primera clase es una *${t.nombre}* (${t.gratis ? 'gratis' : `*${t.precio}*`}): ` +
+        'escríbeme el día que quieres venir y te muestro los horarios.';
+}
+
 // ─── Simulación (scripts/wa-responder-prospectos.ts) ─────────────────────────
 //
 // Dentro de `simularEnvios`, `deliver` NO envía ni deja borrador: anota lo que
@@ -168,6 +246,12 @@ export interface SalidaSimulada {
     opciones?: { id: string; title: string; descripcion?: string }[];
     /** Botón URL (cta_url) que habría salido. */
     cta?: { texto: string; url: string };
+    /**
+     * El `context` con que `deliver` lo habría guardado en el payload del
+     * saliente. Los flujos de varios pasos (cortesía, puerta) leen de ahí dónde
+     * van; sin esto, en el número de pruebas no pasan del primer paso.
+     */
+    payload?: Record<string, unknown>;
 }
 const simulacion = new AsyncLocalStorage<SalidaSimulada[]>();
 export async function simularEnvios<T>(fn: () => Promise<T>): Promise<{ resultado: T; salidas: SalidaSimulada[] }> {
@@ -199,8 +283,8 @@ export async function runBotTurn(
     opciones: { origen?: OrigenDelTurno } = {},
 ): Promise<void> {
     const ctx: ContextoDeTurno = { origen: opciones.origen ?? 'texto', eco: null, ecoUsado: false, llmFallas: [] };
-    return turnoEnCurso.run(ctx, () => cuerpoDelTurno(
-        integration, conversationId, contactWaId, inboundText, waMessageId, optedOut, botonId, ctx));
+    return turnoEnCurso.run(ctx, () => escuelaDelTurno.run({ schoolId: integration.school_id, ajustes: null, discreto: null },
+        () => cuerpoDelTurno(integration, conversationId, contactWaId, inboundText, waMessageId, optedOut, botonId, ctx)));
 }
 
 async function cuerpoDelTurno(
@@ -230,6 +314,9 @@ async function cuerpoDelTurno(
         console.info('[whatsapp-bot] conversación tomada por una persona: runBotTurn no hace nada', { conversationId });
         return;
     }
+    // Ajustes de la escuela, una vez por turno: de acá sale el modo discreto POR
+    // ESCUELA (B6) que usan las reglas de abajo.
+    await ajustesDeLaEscuela(integration.school_id);
 
     // Lo último de la conversación (24 h), leído UNA vez por turno: de acá salen
     // el silencio por humano (P4), la pregunta de consentimiento abierta (P2),
@@ -258,7 +345,7 @@ async function cuerpoDelTurno(
     //     ya está ahí).
     //     Modo discreto (2026-10-29): la ventana es de 12 h y cuenta también sus
     //     respuestas rápidas («Bienvenidos a Dynasty…»), ver `escritoPorLaEscuela`.
-    if (modoDiscreto() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+    if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
         console.info('[whatsapp-bot] la escuela está atendiendo; el bot se calla', { conversationId });
         await marcarAbiertaSinAviso(conversationId);
         return;
@@ -317,7 +404,8 @@ async function cuerpoDelTurno(
         await deliver(integration, conversationId, contactWaId, TEXTO_COBRO_POR_AUDIO, { step: 'cobro_por_audio' });
         return;
     }
-    if (!conv.identified && text && ctx.origen !== 'audio' && await hayPreguntaDeCobroAbierta(integration, contactWaId)) {
+    if (!conv.identified && text && ctx.origen !== 'audio' && (await hayPreguntaDeCobroAbierta(integration, contactWaId)
+        || await respondeResumenDeMotivos(integration, contactWaId, text, botonId))) {
         const resuelta = await resolverRespuestaDeCobro(integration, contactWaId, textoDeEleccion(botonId, text),
             responderDeCobro(integration, conversationId, contactWaId),
             pasarCobroALaEscuela(integration, conversationId, contactWaId)).catch(() => false);
@@ -406,7 +494,7 @@ async function cuerpoDelTurno(
     //       en su celular: sin «Dejo tu mensaje para Milena» ni escalación (análisis
     //       2026-10-29: 72 de 112 escalaciones del mes eran mensajes que ya le
     //       hablaban por su nombre). Lo urgente sigue su camino.
-    if (modoDiscreto() && !botonId) {
+    if (discretoEnBot() && !botonId) {
         const rafagaDiscreta = textoDeRafaga(recientes, text, waMessageId);
         if (!incidenciaUrgente(rafagaDiscreta)
             && pideALaPersona(rafagaDiscreta, await vocativosDeEscuela(integration.school_id))) {
@@ -423,7 +511,7 @@ async function cuerpoDelTurno(
     //       puede llegar por la tool `get_trial_class_info`.
     //       Con `wa_modo_cortesia='semana_app'` (ajuste por escuela) va el paso
     //       a paso del enlace de cortesía en vez de la clase suelta.
-    const ajustesEscuela = await ajustesWhatsAppDeEscuela(integration.school_id);
+    const ajustesEscuela = await ajustesDeLaEscuela(integration.school_id);
     // «Sobre la cortesía, quiero que me atienda alguien»: a una persona, no a
     // la lista de franjas (2026-10-06, `cc877c2d`).
     if (pideClaseDeCortesia(text) && quiereSalirDelFlujo(text)) {
@@ -483,7 +571,7 @@ async function cuerpoDelTurno(
 
     // Modo discreto: con la familia el bot hace lo suyo y nada más
     // (`restoDelTurnoDiscreto`).
-    if (modoDiscreto()) {
+    if (discretoEnBot()) {
         await restoDelTurnoDiscreto({ integration, conversationId, contactWaId, parentId: conv.parent_id,
             text, rafaga, recientes, waMessageId, botonId, ajustesEscuela });
         return;
@@ -1479,7 +1567,7 @@ async function atenderVentaEnBot(
     ajustes?: AjustesWhatsAppEscuela,
 ): Promise<boolean> {
     try {
-        const a = ajustes ?? await ajustesWhatsAppDeEscuela(integration.school_id);
+        const a = ajustes ?? await ajustesDeLaEscuela(integration.school_id);
         if (!a.ventasHabilitadas) return false;
         return await atenderTurnoVenta({
             conversationId,
@@ -1804,7 +1892,7 @@ async function identificarPorTelefono(
         // Modo discreto: sin «Créala aquí» como respuesta a cualquier mensaje (una
         // familia lo recibió 6 veces, a mensajes de cariño). El comprobante lo
         // atiende la cola; lo demás lo ve la escuela.
-        if (modoDiscreto()) {
+        if (discretoEnBot()) {
             await marcarAbiertaSinAviso(conversationId);
             return true;
         }
@@ -1946,6 +2034,12 @@ async function handleIdentification(
     if (await atenderCortesiaEnBot(integration, conversationId, contactWaId, text, botonId, null, { rafaga })) {
         return 'resuelto';
     }
+    // Embudo del interesado EN CURSO (B2): sigue aunque una persona de la escuela le
+    // haya escrito antes (el freno de 30 días de abajo lo callaría a mitad del registro).
+    if (embudoActivo(await ajustesDeLaEscuela(integration.school_id))
+        && await atenderEmbudoEnBot(integration, conversationId, contactWaId, text, botonId)) {
+        return 'resuelto';
+    }
 
     // El correo o el código pueden venir en un mensaje ANTERIOR de la ráfaga:
     // el turno agrupado corre con el último mensaje y los previos van en
@@ -2083,9 +2177,23 @@ async function handleIdentification(
     // le manda el menú («¿Ya eres del club / Quiero información / Otro tema?»):
     // en el celular de la dueña casi siempre es su vida personal (la hermana, un
     // proveedor, otro club). Queda en el buzón sin push.
-    if (modoDiscreto()) {
+    if (discretoEnBot()) {
         await marcarAbiertaSinAviso(conversationId);
         return 'resuelto';
+    }
+
+    // Embudo del interesado (B2): la escuela que lo tiene recibe al número nuevo con
+    // SU bienvenida y sus sedes en vez de la puerta de 3 botones. Una sola vez: si
+    // ya se le contestó lo escolar (30 días), lo ve la escuela en el buzón.
+    if (embudoActivo(await ajustesDeLaEscuela(integration.school_id))) {
+        if (await yaSeLeContestoEscolar(conversationId) || !(await reservarPasoUnaVez(conversationId, 'ask_email', 24))) {
+            return 'resuelto';
+        }
+        const saludoEmbudo = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
+        if (await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+            { saludo: saludoEmbudo, step: PASO_DESCONOCIDO_ESCOLAR })) {
+            return 'resuelto';
+        }
     }
 
     if (!(await reservarPasoUnaVez(conversationId, 'ask_email', 24))) return 'resuelto';
@@ -2175,7 +2283,7 @@ function ctxPuerta(integration: WhatsAppIntegration, conversationId: string, con
             };
         },
         // Los valores solo salen si la escuela los responde por WhatsApp (`wa_responder_precios`).
-        precios: async () => preciosParaProspecto(schoolId, (await ajustesWhatsAppDeEscuela(schoolId)).responderPrecios),
+        precios: async () => preciosParaProspecto(schoolId, (await ajustesDeLaEscuela(schoolId)).responderPrecios),
         enlace: () => enlaceDeInscripcion(schoolId),
         cortesia: (datos, encabezado) => iniciarCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
             encabezado, step: PASO_DESCONOCIDO_ESCOLAR,
@@ -2200,6 +2308,159 @@ async function atenderPuertaEnBot(
     }
 }
 
+// ─── Embudo del interesado por escuela (B2/B3, Monster 2026-10-30) ───────────
+//
+// El motor (whatsapp-embudo-prospecto) no habla con Meta ni importa B3/B4: todo
+// entra por este contexto. Solo corre si la escuela tiene `wa_preguntas_prospecto`
+// (`embudoActivo`): Dynasty y las demás no lo ven nunca.
+
+/** wa_message_id del último entrante: la prueba del «Sí, claro» del consentimiento. Nunca lanza. */
+async function ultimoEntranteWaId(conversationId: string): Promise<string | null> {
+    try {
+        const { data } = await supabase.from('whatsapp_messages')
+            .select('wa_message_id').eq('conversation_id', conversationId).eq('direction', 'inbound')
+            .order('created_at', { ascending: false }).limit(1).maybeSingle();
+        return ((data as any)?.wa_message_id as string | undefined) ?? null;
+    } catch {
+        return null;
+    }
+}
+
+function ctxEmbudo(integration: WhatsAppIntegration, conversationId: string, contactWaId: string): CtxEmbudo {
+    const schoolId = integration.school_id;
+    return {
+        conversationId, schoolId, contactWaId,
+        ...depsEmbudoDeSupabase(schoolId, contactWaId),
+        // La misma lectura de ajustes del turno.
+        ajustes: () => ajustesDeLaEscuela(schoolId),
+        // El estado viaja en el payload; `contexto.texto_de_la_escuela` = la bienvenida
+        // que escribió la escuela (deliver no le recorta los emojis de sus sedes).
+        enviar: (texto, step, estado, botones, enTexto, contexto) => deliver(integration, conversationId, contactWaId, texto,
+            { step, ...payloadDeEstado(estado), ...(contexto ?? {}) },
+            botones?.length ? { botones, enTexto } : undefined),
+        // B3: sede → año exacto → rama, solo equipos que reciben clase de prueba.
+        elegirGrupo: async (q) => elegirGrupoEmbudo(await rangosDeEscuela(schoolId), q),
+        textosDeClase: (c) => textosDeClase(c),
+        guardarLead: async (l) => {
+            // Número de pruebas: no se escribe; el motor sigue con un id de mentira.
+            if (enSimulacion()) return 'lead-simulado';
+            const r = await registrarLeadDeProspecto({
+                schoolId, conversationId, contactWaId,
+                nombre: await nombreDelContacto(conversationId),
+                textos: await entrantesDeTexto(conversationId, DIAS_MARCA_PROSPECTO),
+                estado: 'respondido',
+                completo: leadCompletoDeEmbudo(l),
+            });
+            return r?.leadId ?? null;
+        },
+        // B2 → B4: el motivo queda esperado al separar el cupo; el comprobante que llegue lo toma sin preguntar.
+        registrarConceptoEsperado: async (p) => {
+            if (enSimulacion()) return;
+            const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
+            await registrarConceptoEsperado(schoolId, contactWaId, {
+                motivo: p.motivo, leadId: p.leadId,
+                ...(p.monto != null ? { monto: p.monto } : {}), ...(p.venceEn ? { venceEn: p.venceEn } : {}),
+            });
+        },
+        // Fuente 'bot_prospecto'; la prueba es el mensaje del «Sí, claro» (el último entrante).
+        registrarOptIn: async () => {
+            if (enSimulacion()) return;
+            const waMessageId = await ultimoEntranteWaId(conversationId);
+            if (!waMessageId) return;
+            await registrarOptInProspecto({ integrationId: integration.id, schoolId, contactWaId, waMessageId });
+        },
+        // A una persona: el aviso sale aunque la conversación ya estuviera abierta, con el motivo.
+        avisarEscuela: async (motivo, detalle) => {
+            await abrirEnBuzon(integration, conversationId, contactWaId, {
+                motivo: 'puerta_otro',
+                detalle: `Clase de prueba por WhatsApp (${motivo.replace(/_/g, ' ')}): ${detalle ?? 'pasa a una persona.'}`,
+            });
+        },
+        // «Ya soy del club» escrito: lo atiende la puerta de siempre, como si tocara su botón.
+        yaSoyDelClub: async () => {
+            await atenderPuertaEnBot(integration, conversationId, contactWaId, 'Ya soy del club', BOTON_PUERTA.CLUB);
+        },
+    };
+}
+
+/** Turno del embudo. Nunca lanza: si falla, sigue el camino de siempre. */
+async function atenderEmbudoEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, text: string, botonId: string | null,
+): Promise<boolean> {
+    const s = escuelaDelTurno.getStore();
+    if (s?.embudoProbado) return false;
+    try {
+        const atendido = await atenderTurnoEmbudo(ctxEmbudo(integration, conversationId, contactWaId), text, botonId);
+        if (!atendido && s) s.embudoProbado = true;
+        return atendido;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] embudo del interesado falló', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
+/** Primer mensaje del embudo. false = la escuela no lo tiene o falló (sigue lo de siempre). Nunca lanza. */
+async function iniciarEmbudoEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    opciones: { saludo?: string; step?: string },
+): Promise<boolean> {
+    try {
+        return await iniciarEmbudo(ctxEmbudo(integration, conversationId, contactWaId), opciones);
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo iniciar el embudo del interesado', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
+/**
+ * Saludo suelto («Hola») de un número nuevo en una escuela con embudo (B2, P4):
+ * recibe la bienvenida del embudo con sus sedes, sin la variable de entorno de la
+ * bienvenida genérica. Las mismas condiciones que esa (nadie de la escuela le
+ * escribió en 30 días ni está escribiendo, no está tomada) y una sola vez (freno
+ * de 30 días del step escolar). true = arrancó. Nunca lanza.
+ */
+async function darBienvenidaDeEmbudo(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, text: string, botonId: string | null,
+): Promise<boolean> {
+    try {
+        if (botonId || !embudoActivo(await ajustesDeLaEscuela(integration.school_id))) return false;
+        const escuela = await nombreDeEscuela(integration.school_id);
+        const equipo = await vocativosDeEscuela(integration.school_id);
+        if (!esSaludoDeBienvenida(text, { nombreEscuela: escuela, equipo })) return false;
+        if (await escuelaLeEscribioEnDias(conversationId, 30)) return false;
+        if (humanoReciente(await mensajesRecientes(conversationId), VENTANA_SALUDO_TRAS_HUMANO_MIN)) return false;
+        const { data: conv } = await supabase.from('whatsapp_conversations')
+            .select('tomada_hasta').eq('id', conversationId).maybeSingle();
+        const tomada = (conv as any)?.tomada_hasta;
+        if (tomada && new Date(tomada).getTime() > Date.now()) return false;
+        if (await yaSeLeContestoEscolar(conversationId)) return false;
+        if (!(await reservarPasoUnaVez(conversationId, PASO_DESCONOCIDO_ESCOLAR, 24))) return false;
+        return await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+            { saludo: await saludoDePresentacion(conversationId, escuela), step: PASO_DESCONOCIDO_ESCOLAR });
+    } catch (err) {
+        console.error('[whatsapp-bot] bienvenida del embudo falló:', err instanceof Error ? err.message : err);
+        return false;
+    }
+}
+
+/**
+ * B4: tocó (o escribió) [Sí, está bien] / [Cambiar un motivo] y el último saliente
+ * es el resumen de motivos de una ráfaga. Solo lee la base si el texto ES el título
+ * de uno de esos botones: cero lecturas en un mensaje normal. Nunca lanza.
+ */
+async function respondeResumenDeMotivos(
+    integration: WhatsAppIntegration, contactWaId: string, text: string, botonId: string | null,
+): Promise<boolean> {
+    try {
+        const m = await import('./whatsapp-respuesta-de-cobro.service');
+        const boton = m.botonDeResumen(text) ?? m.botonDeResumen(textoDeEleccion(botonId, text));
+        if (!boton) return false;
+        return await m.hayResumenDeMotivosAbierto(integration.id, contactWaId);
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Deja la conversación 'open' en el buzón y avisa por push SOLO en la
  * transición (si ya estaba abierta, la escuela ya fue avisada).
@@ -2218,7 +2479,7 @@ export async function abrirEnBuzon(
     // Modo discreto: sin un motivo explícito (interesado, puerta) no suena el
     // celular: la escuela ya ve el mensaje en el suyo, y lo que quede sin
     // contestar lo recoge el aviso único de pendientes.
-    if (modoDiscreto() && !aviso) {
+    if (discretoEnBot() && !aviso) {
         await marcarAbiertaSinAviso(conversationId);
         return;
     }
@@ -2515,6 +2776,7 @@ export type ResultadoDesconocido =
     | 'consentimiento_sin_cuenta'
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
+    | 'embudo'
     | 'frenado' | 'silencio';
 
 /**
@@ -2544,7 +2806,7 @@ async function darBienvenidaAlDesconocido(
 
         const saludo = await saludoDePresentacion(conversationId, escuela);
         await deliver(integration, conversationId, contactWaId,
-            (saludo ? `${saludo}\n\n` : '') + textoDeBienvenida(),
+            (saludo ? `${saludo}\n\n` : '') + textoDeBienvenida((await textosClase(integration.school_id)).nombre),
             { step: PASO_BIENVENIDA_DESCONOCIDO });
         return true;
     } catch (err) {
@@ -2591,16 +2853,35 @@ export async function atenderDesconocido(
     /** 'audio': el texto es una transcripción; no contesta preguntas de dinero. */
     origen: 'texto' | 'audio' = 'texto',
 ): Promise<ResultadoDesconocido> {
+    // El webhook la llama fuera de `runBotTurn`: la escuela del turno (modo discreto
+    // por escuela, embudo, temas a persona) se pone acá.
+    return conEscuela(integration.school_id, () => atenderDesconocidoEnEscuela(
+        integration, conversationId, contactWaId, inboundText, botonId, rafaga, origen));
+}
+
+async function atenderDesconocidoEnEscuela(
+    integration: WhatsAppIntegration,
+    conversationId: string,
+    contactWaId: string,
+    inboundText: string | null,
+    botonId: string | null,
+    rafaga: string | null,
+    origen: 'texto' | 'audio',
+): Promise<ResultadoDesconocido> {
     // Misma defensa que `runBotTurn`: si alguien llama directo con el bot
     // apagado, no se habla.
     if (!(await botEncendido(integration.id))) return 'silencio';
 
     const text = (inboundText || '').trim();
     if (!text && !botonId) return 'silencio';
+    // Los ajustes de la escuela, una vez (modo discreto por escuela y embudo).
+    await ajustesDeLaEscuela(integration.school_id);
 
     // 0a. Contesta «¿De qué deportista es este pago?» (o «¿a cuál cobro?») de un
-    //     comprobante que mandó desde este número sin ficha.
-    if (text && await hayPreguntaDeCobroAbierta(integration, contactWaId)) {
+    //     comprobante que mandó desde este número sin ficha. También [Sí, está
+    //     bien] / [Cambiar un motivo] del resumen de una ráfaga (B4).
+    if (text && (await hayPreguntaDeCobroAbierta(integration, contactWaId)
+        || await respondeResumenDeMotivos(integration, contactWaId, text, botonId))) {
         // Nota de voz: mueve plata y el resolver solo ve texto. Se pide escrito.
         if (origen === 'audio') {
             await deliver(integration, conversationId, contactWaId, TEXTO_COBRO_POR_AUDIO, { step: 'cobro_por_audio' });
@@ -2610,6 +2891,16 @@ export async function atenderDesconocido(
             responderDeCobro(integration, conversationId, contactWaId),
             pasarCobroALaEscuela(integration, conversationId, contactWaId)).catch(() => false);
         if (resuelta) return 'pregunta_de_comprobante';
+    }
+
+    // 0a''. Embudo del interesado POR ESCUELA (B2), solo si la escuela lo tiene
+    //       (`wa_preguntas_prospecto`): continúa el flujo abierto, sus botones
+    //       (también los de sus plantillas: «Cambiar horario», «Elegir otro
+    //       horario», «Ahí estaremos») y su consentimiento. Va antes del «Sí,
+    //       acepto» de un número sin cuenta: en el embudo el sí es suyo.
+    if (embudoActivo(await ajustesDeLaEscuela(integration.school_id))
+        && await atenderEmbudoEnBot(integration, conversationId, contactWaId, text, botonId)) {
+        return 'embudo';
     }
 
     // 0a'. El botón del consentimiento («Sí, acepto» / «No, gracias») desde un
@@ -2719,7 +3010,7 @@ export async function atenderDesconocido(
     // 1c. Ajustes por escuela (docs/specs/whatsapp-ajustes-por-escuela.md),
     //     apagados por defecto. «No puedo entrar a la app» no es tema escolar
     //     para el filtro de abajo y quedaría en silencio.
-    const ajustesEscuela = await ajustesWhatsAppDeEscuela(integration.school_id);
+    const ajustesEscuela = await ajustesDeLaEscuela(integration.school_id);
     if (await responderAyudaDeApp(integration, conversationId, contactWaId, text, ajustesEscuela, false)) {
         return 'ayuda_app';
     }
@@ -2735,6 +3026,7 @@ export async function atenderDesconocido(
         && !humanoReciente(await mensajesRecientes(conversationId), SILENCIO_HUMANO_MIN)) {
         const precios = await textoDePreciosDeEscuela(integration.school_id);
         if (precios) {
+            const tClasePrecios = await textosClase(integration.school_id);
             const semana = await mensajeSemanaDeCortesia(integration.school_id, ajustesEscuela);
             const saludoPrecios = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
             // «Estoy interesada en inscribir a mi hija» (…6376, 2026-10-26) recibía
@@ -2747,11 +3039,11 @@ export async function atenderDesconocido(
                 (semana
                     ? `\n\nY antes de decidir:\n\n${semana}`
                     : inscribir
-                        ? '\n\nLa primera clase es de *cortesía* (gratis): escríbeme el día que quieres venir y te muestro los horarios.'
+                        ? lineaPrimeraClase(tClasePrecios)
                         : '\n\nSi quieres inscribirte o tienes dudas, escríbelas por aquí y la escuela te responde.') +
                 (enlaceIns ? `\n\nPara inscribirte: ${enlaceIns}` : '') +
                 // Modo discreto: al interesado no se le pide el correo.
-                (inscribir || modoDiscreto() ? '' : '\n\nSi ya eres familia de la escuela y quieres saber *tu* saldo, escríbeme el correo con el que estás registrado.'),
+                (inscribir || discretoEnBot() ? '' : '\n\nSi ya eres familia de la escuela y quieres saber *tu* saldo, escríbeme el correo con el que estás registrado.'),
                 { step: PASO_DESCONOCIDO_ESCOLAR, intencion: inscribir ? 'inscripcion' : 'precios', con_enlace: Boolean(semana || enlaceIns) });
             return 'precios';
         }
@@ -2791,6 +3083,8 @@ export async function atenderDesconocido(
     const tema = temaEscolar(text, { sinFamiliaImplicita: true });
     const prospecto = await puertaDeProspectoEn(integration, conversationId, text);
     if (!tema && !prospecto) {
+        // Escuela con embudo (B2, P4): el «Hola» de un número nuevo recibe SU bienvenida con sus sedes.
+        if (await darBienvenidaDeEmbudo(integration, conversationId, contactWaId, text, botonId)) return 'bienvenida';
         // Bienvenida al saludo suelto del desconocido (apagada salvo en las escuelas de
         // `WA_BIENVENIDA_DESCONOCIDOS_SCHOOL_IDS`): nadie de la escuela le ha hablado y
         // escribió solo «Hola». Ver whatsapp-bienvenida.ts.
@@ -2889,7 +3183,7 @@ export async function atenderDesconocido(
     if (tema === 'pagos' && preguntaPrecioComoProspecto(text)) {
         const enlaceCombinado = await enlaceDeInscripcion(integration.school_id);
         // Modo discreto: al interesado no se le pide el correo; va solo lo suyo.
-        const discreto = modoDiscreto();
+        const discreto = discretoEnBot();
         const paraFamilias = discreto ? '' :
             'Si ya eres familia de la escuela, escríbeme el *correo electrónico* con el que estás ' +
             'registrado y te envío un código para verificarte; así te digo el valor de tu mensualidad.\n\n';
@@ -2929,7 +3223,7 @@ export async function atenderDesconocido(
     // lo ubica la escuela; el bot no le pide el correo (análisis 2026-10-29: 132
     // conversaciones con pedidos de correo o registro que sobraban, a la hermana
     // de la dueña, a proveedores, a otros clubes).
-    if (tema === 'pagos' && modoDiscreto()) {
+    if (tema === 'pagos' && discretoEnBot()) {
         console.info('[whatsapp-bot] modo discreto: cobros de un número sin ficha; lo ve la escuela', { conversationId });
         await marcarAbiertaSinAviso(conversationId);
         return 'silencio';
@@ -2979,6 +3273,14 @@ export async function atenderDesconocido(
         : null;
     const bloquePrecios = preciosPrimera ? `\n\n${preciosPrimera}` : '';
 
+    // Embudo del interesado (B2): la escuela que lo tiene contesta con SU bienvenida,
+    // sus sedes y sus preguntas en vez de la cortesía o el enlace. Mismo step: cuenta
+    // para el freno de 30 días.
+    if (embudoActivo(ajustesEscuela) && await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+        { saludo, step: PASO_DESCONOCIDO_ESCOLAR })) {
+        return contestar('embudo');
+    }
+
     // Cortesía «semana por la app» (ajuste por escuela): el paso a paso del
     // enlace de cortesía reemplaza la clase suelta y el enlace genérico. Mismo
     // step, así que cuenta para el freno de 30 días. El adulto sigue el camino
@@ -3002,6 +3304,8 @@ export async function atenderDesconocido(
             ? `\n\nEn este enlace ves los grupos y los valores, y puedes hacer la inscripción: ${enlace}`
             : '';
         const direccion = quiereVisitar ? await direccionDeEscuela(integration.school_id) : null;
+        // Nombre y valor de la clase de la escuela (B3): con valor nunca «gratis».
+        const tClase = await textosClase(integration.school_id);
         // Visita («horarios… para pasar y mirar las instalaciones»): las
         // franjas SON los entrenamientos de los próximos días, con su sede.
         // Adulto: los grupos no tienen edades cargadas y el grupo no se deduce
@@ -3013,12 +3317,12 @@ export async function atenderDesconocido(
             ? `¡Claro que puedes venir a conocernos! 🙌${direccion ? ` Estamos en *${direccion}*.` : ''} ` +
               notaAdulto +
               'Estos son los entrenamientos de los próximos días; en cualquiera puedes tomar una ' +
-              '*clase de cortesía* gratis:'
+              `${claseConValor(tClase)}:`
             : esAdulto
-                ? notaAdulto + 'Mientras tanto, puedes venir a una *clase de cortesía* gratis. Estos son los próximos horarios:'
+                ? notaAdulto + `Mientras tanto, puedes venir a una ${claseConValor(tClase)}. Estos son los próximos horarios:`
                 : pideCortesia
                     ? undefined
-                    : 'Y si quieres conocer la escuela antes, puedes venir a una *clase de cortesía* gratis. ' +
+                    : `Y si quieres conocer la escuela antes, puedes venir a una ${claseConValor(tClase)}. ` +
                       'Estas son las próximas franjas:';
         await iniciarCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
             encabezado: (saludo + bloquePrecios + lineaEnlace).trim(),
@@ -3088,11 +3392,11 @@ async function precioConCortesiaAbierta(
         const estado = await leerEstadoDeSupabase(conversationId);
         if (!estado || estado.paso === 'recordatorio') return null;
         if (await pasoReciente(conversationId, PASO_PROSPECTO_PRECIOS, 24)) return null;
-        const ajustes = await ajustesWhatsAppDeEscuela(integration.school_id);
+        const ajustes = await ajustesDeLaEscuela(integration.school_id);
         const precios = await preciosParaProspecto(integration.school_id, ajustes.responderPrecios, leerPerfil(text));
         if (!precios) return null;
         await deliver(integration, conversationId, contactWaId,
-            precios + '\n\nCuando quieras, seguimos con la reserva de tu clase de cortesía. 🙌',
+            precios + `\n\nCuando quieras, seguimos con la reserva de tu ${(await textosClase(integration.school_id)).nombre}. 🙌`,
             {
                 step: PASO_PROSPECTO_PRECIOS, flujo: FLUJO_CORTESIA,
                 paso_cortesia: estado.paso, datos_cortesia: estado.datos ?? {},
@@ -3190,7 +3494,7 @@ async function responderSeguimientoDeProspecto(
         const ofrecidas = await ofrecerHorariosDeCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
             texto: p.todo,
             textoDelDia: diaPedido,
-            intro: `Claro que sí 🙌 Estos son los horarios del *${diaPedido}* para tu clase de cortesía:`,
+            intro: `Claro que sí 🙌 Estos son los horarios del *${diaPedido}* para tu ${(await textosClase(integration.school_id)).nombre}:`,
             step: PASO_PROSPECTO_HORARIOS,
         });
         if (ofrecidas) return 'prospecto_horarios';
@@ -3208,7 +3512,7 @@ async function responderSeguimientoDeProspecto(
             texto: p.todo,
             textoDelDia: nuevo,
             intro: arriba + (esAdulto ? 'La escuela te confirma por aquí cuál grupo te queda mejor. ' : '') +
-                'Estos son los próximos entrenamientos; en cualquiera puedes tomar una *clase de cortesía* gratis:',
+                `Estos son los próximos entrenamientos; en cualquiera puedes tomar una ${claseConValor(await textosClase(integration.school_id))}:`,
             step: PASO_PROSPECTO_HORARIOS,
         });
         if (ofrecidas) return 'prospecto_horarios';
@@ -3319,6 +3623,14 @@ async function responderProspectoConIa(
     }
 }
 
+/**
+ * Lo que sale de una campaña (plan B5 T7): la plantilla y la respuesta al «Sí».
+ * Lo que el contacto escriba después lo contesta el bot con la ficha (Haiku), como
+ * la respuesta al seguimiento de 20 h, en vez de callar por el freno de 30 días.
+ * Literales: no se importa el módulo de campañas (ciclo).
+ */
+const PASOS_DE_CAMPANA = new Set(['campana', 'campana_respuesta_si']);
+
 /** Hasta cuándo lo que escribe el prospecto se lee como respuesta al seguimiento de 20 h. */
 const VENTANA_RESPUESTA_SEGUIMIENTO_H = 72;
 
@@ -3331,7 +3643,8 @@ export function seguimientoQueContesta(
     ultimoSaliente: { payload?: any; text_body?: string | null; created_at: string } | null,
     ahora = Date.now(),
 ): { texto: string; enviadoEn: Date } | null {
-    if (!ultimoSaliente || ultimoSaliente.payload?.step !== PASO_SEGUIMIENTO_20H) return null;
+    const step = String(ultimoSaliente?.payload?.step ?? '');
+    if (!ultimoSaliente || (step !== PASO_SEGUIMIENTO_20H && !PASOS_DE_CAMPANA.has(step))) return null;
     const enviadoEn = new Date(ultimoSaliente.created_at);
     if (!(ahora - enviadoEn.getTime() < VENTANA_RESPUESTA_SEGUIMIENTO_H * 3600_000)) return null;
     return { texto: ultimoSaliente.text_body ?? '', enviadoEn };
@@ -3377,6 +3690,7 @@ async function responderAlSeguimiento(
             .order('created_at', { ascending: false }).limit(1).maybeSingle();
         const seguimiento = seguimientoQueContesta(data as any);
         if (!seguimiento) return null;
+        const deCampana = PASOS_DE_CAMPANA.has(String((data as any)?.payload?.step ?? ''));
         // «Gracias», «👍»: no hay nada que contestar. «Ok», «listo» sí: aceptan.
         const equipo = await vocativosDeEscuela(integration.school_id);
         if (!esSi(text) && nuevo.split('\n').every((l) => esCierreSuelto(l, equipo))) return null;
@@ -3388,18 +3702,19 @@ async function responderAlSeguimiento(
         }
         // «Sí» al día propuesto, u otro día: los horarios de ESE día, filtrados por
         // la edad que dijo (30 días: el prospecto suele decirla al primer mensaje).
-        const dia = diaAceptadoDelSeguimiento(text, seguimiento);
+        // A la campaña no se le «acepta un día» (su texto habla de fechas de eventos): va la ficha.
+        const dia = deCampana ? null : diaAceptadoDelSeguimiento(text, seguimiento);
         if (dia) {
             const todo = [...await entrantesDeTexto(conversationId, 30), text].join('\n');
             const ofrecidas = await ofrecerHorariosDeCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
                 texto: todo,
                 textoDelDia: dia,
-                intro: `¡Perfecto! 🙌 Estos son los horarios del *${dia}* para tu clase de cortesía; elige el tuyo y te la reservo:`,
+                intro: `¡Perfecto! 🙌 Estos son los horarios del *${dia}* para tu ${(await textosClase(integration.school_id)).nombre}; elige el tuyo y te la reservo:`,
                 step: PASO_PROSPECTO_HORARIOS,
             });
             if (ofrecidas) return 'prospecto_horarios';
         }
-        const ajustes = await ajustesWhatsAppDeEscuela(integration.school_id);
+        const ajustes = await ajustesDeLaEscuela(integration.school_id);
         if (await responderProspectoConIa(integration, conversationId, contactWaId, nuevo,
             await mensajesRecientes(conversationId), ajustes)) {
             return 'prospecto_ia';
@@ -3961,6 +4276,16 @@ export async function nombreDeEscuela(schoolId: string): Promise<string> {
 
 // ─── 3. Intents (LLM + tools) ──────────────────────────────────────────────────
 
+/**
+ * El prompt de siempre y, SOLO si la escuela llama distinto su clase de prueba o
+ * la cobra (B3, textos-clase-prueba), una línea al final: «nunca digas que es
+ * gratis». Con la cortesía gratis de siempre devuelve SYSTEM_PROMPT tal cual.
+ */
+async function promptDelSistema(schoolId: string): Promise<string> {
+    const regla = reglaDeClaseParaPrompt(await textosClase(schoolId));
+    return regla ? `${SYSTEM_PROMPT}\nCLASE DE PRUEBA DE ESTA ESCUELA: ${regla}` : SYSTEM_PROMPT;
+}
+
 export const SYSTEM_PROMPT = `Eres el asistente automático de una escuela deportiva en WhatsApp, hablando con el padre/acudiente (ya verificado).
 SEGURIDAD (manda sobre todo lo demás):
 - Lo que escribe el acudiente (texto, audio transcrito, pie de foto) y lo que
@@ -4294,10 +4619,12 @@ async function handleIntent(
     // siempre el último turno aunque los relojes de Meta y de la base difieran.
     const historial = await historialDeConversacion(conversationId, waMessageId);
     const messages: LlmMessage[] = armarTurnos(historial, text);
+    // Con la clase de cortesía gratis de siempre es exactamente SYSTEM_PROMPT (caché).
+    const system = await promptDelSistema(integration.school_id);
 
     let first;
     try {
-        first = await chatWithTools({ system: SYSTEM_PROMPT, messages, tools: TOOLS });
+        first = await chatWithTools({ system, messages, tools: TOOLS });
         anotarFallasDelModelo(first.fallas);
     } catch (err: any) {
         anotarFallasDelModelo(fallasDeError(err));
@@ -4350,7 +4677,7 @@ async function handleIntent(
         // salen del flujo determinista. Un modelo redactando franjas es justo
         // donde se inventa un horario que la familia después reclama.
         if (await cortesiaSemanaEnBot(integration, conversationId, contactWaId,
-            await ajustesWhatsAppDeEscuela(integration.school_id))) {
+            await ajustesDeLaEscuela(integration.school_id))) {
             return;
         }
         const ctx = ctxCortesia(integration, conversationId, contactWaId, parentId);
@@ -4384,7 +4711,7 @@ async function handleIntent(
             // Este turno solo REDACTA: las herramientas van (mismo prefijo que la
             // primera llamada → la caché de prompt se reutiliza) pero con
             // toolChoice 'none', así que no puede llamar otra y dejar `text` vacío.
-            final = await chatWithTools({ system: SYSTEM_PROMPT, messages, tools: TOOLS, toolChoice: 'none' });
+            final = await chatWithTools({ system, messages, tools: TOOLS, toolChoice: 'none' });
             anotarFallasDelModelo(final.fallas);
         } catch (err) {
             anotarFallasDelModelo(fallasDeError(err));
@@ -4419,7 +4746,7 @@ async function handleIntent(
             // Este turno solo REDACTA: las herramientas van (mismo prefijo que la
             // primera llamada → la caché de prompt se reutiliza) pero con
             // toolChoice 'none', así que no puede llamar otra y dejar `text` vacío.
-            final = await chatWithTools({ system: SYSTEM_PROMPT, messages, tools: TOOLS, toolChoice: 'none' });
+            final = await chatWithTools({ system, messages, tools: TOOLS, toolChoice: 'none' });
             anotarFallasDelModelo(final.fallas);
         } catch (err) {
             anotarFallasDelModelo(fallasDeError(err));
@@ -4474,7 +4801,7 @@ async function handleIntent(
             // Este turno solo REDACTA: las herramientas van (mismo prefijo que la
             // primera llamada → la caché de prompt se reutiliza) pero con
             // toolChoice 'none', así que no puede llamar otra y dejar `text` vacío.
-            final = await chatWithTools({ system: SYSTEM_PROMPT, messages, tools: TOOLS, toolChoice: 'none' });
+            final = await chatWithTools({ system, messages, tools: TOOLS, toolChoice: 'none' });
             anotarFallasDelModelo(final.fallas);
         } catch (err) {
             anotarFallasDelModelo(fallasDeError(err));
@@ -4596,7 +4923,8 @@ export async function deliver(
             opciones: (conBotones?.botones ?? []).map((b: any) => ({ id: String(b.id), title: String(b.title),
                 ...(b.descripcion ? { descripcion: String(b.descripcion) } : {}) })),
             ...(conBotones?.cta ? { cta: conBotones.cta } : {}),
-            ...(conBotones?.imagen ? { imagen: conBotones.imagen } : {}) });
+            ...(conBotones?.imagen ? { imagen: conBotones.imagen } : {}),
+            payload: context });
         return;
     }
     // ¿Modo auto vigente? (auto solo si mode='auto' y ya pasó assisted_until)
@@ -4640,7 +4968,7 @@ export async function deliver(
     // la base JUSTO antes de enviar: el turno revisa al empezar, pero el modelo
     // tarda segundos y Milena puede escribir en el medio. La confirmación de una
     // baja sí sale: es una instrucción al sistema, no una charla.
-    if (modoDiscreto() && !PASOS_CON_LA_ESCUELA_ACTIVA.has(String((context as any)?.step ?? ''))
+    if (discretoEnBot() && !PASOS_CON_LA_ESCUELA_ACTIVA.has(String((context as any)?.step ?? ''))
         && await escuelaActiva(conversationId)) {
         console.info('[whatsapp-bot] modo discreto: la escuela escribió hace poco; no se envía',
             { conversationId, step: (context as any)?.step ?? null });
@@ -4697,7 +5025,12 @@ export async function deliver(
     // El listado de respaldo de los botones (`enTexto`) no cuenta: no es el cuerpo.
     // Sin emojis de un deporte concreto (⚽ en un club de voleibol, auditoría
     // 2026-10-10): el bot atiende escuelas de cualquier deporte.
-    let texto = recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado)));
+    // El texto que escribió la ESCUELA (la bienvenida del embudo, B2) sale como lo
+    // escribió: sus emojis de sede y de su deporte no los recorta el tope de 3.
+    const deLaEscuela = (context as any)?.texto_de_la_escuela === true;
+    let texto = deLaEscuela
+        ? aFormatoWhatsApp(conEncabezado)
+        : recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado)));
     if (!PASOS_DE_CONSENTIMIENTO.includes(String((context as any)?.step ?? ''))
         && await estaDadoDeBaja(integration.id, contactWaId)) {
         texto += AVISO_DADO_DE_BAJA;
@@ -4883,8 +5216,8 @@ export const presentacionDelAsistente = (escuela: string) =>
 // Sin emoji: el tope de 3 por mensaje (`recortarEmojis`) se los quitaba al cuerpo.
 export const AVISO_PRIVACIDAD_DESCONOCIDO =
     'Política de datos: https://app.sportmaps.co/politica-de-privacidad';
-export const presentacionLarga = (escuela: string) =>
-    `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu clase de cortesía.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
+export const presentacionLarga = (escuela: string, clase = TEXTOS_POR_DEFECTO.nombre) =>
+    `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
 
 /**
  * ¿El texto ya es una presentación del asistente? Cuenta la de antes del
@@ -4930,7 +5263,9 @@ export async function saludoDePresentacion(conversationId: string, escuela: stri
         ]);
         if (((enviados as any)?.count ?? 0) + ((borradores as any)?.count ?? 0) > 0) return '';
     } catch { /* se presenta */ }
-    return presentacionLarga(escuela);
+    // Nombre de la clase de la escuela del turno (B3); fuera de un turno, el de siempre.
+    const s = escuelaDelTurno.getStore();
+    return presentacionLarga(escuela, s ? (await textosClase(s.schoolId)).nombre : TEXTOS_POR_DEFECTO.nombre);
 }
 
 /**
@@ -5265,7 +5600,7 @@ async function escalate(
     // persona con el botón o como interesado. Lo demás lo ve la escuela en su
     // celular: a la familia no se le promete nada y no suena ningún push; si
     // queda sin contestar, avisa el aviso único de pendientes.
-    if (modoDiscreto() && !urgente && !ESCALA_EN_MODO_DISCRETO.has(reason)) {
+    if (discretoEnBot() && !urgente && !escalaEnModoDiscreto(reason)) {
         console.info('[whatsapp-bot] modo discreto: no se escala; lo contesta la escuela', { conversationId, reason });
         await marcarAbiertaSinAviso(conversationId);
         return;
@@ -5353,7 +5688,7 @@ async function escalate(
         : retiro ? MENSAJE_ESCALACION_RETIRO
         // Sin «fuera del horario… te responden hoy a las 16:00»: Milena contesta a
         // cualquier hora y la promesa casi nunca era cierta.
-        : modoDiscreto() ? MENSAJE_PASO_A_PERSONA
+        : discretoEnBot() ? MENSAJE_PASO_A_PERSONA
         : mensajeDeEscalamiento(horario);
     await deliver(integration, conversationId, contactWaId,
         opciones.antes ? `${opciones.antes}\n\n${aviso}` : aviso,
@@ -5367,6 +5702,17 @@ async function escalate(
 
 /** Escalaciones que siguen saliendo en modo discreto (además de las urgentes): pidió una persona. */
 const ESCALA_EN_MODO_DISCRETO = new Set([PASO_PROSPECTO_PERSONA, 'cortesia_pide_una_persona', 'boton_hablar_con_la_escuela']);
+
+/**
+ * ¿Este motivo pasa a una persona aunque el modo discreto esté prendido? La lista
+ * de la escuela (`school_settings.wa_temas_a_persona`, B6) o, sin ajuste, la global
+ * de siempre (`ESCALA_EN_MODO_DISCRETO`). Cada tema es un `reason` de `escalate`
+ * exacto o su prefijo («incidencia_urgente» cubre «incidencia_urgente:lesion»).
+ */
+function escalaEnModoDiscreto(reason: string): boolean {
+    const temas = temasAPersonaDeEscuela(escuelaDelTurno.getStore()?.ajustes, [...ESCALA_EN_MODO_DISCRETO]);
+    return temas.some((t) => reason === t || reason.startsWith(`${t}:`));
+}
 
 /** Lo que se le dice al escalar en modo discreto: sin prometer horas. */
 export const MENSAJE_PASO_A_PERSONA = 'Listo 🙌 Le aviso a la escuela para que te escriba por aquí.';
@@ -5404,7 +5750,7 @@ export async function revisarEscalacionesVencidas(ahora = Date.now()): Promise<R
             if (!plazoVencido(e.createdAt, plazo, ahora)) continue;
             // Modo discreto: el reaviso de los 30 min queda solo para lo urgente; lo
             // demás lo recoge el aviso único de pendientes.
-            if (modoDiscreto() && e.payload?.urgencia !== 'urgente') {
+            if (discretoEnBot() && e.payload?.urgencia !== 'urgente') {
                 await reservarRevision(e, 'discreto', ahora).catch(() => false);
                 continue;
             }
@@ -5446,7 +5792,7 @@ export async function revisarEscalacionesVencidas(ahora = Date.now()): Promise<R
             // nueva (auditoría 2026-10-28, X-09). El equipo sí se re-avisa siempre.
             // Modo discreto: a la familia nada («Todavía nadie de la escuela…» la
             // dejaba esperando en público y presionaba a la escuela).
-            if (!modoDiscreto() && !humanoReciente(await mensajesRecientes(e.conversationId), SILENCIO_HUMANO_MIN)
+            if (!discretoEnBot() && !humanoReciente(await mensajesRecientes(e.conversationId), SILENCIO_HUMANO_MIN)
                 && !(await pasoReciente(e.conversationId, 'escalacion_sin_respuesta', 72))) {
                 const horario = await estadoDeHorario(integration.id);
                 const aviso = textoSinRespuesta({ urgencia, categoria, fueraDeHorario: horario.fueraDeHorario,
@@ -5464,7 +5810,7 @@ export async function revisarEscalacionesVencidas(ahora = Date.now()): Promise<R
     // Modo discreto: en vez del SLA por escalación (push + correo), UN aviso por
     // conversación y por día cuando una familia o un interesado lleva 2 h hábiles
     // sin respuesta de nadie (`revisarPendientesSinRespuesta`).
-    if (modoDiscreto()) {
+    if (discretoEnBot()) {
         await revisarPendientesSinRespuesta(ahora).catch((err) =>
             console.warn('[whatsapp-bot] no se pudo revisar lo pendiente', { err: err?.message }));
         return r;
@@ -5636,7 +5982,7 @@ async function responderLoQueSeSabe(
     textos: string[],
     esFamilia: boolean,
 ): Promise<{ respondio: boolean; sinRespuesta: boolean }> {
-    const ajustes = await ajustesWhatsAppDeEscuela(integration.school_id);
+    const ajustes = await ajustesDeLaEscuela(integration.school_id);
     const partes: string[] = [];
     let respondio = false;
     let sinRespuesta = false;
@@ -5669,7 +6015,7 @@ async function responderLoQueSeSabe(
             if (!horariosDados) {
                 horariosDados = await ofrecerHorariosDeCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
                     texto: t, textoDelDia: t, step: PASO_RETOMA_RESPUESTA,
-                    intro: 'Estos son los próximos entrenamientos; en cualquiera puedes tomar una *clase de cortesía* gratis:',
+                    intro: `Estos son los próximos entrenamientos; en cualquiera puedes tomar una ${claseConValor(await textosClase(integration.school_id))}:`,
                 }).catch(() => false);
                 if (horariosDados) respondio = true;
             }
@@ -5830,7 +6176,7 @@ export async function revisarRetomas(ahora = Date.now()): Promise<ResultadoRetom
     // Modo discreto: si la escuela entró a la conversación, el bot no retoma
     // solo («si Milena entra a escribir, el bot no debe responder solo»). Lo que
     // quede sin contestar lo recoge el aviso único de pendientes.
-    if (modoDiscreto()) return r;
+    if (discretoEnBot()) return r;
     for (const cand of await conversacionesConEntrantesRecientes(ahora)) {
         try {
             const filas = await mensajesRecientes(cand.conversationId);

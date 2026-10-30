@@ -12,6 +12,7 @@
  * las convierte al vuelo cuando la lista todavia no fue guardada, para que ninguna
  * escuela quede sin datos de pago entre el deploy y el primer guardado.
  */
+import { CLAVES_MOTIVO, ETIQUETA_MOTIVO, esMotivoDeCobro, type MotivoDeCobro } from '@/lib/motivosDeCobro';
 
 /**
  * `payment_link` NO es una llave para transferir: es un link de pago reutilizable
@@ -47,14 +48,13 @@ export function isValidPaymentLinkUrl(value: string): boolean {
 export const isPaymentLink = (a: Pick<PaymentAccount, 'type'>): boolean => a.type === PAYMENT_LINK_TYPE;
 
 /**
- * Categorías de cobro: las del CHECK payments_payment_category_check (verificado
- * en la base el 2026-10-10). Misma lista que CATEGORIAS_COBRO del BFF
- * (bff/src/services/payment-accounts.ts) — si se agrega una allá, va aquí.
+ * Categorías de cobro: las 12 del CHECK payments_payment_category_check, desde
+ * el catálogo único de motivos (lib/motivosDeCobro.ts, espejo de MOTIVOS del
+ * BFF). Si se agrega una categoría, va allá, no aquí.
  */
-export const CHARGE_CATEGORIES = ['mensualidad', 'inscripcion', 'articulos', 'torneo', 'otro', 'seguro', 'excedente', 'clase_extra', 'vacacional', 'viaje'] as const;
-export type PaymentChargeCategory = (typeof CHARGE_CATEGORIES)[number];
-export const isChargeCategory = (v: unknown): v is PaymentChargeCategory =>
-    typeof v === 'string' && (CHARGE_CATEGORIES as readonly string[]).includes(v);
+export const CHARGE_CATEGORIES = CLAVES_MOTIVO;
+export type PaymentChargeCategory = MotivoDeCobro;
+export const isChargeCategory = (v: unknown): v is PaymentChargeCategory => esMotivoDeCobro(v);
 
 export interface PaymentAccount {
     id: string;
@@ -114,19 +114,8 @@ export function chargeCategoryOf(
     return paymentCategory === 'otro' ? 'otro' : null;
 }
 
-/** Nombre del cobro para la escuela, por categoría. */
-export const CHARGE_CATEGORY_LABEL: Record<PaymentChargeCategory, string> = {
-    mensualidad: 'Mensualidad',
-    inscripcion: 'Inscripción',
-    seguro: 'Seguro de accidentes',
-    excedente: 'Horas adicionales',
-    articulos: 'Artículos',
-    torneo: 'Torneo',
-    otro: 'Otro cobro',
-    clase_extra: 'Clase extra',
-    vacacional: 'Vacacional',
-    viaje: 'Viaje',
-};
+/** Nombre del cobro para la escuela, por categoría (etiqueta del catálogo de motivos). */
+export const CHARGE_CATEGORY_LABEL: Record<PaymentChargeCategory, string> = ETIQUETA_MOTIVO;
 
 /**
  * ¿Es un cobro ÚNICO (no la mensualidad del período)? Solo por la categoría
@@ -192,8 +181,8 @@ export function chargeLabel(p: {
  * Categoría de una fila para FILTRAR la lista de pagos. A diferencia de
  * `chargeCategoryOf` nunca devuelve null: sin categoría ni concepto reconocible
  * es la mensualidad (las del cron nacen con NULL), y una categoría que el front
- * no conoce (p. ej. 'reserva', que está en el CHECK vivo) se respeta tal cual en
- * vez de esconderse dentro de «Mensualidad».
+ * todavía no conoce (una futura del CHECK) se respeta tal cual en vez de
+ * esconderse dentro de «Mensualidad».
  */
 export function chargeFilterKey(
     paymentCategory: string | null | undefined,
@@ -205,9 +194,7 @@ export function chargeFilterKey(
 
 /** Etiqueta de una clave de `chargeFilterKey`. */
 export function chargeFilterLabel(key: string): string {
-    if (isChargeCategory(key)) return CHARGE_CATEGORY_LABEL[key];
-    if (key === 'reserva') return 'Reserva';
-    return key;
+    return isChargeCategory(key) ? CHARGE_CATEGORY_LABEL[key] : key;
 }
 
 /**

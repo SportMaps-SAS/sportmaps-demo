@@ -76,10 +76,24 @@ import {
     deportistasParaPreguntar, fichasDesdeDeportistas, guardarPreguntaGuiada, opcionesDeMeses, ultimosMeses,
     botonesDeOpciones, textoPreguntaMes, textoPreguntaConcepto, OPCIONES_CONCEPTO, PASO_PREGUNTA_MES,
     PASO_PREGUNTA_CONCEPTO, PASO_PREGUNTA_DEPORTISTA_BOTONES, textoCierreEnRevision, mesDeCobroEnTexto,
+    PASO_RESUMEN_MOTIVOS, BOTON_MOTIVOS_OK, BOTON_MOTIVOS_CAMBIAR,
     type GuiaGuardada,
 } from '../services/whatsapp-comprobante-guiado.service';
 import { categoriaDelCobro, etiquetaDelCobro } from '../services/tipo-de-cobro';
 import { modoDiscreto, escuelaActiva } from '../services/whatsapp-modo-discreto';
+import type { Verdict } from '../services/receipt-verdict';
+import type { Motivo } from '../services/motivos-de-cobro';
+import { MOTIVO_DE_OTRO_CONCEPTO } from '../services/whatsapp-otro-concepto.service';
+import {
+    cobroDesdeComprobanteActivo, preciosDeMotivos, motivoPorMonto, decidirConEsperado, opcionesDeMotivo,
+    crearCobroDesdeComprobante, anularCobroCreado, pendientesDelLead, leadPorTelefono, destinoExactoDelComprobante,
+    conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
+    type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
+} from '../services/wa-cobro-desde-comprobante.service';
+import {
+    conceptosEsperadosDe, elegirEsperado, consumirEsperado, type ConceptoEsperado,
+} from '../services/wa-concepto-esperado.service';
+import type { FichaConNombre, OpcionGuiada } from '../services/whatsapp-comprobante-guiado.service';
 
 const BUCKET = 'payment-receipts';
 const LOTE = 10;
@@ -330,6 +344,8 @@ const M = {
 
 const cop = (n: number) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
+/** «$310.000», sin el espacio del formato de moneda: el de los textos nuevos (plan B4), igual que el cierre guiado. */
+const pesos = (n: number) => `$${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(Math.round(n))}`;
 
 /**
  * ¿Vale la pena reintentar este fallo de `downloadMedia`?
@@ -396,6 +412,12 @@ async function esperarAlUsuario(id: string, pregunta: {
     tipo?: 'cobro' | 'deportista';
     /** Opciones de los botones de deportista (2026-10-24): el «1», «2» de la respuesta apunta a ellas. */
     guia?: GuiaGuardada;
+    /**
+     * (Plan B4, 2026-10-30) La pregunta NO salió porque el contacto ya tiene otra
+     * abierta: queda en fila (`pregunta_at` null) y sale cuando se resuelva la
+     * anterior (`promoverSiguientePregunta`).
+     */
+    enFila?: PreguntaEnFila | null;
 }) {
     await supabase.from('whatsapp_inbound_queue')
         .update({
@@ -413,8 +435,9 @@ async function esperarAlUsuario(id: string, pregunta: {
                 referencias: referenciasDelComprobante(pregunta.ocr),
                 ...(pregunta.tipo === 'deportista' ? { tipo: 'deportista' } : {}),
                 ...(pregunta.guia ? { guia: pregunta.guia } : {}),
+                ...(pregunta.enFila ? { en_fila: { ...pregunta.enFila, monto: pregunta.enFila.monto ?? pregunta.ocr?.amount ?? null } } : {}),
             },
-            pregunta_at: new Date().toISOString(),
+            pregunta_at: pregunta.enFila ? null : new Date().toISOString(),
         })
         .eq('id', id);
 }
@@ -457,11 +480,21 @@ export interface ContextoAplicacion {
     /** sha256 de la imagen. Es la llave del dedup: no se recalcula, se pasa. */
     sha: string;
     ocr: Awaited<ReturnType<typeof extractReceipt>>;
-    responder: (texto: string, paso: string) => Promise<unknown>;
+    /** `linea` (plan B4): lo que el asistente decidió de este comprobante, para el resumen de la ráfaga. */
+    responder: (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo) => Promise<unknown>;
     /** Qué hacer ante un fallo transitorio. El worker reintenta; la respuesta no. */
     alFallar: (motivo: string) => Promise<void>;
     log?: Logger;
 }
+
+/** Lo que pasó al aplicar (los llamadores de siempre lo ignoran; B4 lo usa para anular o agendar). */
+export type ResultadoAplicacion =
+    | { ok: true; action: string; veredicto: Verdict }
+    | { ok: false; duplicado: boolean };
+
+/** Reemplaza la respuesta a la familia después de aplicar (B3: «Tu clase quedó el sábado…»). */
+export type AlAplicar = (r: { action: string; veredicto: Verdict; pago: PagoPendiente }) =>
+    Promise<{ texto: string; botones?: BotonInteractivo[]; paso?: string } | null>;
 
 /**
  * Estampa el comprobante en UN pago, con su veredicto, y le cuenta al acudiente.
@@ -604,8 +637,15 @@ export async function aplicarComprobante(
          * `motivo` queda en `error_message` de la fila (la propuesta armada).
          */
         soloRevision?: boolean; motivo?: string;
+        /**
+         * (Plan B4, 2026-10-30) `linea`: va con la respuesta al resumen de la
+         * ráfaga. `para`: cómo se nombra el cobro en el cierre (el nombre del
+         * servicio creado). `alAplicar`: reemplaza la respuesta (la agenda de la
+         * clase de prueba).
+         */
+        linea?: LineaDeMotivo; para?: string; alAplicar?: AlAplicar;
     } = {},
-): Promise<void> {
+): Promise<ResultadoAplicacion> {
     const estampado = await estamparComprobante(ctx, pago, extra.esperado);
 
     if (!estampado.ok) {
@@ -631,10 +671,10 @@ export async function aplicarComprobante(
                 error_message: `referencia ya usada: ${ctx.ocr.reference}`,
             });
             ctx.log?.info?.({ queueId: ctx.queueId, referencia: ctx.ocr.reference }, '[wa-queue] comprobante repetido');
-            return;
+            return { ok: false, duplicado: true };
         }
         await ctx.alFallar(estampado.error);
-        return;
+        return { ok: false, duplicado: false };
     }
 
     const cubre = extra.cubre ?? [];
@@ -671,11 +711,27 @@ export async function aplicarComprobante(
             : textoCierreEnRevision({
                 monto: ctx.ocr?.amount ?? null,
                 atleta: pago.atleta,
-                para: paraDelCobro(pago),
+                para: extra.para ?? paraDelCobro(pago),
                 abono: extra.soloRevision === true,
             });
     }
     if (extra.nota && resultado.action !== 'rejected') respuesta += `\n\n${extra.nota}`;
+
+    // (Plan B4) Otra respuesta para la familia: la agenda de la clase de prueba.
+    let paso = 'resultado_comprobante';
+    let botones: BotonInteractivo[] | undefined;
+    if (extra.alAplicar) {
+        try {
+            const otra = await extra.alAplicar({ action: resultado.action, veredicto: estampado.veredicto.verdict, pago });
+            if (otra?.texto) {
+                respuesta = otra.texto;
+                paso = otra.paso ?? paso;
+                botones = otra.botones?.length ? otra.botones : undefined;
+            }
+        } catch (e: any) {
+            ctx.log?.warn?.({ queueId: ctx.queueId, err: e?.message }, '[wa-queue] alAplicar falló: sale la respuesta de siempre');
+        }
+    }
 
     // Lo que SIGUE debiendo. Sin esto, el acudiente que paga «lo pendiente»
     // se va convencido de que quedó al día y la escuela se entera cuando le
@@ -686,7 +742,7 @@ export async function aplicarComprobante(
             + restantes.map((r) => `• ${describirPago(r)}`).join('\n');
     }
 
-    const salida = await ctx.responder(respuesta, 'resultado_comprobante') as { ok?: boolean; error?: string } | undefined;
+    const salida = await ctx.responder(respuesta, paso, botones, extra.linea) as { ok?: boolean; error?: string } | undefined;
     // En revisión y Meta rechazó el texto por ventana cerrada (cola atrasada
     // más de 24 h): `comprobante_en_revision` si está aprobada; si no, como antes.
     if (resultado.action !== 'approved' && resultado.action !== 'rejected'
@@ -702,6 +758,7 @@ export async function aplicarComprobante(
         error_message: extra.motivo ? extra.motivo.slice(0, 500) : null,
     });
     ctx.log?.info?.({ queueId: ctx.queueId, paymentId: pago.id, accion: resultado.action }, '[wa-queue] aplicado');
+    return { ok: true, action: resultado.action, veredicto: estampado.veredicto.verdict };
 }
 
 /** A qué se refiere un cobro en el cierre de una línea: el mes (mensualidad) o su tipo (inscripción, seguro, torneo…). */
@@ -789,21 +846,22 @@ async function preguntarMesOQuien(a: {
         if (ds.length === 1) {
             const d = ds[0];
             const opciones = opcionesDeMeses(ultimosMeses(new Date()));
-            const r = await a.responder(textoPreguntaMes({ monto, atleta: d.nombre }), PASO_PREGUNTA_MES, botonesDeOpciones(opciones)) as { silenciado?: boolean } | undefined;
+            const r = await a.responder(textoPreguntaMes({ monto, atleta: d.nombre }), PASO_PREGUNTA_MES, botonesDeOpciones(opciones)) as SalidaDePregunta;
             if (r?.silenciado) return false;
             await guardarPreguntaGuiada(a.fila.id, base, 'mes', {
                 opciones, monto, quienPago, parentId: a.parentId,
                 deportista: { id: d.id, tipo: d.tipo, nombre: d.nombre, cuota: d.cuota },
-            });
+            }, { enFila: r?.enFila });
             return true;
         }
         if (ds.length > 1 && ds.length <= 3) {
             const fichas = fichasDesdeDeportistas(ds);
-            const r = await a.responder(textoPreguntaDeportista(), PASO_PREGUNTA_DEPORTISTA_BOTONES, botonesDeDeportistas(fichas)) as { silenciado?: boolean } | undefined;
+            const r = await a.responder(textoPreguntaDeportista(), PASO_PREGUNTA_DEPORTISTA_BOTONES, botonesDeDeportistas(fichas)) as SalidaDePregunta;
             if (r?.silenciado) return false;
             await esperarAlUsuario(a.fila.id, {
                 opciones: [], ocr: a.ocr, sha: a.sha, storagePath: a.storagePath, parentId: a.parentId, tipo: 'deportista',
                 guia: { opciones: opcionesDeDeportistas(fichas), monto, quienPago, parentId: a.parentId },
+                enFila: r?.enFila,
             });
             return true;
         }
@@ -813,26 +871,31 @@ async function preguntarMesOQuien(a: {
     }
 }
 
-/** «Ese valor no coincide con una mensualidad: ¿es de…?» [Mensualidad][Inscripción][Otro]. true si salió. */
+/**
+ * «Ese valor no coincide con una mensualidad: ¿es de…?» [Mensualidad][Inscripción][Otro].
+ * Con el interruptor de B4, `opciones` trae los 2 motivos con precio más
+ * cercanos + «Otro» (`opcionesDeMotivo`). true si salió.
+ */
 async function preguntarConcepto(a: {
     fila: FilaCola; parentId: string | null; llaves?: LlavesDeFicha;
     ocr: Awaited<ReturnType<typeof extractReceipt>>; sha: string; storagePath: string | null;
-    responder: Responder; propuesta: string | null;
+    responder: Responder; propuesta: string | null; opciones?: OpcionGuiada[];
 }): Promise<boolean> {
     try {
         const monto = a.ocr.amount ?? null;
+        const opciones = a.opciones?.length ? a.opciones : OPCIONES_CONCEPTO;
         const ds = await deportistasParaPreguntar(a.fila.school_id, {
             parentId: a.parentId, childIds: a.llaves?.childIds, unregisteredIds: a.llaves?.unregisteredIds,
         });
-        const r = await a.responder(textoPreguntaConcepto({ monto }), PASO_PREGUNTA_CONCEPTO, botonesDeOpciones(OPCIONES_CONCEPTO)) as { silenciado?: boolean } | undefined;
+        const r = await a.responder(textoPreguntaConcepto({ monto }), PASO_PREGUNTA_CONCEPTO, botonesDeOpciones(opciones)) as SalidaDePregunta;
         if (r?.silenciado) return false;
         await guardarPreguntaGuiada(a.fila.id,
             { ocr: a.ocr, sha: a.sha, storagePath: a.storagePath, parentId: a.parentId, referencias: referenciasDelComprobante(a.ocr) },
             'concepto', {
-                opciones: OPCIONES_CONCEPTO, monto, quienPago: a.ocr.originName ?? null, parentId: a.parentId,
+                opciones, monto, quienPago: a.ocr.originName ?? null, parentId: a.parentId,
                 propuesta: a.propuesta,
                 deportista: ds.length === 1 ? { id: ds[0].id, tipo: ds[0].tipo, nombre: ds[0].nombre, cuota: ds[0].cuota } : null,
-            });
+            }, { enFila: r?.enFila });
         return true;
     } catch {
         return false;
@@ -1010,6 +1073,497 @@ export async function destinoFueraDeSportmaps(
     return destinationMatchesRegistered(destino, fuera);
 }
 
+// ─── Comprobantes con motivo (plan B4, 2026-10-30) ──────────────────────────
+//
+// docs/specs/whatsapp-monster-plan-B4.md §3. Todo detrás de
+// `school_settings.wa_cobro_desde_comprobante` (nace false): con el interruptor
+// apagado no se lee ningún esperado, no se crea ningún cobro y no sale ningún
+// botón nuevo — la cola responde exactamente como hoy (whatsapp-queue-motivo.test).
+//
+//  · Motivo esperado: el bot pidió un pago («La clase de prueba vale $15.000…»)
+//    y registró qué espera (wa-concepto-esperado). El comprobante toma ese motivo.
+//  · Cobro desde el comprobante: si el motivo tiene precio en la escuela y no
+//    hay cobro, la base lo crea (RPC, el precio es SUYO) y se le aplica.
+//  · Motivo por monto: $310.000 = matrícula, $60.000 = uniformes, $370.000 = las dos.
+//  · Prospecto (sin ficha): el cobro va al lead (`payments.signup_lead_id`) y,
+//    si es la clase de prueba y todo coincide, B3 la agenda.
+
+/** Lo que el asistente decidió de un comprobante, para el resumen de la ráfaga. */
+export interface LineaDeMotivo {
+    monto: number | null;
+    /** «Inscripción», «Uniformes», «Clase de prueba», «Inscripción + Uniformes». */
+    motivo: string;
+    atleta: string | null;
+    paymentId: string;
+    /** true = el cobro lo creó el asistente desde el comprobante. */
+    nuevo: boolean;
+}
+
+/** Un motivo ya decidido (lo eligió la familia, o venía esperado) que entra a `continuarComoComprobante`. */
+export interface MotivoForzado extends ValorMotivoElegido {
+    esperadoId?: string | null;
+}
+
+/** La pregunta que no salió porque el contacto ya tenía otra abierta (plan B4 §3 T4.6). */
+export interface PreguntaEnFila {
+    texto: string;
+    paso: string;
+    botones: BotonInteractivo[] | null;
+    monto: number | null;
+}
+
+/** Lo que devuelve `responder` a una pregunta. */
+type SalidaDePregunta = { silenciado?: boolean; enFila?: PreguntaEnFila } | undefined;
+
+interface ContextoB4 { activo: boolean; esperados: ConceptoEsperado[] }
+
+const APAGADO_B4: ContextoB4 = { activo: false, esperados: [] };
+
+/** El interruptor y, si está prendido, los esperados vivos del contacto. Dos lecturas como mucho; nunca lanza. */
+async function contextoB4(schoolId: string, telefono: string): Promise<ContextoB4> {
+    try {
+        if (!(await cobroDesdeComprobanteActivo(schoolId))) return APAGADO_B4;
+        return { activo: true, esperados: await conceptosEsperadosDe(schoolId, telefono) };
+    } catch {
+        return APAGADO_B4;
+    }
+}
+
+const montoDelOcr = (ocr: { amount?: number | null } | null | undefined): number | null =>
+    typeof ocr?.amount === 'number' && ocr.amount > 0 ? ocr.amount : null;
+const mismoMonto = (a: number | null, b: number | null) => a !== null && b !== null && Math.abs(a - b) <= 1;
+const shaDe = (base64: string) => crypto.createHash('sha256').update(Buffer.from(base64, 'base64')).digest('hex');
+const primerNombre = (n: string | null | undefined) => (n ? n.trim().split(/\s+/)[0] : null);
+
+/** El motivo forzado como precio (lo que la RPC necesita). Pura. */
+function precioDelForzado(f: MotivoForzado): PrecioDeMotivo {
+    return {
+        motivo: f.motivo, monto: f.monto, fuente: f.fuente, fuenteId: f.fuenteId, etiqueta: f.etiqueta,
+        ...(f.opcion ? { opcion: f.opcion } : {}), ...(f.esAbono ? { esAbono: true } : {}),
+    };
+}
+
+/** ¿Esa referencia de banco ya está en un pago de la escuela? Antes de crear: el estampado daría 23505. Nunca lanza. */
+async function referenciaYaUsada(schoolId: string, ocr: { reference?: string | null }): Promise<boolean> {
+    const ref = ocr?.reference ? String(ocr.reference).trim() : '';
+    if (!ref) return false;
+    try {
+        const { data } = await supabase.from('payments').select('id')
+            .eq('school_id', schoolId).eq('ocr_reference', ref).limit(1);
+        return Array.isArray(data) && data.length > 0;
+    } catch {
+        return false;
+    }
+}
+
+/** De quién es el cobro en una familia: uno (se crea), 2–3 (se pregunta) o no se sabe. */
+type DuenoFamilia =
+    | { tipo: 'uno'; dueno: DuenoDelCobro; nombre: string | null; cuotas: number[] }
+    | { tipo: 'varios'; fichas: FichaConNombre[]; cuotas: number[] }
+    | { tipo: 'ninguno'; cuotas: number[] };
+
+/**
+ * Los deportistas de la familia. Con `llaves` (familia sin cuenta, o el
+ * deportista que eligió en la pregunta de hermanos) solo esas fichas; si no,
+ * los hijos del acudiente. Nunca lanza.
+ */
+async function duenoDeLaFamilia(schoolId: string, parentId: string | null, llaves?: LlavesDeFicha): Promise<DuenoFamilia> {
+    try {
+        const conLlaves = !!llaves && (llaves.childIds.length + llaves.unregisteredIds.length) > 0;
+        const ds = await deportistasParaPreguntar(schoolId, conLlaves
+            ? { childIds: llaves!.childIds, unregisteredIds: llaves!.unregisteredIds }
+            : { parentId });
+        const cuotas = ds.map((d) => d.cuota).filter((c): c is number => typeof c === 'number' && c > 0);
+        if (ds.length === 1) {
+            const d = ds[0];
+            return { tipo: 'uno', dueno: d.tipo === 'child' ? { childId: d.id } : { unregisteredId: d.id }, nombre: d.nombre, cuotas };
+        }
+        if (ds.length >= 2 && ds.length <= 3) return { tipo: 'varios', fichas: fichasDesdeDeportistas(ds), cuotas };
+        return { tipo: 'ninguno', cuotas };
+    } catch {
+        return { tipo: 'ninguno', cuotas: [] };
+    }
+}
+
+/** Lo que necesita B4 para crear y aplicar sin depender de la fila de la cola. */
+interface ArgsB4 {
+    fila: FilaCola;
+    parentId: string | null;
+    llaves?: LlavesDeFicha;
+    pendientes: PagoPendiente[];
+    ocr: Awaited<ReturnType<typeof extractReceipt>>;
+    sha: string;
+    storagePath: string;
+    responder: Responder;
+    alFallar: (motivo: string) => Promise<void>;
+    log?: Logger;
+}
+
+const contextoDe = (a: ArgsB4): ContextoAplicacion => ({
+    queueId: a.fila.id, schoolId: a.fila.school_id, parentId: a.parentId, storagePath: a.storagePath,
+    sha: a.sha, ocr: a.ocr, responder: a.responder, alFallar: a.alFallar, log: a.log,
+});
+
+/**
+ * Crea los cobros (RPC; el precio lo pone la base) y les aplica el comprobante:
+ * uno, o el principal con los demás cubiertos (`cubre`, la RPC de siempre). Un
+ * abono (clínica: 50 % para separar cupo) queda en revisión y nunca se aprueba
+ * solo. Devuelve false si NO hizo nada (referencia ya usada, la base no lo
+ * creó): quien llama sigue su camino. Si el estampado choca con una referencia
+ * repetida, los cobros creados se anulan.
+ */
+async function crearYAplicar(
+    a: ArgsB4, precios: PrecioDeMotivo[], dueno: DuenoDelCobro, nombre: string | null,
+    o: { esperadoId?: string | null; alAplicar?: AlAplicar } = {},
+): Promise<boolean> {
+    if (!precios.length || await referenciaYaUsada(a.fila.school_id, a.ocr)) return false;
+    const creados: PagoPendiente[] = [];
+    let abono = false;
+    for (const p of precios) {
+        // Sin el nombre (prospecto del esperado), el concepto lo arma la base con el del lead.
+        const concepto = nombre ? conceptoDelCobroCreado(p, nombre) : null;
+        const r = await crearCobroDesdeComprobante({
+            schoolId: a.fila.school_id, queueId: a.fila.id, categoria: p.motivo, monto: p.monto,
+            fuente: p.fuente, fuenteId: p.fuenteId, ...dueno, concepto,
+            conceptoEsperadoId: o.esperadoId ?? null, opcion: p.opcion ?? null, telefono: a.fila.wa_phone_number,
+        });
+        if (!r.ok) {
+            a.log?.warn?.({ queueId: a.fila.id, codigo: r.codigo, motivo: p.motivo }, '[wa-queue] B4: la base no creó el cobro');
+            for (const c of creados) await anularCobroCreado(c.id);
+            return false;
+        }
+        abono = abono || r.esAbono;
+        creados.push({
+            id: r.paymentId, amount: r.precio, concept: r.concepto ?? concepto ?? conceptoDelCobroCreado(p, null), due_date: hoyBogota(),
+            child_id: dueno.childId ?? null, atleta: nombre, categoria: p.motivo,
+        });
+    }
+    const [principal, ...cubre] = creados;
+    const monto = montoDelOcr(a.ocr);
+    const etiqueta = precios.map((p) => p.etiqueta).join(' + ');
+    const r = await aplicarComprobante(contextoDe(a), principal, a.pendientes, {
+        ...(cubre.length ? { esperado: creados.reduce((s, c) => s + Number(c.amount), 0), cubre } : {}),
+        ...(abono && monto !== null ? {
+            soloRevision: true,
+            motivo: `abono_en_revision: ${etiqueta} — abono para separar el cupo (cobro creado por el asistente)`,
+            nota: `Quedan *${cop(Math.max(0, principal.amount - monto))}* para completar ${cop(principal.amount)}.`,
+        } : {}),
+        linea: { monto, motivo: etiqueta, atleta: nombre, paymentId: principal.id, nuevo: true },
+        ...(cubre.length ? {} : { para: precios[0].etiqueta.toLowerCase() }),
+        alAplicar: o.alAplicar,
+    });
+    if (!r.ok && r.duplicado) for (const c of creados) await anularCobroCreado(c.id);
+    if (r.ok && o.esperadoId) await consumirEsperado(o.esperadoId, principal.id, a.fila.id);
+    a.log?.info?.({ queueId: a.fila.id, cobros: creados.map((c) => c.id), abono }, '[wa-queue] B4: cobro creado desde el comprobante');
+    return true;
+}
+
+/** Aplica el comprobante a un cobro que YA existía del motivo esperado. */
+async function aplicarAlEsperado(a: ArgsB4, pago: PagoPendiente, esperadoId: string | null, alAplicar?: AlAplicar): Promise<void> {
+    const r = await aplicarComprobante(contextoDe(a), pago, a.pendientes.filter((x) => x.id !== pago.id), {
+        linea: {
+            monto: montoDelOcr(a.ocr), motivo: etiquetaDelCobro({ payment_category: pago.categoria ?? null, concept: pago.concept }),
+            atleta: pago.atleta, paymentId: pago.id, nuevo: false,
+        },
+        alAplicar,
+    });
+    if (r.ok && esperadoId) await consumirEsperado(esperadoId, pago.id, a.fila.id);
+}
+
+/** Hermanos: el motivo está claro y el deportista no. Botones con sus nombres; la guía lleva el motivo. */
+async function preguntarDeQuienEs(a: ArgsB4, fichas: FichaConNombre[], motivo: MotivoForzado): Promise<boolean> {
+    const r = await a.responder(
+        `Recibí tu comprobante de *${motivo.etiqueta.toLowerCase()}* 📄 ¿De cuál deportista es? Toca el nombre.`,
+        PASO_PREGUNTA_DEPORTISTA_BOTONES, botonesDeDeportistas(fichas)) as SalidaDePregunta;
+    if (r?.silenciado) return false;
+    await esperarAlUsuario(a.fila.id, {
+        opciones: [], ocr: a.ocr, sha: a.sha, storagePath: a.storagePath, parentId: a.parentId, tipo: 'deportista',
+        guia: { opciones: opcionesDeDeportistas(fichas), monto: montoDelOcr(a.ocr), quienPago: a.ocr.originName ?? null, parentId: a.parentId, motivo },
+        enFila: r?.enFila,
+    });
+    return true;
+}
+
+/** El motivo forzado no se pudo cobrar: a la escuela con lo que se sabe (la familia ya contestó). */
+async function motivoForzadoALaEscuela(a: ArgsB4, f: MotivoForzado, por: string): Promise<void> {
+    const monto = montoDelOcr(a.ocr);
+    await a.responder('Gracias 🙏 Le paso tu comprobante a la escuela para que lo aplique y te confirme.', 'guiado_a_la_escuela');
+    await cerrar(a.fila.id, 'ignored', {
+        result_type: 'escalated', matched_parent_id: a.parentId,
+        error_message: motivoConPropuesta(
+            `otro_concepto: ${f.etiqueta.toLowerCase()} (la familia lo eligió) · ${por}`,
+            `Propuesta → pagó: ${a.ocr.originName ?? 'no se leyó'}${monto ? ` · ${pesos(monto)}` : ''} · crear el cobro de ${f.etiqueta} (${pesos(f.monto)}) y aplicar este comprobante`),
+        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+    });
+}
+
+/**
+ * B4 para una familia (con cuenta, o por la ficha): primero el motivo que eligió
+ * la familia (`forzado`), si no, el motivo esperado. true = la fila quedó atendida.
+ */
+async function atenderMotivoDeFamilia(a: ArgsB4, b4: ContextoB4, forzado: MotivoForzado | null): Promise<boolean> {
+    const monto = montoDelOcr(a.ocr);
+    const schoolId = a.fila.school_id;
+
+    if (forzado) {
+        const existente = monto === null ? undefined : a.pendientes.find((p) =>
+            categoriaDelCobro({ payment_category: p.categoria ?? null, concept: p.concept }) === forzado.motivo
+            && mismoMonto(Number(p.amount), monto));
+        if (existente) {
+            await aplicarAlEsperado(a, existente, forzado.esperadoId ?? null);
+            return true;
+        }
+        if (!mismoMonto(forzado.monto, monto)) {
+            await motivoForzadoALaEscuela(a, forzado, `el comprobante (${monto ? pesos(monto) : 'sin monto'}) no es el precio`);
+            return true;
+        }
+        const dueno = await duenoDeLaFamilia(schoolId, a.parentId, a.llaves);
+        if (dueno.tipo === 'varios') {
+            if (await preguntarDeQuienEs(a, dueno.fichas, forzado)) return true;
+            await motivoForzadoALaEscuela(a, forzado, 'no se sabe de qué deportista es');
+            return true;
+        }
+        if (dueno.tipo !== 'uno') {
+            await motivoForzadoALaEscuela(a, forzado, 'no se sabe de qué deportista es');
+            return true;
+        }
+        if (forzado.motivo === 'inscripcion' && await yaTieneCobroDelMotivo(schoolId, dueno.dueno, 'inscripcion')) {
+            await motivoForzadoALaEscuela(a, forzado, 'el deportista ya tiene una inscripción');
+            return true;
+        }
+        if (await crearYAplicar(a, [precioDelForzado(forzado)], dueno.dueno, dueno.nombre, { esperadoId: forzado.esperadoId })) return true;
+        await motivoForzadoALaEscuela(a, forzado, 'no se pudo crear el cobro');
+        return true;
+    }
+
+    const esperado = elegirEsperado(b4.esperados.filter((e) => !e.leadId), monto);
+    if (!esperado) return false;
+    const dec = decidirConEsperado(esperado, monto, null, a.pendientes);
+    if (dec.tipo === 'aplicar_existente') {
+        await aplicarAlEsperado(a, dec.pago, esperado.id);
+        return true;
+    }
+    if (dec.tipo !== 'crear') return false;
+
+    const dueno: DuenoFamilia = esperado.childId
+        ? await duenoDeLaFamilia(schoolId, null, { childIds: [esperado.childId], unregisteredIds: [] })
+        : await duenoDeLaFamilia(schoolId, a.parentId, a.llaves);
+    if (dueno.tipo === 'ninguno') return false;
+    const precios = await preciosDeMotivos(schoolId, dueno.tipo === 'uno' ? dueno.dueno : {}, {
+        motivos: [esperado.motivo], telefono: a.fila.wa_phone_number,
+    });
+    const precio = precios.find((p) => mismoMonto(p.monto, monto));
+    if (!precio) return false;
+    if (dueno.tipo === 'varios') return preguntarDeQuienEs(a, dueno.fichas, { ...valorDePrecio(precio), esperadoId: esperado.id });
+    if (precio.motivo === 'inscripcion' && await yaTieneCobroDelMotivo(schoolId, dueno.dueno, 'inscripcion')) return false;
+    return crearYAplicar(a, [precio], dueno.dueno, dueno.nombre, { esperadoId: esperado.id });
+}
+
+/** Resultado de buscar el motivo por el monto (familia). */
+interface MotivoDeFamilia { atendida: boolean; precios: PrecioDeMotivo[]; tipo: MotivoPorMonto['tipo'] }
+
+/**
+ * Motivo por monto para una familia (interruptor prendido, sin esperado): `uno`
+ * o `varios` crean y aplican (o preguntan de cuál hermano, si es un solo
+ * motivo); lo demás devuelve los precios para armar la pregunta. Nunca cuando
+ * el monto es una cuota de la familia.
+ */
+async function motivoPorMontoDeFamilia(a: ArgsB4, o: { motivos?: Motivo[] } = {}): Promise<MotivoDeFamilia> {
+    const monto = montoDelOcr(a.ocr);
+    const dueno = await duenoDeLaFamilia(a.fila.school_id, a.parentId, a.llaves);
+    if (dueno.tipo === 'ninguno' || monto === null) return { atendida: false, precios: [], tipo: 'ninguno' };
+    const precios = await preciosDeMotivos(a.fila.school_id, dueno.tipo === 'uno' ? dueno.dueno : {}, {
+        motivos: o.motivos, telefono: a.fila.wa_phone_number,
+    });
+    const m = motivoPorMonto(monto, precios, { cuotas: dueno.cuotas });
+    if (m.tipo !== 'uno' && m.tipo !== 'varios') return { atendida: false, precios, tipo: m.tipo };
+    const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
+    if (dueno.tipo === 'varios') {
+        const atendida = elegidos.length === 1 && await preguntarDeQuienEs(a, dueno.fichas, valorDePrecio(elegidos[0]));
+        return { atendida, precios, tipo: m.tipo };
+    }
+    if (elegidos.some((p) => p.motivo === 'inscripcion')
+        && await yaTieneCobroDelMotivo(a.fila.school_id, dueno.dueno, 'inscripcion')) {
+        return { atendida: false, precios, tipo: 'ninguno' };
+    }
+    return { atendida: await crearYAplicar(a, elegidos, dueno.dueno, dueno.nombre), precios, tipo: m.tipo };
+}
+
+// ─── Prospecto y agenda de la clase de prueba ────────────────────────────────
+
+/** Contrato con B3 (plan maestro §3). B4 la carga con import dinámico; si falta, no agenda y pasa a una persona. */
+export interface AgendaClasePrueba {
+    confirmarClasePruebaPagada(a: { schoolId: string; leadId: string; paymentId: string; telefono: string }):
+        Promise<{ texto: string; botones?: { id: string; title: string }[]; step?: string }>;
+}
+
+/** Ruta en variable: el módulo de B3 puede no existir todavía (se compila y se prueba sin él). */
+const RUTA_AGENDA_CLASE_PRUEBA = '../services/clase-prueba-agenda.service';
+
+const cargadorDeAgendaPorDefecto = async (): Promise<AgendaClasePrueba | null> => {
+    try {
+        const m: any = await import(RUTA_AGENDA_CLASE_PRUEBA);
+        return typeof m?.confirmarClasePruebaPagada === 'function' ? m as AgendaClasePrueba : null;
+    } catch {
+        return null;
+    }
+};
+let cargarAgendaClasePrueba = cargadorDeAgendaPorDefecto;
+
+/** Solo para pruebas (null = el import dinámico de siempre). */
+export function _fijarCargadorAgenda(f: (() => Promise<AgendaClasePrueba | null>) | null): void {
+    cargarAgendaClasePrueba = f ?? cargadorDeAgendaPorDefecto;
+}
+
+export const TEXTO_CLASE_PRUEBA_A_PERSONA = (monto: number | null) =>
+    `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} para la clase de prueba 📄 ` +
+    'Una persona de la escuela te confirma el horario por aquí.';
+
+interface ArgsProspecto {
+    fila: FilaCola;
+    wa: WhatsAppIntegration;
+    conversationId: string | null;
+    responder: Responder;
+    ocr: Awaited<ReturnType<typeof extractReceipt>>;
+    base64: string;
+    storagePath: string;
+    log?: Logger;
+}
+
+/** La conversación pasa a una persona de la escuela (buzón + aviso), sin otro mensaje a la familia. Nunca lanza. */
+async function pasarAPersona(p: ArgsProspecto, motivo: string): Promise<void> {
+    if (!p.conversationId) return;
+    try {
+        const { abrirConsultaParaLaEscuela } = await import('../services/whatsapp-bot.service');
+        await abrirConsultaParaLaEscuela(p.wa, p.conversationId, p.fila.wa_phone_number, motivo);
+    } catch (e: any) {
+        p.log?.warn?.({ queueId: p.fila.id, err: e?.message }, '[wa-queue] B4: no se pudo avisar a la escuela; se abre la conversación');
+        await supabase.from('whatsapp_conversations')
+            .update({ status: 'open', updated_at: new Date().toISOString() })
+            .eq('id', p.conversationId);
+    }
+}
+
+/**
+ * La agenda de la clase de prueba al aplicar el comprobante (D9, plan B4 §4):
+ * se agenda SOLO si el monto es el esperado (±$1), el dinero llegó a una cuenta
+ * general de la escuela con coincidencia exacta y el veredicto no es rojo. Si
+ * algo no coincide, o B3 no está, o falla: no se agenda y pasa a una persona.
+ * El cobro queda «En revisión» (awaiting_approval) en todos los casos.
+ */
+function agendaDeClasePrueba(p: ArgsProspecto, leadId: string, destino: DestinoExacto, montoEsperado: number | null): AlAplicar {
+    return async ({ action, veredicto, pago }) => {
+        const monto = montoDelOcr(p.ocr);
+        if (action === 'rejected') {
+            await pasarAPersona(p, 'clase_prueba_comprobante_rechazado');
+            return null;
+        }
+        const coincide = destino === 'exacta' && mismoMonto(monto, montoEsperado) && veredicto !== 'rojo';
+        if (coincide) {
+            const agenda = await cargarAgendaClasePrueba();
+            if (agenda) {
+                try {
+                    const r = await agenda.confirmarClasePruebaPagada({
+                        schoolId: p.fila.school_id, leadId, paymentId: pago.id, telefono: p.fila.wa_phone_number,
+                    });
+                    if (r?.texto) {
+                        return {
+                            texto: r.texto,
+                            botones: r.botones?.map((b) => ({ id: b.id, title: b.title })),
+                            paso: r.step ?? 'clase_prueba_agendada',
+                        };
+                    }
+                } catch (e: any) {
+                    p.log?.warn?.({ queueId: p.fila.id, err: e?.message }, '[wa-queue] B4: la agenda de la clase de prueba falló');
+                }
+            }
+        }
+        await pasarAPersona(p, coincide ? 'clase_prueba_sin_agenda' : 'clase_prueba_no_coincide');
+        return { texto: TEXTO_CLASE_PRUEBA_A_PERSONA(monto), paso: 'clase_prueba_a_persona' };
+    };
+}
+
+/** El esperado del prospecto no coincide: no se crea nada; a la bandeja con la propuesta y a una persona. */
+async function prospectoALaEscuela(p: ArgsProspecto, a: ArgsB4, codigo: string, esperado: Pick<ConceptoEsperado, 'motivo' | 'monto'>): Promise<void> {
+    const monto = montoDelOcr(p.ocr);
+    await p.responder(
+        `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} 📄 Se lo paso a la escuela para que lo revise y te confirme por aquí.`,
+        'comprobante_a_la_escuela');
+    await cerrar(p.fila.id, 'ignored', {
+        result_type: 'escalated',
+        error_message: motivoConPropuesta(
+            `${codigo}: se esperaba ${etiquetaDelCobro({ payment_category: esperado.motivo }).toLowerCase()}`
+            + `${esperado.monto ? ` por ${pesos(esperado.monto)}` : ''} y llegó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
+            + ` a ${p.ocr.destination ?? 'un destino sin leer'} (prospecto)`,
+            `Propuesta → pagó: ${p.ocr.originName ?? 'no se leyó'} · revisar el destino y el valor; si está bien, registrar el cobro del prospecto y aplicar este comprobante`),
+        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+    });
+    await pasarAPersona(p, 'comprobante_prospecto_no_coincide');
+}
+
+/**
+ * B4 para un número sin ficha (prospecto). Con motivo esperado manda la regla
+ * de `decidirConEsperado` (monto y destino exacto, o a una persona); sin
+ * esperado, el lead por teléfono y el motivo por el monto, solo con destino
+ * exacto. true = la fila quedó atendida; false = sigue el camino de hoy.
+ */
+async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boolean> {
+    const { fila, ocr } = p;
+    const monto = montoDelOcr(ocr);
+    let esperado = elegirEsperado(b4.esperados.filter((e) => !e.childId), monto);
+    const lead = esperado?.leadId
+        ? { id: esperado.leadId, nombre: null as string | null }
+        : await leadPorTelefono(fila.school_id, fila.wa_phone_number);
+    if (!lead) return false;
+    if (esperado && !esperado.leadId) esperado = { ...esperado, leadId: lead.id };
+
+    const a: ArgsB4 = {
+        fila, parentId: null, pendientes: await pendientesDelLead(fila.school_id, lead.id),
+        ocr, sha: shaDe(p.base64), storagePath: p.storagePath, responder: p.responder,
+        alFallar: (motivo) => reintentar(fila, motivo, p.log), log: p.log,
+    };
+    const destino = await destinoExactoDelComprobante(fila.school_id, ocr);
+    const precios = await preciosDeMotivos(fila.school_id, { leadId: lead.id }, {
+        telefono: fila.wa_phone_number, ...(esperado ? { motivos: [esperado.motivo] } : {}),
+    });
+
+    if (esperado) {
+        if (esperado.monto === null) {
+            const delMotivo = precios.filter((x) => x.motivo === esperado!.motivo && !x.esAbono);
+            if (delMotivo.length === 1) esperado = { ...esperado, monto: delMotivo[0].monto };
+        }
+        const dec = decidirConEsperado(esperado, monto, destino, a.pendientes);
+        if (dec.tipo === 'seguir') return false;
+        if (dec.tipo === 'a_la_escuela') {
+            await prospectoALaEscuela(p, a, `motivo_esperado_no_coincide (${dec.razon})`, esperado);
+            return true;
+        }
+        const agenda = esperado.motivo === 'clase_prueba' ? agendaDeClasePrueba(p, lead.id, destino, esperado.monto) : undefined;
+        if (dec.tipo === 'aplicar_existente') {
+            await aplicarAlEsperado(a, dec.pago, esperado.id, agenda);
+            return true;
+        }
+        const precio = precios.find((x) => x.motivo === esperado!.motivo && mismoMonto(x.monto, monto));
+        if (precio && await crearYAplicar(a, [precio], { leadId: lead.id }, lead.nombre, { esperadoId: esperado.id, alAplicar: agenda })) {
+            return true;
+        }
+        await prospectoALaEscuela(p, a, precio ? 'cobro_no_creado' : 'motivo_esperado_sin_precio', esperado);
+        return true;
+    }
+
+    // Sin esperado: solo con el dinero en una cuenta general de la escuela (exacta).
+    if (destino !== 'exacta') return false;
+    const m = motivoPorMonto(monto, precios);
+    if (m.tipo !== 'uno' && m.tipo !== 'varios') return false;
+    const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
+    const conPrueba = elegidos.some((x) => x.motivo === 'clase_prueba');
+    // Una combinación con la clase de prueba no agenda sola: la confirma una persona.
+    const agenda: AlAplicar | undefined = !conPrueba ? undefined
+        : elegidos.length === 1 ? agendaDeClasePrueba(p, lead.id, destino, elegidos[0].monto)
+            : async () => { await pasarAPersona(p, 'clase_prueba_en_combinacion'); return null; };
+    return crearYAplicar(a, elegidos, { leadId: lead.id }, lead.nombre, { alAplicar: agenda });
+}
+
 /**
  * Todo lo que pasa una vez que sabemos QUIÉN paga (`parentId`) y que el
  * archivo YA se leyó como comprobante (`ocr`). Compartida por el camino de
@@ -1021,7 +1575,7 @@ export async function destinoFueraDeSportmaps(
 async function continuarComoComprobante(
     fila: FilaCola,
     parentId: string | null,
-    responder: (texto: string, paso: string, botones?: BotonInteractivo[]) => Promise<unknown>,
+    responder: Responder,
     base64: string,
     mime: string,
     storagePath: string,
@@ -1031,8 +1585,10 @@ async function continuarComoComprobante(
      * `llaves`: familia sin cuenta (o número sin ficha resuelto por nombre):
      * los cobros se buscan por la ficha. `alFallar`: quién maneja un fallo
      * transitorio (el worker reintenta; la respuesta de la familia no).
+     * `motivo` (plan B4): el motivo ya decidido (la familia lo eligió en la
+     * pregunta de concepto o de hermanos).
      */
-    opts: { llaves?: LlavesDeFicha; alFallar?: (motivo: string) => Promise<void> } = {},
+    opts: { llaves?: LlavesDeFicha; alFallar?: (motivo: string) => Promise<void>; motivo?: MotivoForzado | null } = {},
 ): Promise<void> {
     const alFallar = opts.alFallar ?? ((motivo: string) => reintentar(fila, motivo, log));
     // ¿La MISMA imagen ya se recibió de esta familia? (…0340, 07-oct: la foto
@@ -1121,6 +1677,14 @@ async function continuarComoComprobante(
         return;
     }
 
+    // (Plan B4) Motivo elegido por la familia o motivo esperado. Con el
+    // interruptor apagado no se lee nada más que el interruptor.
+    const b4 = await contextoB4(fila.school_id, fila.wa_phone_number);
+    const argsB4: ArgsB4 = {
+        fila, parentId, llaves: opts.llaves, pendientes, ocr, sha: shaArchivo, storagePath, responder, alFallar, log,
+    };
+    if (b4.activo && await atenderMotivoDeFamilia(argsB4, b4, opts.motivo ?? null)) return;
+
     // ¿Dice que es OTRA cosa? (P0, 2026-10-07: «Clase perfeccionamiento» y «lo
     // de los uniformes» se aplicaron a la mensualidad y la escuela los rechazó
     // tres veces.) Si hay un cobro pendiente de ese concepto por ese monto, va
@@ -1146,6 +1710,11 @@ async function continuarComoComprobante(
         return;
     }
     if (otro.tipo === 'a_la_escuela') {
+        // (Plan B4) El pie dice «uniformes» y $60.000 es su precio: se crea el
+        // cobro de ese motivo y se aplica. Si el monto no calza, como siempre.
+        const motivoNombrado = MOTIVO_DE_OTRO_CONCEPTO[otro.senal.concepto];
+        if (b4.activo && motivoNombrado
+            && (await motivoPorMontoDeFamilia(argsB4, { motivos: [motivoNombrado] })).atendida) return;
         await responder(mensajeOtroConcepto(otro.senal), 'otro_concepto');
         await cerrar(fila.id, 'ignored', {
             result_type: 'escalated',
@@ -1175,6 +1744,15 @@ async function continuarComoComprobante(
         recargos,
     });
     if (porTexto?.tipo === 'a_la_escuela') {
+        // (Plan B4) El monto es exactamente un precio de la escuela (matrícula,
+        // uniformes, clínica): eso pesa más que «abono de la mensualidad». Se
+        // crea el cobro y se aplica. Si no calza, quedan los precios para la
+        // pregunta de concepto.
+        let porMontoB4: MotivoDeFamilia | null = null;
+        if (b4.activo && porTexto.codigo === 'monto_no_cuadra' && !lectura.saldo) {
+            porMontoB4 = await motivoPorMontoDeFamilia(argsB4);
+            if (porMontoB4.atendida) return;
+        }
         // Pago esperado (spec 3.5): un monto MENOR a la cuota es un ABONO, no un
         // cambio de plan (esa regla se descartó). Queda EN REVISIÓN con la
         // propuesta armada y nunca se aprueba solo.
@@ -1201,6 +1779,7 @@ async function continuarComoComprobante(
             if (await preguntarConcepto({
                 fila, parentId, llaves: opts.llaves, ocr, sha: shaArchivo, storagePath, responder,
                 propuesta: esperado?.texto ?? null,
+                opciones: porMontoB4 && porMontoB4.tipo !== 'es_cuota' ? opcionesDeMotivo(porMontoB4.precios, montoLeido) : undefined,
             })) return;
         }
         await responder(porTexto.mensaje, 'comprobante_a_la_escuela');
@@ -1250,6 +1829,17 @@ async function continuarComoComprobante(
             });
             return;
         }
+        // (Plan B4) Sin cobros pero el monto es un precio de la escuela: se crea
+        // el cobro y se aplica. Si no calza con nada (y no es una cuota), se
+        // pregunta de qué es con los motivos que tienen precio.
+        if (b4.activo) {
+            const r = await motivoPorMontoDeFamilia(argsB4);
+            if (r.atendida) return;
+            const opciones = r.tipo === 'ninguno' || r.tipo === 'ambiguo' ? opcionesDeMotivo(r.precios, montoLeido) : [];
+            if (opciones.length && await preguntarConcepto({
+                fila, parentId, llaves: opts.llaves, ocr, sha: shaArchivo, storagePath, responder, propuesta: null, opciones,
+            })) return;
+        }
         // Spec 3.3: sin cobros → se pregunta el mes (o de cuál deportista, si son
         // varios) con botones. Elegirlo NO crea ni aplica nada: va a la bandeja
         // con la propuesta «crear el cobro de ese mes y aplicar».
@@ -1292,13 +1882,14 @@ async function continuarComoComprobante(
     if (match.tipo === 'preguntar') {
         const texto = mensajeElegirPago(match.opciones);
         // (c) Con botones (concepto + monto): tocar es más fácil que escribir «2».
-        await responder(texto, 'ask_cual_pago', botonesDeCobros(match.opciones));
+        const salida = await responder(texto, 'ask_cual_pago', botonesDeCobros(match.opciones)) as SalidaDePregunta;
         await esperarAlUsuario(fila.id, {
             opciones: match.opciones,
             ocr,
             sha: crypto.createHash('sha256').update(Buffer.from(base64, 'base64')).digest('hex'),
             storagePath,
             parentId,
+            enFila: salida?.enFila,
         });
         return;
     }
@@ -1851,11 +2442,38 @@ const PASOS_PREGUNTA = new Set([
 ]);
 
 /** Respuestas de una ráfaga de archivos del mismo contacto, para mandarlas en UN mensaje. */
-export interface RespuestaEnRafaga { texto: string; paso: string; queueId: string }
+export interface RespuestaEnRafaga {
+    texto: string; paso: string; queueId: string;
+    /** (Plan B4) El motivo que asignó el asistente a este comprobante. */
+    linea?: LineaDeMotivo;
+}
 export interface Rafaga {
     respuestas: RespuestaEnRafaga[];
     /** El envío de la última fila (con su conversación, baja, acudiente). */
-    enviar?: (texto: string, payload: Record<string, unknown>, conConsentimiento: boolean) => Promise<unknown>;
+    enviar?: (texto: string, payload: Record<string, unknown>, conConsentimiento: boolean,
+        botones?: BotonInteractivo[]) => Promise<unknown>;
+}
+
+/**
+ * Pura: el resumen de una ráfaga en la que el asistente asignó al menos un
+ * motivo. «¡Recibí 2 comprobantes! ✅ 1. $310.000 → Inscripción · Mariana …»
+ * con [Sí, está bien][Cambiar un motivo]. Callar = está bien.
+ */
+export function resumirRafagaConMotivos(respuestas: RespuestaEnRafaga[]): {
+    texto: string; paso: string; botones: BotonInteractivo[]; lineas: LineaDeMotivo[];
+} {
+    const filas = respuestas.map((r, i) => {
+        if (!r.linea) return `*${i + 1}.* ${r.texto}`;
+        const quien = primerNombre(r.linea.atleta);
+        return `*${i + 1}.* ${r.linea.monto ? pesos(r.linea.monto) : 'Sin monto'} → ${r.linea.motivo}${quien ? ` · ${quien}` : ''}`;
+    });
+    return {
+        texto: `¡Recibí ${respuestas.length} comprobantes! ✅\n\n${filas.join('\n')}\n\n` +
+            'La escuela los revisa y te confirma. ¿Está bien así?',
+        paso: PASO_RESUMEN_MOTIVOS,
+        botones: [{ ...BOTON_MOTIVOS_OK }, { ...BOTON_MOTIVOS_CAMBIAR }],
+        lineas: respuestas.map((r) => r.linea).filter((l): l is LineaDeMotivo => !!l),
+    };
 }
 
 /**
@@ -2047,6 +2665,27 @@ export async function destinoDelComprobante(
     return 'ajena';
 }
 
+/**
+ * ¿El contacto ya tiene OTRA pregunta de comprobante abierta (salió hace < 24 h
+ * y sigue esperando)? Entonces la nueva queda en fila (plan B4 §3 T4.6). Una
+ * lectura, solo cuando hay una pregunta que mandar. Nunca lanza (ante el error, no).
+ */
+async function otraPreguntaAbierta(fila: FilaCola): Promise<boolean> {
+    try {
+        const { data } = await supabase.from('whatsapp_inbound_queue')
+            .select('id')
+            .eq('integration_id', fila.integration_id)
+            .eq('wa_phone_number', fila.wa_phone_number)
+            .eq('status', 'waiting_user')
+            .neq('id', fila.id)
+            .gte('pregunta_at', new Date(Date.now() - 24 * 3600_000).toISOString())
+            .limit(1);
+        return Array.isArray(data) && data.length > 0;
+    } catch {
+        return false;
+    }
+}
+
 /** ¿Este paso ya salió a la conversación en las últimas 24 h? Nunca lanza. */
 async function yaSalioElPaso(conversationId: string | null, paso: string): Promise<boolean> {
     if (!conversationId) return false;
@@ -2064,7 +2703,7 @@ async function yaSalioElPaso(conversationId: string | null, paso: string): Promi
     }
 }
 
-type Responder = (texto: string, paso: string, botones?: BotonInteractivo[]) => Promise<unknown>;
+type Responder = (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo) => Promise<unknown>;
 
 /**
  * (a) Familia sin cuenta con fichas por teléfono: se lee y se aplica por la
@@ -2150,7 +2789,10 @@ async function comprobanteDeNumeroSinFicha(
 ): Promise<void> {
     const silencio = () => cerrar(fila.id, 'ignored', { result_type: 'none', error_message: 'contacto_no_atendido' });
     const textos = await textosDelContacto(fila, conversationId);
-    const hablaDePago = textosHablanDePago(textos);
+    // (Plan B4) Un motivo esperado vivo (el bot le pidió el pago) cuenta como
+    // «habla de pago»: se lee sin el tope de ráfaga y se guarda el archivo.
+    const b4 = await contextoB4(fila.school_id, fila.wa_phone_number);
+    const hablaDePago = textosHablanDePago(textos) || b4.esperados.length > 0;
     let archivo: { base64: string; mime: string };
     if (hablaDePago) {
         const bajada = await bajarYGuardarArchivo(fila, wa, log);
@@ -2211,6 +2853,11 @@ async function comprobanteDeNumeroSinFicha(
 
     const bajada = await bajarYGuardarArchivo(fila, wa, log);
     if (!bajada.ok) return;
+    // (Plan B4) Prospecto: el motivo esperado (o el lead por teléfono y el
+    // monto) ANTES de buscar un deportista por nombre — un prospecto no lo tiene.
+    if (b4.activo && await atenderProspecto({
+        fila, wa, conversationId, responder, ocr, base64: bajada.base64, storagePath: bajada.storagePath, log,
+    }, b4)) return;
     const llaves = await deportistaPorNombre(fila.school_id, [...textos, ocr.description, ocr.originName]);
     if (llaves) {
         log?.info?.({ queueId: fila.id }, '[wa-queue] número sin ficha: deportista por nombre');
@@ -2222,9 +2869,11 @@ async function comprobanteDeNumeroSinFicha(
     const posibles = await candidatosParaPreguntar(fila.school_id, [...textos, ocr.description, ocr.originName]);
     const paso = posibles.length ? PASO_PREGUNTA_DEPORTISTA_BOTONES : PASO_PREGUNTA_DEPORTISTA;
     // UNA vez: si ya se le preguntó (otra foto de la ráfaga), esta queda esperando la misma respuesta.
+    let salida: SalidaDePregunta;
     if (!(await yaSalioElPaso(conversationId, paso))) {
-        if (posibles.length) await responder(textoPreguntaDeportista(), paso, botonesDeDeportistas(posibles));
-        else await responder(PREGUNTA_DEPORTISTA, paso);
+        salida = (posibles.length
+            ? await responder(textoPreguntaDeportista(), paso, botonesDeDeportistas(posibles))
+            : await responder(PREGUNTA_DEPORTISTA, paso)) as SalidaDePregunta;
     }
     await esperarAlUsuario(fila.id, {
         opciones: [], ocr,
@@ -2233,6 +2882,7 @@ async function comprobanteDeNumeroSinFicha(
         ...(posibles.length
             ? { guia: { opciones: opcionesDeDeportistas(posibles), monto: ocr.amount ?? null, quienPago: ocr.originName ?? null, parentId: null } }
             : {}),
+        enFila: salida?.enFila,
     });
 }
 
@@ -2307,6 +2957,46 @@ export async function aplicarComprobanteDeFicha(
     responder: (texto: string, paso: string) => Promise<unknown>,
     log?: Logger,
 ): Promise<void> {
+    await retomarFilaGuardada(queueId, responder, log, (guardado) => (guardado?.guia?.motivo
+        // (Plan B4) Hermanos: la pregunta llevaba el motivo ya resuelto; con el
+        // deportista elegido se crea el cobro de ESE deportista.
+        ? { parentId: guardado.parentId ?? null, llaves, motivo: guardado.guia.motivo as MotivoForzado }
+        : { parentId: null, llaves }));
+}
+
+/**
+ * (Plan B4) La familia eligió en la pregunta de concepto un motivo con precio y
+ * el monto es ese precio: se crea el cobro y se aplica. El deportista es el de
+ * la guía (si había uno solo); si no, se pregunta de cuál. Lo llama
+ * whatsapp-respuesta-de-cobro. Nunca reintenta solo: un fallo deja la fila en
+ * el buzón.
+ */
+export async function aplicarComprobanteConMotivo(
+    queueId: string,
+    motivo: MotivoForzado,
+    responder: (texto: string, paso: string, botones?: BotonInteractivo[]) => Promise<unknown>,
+    log?: Logger,
+): Promise<void> {
+    await retomarFilaGuardada(queueId, responder, log, (guardado) => {
+        const dep = guardado?.guia?.deportista as { id?: string; tipo?: string } | null | undefined;
+        const llaves: LlavesDeFicha | undefined = dep?.id
+            ? (dep.tipo === 'unregistered' ? { childIds: [], unregisteredIds: [dep.id] } : { childIds: [dep.id], unregisteredIds: [] })
+            : undefined;
+        return { parentId: guardado?.parentId ?? null, llaves, motivo };
+    });
+}
+
+/**
+ * Toma una fila `waiting_user` (la respuesta de la familia), relee su archivo y
+ * la pasa por `continuarComoComprobante` con lo que diga `como`. Sin fila, sin
+ * lectura guardada o sin archivo → al buzón.
+ */
+async function retomarFilaGuardada(
+    queueId: string,
+    responder: Responder,
+    log: Logger | undefined,
+    como: (guardado: any) => { parentId: string | null; llaves?: LlavesDeFicha; motivo?: MotivoForzado | null },
+): Promise<void> {
     const { data: tomadas } = await supabase.from('whatsapp_inbound_queue')
         .update({ status: 'processing', updated_at: new Date().toISOString() })
         .eq('id', queueId).eq('status', 'waiting_user')
@@ -2326,8 +3016,9 @@ export async function aplicarComprobanteDeFicha(
         await aLaEscuela(archivo.ok ? 'sin archivo guardado' : archivo.error);
         return;
     }
-    await continuarComoComprobante(fila, null, responder, archivo.base64, archivo.mime, archivo.storagePath,
-        guardado.ocr, log, { llaves, alFallar: aLaEscuela });
+    const { parentId, llaves, motivo } = como(guardado);
+    await continuarComoComprobante(fila, parentId, responder, archivo.base64, archivo.mime, archivo.storagePath,
+        guardado.ocr, log, { llaves, alFallar: aLaEscuela, motivo: motivo ?? null });
 }
 
 async function procesarFila(fila: FilaCola, log?: Logger, rafaga?: Rafaga): Promise<void> {
@@ -2472,17 +3163,26 @@ async function procesarFilaInterna(
         return enviado;
     };
 
-    const responder = async (texto: string, paso: string, botones?: BotonInteractivo[]) => {
+    const responder = async (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo) => {
         if (tomada) {
             log?.info?.({ queueId: fila.id, paso }, '[wa-queue] conversación tomada: no se le escribe a la familia');
             return { ok: true, silenciado: true };
+        }
+        // Fila de preguntas (plan B4, todas las escuelas): si el contacto ya
+        // tiene otra pregunta abierta, ésta NO sale: queda en fila y sale cuando
+        // conteste la anterior. Antes salían las dos y la vieja se perdía.
+        if (PASOS_PREGUNTA.has(paso) && await otraPreguntaAbierta(fila)) {
+            respondio = true;
+            const enFila: PreguntaEnFila = { texto, paso, botones: botones?.length ? botones : null, monto: null };
+            log?.info?.({ queueId: fila.id, paso }, '[wa-queue] otra pregunta abierta: ésta queda en fila');
+            return { ok: true, enFila };
         }
         respondio = true;
         pasosEnviados.add(paso);
         // Ráfaga: la respuesta se junta con las de las otras fotos y sale UNA
         // vez al final (`runWhatsAppQueue`). Las preguntas salen ya.
         if (rafaga && !PASOS_PREGUNTA.has(paso)) {
-            rafaga.respuestas.push({ texto, paso, queueId: fila.id });
+            rafaga.respuestas.push({ texto, paso, queueId: fila.id, ...(linea ? { linea } : {}) });
             rafaga.enviar = enviar;
             return { ok: true, enRafaga: true };
         }
@@ -2720,10 +3420,13 @@ async function procesarFilaInterna(
 
 export const HORAS_VIDA_PREGUNTA = 24;
 
-export type PorQueVencio = 'pregunta_en_borrador' | 'pregunta_no_enviada' | 'sin_respuesta';
+export type PorQueVencio = 'pregunta_en_borrador' | 'pregunta_no_enviada' | 'sin_respuesta' | 'pregunta_en_fila';
 
 /** Pura: el motivo que ve la escuela. */
-export function motivoPreguntaVencida(e: { enviada: boolean; enBorrador: boolean }): { codigo: PorQueVencio; texto: string } {
+export function motivoPreguntaVencida(e: { enviada: boolean; enBorrador: boolean; enFila?: boolean }): { codigo: PorQueVencio; texto: string } {
+    if (e.enFila) {
+        return { codigo: 'pregunta_en_fila', texto: `pregunta_vencida: la pregunta quedó en fila detrás de otra y no salió en ${HORAS_VIDA_PREGUNTA} h; aplicarlo a mano` };
+    }
     if (e.enBorrador) {
         return { codigo: 'pregunta_en_borrador', texto: `pregunta_vencida: la pregunta de a qué cobro va quedó en un borrador sin enviar (${HORAS_VIDA_PREGUNTA} h); aplicarlo a mano` };
     }
@@ -2737,7 +3440,7 @@ export function motivoPreguntaVencida(e: { enviada: boolean; enBorrador: boolean
 export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now()): Promise<number> {
     const corte = new Date(ahora - HORAS_VIDA_PREGUNTA * 3600_000).toISOString();
     const { data: filas, error } = await supabase.from('whatsapp_inbound_queue')
-        .select('id, integration_id, wa_phone_number, pregunta_at, updated_at')
+        .select('id, integration_id, wa_phone_number, pregunta_at, updated_at, en_fila:pregunta_ocr->en_fila')
         .eq('status', 'waiting_user')
         .lt('updated_at', corte)
         .limit(50);
@@ -2773,7 +3476,7 @@ export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now
             }
         } catch { /* sin detalle: vence igual con el motivo genérico */ }
 
-        const motivo = motivoPreguntaVencida({ enviada, enBorrador });
+        const motivo = motivoPreguntaVencida({ enviada, enBorrador, enFila: !f.pregunta_at && !!f.en_fila });
         const { data: cerradas } = await supabase.from('whatsapp_inbound_queue')
             .update({
                 status: 'ignored',
@@ -2835,13 +3538,22 @@ export async function runWhatsAppQueue(log?: Logger): Promise<{ tomadas: number;
             }
         }
         if (rafaga?.respuestas.length && rafaga.enviar) {
-            const { texto, paso } = resumirRafaga(rafaga.respuestas);
+            // (Plan B4) Si el asistente asignó algún motivo, el resumen lleva las
+            // líneas y [Sí, está bien][Cambiar un motivo]; si no, como siempre.
+            const conMotivos = rafaga.respuestas.length > 1 && rafaga.respuestas.some((r) => r.linea);
+            const resumen = conMotivos ? resumirRafagaConMotivos(rafaga.respuestas) : null;
+            const { texto, paso } = resumen ?? resumirRafaga(rafaga.respuestas);
             const pasos = rafaga.respuestas.map((r) => r.paso);
             const ids = rafaga.respuestas.map((r) => r.queueId);
             try {
                 await rafaga.enviar(texto,
-                    { step: paso, queue_id: ids[0], ...(ids.length > 1 ? { queue_ids: ids, pasos } : {}) },
-                    pasos.includes('resultado_comprobante'));
+                    {
+                        step: paso, queue_id: ids[0], ...(ids.length > 1 ? { queue_ids: ids, pasos } : {}),
+                        ...(resumen ? { lineas: resumen.lineas } : {}),
+                    },
+                    // Con los botones del resumen no va el consentimiento al pie (le quitaría los botones).
+                    !resumen && pasos.includes('resultado_comprobante'),
+                    resumen?.botones);
             } catch (err: any) {
                 errores++;
                 log?.error?.({ err: err?.message ?? err, queueIds: ids }, '[wa-queue] no salió la respuesta de la ráfaga');

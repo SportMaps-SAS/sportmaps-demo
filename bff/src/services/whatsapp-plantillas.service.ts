@@ -53,7 +53,11 @@ export type ConceptoCobro =
     | 'comprobante_rechazado' // evento: la escuela no validó el comprobante
     | 'pago_recibido_otro_concepto' // evento: pagado un cobro que NO es mensualidad (uniforme, torneo…)
     | 'comprobante_en_revision'     // evento: el comprobante quedó en un cobro, en revisión de la escuela
-    | 'recordatorio_clase_cortesia'; // víspera de la clase de cortesía (no es cobro)
+    | 'recordatorio_clase_cortesia' // víspera de la clase de cortesía (no es cobro)
+    // Embudo del interesado y agenda de la clase de prueba (Monster, 2026-10-30). Ninguna es cobro.
+    | 'recordatorio_clase_prueba'    // víspera de la clase de PRUEBA (escuela con nombre_clase='prueba')
+    | 'clase_prueba_cupo_por_vencer' // el cupo separado vence en ~2 h y la ventana ya cerró
+    | 'clase_prueba_reprogramada';   // la sesión se canceló (lluvia / el profe): elegir otro horario
 
 /** Datos del cobro ya formateados para mostrar (COP, fechas en español). */
 export interface DatosCobro {
@@ -74,6 +78,8 @@ export interface DatosCobro {
     dia?: string | null;
     hora?: string | null;
     sede?: string | null;
+    /** Cupo separado: cuándo vence («hoy a las 4:45 p. m.»). clase_prueba_cupo_por_vencer. */
+    vence?: string | null;
 }
 
 interface DefConcepto {
@@ -151,6 +157,24 @@ export const CONCEPTOS: Record<ConceptoCobro, DefConcepto> = {
     recordatorio_clase_cortesia: {
         plantilla: 'recordatorio_clase_cortesia', idioma: 'es_CO', esCobro: false,
         variables: (d) => [d.nombreContacto, d.nombreEscuela, d.dia, d.hora, d.sede],
+    },
+    // "Hola {{1}}, te recordamos la clase de prueba de {{2}} en {{3}}: {{4}} a las {{5}}, en {{6}}.
+    //  Si no pueden asistir, toquen «Cambiar horario»." [Ahí estaremos] [Cambiar horario] [No puedo ir]
+    recordatorio_clase_prueba: {
+        plantilla: 'recordatorio_clase_prueba', idioma: 'es_CO', esCobro: false,
+        variables: (d) => [d.nombreContacto, d.nombreAtleta, d.nombreEscuela, d.dia, d.hora, d.sede],
+    },
+    // "Hola {{1}}, el cupo que separaste para la clase de prueba de {{2}} ({{3}} a las {{4}}) vence {{5}}.
+    //  Para confirmarlo, envía por este chat el comprobante de pago por {{6}}."
+    clase_prueba_cupo_por_vencer: {
+        plantilla: 'clase_prueba_cupo_por_vencer', idioma: 'es_CO', esCobro: false,
+        variables: (d) => [d.nombreContacto, d.nombreAtleta, d.dia, d.hora, d.vence, d.monto],
+    },
+    // "Hola {{1}}, la clase de prueba de {{2}} del {{3}} a las {{4}} no se va a realizar por {{5}}.
+    //  Toca «Elegir otro horario» para escoger una nueva fecha, sin costo adicional." [Elegir otro horario]
+    clase_prueba_reprogramada: {
+        plantilla: 'clase_prueba_reprogramada', idioma: 'es_CO', esCobro: false,
+        variables: (d) => [d.nombreContacto, d.nombreAtleta, d.dia, d.hora, d.motivo],
     },
 };
 

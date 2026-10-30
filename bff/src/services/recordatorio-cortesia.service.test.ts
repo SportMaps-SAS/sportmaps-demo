@@ -238,3 +238,68 @@ describe('respuesta «CANCELAR» al recordatorio', () => {
         expect(cortesia.cancelaTrasRecordatorio('cancelaron el partido?')).toBe(false);
     });
 });
+
+
+// ─── Integración (2026-10-30): escuela con embudo (Monster) ─────────────────
+const { textosDeClase } = await import('./textos-clase-prueba');
+
+describe('víspera de una escuela con embudo (B2/B3)', () => {
+    const PRUEBA = textosDeClase({ nombre_clase: 'prueba', trial_price: 15000 });
+    const LUGARES = [
+        { id: 'p2', nombre: 'Parque Pinar de Suba 2', branchId: 'suba', direccion: 'Cl. 145 #91-19', mapsUrl: 'https://maps.app.goo.gl/p2', indicaciones: null },
+        { id: 'p1', nombre: 'Parque Pinar', branchId: 'suba', direccion: 'Cra. 92 #147', mapsUrl: null, indicaciones: null },
+    ];
+    beforeEach(() => {
+        deps.reservasDelDia = vi.fn(async () => [reserva({
+            slot: { id: 'slot-9', label: 'U9 Y U11 MIXTO', slot_date: '2026-10-07', start_time: '08:00', end_time: '10:00', location: 'Parque Pinar de Suba 2', team_id: 'team-u9' },
+        })]);
+        deps.escuela = vi.fn(async () => ({
+            nombre: 'Monsters Volley', sedes: [{ name: 'Sede Suba', address: 'Calle 152 #94A-67', is_main: true }],
+            lugares: LUGARES, embudo: true, textos: PRUEBA,
+        }));
+    });
+
+    it('ventana cerrada → plantilla recordatorio_clase_prueba con el estado del embudo y la cancha exacta', async () => {
+        const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });
+        expect(r.enviados).toBe(1);
+        const arg = deps.enviarPlantilla.mock.calls[0][0];
+        expect(arg.concepto).toBe('recordatorio_clase_prueba');
+        expect(arg.datos.sede).toBe('Parque Pinar de Suba 2 (Cl. 145 #91-19)');
+        expect(arg.payloadExtra).toMatchObject({
+            flujo: 'embudo', paso_embudo: 'agendada', step: 'recordatorio_cortesia_vispera', lead_id: 'lead-1',
+            datos_embudo: { leadId: 'lead-1', teamId: 'team-u9', slotId: 'slot-9' },
+        });
+        expect(arg.payloadExtra.flujo).not.toBe(cortesia.FLUJO_CORTESIA);
+    });
+
+    it('ventana abierta → texto con la clase de prueba, botones del embudo y sin «gratis» ni CANCELAR', async () => {
+        deps.conversacion = vi.fn(async () => ({ id: 'conv-1', last_inbound_at: '2026-10-06T20:00:00Z' }));
+        await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });
+        const [, , texto, botones] = deps.enviarTexto.mock.calls[0];
+        expect(texto).toContain('la clase de prueba de *Samuel Perez*');
+        expect(texto).toContain('Cambiar horario');
+        expect(texto).not.toMatch(/gratis|cortes[ií]a|CANCELAR/i);
+        expect(botones.map((b: any) => b.id)).toEqual(['sm_em_ahi', 'sm_em_cambiar']);
+        expect(deps.registrarTexto.mock.calls[0][0].payload).toMatchObject({ flujo: 'embudo', paso_embudo: 'agendada' });
+    });
+
+    it('la sesión se canceló y ya se avisó «clase reprogramada»: no se recuerda', async () => {
+        deps.reservasDelDia = vi.fn(async () => [reserva({
+            slot: { id: 'slot-9', label: 'U9', slot_date: '2026-10-07', start_time: '08:00', end_time: '10:00', location: 'Parque Pinar de Suba 2', team_id: 'team-u9' },
+            reprogramadaSlotId: 'slot-9',
+        })]);
+        const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });
+        expect(r).toMatchObject({ candidatas: 1, enviados: 0, omitidos: 1 });
+        expect(deps.enviarPlantilla).not.toHaveBeenCalled();
+    });
+
+    it('Dynasty igual: sin embudo, la plantilla y el estado de la cortesía de siempre', async () => {
+        deps.escuela = vi.fn(async () => ({ nombre: 'Dynasty Volley Club', sedes: [{ name: 'Coliseo Dynasty DC', address: 'Cl. 12 Bis #71g-09', is_main: true }] }));
+        deps.reservasDelDia = vi.fn(async () => [reserva()]);
+        await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });
+        const arg = deps.enviarPlantilla.mock.calls[0][0];
+        expect(arg.concepto).toBe('recordatorio_clase_cortesia');
+        expect(arg.datos.sede).toBe('Coliseo Dynasty (Cl. 12 Bis #71g-09)');
+        expect(arg.payloadExtra).toMatchObject({ flujo: cortesia.FLUJO_CORTESIA, paso_cortesia: 'recordatorio' });
+    });
+});

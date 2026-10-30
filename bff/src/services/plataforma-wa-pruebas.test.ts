@@ -106,6 +106,24 @@ describe('turnoSimulado', () => {
         expect(sesion.estado.bloqueadas).toEqual(r.bloqueadas);
     });
 
+    it('el saliente en memoria guarda el payload de deliver: los flujos de varios pasos siguen al turno siguiente', async () => {
+        (runBotTurn as any).mockImplementationOnce(async () => {
+            h.salidas!.push({
+                texto: '¿Qué día te queda mejor?', step: 'cortesia_elegir_dia', botones: ['Sábado'],
+                opciones: [{ id: 'sm_cort_dia_1', title: 'Sábado' }],
+                payload: { step: 'cortesia_elegir_dia', flujo: 'cortesia', paso_cortesia: 'elegir_dia', datos_cortesia: { anio: 2011 } },
+            });
+        });
+        const sesion: SesionPrueba = { contact_wa_id: '573128463555', school_id: 'esc', rol: 'papa', child_id: 'h1', parent_id: 'padre-prueba', estado: {} };
+        await turnoSimulado(sesion, { waMessageId: 'wamid.t3', textBody: 'clase de prueba', botonId: null });
+
+        const saliente = sesion.estado.tablas!.whatsapp_messages.find((m) => m.direction === 'outbound');
+        expect(saliente.payload).toEqual({
+            step: 'cortesia_elegir_dia', flujo: 'cortesia', paso_cortesia: 'elegir_dia', datos_cortesia: { anio: 2011 },
+            botones: ['sm_cort_dia_1'],
+        });
+    });
+
     it('como prospecto el teléfono no identifica a nadie', async () => {
         const sesion: SesionPrueba = { contact_wa_id: '573128463555', school_id: 'esc', rol: 'prospecto', child_id: null, parent_id: null, estado: {} };
         const r = await turnoSimulado(sesion, { waMessageId: 'wamid.t2', textBody: 'hola', botonId: null });

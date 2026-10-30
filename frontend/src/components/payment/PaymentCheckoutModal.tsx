@@ -42,6 +42,28 @@ import { useWompiCheckout, type ServerQuote } from '@/hooks/useWompiCheckout';
 import { blockPwaReload, unblockPwaReload } from '@/pwa/reloadGuard';
 import MercadoPagoBrick from '@/components/checkout/MercadoPagoBrick';
 import { resolvePaymentAccounts, resolvePaymentLink, accountDisplayLabel, existingChargeInfo, type PaymentChargeCategory } from '@/lib/payment-accounts';
+import { definicionDeMotivo } from '@/lib/motivosDeCobro';
+import { parseOpciones, precioDeServicio } from '@/lib/preciosDeServicio';
+import {
+  camposDeCategoria,
+  conceptoDeServicios,
+  conceptoDisponible,
+  conceptoInicial,
+  esConceptoDeCarrito,
+  itemDeServicio,
+  lineasDeServicio,
+  motivoDelConcepto,
+  opcionInicial,
+  opcionesDeCheckout,
+  primeraQueResponda,
+  tipoDeServicioDe,
+  tiposConItems,
+  totalDeServicios,
+  type ConceptoCheckout,
+  type ConceptoInicial,
+  type ItemDeServicio,
+  type SeleccionDeServicios,
+} from '@/components/payment/checkoutConcepto';
 import { PaymentLinkButton } from '@/components/payment/PaymentLinkButton';
 import type { MpCreatePaymentResult } from '@/lib/api/mercadopago';
 import { autoEvaluate as autoEvaluateGlosa } from '@/lib/api/glosas';
@@ -59,12 +81,6 @@ interface MerchItemOption {
   size_options: string | null;
 }
 
-interface TournItemOption {
-  id: string;
-  name: string;
-  price: number;
-}
-
 interface PaymentCheckoutModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -78,8 +94,13 @@ interface PaymentCheckoutModalProps {
   amount: number;
   concept: string;
   mode?: 'create' | 'update';
-  /** Abre el modal directo en el conceptType 'articulos' (botón "Agregar artículos"). */
-  initialConceptType?: 'mensualidad' | 'inscripcion_fija' | 'inscripcion_variable' | 'otro' | 'articulos' | 'torneo';
+  /**
+   * Motivo preseleccionado (mode='create'): cualquier motivo del catálogo
+   * (lib/motivosDeCobro.ts), p. ej. 'articulos' del botón «Agregar artículos»
+   * o el `?motivo=` de un enlace de cobro. Si la escuela no lo ofrece, abre en
+   * su equivalente o en la mensualidad (ver checkoutConcepto.conceptoDisponible).
+   */
+  initialConceptType?: ConceptoInicial;
   /**
    * mode='update': `payments.payment_category` del cobro que se paga, si quien
    * abre el modal ya la tiene. Si no viene, el modal la lee de la fila. Decide si
@@ -126,7 +147,9 @@ export function PaymentCheckoutModal({
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'error' | 'awaiting_approval'>('idle');
 
   // Custom Payment Fields
-  const [conceptType, setConceptType] = useState<'mensualidad' | 'inscripcion_fija' | 'inscripcion_variable' | 'otro' | 'articulos' | 'torneo'>(initialConceptType || 'mensualidad');
+  // «Tipo de Pago» (mode='create'). Las opciones salen del catálogo único de
+  // motivos (checkoutConcepto.opcionesDeCheckout).
+  const [conceptType, setConceptType] = useState<ConceptoCheckout>(() => conceptoInicial(initialConceptType, amount));
   const [customAmount, setCustomAmount] = useState((amount || 0).toString());
   const [customConcept, setCustomConcept] = useState('');
 
@@ -137,6 +160,7 @@ export function PaymentCheckoutModal({
   const [merchEnabled, setMerchEnabled] = useState(false);
   const [merchCatalog, setMerchCatalog] = useState<MerchItemOption[]>([]);
   const [merchSelected, setMerchSelected] = useState<Record<string, { qty: number; size: string | null }>>({});
+  const [merchLoaded, setMerchLoaded] = useState(false);
 
   useEffect(() => {
     if (!open || !schoolId || mode !== 'create') return;
@@ -145,12 +169,13 @@ export function PaymentCheckoutModal({
         .select('merchandise_enabled').eq('school_id', schoolId).maybeSingle();
       const enabled = !!(settings as any)?.merchandise_enabled;
       setMerchEnabled(enabled);
-      if (!enabled) { setMerchCatalog([]); return; }
+      if (!enabled) { setMerchCatalog([]); setMerchLoaded(true); return; }
       const { data: items } = await supabase.from('school_merchandise_items' as any)
         .select('id, name, price, size_options')
         .eq('school_id', schoolId).eq('active', true)
         .order('sort_order', { ascending: true });
       setMerchCatalog((items as any) || []);
+      setMerchLoaded(true);
     })();
   }, [open, schoolId, mode]);
 
@@ -181,11 +206,14 @@ export function PaymentCheckoutModal({
     })
     .join(', ');
 
-  // ── Cobros de torneo (20260908152538) — mismo patrón que artículos, sin
-  // tallas: genera su propia fila de pago (payment_category='torneo').
+  // ── Catálogo de servicios (school_tournament_items, 20260908152538) — mismo
+  // patrón que artículos, sin tallas. Antes todo ítem salía bajo «Torneos» y se
+  // cobraba como 'torneo' (bug L8 del plan B4): ahora cada tipo (`kind`) es su
+  // propia opción y el cobro va con su categoría, un solo tipo por pago.
   const [tournEnabled, setTournEnabled] = useState(false);
-  const [tournCatalog, setTournCatalog] = useState<TournItemOption[]>([]);
-  const [tournSelected, setTournSelected] = useState<Record<string, { qty: number }>>({});
+  const [tournCatalog, setTournCatalog] = useState<ItemDeServicio[]>([]);
+  const [tournSelected, setTournSelected] = useState<SeleccionDeServicios>({});
+  const [tournLoaded, setTournLoaded] = useState(false);
 
   useEffect(() => {
     if (!open || !schoolId || mode !== 'create') return;
@@ -194,45 +222,80 @@ export function PaymentCheckoutModal({
         .select('tournament_charges_enabled').eq('school_id', schoolId).maybeSingle();
       const enabled = !!(settings as any)?.tournament_charges_enabled;
       setTournEnabled(enabled);
-      if (!enabled) { setTournCatalog([]); return; }
+      if (!enabled) { setTournCatalog([]); setTournLoaded(true); return; }
+      // Columnas que quizás todavía no existen (migración sin aplicar → 400):
+      // los precios de M2 (comprobantes_con_motivo), `kind` (F0, 20261007095911)
+      // y `event_id` (20261020122827). Se piden de la más nueva a la de siempre.
       // Un cobro vinculado a un torneo (event_id) se paga inscribiendo, no como cobro suelto.
-      // Si la columna aún no existe (migración sin aplicar), se pide el catálogo como siempre.
-      const base = () => supabase.from('school_tournament_items' as any)
-        .select('id, name, price')
-        .eq('school_id', schoolId).eq('active', true)
-        .order('sort_order', { ascending: true });
-      const primero = await base().is('event_id', null);
-      let items = primero.data;
-      if (primero.error) ({ data: items } = await base());
-      setTournCatalog((items as any) || []);
+      const pedir = (cols: string, sinTorneo: boolean) => () => {
+        const q = supabase.from('school_tournament_items' as any)
+          .select(cols)
+          .eq('school_id', schoolId).eq('active', true)
+          .order('sort_order', { ascending: true });
+        return sinTorneo ? q.is('event_id', null) : q;
+      };
+      const items = await primeraQueResponda<Record<string, unknown>[]>([
+        pedir('id, name, price, kind, precio_afiliado, precios_por_fecha, opciones', true),
+        pedir('id, name, price, kind', true),
+        pedir('id, name, price', true),
+        pedir('id, name, price', false),
+      ] as any);
+      setTournCatalog((items ?? []).map(itemDeServicio));
+      setTournLoaded(true);
     })();
   }, [open, schoolId, mode]);
 
-  function toggleTournItem(item: TournItemOption) {
+  function toggleTournItem(item: ItemDeServicio) {
     setTournSelected((prev) => {
       const next = { ...prev };
       if (next[item.id]) delete next[item.id];
-      else next[item.id] = { qty: 1 };
+      else next[item.id] = { qty: 1, opcion: opcionInicial(item) };
       return next;
     });
   }
 
   function setTournQty(itemId: string, qty: number) {
-    setTournSelected((prev) => prev[itemId] ? { ...prev, [itemId]: { qty: Math.max(1, qty) } } : prev);
+    setTournSelected((prev) => prev[itemId] ? { ...prev, [itemId]: { ...prev[itemId], qty: Math.max(1, qty) } } : prev);
   }
 
-  const tournTotal = tournCatalog.reduce((sum, it) => {
-    const sel = tournSelected[it.id];
-    return sel ? sum + it.price * sel.qty : sum;
-  }, 0);
+  function setTournOpcion(itemId: string, opcion: string) {
+    setTournSelected((prev) => prev[itemId] ? { ...prev, [itemId]: { ...prev[itemId], opcion } } : prev);
+  }
 
-  const tournConceptText = tournCatalog
-    .filter((it) => tournSelected[it.id])
-    .map((it) => {
-      const sel = tournSelected[it.id];
-      return `${it.name} x${sel?.qty}`;
-    })
-    .join(', ');
+  // Quien paga en la app ya es del club (acudiente de un deportista o
+  // deportista adulto): paga el precio de afiliado del servicio, el mismo que
+  // el bot le da a un celular reconocido. `hoy` decide el precio por fecha.
+  const serviceType = tipoDeServicioDe(conceptType);
+  const serviceItems = useMemo(
+    () => (serviceType ? tournCatalog.filter((it) => it.kind === serviceType) : []),
+    [tournCatalog, serviceType],
+  );
+  const hoyBogota = todayColombia();
+  const serviceLines = lineasDeServicio(tournCatalog, tournSelected, serviceType, { afiliado: true, hoy: hoyBogota });
+  const tournTotal = totalDeServicios(serviceLines);
+
+  // Opciones de «Tipo de Pago»: los motivos del catálogo que la escuela ofrece.
+  const conceptOptions = opcionesDeCheckout({
+    conceptoMensualidad: concept,
+    montoPlan: amount,
+    permiteAbonos: allowInstallments,
+    hayArticulos: merchEnabled && merchCatalog.length > 0,
+    tiposDeServicio: tournEnabled ? tiposConItems(tournCatalog) : [],
+  });
+
+  // Motivo preseleccionado (enlace de cobro): se aplica al abrir; ya leídos los
+  // ajustes y los catálogos, si la escuela no lo ofrece pasa a su equivalente o
+  // a la mensualidad, para no dejar elegido algo que no se puede pagar.
+  useEffect(() => {
+    if (open && mode === 'create' && initialConceptType) setConceptType(conceptoInicial(initialConceptType, amount));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- solo al abrir o si cambia el motivo pedido
+  }, [open, mode, initialConceptType]);
+  const catalogsReady = settingsLoaded && merchLoaded && tournLoaded;
+  useEffect(() => {
+    if (!open || mode !== 'create' || !catalogsReady) return;
+    setConceptType((c) => conceptoDisponible(c, conceptOptions));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- las opciones quedan fijas una vez cargado todo
+  }, [open, mode, catalogsReady]);
 
   const [checkingPending, setCheckingPending] = useState(false);
   const [pendingPaymentDate, setPendingPaymentDate] = useState<string | null>(null);
@@ -338,11 +401,7 @@ export function PaymentCheckoutModal({
   // Nequi de inscripciones de Dynasty) solo se muestra al pagar ese concepto.
   // En 'create' la decide el selector; en 'update' sale del concepto del cobro.
   const accountsCategory: PaymentChargeCategory | null = mode === 'create'
-    ? (conceptType === 'articulos' ? 'articulos'
-      : conceptType === 'torneo' ? 'torneo'
-      : conceptType === 'mensualidad' ? 'mensualidad'
-      : conceptType.startsWith('inscripcion') ? 'inscripcion'
-      : 'otro')
+    ? motivoDelConcepto(conceptType)
     : existingCharge.accountsCategory;
   const payableAccounts = useMemo(
     () => resolvePaymentAccounts(bankDetails, { category: accountsCategory }),
@@ -404,13 +463,13 @@ export function PaymentCheckoutModal({
   // ── Wompi checkout hook ──────────────────────────────────────────────────
   const finalAmount = conceptType === 'articulos'
     ? merchTotal
-    : conceptType === 'torneo'
+    : serviceType
     ? tournTotal
     : mode === 'create' && !['mensualidad', 'inscripcion_fija'].includes(conceptType) ? (parseFloat(customAmount) || 0) : amount;
   const finalConcept = conceptType === 'articulos'
     ? `Artículos Deportivos: ${merchConceptText || 'sin seleccionar'}`
-    : conceptType === 'torneo'
-    ? `Torneos: ${tournConceptText || 'sin seleccionar'}`
+    : serviceType
+    ? conceptoDeServicios(serviceType, serviceLines)
     : mode === 'create' && conceptType !== 'mensualidad'
     ? (conceptType.startsWith('inscripcion') ? 'Inscripción Anual' : customConcept || 'Pago / Abono')
     : (effectivePeriod ? `Mensualidad ${effectivePeriod.label}` : concept);
@@ -418,22 +477,15 @@ export function PaymentCheckoutModal({
   // Solo importa para las filas que este modal INSERTA (mode='create'): una fila
   // en mode='update' ya nació categorizada donde se creó (open_month, etc.), no
   // se retoca acá. Ver docs/specs/articulos-escolares-catalogo.md §7.
-  const paymentCategory: PaymentChargeCategory =
-    conceptType === 'articulos' ? 'articulos'
-      : conceptType === 'torneo' ? 'torneo'
-      : conceptType === 'mensualidad' ? 'mensualidad'
-      : conceptType.startsWith('inscripcion') ? 'inscripcion'
-      : 'otro';
-
-  // Bug real encontrado en prueba E2E (2026-09-08): artículos/torneo generan
-  // su propia fila con el period_year/period_month del mes en curso, y
-  // uniq_payment_active_period_per_child es UNA fila activa por (child_id,
-  // period) sin distinguir categoría — choca con la mensualidad del mismo
-  // mes, que es el caso normal de cualquier familia al día, no un edge case.
-  // Mismo fix que 20260903103757 (register_for_internal_tournament): marcar
-  // el cobro como exento de esa unicidad porque es un adicional de una sola
-  // vez, no una mensualidad.
-  const periodUniquenessExempt = conceptType === 'articulos' || conceptType === 'torneo';
+  //
+  // Categoría y exención, del catálogo de motivos: todo lo que no es la
+  // mensualidad va con period_uniqueness_exempt. Bug real encontrado en prueba
+  // E2E (2026-09-08): artículos/torneo generan su propia fila con el
+  // period_year/period_month del mes en curso, y uniq_payment_active_period_per_child
+  // es UNA fila activa por (child_id, period) sin distinguir categoría — choca
+  // con la mensualidad del mismo mes. Mismo fix que 20260903103757. Para la
+  // inscripción y el abono el servidor ya lo forzaba (S4, 20261010145241).
+  const { payment_category: paymentCategory, period_uniqueness_exempt: periodUniquenessExempt } = camposDeCategoria(conceptType);
 
   // Descuento por pronto pago es exclusivo de mensualidad (spec §0) — nunca
   // artículos, torneos ni un cobro único ya creado (inscripción, seguro…).
@@ -453,7 +505,7 @@ export function PaymentCheckoutModal({
   // tarifa o un monto variable vacío terminaban en un INSERT con amount = 0 y
   // la base lo rechazaba (payments_amount_positive) con el error crudo en
   // pantalla. Artículos y torneo tienen su propio candado (total del carrito).
-  const montoInvalido = !['articulos', 'torneo'].includes(conceptType) && !(chargeAmount > 0);
+  const montoInvalido = !esConceptoDeCarrito(conceptType) && !(chargeAmount > 0);
 
   // Estimación local, solo para previsualizar antes de pedirle la sesión al servidor.
   const estimatedFee = Math.round(chargeAmount * (onlineFeePct / 100));
@@ -602,15 +654,15 @@ export function PaymentCheckoutModal({
   // Para inscripcion / abono / otros conceptos, mantenemos el bloqueo total
   // porque no hay periodo y no podemos distinguir duplicados.
   //
-  // Artículos/torneo quedan FUERA de este bloqueo (2026-09-08): son compras de
-  // catálogo independientes entre sí — un comprobante de un uniforme en espera
+  // Artículos y servicios (torneo, clínica, vacacional…) quedan FUERA de este
+  // bloqueo (2026-09-08): son compras de catálogo independientes entre sí — un comprobante de un uniforme en espera
   // de validación no puede impedir comprarle a la familia una segunda prenda
   // o inscribirla a un torneo. No compiten por "un solo cupo" como sí lo hacen
   // inscripción/abono (que además ya tienen su propio candado sin periodo,
   // ver `reuseId` más abajo). Bug real encontrado en prueba E2E.
   useEffect(() => {
     if (!open || !studentId) return;
-    if (conceptType === 'mensualidad' || conceptType === 'articulos' || conceptType === 'torneo') {
+    if (conceptType === 'mensualidad' || esConceptoDeCarrito(conceptType)) {
       setPendingPaymentDate(null);
       setCheckingPending(false);
       return;
@@ -659,6 +711,8 @@ export function PaymentCheckoutModal({
       setServerQuote(null);
       setCreatedPaymentId(null);
       setRowCategory(null);
+      setMerchLoaded(false);
+      setTournLoaded(false);
     }
   }, [open]);
 
@@ -854,7 +908,7 @@ export function PaymentCheckoutModal({
             throw new Error(`Ya existe un pago activo para ${effectivePeriod.label}.`);
           }
         }
-      } else if (conceptType !== 'mensualidad' && conceptType !== 'articulos' && conceptType !== 'torneo') {
+      } else if (conceptType !== 'mensualidad' && !esConceptoDeCarrito(conceptType)) {
         // No-mensualidad (inscripcion / abono): reutilizar cualquier impago sin
         // periodo; si hay uno en validacion/pagado, bloquear (legacy).
         // Artículos y torneos quedan FUERA: cada compra es su propia fila
@@ -1014,7 +1068,7 @@ export function PaymentCheckoutModal({
     if (processing) return;
     if (!selectedMethod) return;
     if (conceptType === 'articulos' && Object.keys(merchSelected).length === 0) return;
-    if (conceptType === 'torneo' && Object.keys(tournSelected).length === 0) return;
+    if (serviceType && serviceLines.length === 0) return;
 
     // No-mensualidad o sin info de periodo → flujo directo
     if (conceptType !== 'mensualidad' || isExistingOneTime || !nextPeriod || !childId) {
@@ -1150,26 +1204,15 @@ export function PaymentCheckoutModal({
                           <SelectValue placeholder="Concepto" />
                         </SelectTrigger>
                         <SelectContent className="bg-white text-gray-900">
-                          <SelectItem value="mensualidad" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Mensualidad ({concept})</SelectItem>
-                          {/* Inscripción de monto fijo solo con tarifa; monto variable y abono
-                              libre solo si la escuela recibe abonos (allow_installments). Una
+                          {/* Del catálogo de motivos (checkoutConcepto.opcionesDeCheckout):
+                              inscripción de monto fijo solo con tarifa; monto variable y abono
+                              libre solo si la escuela recibe abonos (allow_installments) — una
                               escuela sin abonos (Dynasty) no debe dejar que la familia invente
-                              un cobro ni un valor. */}
-                          {amount > 0 && (
-                            <SelectItem value="inscripcion_fija" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Inscripción Anual (Monto Fijo)</SelectItem>
-                          )}
-                          {allowInstallments && (
-                            <SelectItem value="inscripcion_variable" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Inscripción Anual (Monto Variable)</SelectItem>
-                          )}
-                          {allowInstallments && (
-                            <SelectItem value="otro" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Otro Concepto / Abono libre</SelectItem>
-                          )}
-                          {merchEnabled && merchCatalog.length > 0 && (
-                            <SelectItem value="articulos" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Artículos Deportivos</SelectItem>
-                          )}
-                          {tournEnabled && tournCatalog.length > 0 && (
-                            <SelectItem value="torneo" className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">Torneos</SelectItem>
-                          )}
+                              un cobro ni un valor —; artículos y cada tipo de servicio solo si
+                              la escuela tiene ítems. */}
+                          {conceptOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value} className="text-gray-900 focus:bg-gray-100 focus:text-gray-900">{o.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -1223,31 +1266,49 @@ export function PaymentCheckoutModal({
                         </div>
                       </div>
                     )}
-                    {conceptType === 'torneo' && (
+                    {serviceType && (
                       <div className="space-y-2">
                         <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Elige los cobros</Label>
                         <div className="space-y-1.5">
-                          {tournCatalog.map((item) => {
+                          {serviceItems.map((item) => {
                             const sel = tournSelected[item.id];
+                            const opciones = parseOpciones(item.opciones);
+                            const precioDe = (opcion: string | null) => precioDeServicio(item, { afiliado: true, hoy: hoyBogota, opcion });
+                            const linea = serviceLines.find((l) => l.item.id === item.id);
+                            const precioVisible = linea
+                              ? formatCurrency(linea.precio)
+                              : opciones.length > 1
+                              ? `Desde ${formatCurrency(Math.min(...opciones.map((o) => precioDe(o.clave))))}`
+                              : formatCurrency(precioDe(opciones[0]?.clave ?? null));
                             return (
                               <div
                                 key={item.id}
                                 className={`rounded-lg border-2 p-2.5 transition-all ${sel ? 'border-primary bg-primary/5' : 'border-border'}`}
                               >
-                                <button type="button" onClick={() => toggleTournItem(item)} className="w-full flex items-center gap-2.5 text-left">
+                                <button type="button" aria-pressed={!!sel} onClick={() => toggleTournItem(item)} className="w-full flex items-center gap-2.5 text-left">
                                   <span className={`h-5 w-5 rounded-md border-2 flex items-center justify-center shrink-0 ${sel ? 'bg-primary border-primary' : 'border-gray-300'}`}>
                                     {sel && <CheckCircle2 className="h-4 w-4 text-white" />}
                                   </span>
                                   <span className="flex-1 min-w-0">
                                     <span className="block text-sm font-medium text-gray-900">{item.name}</span>
-                                    <span className="block text-xs text-muted-foreground">{formatCurrency(item.price)}</span>
+                                    <span className="block text-xs text-muted-foreground">{precioVisible}</span>
                                   </span>
                                 </button>
                                 {sel && (
-                                  <div className="mt-2 pl-7 flex items-center gap-2">
-                                    <button type="button" className="h-7 w-7 rounded border flex items-center justify-center text-sm" onClick={() => setTournQty(item.id, sel.qty - 1)}>−</button>
-                                    <span className="text-sm font-medium w-4 text-center">{sel.qty}</span>
-                                    <button type="button" className="h-7 w-7 rounded border flex items-center justify-center text-sm" onClick={() => setTournQty(item.id, sel.qty + 1)}>+</button>
+                                  <div className="mt-2 pl-7 flex items-center gap-3 flex-wrap">
+                                    {opciones.length > 0 && (
+                                      <Select value={linea?.opcion?.clave ?? opciones[0].clave} onValueChange={(v) => setTournOpcion(item.id, v)}>
+                                        <SelectTrigger aria-label={`Opción de ${item.name}`} className="h-8 w-36 bg-white text-xs"><SelectValue placeholder="Opción" /></SelectTrigger>
+                                        <SelectContent className="bg-white text-gray-900">
+                                          {opciones.map((o) => <SelectItem key={o.clave} value={o.clave}>{o.etiqueta} · {formatCurrency(precioDe(o.clave))}</SelectItem>)}
+                                        </SelectContent>
+                                      </Select>
+                                    )}
+                                    <div className="flex items-center gap-2">
+                                      <button type="button" aria-label={`Uno menos de ${item.name}`} className="h-7 w-7 rounded border flex items-center justify-center text-sm" onClick={() => setTournQty(item.id, sel.qty - 1)}>−</button>
+                                      <span className="text-sm font-medium w-4 text-center">{sel.qty}</span>
+                                      <button type="button" aria-label={`Uno más de ${item.name}`} className="h-7 w-7 rounded border flex items-center justify-center text-sm" onClick={() => setTournQty(item.id, sel.qty + 1)}>+</button>
+                                    </div>
                                   </div>
                                 )}
                               </div>
@@ -1258,11 +1319,11 @@ export function PaymentCheckoutModal({
                     )}
                     <div className="space-y-2">
                       <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        {conceptType === 'articulos' ? 'Subtotal artículos' : conceptType === 'torneo' ? 'Subtotal torneos' : 'Monto ($ COP)'}
+                        {conceptType === 'articulos' ? 'Subtotal artículos' : serviceType ? `Subtotal ${definicionDeMotivo(serviceType).plural}` : 'Monto ($ COP)'}
                       </Label>
                       {conceptType === 'articulos' ? (
                         <p className="text-2xl sm:text-3xl font-bold text-primary">{formatCurrency(merchTotal)}</p>
-                      ) : conceptType === 'torneo' ? (
+                      ) : serviceType ? (
                         <p className="text-2xl sm:text-3xl font-bold text-primary">{formatCurrency(tournTotal)}</p>
                       ) : ['mensualidad', 'inscripcion_fija'].includes(conceptType) ? (
                         <div className="flex items-baseline gap-2">
@@ -1502,7 +1563,7 @@ export function PaymentCheckoutModal({
               {/* Botones acción para los demás métodos (no online ni MP) */}
               {dianDataOk && selectedMethod !== 'online' && selectedMethod !== 'mercadopago' && (
                 <div className="space-y-2 pt-2">
-                  <Button className="w-full" size="lg" disabled={!selectedMethod || processing || montoInvalido || (conceptType === 'articulos' && merchTotal === 0) || (conceptType === 'torneo' && tournTotal === 0)} onClick={handlePayClick}>
+                  <Button className="w-full" size="lg" disabled={!selectedMethod || processing || montoInvalido || (conceptType === 'articulos' && merchTotal === 0) || (!!serviceType && tournTotal === 0)} onClick={handlePayClick}>
                     {processing ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Procesando...</> : `Pagar ${formatCurrency(chargeAmount)}`}
                   </Button>
                   <Button variant="outline" className="w-full" onClick={handleClose} disabled={processing}>Cancelar</Button>

@@ -28,6 +28,7 @@
  */
 
 import { categoriaDeCobro } from './payment-accounts';
+import { mapaDeMotivos } from './motivos-de-cobro';
 
 export interface CobroClasificable {
     payment_category?: string | null;
@@ -58,20 +59,11 @@ export function esPagoUnico(c: CobroClasificable | null | undefined): boolean {
     return !esMensualidad(c);
 }
 
-/** Cómo se nombra cada categoría conocida. Las nuevas se nombran por su clave. */
-export const ETIQUETA_CATEGORIA: Record<string, string> = {
-    mensualidad: 'Mensualidad',
-    inscripcion: 'Inscripción',
-    seguro: 'Seguro de accidentes',
-    articulos: 'Artículos',
-    torneo: 'Torneo',
-    clase_extra: 'Clase extra',
-    excedente: 'Horas adicionales',
-    vacacional: 'Vacacional',
-    viaje: 'Viaje',
-    clase_prueba: 'Clase de prueba',
-    otro: 'Otro cobro',
-};
+/**
+ * Cómo se nombra cada categoría conocida (del catálogo único,
+ * motivos-de-cobro.ts). Las nuevas se nombran por su clave.
+ */
+export const ETIQUETA_CATEGORIA: Record<string, string> = mapaDeMotivos('etiqueta');
 
 const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
     'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
@@ -119,17 +111,8 @@ export function etiquetaDelCobro(c: CobroClasificable | null | undefined): strin
 }
 
 const ABREV_MES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-const CORTA: Record<string, string> = {
-    inscripcion: 'Inscrip.',
-    seguro: 'Seguro',
-    articulos: 'Artículos',
-    torneo: 'Torneo',
-    clase_extra: 'Clase',
-    excedente: 'Horas',
-    vacacional: 'Vacac.',
-    viaje: 'Viaje',
-    otro: 'Otro',
-};
+/** Rótulos cortos del catálogo único: la clase de prueba es «Prueba» (antes salía «Clase», igual que la clase extra). */
+const CORTA: Record<string, string> = mapaDeMotivos('corta');
 
 /**
  * Rótulo de ≤ 9 caracteres para un botón de WhatsApp (el título se corta en

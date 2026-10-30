@@ -33,6 +33,7 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Clock, Plus, Trash2, Loader2, AlertTriangle, Check } from 'lucide-react';
+import { faltaEnLaBase } from '@/lib/esquemaPendiente';
 
 /** `day` sigue a Date.getDay(): 0 = domingo. */
 interface Franja {
@@ -52,6 +53,12 @@ interface Equipo {
     /** false = no recibe atletas nuevos. Los inscritos siguen igual. */
     admite_nuevos: boolean;
     nota_admision: string;
+    /**
+     * false = el bot no agenda clases de prueba en este grupo (mig.
+     * embudo_y_agenda_clase_prueba). Distinto de `admite_nuevos`: Monster recibe
+     * nuevos en Competencia, pero la clase de prueba va siempre a Proyección.
+     */
+    recibe_clase_prueba: boolean;
 }
 
 const DIAS = [
@@ -84,22 +91,31 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
     const { toast } = useToast();
     const [equipos, setEquipos] = useState<Equipo[]>([]);
     const [sedes, setSedes] = useState<string[]>([]);
+    // La columna `teams.recibe_clase_prueba` puede no existir todavía: sin ella,
+    // el interruptor no se muestra y se guarda lo de siempre.
+    const [conClasePrueba, setConClasePrueba] = useState(false);
     const [cargando, setCargando] = useState(true);
     const [guardando, setGuardando] = useState<string | null>(null);
 
     const cargar = useCallback(async () => {
         setCargando(true);
-        const [{ data: eq }, { data: br }] = await Promise.all([
-            supabase.from('teams')
-                .select('id, name, schedule, student_count, admite_nuevos, nota_admision')
-                .eq('school_id', schoolId).order('name'),
+        const columnas = 'id, name, schedule, student_count, admite_nuevos, nota_admision';
+        const leerEquipos = (cols: string) => (supabase.from('teams') as any)
+            .select(cols).eq('school_id', schoolId).order('name');
+        const [primera, { data: br }] = await Promise.all([
+            leerEquipos(`${columnas}, recibe_clase_prueba`),
             supabase.from('school_branches').select('name').eq('school_id', schoolId),
         ]);
+        let eq = primera.data;
+        const conColumna = !faltaEnLaBase(primera.error, primera.status);
+        if (!conColumna) eq = (await leerEquipos(columnas)).data;
+        setConClasePrueba(conColumna && !primera.error);
         setEquipos(((eq ?? []) as any[]).map((t) => ({
             id: t.id, name: t.name, student_count: t.student_count,
             franjas: leerFranjas(t.schedule).sort(ordenSemana),
             admite_nuevos: t.admite_nuevos !== false,
             nota_admision: t.nota_admision ?? '',
+            recibe_clase_prueba: t.recibe_clase_prueba !== false,
         })));
         setSedes(((br ?? []) as any[]).map((b) => String(b.name)).filter(Boolean));
         setCargando(false);
@@ -127,11 +143,13 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
         }
 
         setGuardando(equipo.id);
-        const { error } = await supabase.from('teams')
+        // `recibe_clase_prueba` todavía no está en types.ts: por eso el `as any`.
+        const { error } = await (supabase.from('teams') as any)
             .update({
                 schedule: equipo.franjas.sort(ordenSemana) as any,
                 admite_nuevos: equipo.admite_nuevos,
                 nota_admision: equipo.nota_admision.trim() || null,
+                ...(conClasePrueba ? { recibe_clase_prueba: equipo.recibe_clase_prueba } : {}),
             })
             .eq('id', equipo.id);
         setGuardando(null);
@@ -186,6 +204,7 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
                                 {equipo.student_count ?? 0} atletas
                                 {equipo.franjas.length === 0 && ' · sin horario'}
                                 {!equipo.admite_nuevos && ' · no recibe nuevos'}
+                                {conClasePrueba && !equipo.recibe_clase_prueba && ' · sin clases de prueba'}
                             </CardDescription>
                         </div>
                         <Button
@@ -224,6 +243,24 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
                                 />
                             )}
                         </div>
+                        {/* La clase de prueba del bot solo se agenda en los grupos con esto
+                            prendido (p. ej. solo los de Proyección). Nace prendido. */}
+                        {conClasePrueba && (
+                            <div className="flex flex-wrap items-center gap-3 rounded-md border p-3">
+                                <Switch
+                                    id={`clase-prueba-${equipo.id}`}
+                                    checked={equipo.recibe_clase_prueba}
+                                    onCheckedChange={(v) => setEquipos((prev) => prev.map((e) =>
+                                        e.id === equipo.id ? { ...e, recibe_clase_prueba: v } : e))}
+                                />
+                                <Label htmlFor={`clase-prueba-${equipo.id}`} className="cursor-pointer">
+                                    Recibe clases de prueba
+                                </Label>
+                                <span className="text-xs text-muted-foreground">
+                                    Apagado, el bot no agenda clases de prueba en este grupo.
+                                </span>
+                            </div>
+                        )}
                         {equipo.franjas.map((f, i) => (
                             <div key={i} className="flex flex-wrap items-end gap-2 rounded-md border p-3">
                                 <div className="w-full sm:w-36">

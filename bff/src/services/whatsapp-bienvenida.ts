@@ -58,7 +58,7 @@ export function esSaludoDeBienvenida(
 }
 
 /** El cuerpo tras la presentación («Hola 👋 soy el asistente automático de …»), corto y sin trámites. */
-export function textoDeBienvenida(): string {
-    return '¿En qué te puedo ayudar? Puedo contarte de la *clase de cortesía* y la *inscripción*, los *horarios*, ' +
+export function textoDeBienvenida(nombreClase = 'clase de cortesía'): string {
+    return `¿En qué te puedo ayudar? Puedo contarte de la *${nombreClase}* y la *inscripción*, los *horarios*, ` +
         'o dejar tu mensaje para que una persona de la escuela te responda. 🙌';
 }

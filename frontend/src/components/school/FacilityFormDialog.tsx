@@ -10,6 +10,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Building2, Pencil } from 'lucide-react';
 import { NumberStepper } from '@/components/ui/number-stepper';
 import { useEffect } from 'react';
+import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { LIMITES_UBICACION, errorEnlaceMaps, useUbicacionCanchaDisponible } from '@/components/school/canchaUbicacion';
 
 const facilitySchema = z.object({
   name: z.string().min(2, 'Nombre es requerido'),
@@ -18,6 +20,10 @@ const facilitySchema = z.object({
   description: z.string().optional(),
   min_booking_advance_hours: z.string().optional(),
   min_cancellation_hours: z.string().optional(),
+  // Cómo llegar (lo manda el bot al agendar la clase de prueba). Solo si la base tiene las columnas.
+  address: z.string().max(LIMITES_UBICACION.address, 'La dirección es muy larga').optional(),
+  maps_url: z.string().optional().refine((v) => !errorEnlaceMaps(v), { message: 'Pega el enlace completo (empieza por https://).' }),
+  indicaciones: z.string().max(LIMITES_UBICACION.indicaciones, 'Las indicaciones son muy largas').optional(),
 });
 
 type FacilityFormData = z.infer<typeof facilitySchema>;
@@ -32,6 +38,10 @@ interface FacilityFormDialogProps {
     description?: string;
     min_booking_advance_hours?: number;
     min_cancellation_hours?: number;
+    /** undefined = la base todavía no tiene las columnas: no se mandan. */
+    address?: string;
+    maps_url?: string;
+    indicaciones?: string;
   }) => void;
   isLoading?: boolean;
   facility?: {
@@ -42,6 +52,9 @@ interface FacilityFormDialogProps {
     description: string | null;
     min_booking_advance_hours: number | null;
     min_cancellation_hours: number | null;
+    address?: string | null;
+    maps_url?: string | null;
+    indicaciones?: string | null;
   } | null;
 }
 
@@ -60,6 +73,8 @@ const facilityTypes = [
 ];
 
 export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, facility }: FacilityFormDialogProps) {
+  const { schoolId } = useSchoolContext();
+  const conUbicacion = useUbicacionCanchaDisponible(schoolId, open);
   const form = useForm<FacilityFormData>({
     resolver: zodResolver(facilitySchema),
     defaultValues: {
@@ -69,6 +84,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
       description: '',
       min_booking_advance_hours: '0',
       min_cancellation_hours: '0',
+      address: '',
+      maps_url: '',
+      indicaciones: '',
     },
   });
 
@@ -83,6 +101,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
           description: facility.description || '',
           min_booking_advance_hours: String(facility.min_booking_advance_hours ?? 0),
           min_cancellation_hours: String(facility.min_cancellation_hours ?? 0),
+          address: facility.address ?? '',
+          maps_url: facility.maps_url ?? '',
+          indicaciones: facility.indicaciones ?? '',
         });
       } else {
         form.reset({
@@ -92,6 +113,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
           description: '',
           min_booking_advance_hours: '0',
           min_cancellation_hours: '0',
+          address: '',
+          maps_url: '',
+          indicaciones: '',
         });
       }
     }
@@ -105,6 +129,7 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
       description: data.description || undefined,
       min_booking_advance_hours: data.min_booking_advance_hours ? parseInt(data.min_booking_advance_hours) : 0,
       min_cancellation_hours: data.min_cancellation_hours ? parseInt(data.min_cancellation_hours) : 0,
+      ...(conUbicacion ? { address: data.address ?? '', maps_url: data.maps_url ?? '', indicaciones: data.indicaciones ?? '' } : {}),
     });
     form.reset();
     onOpenChange(false);
@@ -112,7 +137,7 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {facility ? <Pencil className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
@@ -204,6 +229,37 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
               rows={3}
             />
           </div>
+
+          {conUbicacion && (
+            <fieldset className="space-y-3 rounded-lg border border-border/60 p-3" data-testid="cancha-como-llegar">
+              <legend className="px-1 text-sm font-semibold">Cómo llegar</legend>
+              <p className="text-xs text-muted-foreground">El bot de WhatsApp lo manda cuando agenda una clase de prueba aquí.</p>
+              <div className="space-y-2">
+                <Label htmlFor="address">Dirección</Label>
+                <Input id="address" placeholder="Ej: Calle 152 # 58-50, Suba" maxLength={LIMITES_UBICACION.address} {...form.register('address')} />
+                {form.formState.errors.address && (
+                  <p className="text-sm text-destructive">{form.formState.errors.address.message}</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="maps_url">Enlace de Google Maps</Label>
+                <Input id="maps_url" inputMode="url" placeholder="https://maps.app.goo.gl/…" {...form.register('maps_url')} />
+                {form.formState.errors.maps_url && (
+                  <p className="text-sm text-destructive">{form.formState.errors.maps_url.message}</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="indicaciones">Indicaciones (por dónde se entra, qué pasa si llueve)</Label>
+                <Textarea
+                  id="indicaciones"
+                  placeholder="Ej: Entrada de deportistas por la puerta 2. Si llueve, la clase se reprograma y les avisamos por WhatsApp."
+                  maxLength={LIMITES_UBICACION.indicaciones}
+                  rows={3}
+                  {...form.register('indicaciones')}
+                />
+              </div>
+            </fieldset>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

@@ -8,6 +8,7 @@ import { Banknote, Loader2, MessageCircle, Plus, Store, X } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useConfigClasePrueba, useCuposClasePrueba, type ConfigClasePrueba } from '@/hooks/useClasePrueba';
 import { useValorClasePrueba } from '@/hooks/useCobrosClasePrueba';
+import { AjustesAgendaClasePrueba } from '@/components/school/AjustesAgendaClasePrueba';
 
 /**
  * Interruptor general + canales de la clase de prueba (configuración única,
@@ -157,6 +158,8 @@ export function CanalesClasePrueba({ schoolId }: { schoolId: string | null | und
                     </Button>
                   )}
                 </div>
+
+                {config.es_admin && <AjustesAgendaClasePrueba schoolId={schoolId} />}
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">

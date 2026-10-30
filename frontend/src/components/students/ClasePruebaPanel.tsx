@@ -12,6 +12,7 @@ import { whatsappLink } from '@/lib/clinical/family-extra';
 import {
   useConfigClasePrueba, useProspectosClasePrueba, type ProspectoClasePrueba,
 } from '@/hooks/useClasePrueba';
+import { ProspectoDetalleEmbudo } from './ProspectoDetalleEmbudo';
 
 const CANAL: Record<string, { label: string; icon: typeof Store }> = {
   presencial: { label: 'En la escuela', icon: Store },
@@ -131,6 +132,7 @@ export function ClasePruebaPanel({ schoolId, onCompletar, onConfigurar }: Props)
                         </Badge>
                       )}
                     </div>
+                    <ProspectoDetalleEmbudo prospecto={p} />
                   </div>
                   <div className="flex gap-2 shrink-0">
                     {wa && (

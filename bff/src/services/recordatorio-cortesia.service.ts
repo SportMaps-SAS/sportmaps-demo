@@ -34,6 +34,15 @@
  * contacto dado de baja (texto) y opt-in (plantilla). Solo celulares
  * colombianos (`aWaId`); un teléfono fijo o mal escrito no recibe nada.
  * Nunca lanza.
+ *
+ * ESCUELA CON EMBUDO (B2/B3, Monster 2026-10-30; `wa_preguntas_prospecto`): el
+ * recordatorio usa el nombre y el valor de SU clase (nunca «gratis» si se cobra),
+ * la plantilla `recordatorio_clase_prueba` ([Ahí estaremos] [Cambiar horario]
+ * [No puedo ir]) y deja en el saliente el estado del embudo, para que «Cambiar
+ * horario» lo atienda el embudo sin volver a cobrar. Una clase cuya sesión el
+ * profe canceló o movió («clase reprogramada») no se recuerda. La dirección de la
+ * cancha sale por coincidencia EXACTA (`enriquecerFranja`: «Pinar» no es «Pinar 2»).
+ * Sin embudo, todo igual que antes.
  */
 
 import crypto from 'node:crypto';
@@ -47,9 +56,18 @@ import {
 } from './whatsapp-plantillas.service';
 import {
     FLUJO_CORTESIA, QUE_LLEVAR, BOTON_CANCELAR_MI_CLASE, bloqueFranja, sedeConDireccion,
-    fechaLegible, horaLegible, direccionDeSede, type FranjaCortesia,
+    fechaLegible, horaLegible, enriquecerFranja, type FranjaCortesia,
 } from './whatsapp-clase-cortesia.service';
-import { indicacionesCortesiaDeEscuela } from './whatsapp-ajustes-escuela.service';
+import { indicacionesCortesiaDeEscuela, ajustesWhatsAppDeEscuela, embudoActivo } from './whatsapp-ajustes-escuela.service';
+import { lugaresDeEscuela, type LugarDeEscuela } from './grupos-por-edad.service';
+import { textosClaseDeEscuela, TEXTOS_POR_DEFECTO, type TextosClase } from './textos-clase-prueba';
+import type { BotonInteractivo } from './whatsapp.service';
+
+/** Botones del recordatorio de la escuela con embudo (los atiende el embudo, ids `sm_em_*`). */
+export const BOTONES_RECORDATORIO_EMBUDO: BotonInteractivo[] = [
+    { id: 'sm_em_ahi', title: 'Ahí estaremos' },
+    { id: 'sm_em_cambiar', title: 'Cambiar horario' },
+];
 
 export type TipoRecordatorio = 'vispera' | 'mismo_dia';
 
@@ -108,14 +126,21 @@ export function textoRecordatorio(
         saludo: string; atleta: string | null; esAcudiente: boolean; escuela: string; franja: FranjaCortesia;
         /** school_settings.wa_cortesia_indicaciones: reemplaza el «qué llevar» genérico. */
         indicaciones?: string | null;
+        /** Nombre y valor de la clase de la escuela (B3). Por defecto, «clase de cortesía». */
+        textos?: TextosClase;
+        /** Escuela con embudo: el cambio de horario se pide con el botón, no con CANCELAR. */
+        embudo?: boolean;
     },
 ): string {
     const cuando = tipo === 'vispera' ? 'mañana' : 'hoy';
-    const de = a.esAcudiente && a.atleta ? `la clase de cortesía de *${a.atleta}*` : 'tu clase de cortesía';
+    const clase = (a.textos ?? TEXTOS_POR_DEFECTO).nombre;
+    const de = a.esAcudiente && a.atleta ? `la ${clase} de *${a.atleta}*` : `tu ${clase}`;
     return `Hola ${a.saludo} 👋 Te recuerdo ${de} ${cuando} en *${a.escuela}*:\n\n`
         + `${bloqueFranja(a.franja)}\n\n`
         + (a.indicaciones?.trim() ? `🎒 ${a.indicaciones.trim()}\n\n` : `🎒 Qué llevar: ${QUE_LLEVAR}.\n\n`)
-        + 'Si no puedes ir, responde *CANCELAR* y liberamos el cupo para otra persona.';
+        + (a.embudo
+            ? 'Si no pueden ir, toca *Cambiar horario* y eliges otro, sin pagar de nuevo.'
+            : 'Si no puedes ir, responde *CANCELAR* y liberamos el cupo para otra persona.');
 }
 
 /** {{5}} de la plantilla: sede con dirección; sin sede, la principal de la escuela. */
@@ -135,7 +160,12 @@ export interface ReservaParaRecordar {
     acudiente: string | null;
     telefono: string | null;
     creadaEn: string | null;
-    slot: { id: string; label: string | null; slot_date: string; start_time: string; end_time: string | null; location: string | null };
+    slot: {
+        id: string; label: string | null; slot_date: string; start_time: string; end_time: string | null; location: string | null;
+        team_id?: string | null;
+    };
+    /** `source_detail.reprogramada.id`: la franja cuya sesión se canceló o movió (B2). */
+    reprogramadaSlotId?: string | null;
 }
 
 export interface ResumenRecordatorios {
@@ -156,6 +186,12 @@ export interface DepsRecordatorio {
         nombre: string; sedes: { name: string | null; address: string | null; is_main?: boolean | null }[];
         /** Qué llevar / a quién buscar (school_settings.wa_cortesia_indicaciones); null = genérico. */
         indicaciones?: string | null;
+        /** Canchas con dirección, Maps e indicaciones (mig. M1; sin ella, vacío = como antes). */
+        lugares?: LugarDeEscuela[];
+        /** La escuela tiene el embudo del interesado (B2). */
+        embudo?: boolean;
+        /** Nombre y valor de su clase (B3). */
+        textos?: TextosClase;
     }>;
     /** 'ok' = este BFF lo tomó; 'ya' = otro lo tomó; 'sin_tabla' = migración sin aplicar. */
     reservar: (r: ReservaParaRecordar, tipo: TipoRecordatorio, waId: string) => Promise<{ estado: 'ok'; id: string } | { estado: 'ya' | 'sin_tabla' | 'error'; detalle?: string }>;
@@ -165,13 +201,13 @@ export interface DepsRecordatorio {
     /** Modo discreto: ¿una persona de la escuela escribió en el chat en las últimas 12 h? */
     escuelaActiva?: (conversationId: string) => Promise<boolean>;
     dadoDeBaja: (integrationId: string, waId: string) => Promise<boolean>;
-    enviarTexto: (integ: WhatsAppIntegration, waId: string, texto: string) => Promise<SendTextResult>;
+    enviarTexto: (integ: WhatsAppIntegration, waId: string, texto: string, botones?: BotonInteractivo[]) => Promise<SendTextResult>;
     registrarTexto: (a: { integ: WhatsAppIntegration; conversationId: string; waId: string; waMessageId: string | null; texto: string; payload: Record<string, unknown> }) => Promise<void>;
     enviarPlantilla: typeof enviarCobroPorPlantilla;
 }
 
-const SELECT_LEAD = 'id, school_id, full_name, guardian_name, phone, status, created_at, trial_slot_id, '
-    + 'school_trial_slots!inner(id, label, slot_date, start_time, end_time, location)';
+const SELECT_LEAD = 'id, school_id, full_name, guardian_name, phone, status, created_at, trial_slot_id, source_detail, '
+    + 'school_trial_slots!inner(id, label, slot_date, start_time, end_time, location, team_id)';
 
 const DEPS: DepsRecordatorio = {
     async reservasDelDia(fecha) {
@@ -194,8 +230,9 @@ const DEPS: DepsRecordatorio = {
                 slot: {
                     id: s.id, label: s.label ?? null, slot_date: String(s.slot_date).slice(0, 10),
                     start_time: String(s.start_time).slice(0, 5), end_time: s.end_time ? String(s.end_time).slice(0, 5) : null,
-                    location: s.location ?? null,
+                    location: s.location ?? null, team_id: s.team_id ?? null,
                 },
+                reprogramadaSlotId: l.source_detail?.reprogramada?.id ?? null,
             }];
         });
     },
@@ -213,12 +250,18 @@ const DEPS: DepsRecordatorio = {
         return (data as any) ?? null;
     },
     async escuela(schoolId) {
-        const [{ data: s }, { data: b }, indicaciones] = await Promise.all([
+        const [{ data: s }, { data: b }, indicaciones, lugares, ajustes, textos] = await Promise.all([
             supabase.from('schools').select('name').eq('id', schoolId).maybeSingle(),
             supabase.from('school_branches').select('name, address, is_main').eq('school_id', schoolId).limit(50),
             indicacionesCortesiaDeEscuela(schoolId),
+            lugaresDeEscuela(schoolId).catch(() => [] as LugarDeEscuela[]),
+            ajustesWhatsAppDeEscuela(schoolId),
+            textosClaseDeEscuela(schoolId).catch(() => TEXTOS_POR_DEFECTO),
         ]);
-        return { nombre: (s as any)?.name ?? 'la escuela', sedes: ((b as any[]) ?? []), indicaciones };
+        return {
+            nombre: (s as any)?.name ?? 'la escuela', sedes: ((b as any[]) ?? []), indicaciones,
+            lugares, embudo: embudoActivo(ajustes), textos,
+        };
     },
     async reservar(r, tipo, waId) {
         const { data, error } = await supabase.from('school_trial_reminders')
@@ -254,8 +297,8 @@ const DEPS: DepsRecordatorio = {
         const { estaDadoDeBaja } = await import('./whatsapp-optin.service');
         return estaDadoDeBaja(integrationId, waId);
     },
-    async enviarTexto(integ, waId, texto) {
-        const r = await sendInteractiveButtons(integ, waId, texto, BOTON_CANCELAR_MI_CLASE);
+    async enviarTexto(integ, waId, texto, botones) {
+        const r = await sendInteractiveButtons(integ, waId, texto, botones ?? BOTON_CANCELAR_MI_CLASE);
         // Si Meta rechaza los botones por otra cosa que la ventana, el texto
         // plano igual sale: dice «responde CANCELAR».
         return r.ok || esErrorDeVentana(r.error) ? r : sendTextMessage(integ, waId, texto);
@@ -307,6 +350,9 @@ export async function runRecordatorioCortesia(
         try {
             const waId = aWaId(r.telefono);
             if (!waId) { resumen.omitidos++; continue; }
+            // La sesión de esa franja se canceló o movió y ya se le avisó «clase
+            // reprogramada» (B2): no se le recuerda una clase que no va a pasar.
+            if (r.reprogramadaSlotId && r.reprogramadaSlotId === r.slot.id) { resumen.omitidos++; continue; }
             // Recién reservada: la confirmación todavía está fresca.
             if (r.creadaEn && ahora.getTime() - new Date(r.creadaEn).getTime() < RESERVA_RECIENTE_MIN * 60_000) {
                 resumen.omitidos++; continue;
@@ -354,25 +400,33 @@ async function enviarUno(
 
     if (!escuelas.has(r.schoolId)) escuelas.set(r.schoolId, await d.escuela(r.schoolId));
     const esc = escuelas.get(r.schoolId)!;
-    const franja: FranjaCortesia = {
-        id: r.slot.id, grupo: r.slot.label ?? 'Clase de cortesía', fecha: r.slot.slot_date,
+    const textos = esc.textos ?? TEXTOS_POR_DEFECTO;
+    // Dirección de la cancha por coincidencia EXACTA (sin canchas cargadas, la de la sede como antes).
+    const franja: FranjaCortesia = enriquecerFranja({
+        id: r.slot.id, grupo: r.slot.label ?? textos.nombreInicial, fecha: r.slot.slot_date,
         horaInicio: r.slot.start_time, horaFin: r.slot.end_time, sede: r.slot.location, cupos: 0,
-        direccion: direccionDeSede(r.slot.location, esc.sedes),
-    };
+        direccion: null,
+    }, { teamId: r.slot.team_id ?? null, rango: null, lugares: esc.lugares ?? [], sedes: esc.sedes });
     const { saludo, atleta } = nombresDelLead({ full_name: r.nombre, guardian_name: r.acudiente });
-    // Estado del flujo en el saliente: la respuesta «CANCELAR» se lee contra él.
-    const estadoFlujo = {
-        step: `recordatorio_cortesia_${tipo}`, flujo: FLUJO_CORTESIA, paso_cortesia: 'recordatorio',
-        datos_cortesia: { franja, nombre: r.nombre }, lead_id: r.leadId,
-    };
+    // Estado del flujo en el saliente: la respuesta «CANCELAR» se lee contra él. Con
+    // embudo, el del embudo: «Cambiar horario» / «No puedo ir» los atiende él.
+    const { estadoParaRecordatorio } = await import('./whatsapp-embudo-prospecto');
+    const estadoFlujo: Record<string, unknown> = esc.embudo
+        ? { step: `recordatorio_cortesia_${tipo}`, lead_id: r.leadId, ...estadoParaRecordatorio(r.leadId, r.slot.team_id ?? null, r.slot.id) }
+        : {
+            step: `recordatorio_cortesia_${tipo}`, flujo: FLUJO_CORTESIA, paso_cortesia: 'recordatorio',
+            datos_cortesia: { franja, nombre: r.nombre }, lead_id: r.leadId,
+        };
 
     if (abierta && conv) {
         if (await d.dadoDeBaja(integ.id, waId)) return { estado: 'no_enviado', motivo: 'dado_de_baja' };
         const texto = aFormatoWhatsApp(textoRecordatorio(tipo, {
             saludo, atleta, esAcudiente: !!r.acudiente, escuela: esc.nombre, franja,
-            indicaciones: esc.indicaciones ?? null,
+            indicaciones: esc.indicaciones ?? null, textos, embudo: !!esc.embudo,
         }));
-        const env = await d.enviarTexto(integ, waId, texto);
+        const env = esc.embudo
+            ? await d.enviarTexto(integ, waId, texto, BOTONES_RECORDATORIO_EMBUDO)
+            : await d.enviarTexto(integ, waId, texto);
         if (env.ok) {
             await d.registrarTexto({ integ, conversationId: conv.id, waId, waMessageId: env.waMessageId ?? null, texto, payload: estadoFlujo })
                 .catch(() => undefined);
@@ -389,7 +443,7 @@ async function enviarUno(
     const principal = esc.sedes.find((s) => s.is_main) ?? esc.sedes[0] ?? null;
     const env: ResultadoEnvio = await d.enviarPlantilla({
         schoolId: r.schoolId,
-        concepto: 'recordatorio_clase_cortesia',
+        concepto: esc.embudo ? 'recordatorio_clase_prueba' : 'recordatorio_clase_cortesia',
         telefono: waId,
         tokenBoton: null,
         datos: {

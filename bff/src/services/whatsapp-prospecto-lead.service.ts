@@ -94,6 +94,47 @@ export interface ParamsLeadWa {
         edad?: number | null;
         categoriaSugerida?: string | null;
         quiere?: string | null;
+        /**
+         * Embudo del interesado (mig. embudo_y_agenda_clase_prueba): sede elegida,
+         * grupo asignado por el bot y las respuestas a las preguntas de la escuela.
+         * Columnas nuevas: si la migración no está aplicada, van a `source_detail.embudo`.
+         */
+        branchId?: string | null;
+        teamId?: string | null;
+        /** 'f' | 'm' → `gender` 'F' | 'M' (el mismo formato del formulario web). */
+        genero?: 'f' | 'm' | null;
+        respuestas?: Record<string, string> | null;
+        /** Quién completó el registro. Por defecto la puerta única ('puerta_v2'). */
+        via?: 'puerta_v2' | 'embudo';
+    };
+}
+
+/** Columnas del embudo que llegan con la migración nueva (pueden no existir todavía). */
+export const COLUMNAS_EMBUDO_LEAD = ['branch_id', 'team_id', 'respuestas'] as const;
+
+/** ¿El error es una columna que todavía no existe? (42703 de Postgres o PGRST204 de PostgREST). */
+export function esColumnaInexistente(e: { code?: string; message?: string } | null | undefined): boolean {
+    if (!e) return false;
+    return e.code === '42703' || e.code === 'PGRST204'
+        || /column .* does not exist|could not find the '.*' column/i.test(String(e.message ?? ''));
+}
+
+/**
+ * Sin la migración: las columnas del embudo salen de la fila y quedan en
+ * `source_detail.embudo`, para que el lead se guarde igual. Pura.
+ */
+export function sinColumnasDeEmbudo(
+    columnas: Record<string, unknown>, detalle: Record<string, unknown>,
+): { columnas: Record<string, unknown>; detalle: Record<string, unknown> } {
+    const resto: Record<string, unknown> = {};
+    const embudo: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(columnas)) {
+        if ((COLUMNAS_EMBUDO_LEAD as readonly string[]).includes(k)) embudo[k] = v;
+        else resto[k] = v;
+    }
+    return {
+        columnas: resto,
+        detalle: Object.keys(embudo).length ? { ...detalle, embudo: { ...(detalle.embudo as object ?? {}), ...embudo } } : detalle,
     };
 }
 
@@ -107,9 +148,14 @@ export function camposDeLeadCompleto(
             guardian_name: c.acudiente?.trim() || null,
             birth_date: c.fechaNacimiento ?? null,
             suggested_category: c.categoriaSugerida ?? null,
+            // Solo lo que el embudo trae: la puerta de siempre no toca estas columnas.
+            ...(c.genero === 'f' || c.genero === 'm' ? { gender: c.genero === 'f' ? 'F' : 'M' } : {}),
+            ...(c.branchId !== undefined ? { branch_id: c.branchId } : {}),
+            ...(c.teamId !== undefined ? { team_id: c.teamId } : {}),
+            ...(c.respuestas !== undefined ? { respuestas: c.respuestas && Object.keys(c.respuestas).length ? c.respuestas : null } : {}),
         },
         detalle: {
-            via: 'puerta_v2',
+            via: c.via ?? 'puerta_v2',
             registro_completo_at: ahora,
             ...(contacto ? { contacto } : {}),
             ...(c.edad != null ? { edad: c.edad } : {}),
@@ -146,8 +192,8 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
             const etapaAntes = etapaDeLead(previo);
             const etapa = siguienteEtapa(etapaAntes, p.estado);
             const completo = p.completo ? camposDeLeadCompleto(p.completo, p.nombre, ahora) : null;
-            const { error } = await supabase.from('school_signup_leads').update({
-                ...(completo?.columnas ?? {}),
+            const fila = (c: { columnas: Record<string, unknown>; detalle: Record<string, unknown> } | null) => ({
+                ...(c?.columnas ?? {}),
                 status,
                 source_detail: {
                     ...sd,
@@ -161,21 +207,27 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                     mensajes: ultimos,
                     ultima_actividad: ahora,
                     ...(p.estado === 'respondido' ? { respondido_at: sd.respondido_at ?? ahora } : {}),
-                    ...(completo?.detalle ?? {}),
+                    ...(c?.detalle ?? {}),
                 },
                 updated_at: ahora,
-            }).eq('id', previo.id);
+            });
+            let { error } = await supabase.from('school_signup_leads').update(fila(completo)).eq('id', previo.id);
+            // Migración del embudo sin aplicar: se guarda igual, con lo nuevo en source_detail.
+            if (error && completo && esColumnaInexistente(error)) {
+                ({ error } = await supabase.from('school_signup_leads')
+                    .update(fila(sinColumnasDeEmbudo(completo.columnas, completo.detalle))).eq('id', previo.id));
+            }
             if (error) throw error;
             return { leadId: previo.id, creado: false };
         }
 
         const { data: escuela } = await supabase.from('schools').select('slug').eq('id', p.schoolId).maybeSingle();
         const nuevoCompleto = p.completo ? camposDeLeadCompleto(p.completo, p.nombre, ahora) : null;
-        const { data, error } = await supabase.from('school_signup_leads').insert({
+        const nueva = (c: { columnas: Record<string, unknown>; detalle: Record<string, unknown> } | null) => ({
             school_id: p.schoolId,
             source_slug: (escuela as any)?.slug ?? 'whatsapp',
             full_name: (p.nombre || '').trim() || 'Prospecto WhatsApp',
-            ...(nuevoCompleto?.columnas ?? {}),
+            ...(c?.columnas ?? {}),
             phone: telefonoDeLeadWa(p.contactWaId),
             how_heard: 'whatsapp',
             notes: ultimos.join(' | ').slice(0, 1000) || null,
@@ -192,9 +244,14 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                 mensajes: ultimos,
                 ultima_actividad: ahora,
                 ...(p.estado === 'respondido' ? { respondido_at: ahora } : {}),
-                ...(nuevoCompleto?.detalle ?? {}),
+                ...(c?.detalle ?? {}),
             },
-        }).select('id').single();
+        });
+        let { data, error } = await supabase.from('school_signup_leads').insert(nueva(nuevoCompleto)).select('id').single();
+        if (error && nuevoCompleto && esColumnaInexistente(error)) {
+            ({ data, error } = await supabase.from('school_signup_leads')
+                .insert(nueva(sinColumnasDeEmbudo(nuevoCompleto.columnas, nuevoCompleto.detalle))).select('id').single());
+        }
         if (error) throw error;
         return { leadId: (data as any).id, creado: true };
     } catch (e: any) {
@@ -459,5 +516,56 @@ export async function fusionarReservaEnLead(previoId: string, nuevoId: string, a
         }
         console.warn('[wa-prospecto] no se pudo fusionar la reserva con el lead del bot', { err: e?.message });
         return nuevoId;
+    }
+}
+
+// ─── Embudo del interesado: el lead del contacto (2026-10-30) ────────────────
+//
+// Los botones del embudo pueden llegar sin el estado del último saliente (la
+// plantilla «clase reprogramada» de hace dos días, el «Elegir horario» que manda
+// B4 al confirmar el pago). Entonces el lead se busca por teléfono.
+
+export interface LeadDelEmbudo {
+    leadId: string;
+    nombre: string | null;
+    teamId: string | null;
+    branchId: string | null;
+    /** Cupo agendado (`trial_slot_id`). */
+    slotId: string | null;
+    /** Cupo separado, esperando el pago. */
+    separadoSlotId: string | null;
+    /** Lo que contestó a «¿Te puedo escribir por aquí…?» (null = no contestó). */
+    consentimiento: 'si' | 'no' | null;
+}
+
+/** El lead abierto más reciente de ese teléfono en la escuela. Nunca lanza. */
+export async function leadDelEmbudo(schoolId: string, contactWaId: string): Promise<LeadDelEmbudo | null> {
+    const variantes = variantesTelefonoLead(contactWaId);
+    if (!schoolId || !variantes.length) return null;
+    const consulta = (cols: string) => supabase.from('school_signup_leads')
+        .select(cols)
+        .eq('school_id', schoolId)
+        .in('phone', variantes)
+        .in('status', ['new', 'contacted'])
+        .order('created_at', { ascending: false })
+        .limit(1);
+    try {
+        let r: any = await consulta('id, full_name, trial_slot_id, source_detail, team_id, branch_id, cupo_separado_slot_id');
+        if (r.error && esColumnaInexistente(r.error)) r = await consulta('id, full_name, trial_slot_id, source_detail');
+        const l = Array.isArray(r.data) ? r.data[0] : null;
+        if (r.error || !l) return null;
+        const embudo = (l.source_detail?.embudo ?? {}) as Record<string, any>;
+        return {
+            leadId: l.id,
+            nombre: l.full_name ?? null,
+            teamId: l.team_id ?? embudo.team_id ?? null,
+            branchId: l.branch_id ?? embudo.branch_id ?? null,
+            slotId: l.trial_slot_id ?? null,
+            separadoSlotId: l.cupo_separado_slot_id ?? null,
+            consentimiento: l.source_detail?.consentimiento === 'si' || l.source_detail?.consentimiento === 'no'
+                ? l.source_detail.consentimiento : null,
+        };
+    } catch {
+        return null;
     }
 }
