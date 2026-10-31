@@ -25,7 +25,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { StatFilterBar, type StatFilterTone } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
-import { UserPlus, FileUp, Search, Send, UserMinus, UserCheck, Edit, Loader2, CheckSquare, MoreVertical, Trophy, Zap, CalendarIcon, User, Phone, Mail, FileText, Download, Heart, MapPin, X, RefreshCw, Clock, Upload, AlertTriangle } from 'lucide-react';
+import { UserPlus, FileUp, Search, Send, UserMinus, UserCheck, Edit, Loader2, CheckSquare, MoreVertical, Trophy, Zap, CalendarIcon, User, Phone, Mail, FileText, Download, Heart, MapPin, X, RefreshCw, Clock, Upload, AlertTriangle, CalendarX } from 'lucide-react';
 import { HourBankBalanceCard } from '@/components/access/HourBankBalanceCard';
 import { formatHourBankMinutes } from '@/lib/hourBank';
 import { StudentReportPanel } from '@/components/access/StudentReportPanel';
@@ -1441,6 +1441,15 @@ export default function SchoolStudentsManagementPage() {
           <DropdownMenuItem onClick={() => setAccountStudentId(student.id)}>
             <FileText className="h-4 w-4 mr-2" /> {cobrosYPagosOn ? 'Cobros y pagos' : 'Editar estado de cuenta'}
           </DropdownMenuItem>
+          {/* En escritorio este es el único menú por fila: sin esto, «No asistió»
+              solo se alcanzaba desde las tarjetas (< lg). */}
+          {canManageStudents && student.enrollment_id && (
+            <DropdownMenuItem onClick={() => setCobrosAbiertosDe({
+              enrollmentId: student.enrollment_id, nombre: student.full_name, origen: 'no_asistio',
+            })}>
+              <CalendarX className="h-4 w-4 mr-2" /> No asistió / cobros abiertos
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     );
