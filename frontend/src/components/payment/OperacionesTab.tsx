@@ -281,7 +281,11 @@ export function OperacionesTab({ canManage }: { canManage: boolean }) {
                 <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                         <CardTitle className="text-base">Operaciones</CardTitle>
-                        <CardDescription>Cada vez que alguien usó «Cobros y pagos»: qué se creó, qué se pagó y qué se descontó.</CardDescription>
+                        <CardDescription>
+                            Solo lo que el equipo hizo desde el modal «Cobros y pagos»: qué cobro creó, qué pago
+                            registró y qué descontó. Lo que la familia paga directo (en línea, QR, WhatsApp) no
+                            nace acá — eso está en Pagos recibidos, con todo lo que entró sin importar el origen.
+                        </CardDescription>
                     </div>
                     <div className="flex items-center gap-3">
                         <div className="flex items-center gap-2">
