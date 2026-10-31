@@ -76,6 +76,32 @@ export function diaDeLaSemana(fecha: string): number {
     return new Date(Date.UTC(+fecha.slice(0, 4), +fecha.slice(5, 7) - 1, +fecha.slice(8, 10))).getUTCDay();
 }
 
+// «1.er», «2.º», «2do», «4to»: un número de semana del mes con su marca de ordinal.
+const ORDINAL = String.raw`(\d)\s*\.?\s*(?:er|ro|do|to|º|°|ª|o)`;
+const TRAMO_POR_SEMANA = new RegExp(String.raw`^${ORDINAL}(?:\s*(?:a|al|-|–)\s*${ORDINAL}?)?[^:]*:\s*(.+)$`, 'i');
+
+/**
+ * El lugar de una sesión en UNA fecha. Monster escribe en el horario una regla
+ * por semana del mes («1.er domingo del mes: Pinar; 2.º a 4.º: Colegio Bilingüe
+ * La Enseñanza») y a la familia hay que decirle la cancha de ESE día. Cada tramo
+ * es «N.º …: lugar» o «N.º a M.º …: lugar», separados por «;». Si algún tramo
+ * no es una regla, o ninguna cubre esa semana (un 5.º domingo), devuelve el
+ * texto tal cual: no se adivina una cancha. PURA.
+ */
+export function lugarDelDia(lugar: string | null, fecha: string): string | null {
+    if (!lugar || !lugar.includes(':')) return lugar;
+    const semana = Math.ceil(Number(fecha.slice(8, 10)) / 7);
+    const tramos = lugar.split(';').map((t) => t.trim()).filter(Boolean);
+    const reglas = tramos.map((t) => t.match(TRAMO_POR_SEMANA));
+    if (reglas.some((m) => !m)) return lugar;
+    for (const m of reglas as RegExpMatchArray[]) {
+        const desde = Number(m[1]);
+        const hasta = m[2] ? Number(m[2]) : desde;
+        if (semana >= desde && semana <= hasta) return m[3].trim();
+    }
+    return lugar;
+}
+
 /** `teams.schedule` crudo (array o string JSON) → filas. [] si no se entiende. */
 export function leerHorario(raw: unknown): any[] {
     try {
@@ -110,7 +136,7 @@ export function sesionesDelDia(schedule: unknown, excepciones: ExcepcionSemana[]
         .map((f) => ({
             inicio: normalizarHora(f.time)!,
             fin: normalizarHora(f.end),
-            lugar: texto(f.place),
+            lugar: lugarDelDia(texto(f.place), dia),
             grupo: texto(f.group),
             origen: 'horario' as const,
             horaOriginal: null,

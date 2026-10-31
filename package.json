@@ -314,6 +314,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "git config core.hooksPath .husky",
     "qa:bot": "npm --prefix bff run qa:bot --",
+    "qa:embudo": "npm --prefix bff run qa:embudo --",
     "migrations": "node scripts/migrations.mjs",
     "migrations:list": "node scripts/migrations.mjs list",
     "seguridad:invariantes": "node scripts/invariantes-seguridad.mjs",

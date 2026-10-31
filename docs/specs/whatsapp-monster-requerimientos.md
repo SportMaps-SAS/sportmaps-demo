@@ -1,7 +1,16 @@
 # Bot de WhatsApp de Monster´s Volley Club: automático de punta a punta
 
-Estado: **diseño enviado a Monster (2026-10-29, PDF de la maqueta); planes de construcción listos, migraciones por
-aprobar** (§8). Escuela `eb3ebc77-4ea4-4992-96c8-3c8ec574578c`, slug `monsters-volley-club`.
+Estado: **construido y en producción (2026-10-31); falta conectar el número de Monster y prender el bot.**
+M1–M5 aplicadas. Escuela `eb3ebc77-4ea4-4992-96c8-3c8ec574578c`, slug `monsters-volley-club`.
+
+**2026-10-31 — franjas prendidas y batería de escenarios.** La simulación de un interesado de Norte y otro de Suba
+terminaba en «no tengo horarios»: `courtesy_from_training` seguía en `false` (§9, «no antes de B3»). Se prendió y se
+generaron 66 franjas (sáb. y dom., 3 semanas, 11 grupos que reciben clase de prueba); el cron de las 05:30 mantiene la
+ventana. Arreglos que salieron de la simulación: el lugar «1.er domingo del mes: Pinar; 2.º a 4.º: La Enseñanza» se
+resuelve por fecha (`lugarDelDia` en `semana-equipo.service`); la bienvenida no repite las sedes que el texto de la
+escuela ya trae con dirección; «Su profe es…» en vez de «con el profe…»; y en el número de pruebas separar el cupo se
+simula (antes se cortaba antes del pago). Para repetir cientos de conversaciones sin mandar nada:
+`npm run qa:embudo -- --escuela monsters-volley-club [--solo matriz|guiones] [--transcripcion archivo.md]`.
 Origen: grupo «Soporte Monsters Volley», 2026-10-29 (lista de 10 puntos, textos, afiches de Norte y Suba, cuadro de
 horarios por categoría de Suba).
 

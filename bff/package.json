@@ -7,6 +7,7 @@
     "dev": "nodemon src/index.ts",
     "test": "vitest run",
     "qa:bot": "tsx scripts/qa-bot-100.ts",
+    "qa:embudo": "tsx scripts/qa-embudo.ts",
     "test:watch": "vitest",
     "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/data', {recursive:true}); fs.copyFileSync('src/data/exercises.json', 'dist/data/exercises.json'); fs.mkdirSync('dist/assets', {recursive:true}); fs.copyFileSync('src/assets/sportmaps-logo.png', 'dist/assets/sportmaps-logo.png');\""
   },

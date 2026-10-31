@@ -12,7 +12,7 @@ vi.mock('../config/supabase', () => ({ supabase: {} }));
 import {
     iniciarEmbudo, atenderTurnoEmbudo, BOTON_EMBUDO, leerFechaNacimiento, opcionDeTexto, leerSede, leerVarias,
     filaDeFranja, textosPorDefecto, botonDePlantilla, franjasOfrecibles, comoPagar, mensajeDeBienvenida,
-    estadoParaRecordatorio, leadCompletoDeEmbudo, leadDeDatos,
+    estadoParaRecordatorio, leadCompletoDeEmbudo, leadDeDatos, lineasDeSedes, cupoSimulado,
     tituloDeGrupo, grupoDeRango,
     type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo,
 } from './whatsapp-embudo-prospecto';
@@ -179,10 +179,13 @@ describe('bienvenida y sede', () => {
         expect(c.ctx.yaSoyDelClub).toHaveBeenCalledTimes(1);
     });
 
-    it('pedir una persona suelta el embudo (lo escala el bot general)', async () => {
+    it('pedir una persona por escrito = el botón «Hablar con alguien» (el bot general calla con un desconocido)', async () => {
         const c = crear();
         await iniciarEmbudo(c.ctx);
-        expect(await c.turno('quiero hablar con un asesor')).toBe(false);
+        expect(await c.turno('quiero hablar con un asesor')).toBe(true);
+        expect(c.ultimo().step).toBe('embudo_a_persona');
+        expect(c.ultimo().texto).toBe('Listo, ya pasé tus datos a la escuela y alguien te responde por aquí 🙌');
+        expect(c.ctx.avisarEscuela).toHaveBeenCalledWith('pide_persona', null);
     });
 });
 
@@ -281,7 +284,7 @@ describe('grupo y horarios', () => {
         await hastaHorarios(c);
         const m = c.ultimo();
         expect(m.texto).toBe(
-            '¡Listo! ✨ Por su año (2011) a Mariana le corresponde *Infantil Femenino* en la Sede Norte, con el profe Iván Sossa.\n' +
+            '¡Listo! ✨ Por su año (2011) a Mariana le corresponde *Infantil Femenino* en la Sede Norte. Su profe es Iván Sossa.\n' +
             'Para empezar en el club se agenda una clase de prueba, que cuesta $15.000. En ella el entrenador la evalúa y confirma su grupo y nivel.\n\n' +
             'Estos son los próximos horarios 👇');
         expect(c.ctx.elegirGrupo).toHaveBeenCalledWith({ branchId: NORTE, anio: 2011, genero: 'f' });
@@ -303,7 +306,7 @@ describe('grupo y horarios', () => {
         expect(m.botones!.map((b) => b.id)).toEqual([`${BOTON_EMBUDO.OTRA_SEDE}${SUBA}`, BOTON_EMBUDO.PERSONA]);
         expect(m.botones![0].title).toBe('Ver Sede Suba');
         await c.turno('Ver Sede Suba', `${BOTON_EMBUDO.OTRA_SEDE}${SUBA}`);
-        expect(c.ultimo().texto).toContain('le corresponde *U15 Fem Proyección* en la Sede Suba, con el profe Sebastián Hurtado');
+        expect(c.ultimo().texto).toContain('le corresponde *U15 Fem Proyección* en la Sede Suba. Su profe es Sebastián Hurtado');
         expect(c.ultimo().estado?.datos.branchId).toBe(SUBA);
     });
 
@@ -514,6 +517,33 @@ describe('lecturas puras', () => {
             .toBe('por Nequi o Daviplata al número 319 450 5150');
         expect(comoPagar([{ tipo: 'Nequi', numero: '3001112233', titular: 'Club' }, { tipo: 'Bancolombia', numero: '123-456' }]))
             .toBe('a una de estas cuentas:\n• Nequi: 3001112233 (a nombre de Club)\n• Bancolombia: 123-456\n');
+    });
+
+    it('bienvenida propia que ya trae cada sede con su dirección: no se repite con la de la base', () => {
+        const botones = [{ branchId: NORTE, titulo: '🟡 Sede Norte' }, { branchId: SUBA, titulo: '⚫ Sede Suba' }];
+        const sedes = [
+            { branchId: NORTE, nombre: 'Norte', direccion: 'AV. El Polo, Cl. 201 #67-12' },
+            { branchId: SUBA, nombre: 'Suba', direccion: 'Cl. 152 #No. 94A 67' },
+        ];
+        const propia = '¡Hola! ¿Cuál sede te queda más cerca?\n🟡 *Sede Norte* · Calle 201 #67-12\n⚫ *Sede Suba* · Calle 152 #94A-67';
+        expect(lineasDeSedes(propia, botones, sedes)).toEqual([]);
+        expect(mensajeDeBienvenida(propia, botones, sedes).texto).toBe(propia);
+        // Nombra la sede pero sin dirección: la de la base sí sirve.
+        expect(lineasDeSedes('¿Norte o Suba? Cuéntanos cuál sede te queda más cerca', botones, sedes))
+            .toEqual(['🟡 Sede Norte · AV. El Polo, Cl. 201 #67-12', '⚫ Sede Suba · Cl. 152 #No. 94A 67']);
+        // Solo una trae dirección: se agrega la otra.
+        expect(lineasDeSedes('🟡 Sede Norte: Calle 201 #67-12\n¿Y en Suba?', botones, sedes))
+            .toEqual(['⚫ Sede Suba · Cl. 152 #No. 94A 67']);
+    });
+
+    it('cupoSimulado: lo que respondería la RPC en el número de pruebas', () => {
+        const ahora = Date.parse('2026-10-31T16:00:00Z');
+        expect(cupoSimulado({ precio: 15000, separarHoras: 24 }, ahora))
+            .toEqual({ estado: 'separada', hasta: '2026-11-01T16:00:00.000Z' });
+        expect(cupoSimulado({ precio: 15000, separarHoras: null }, ahora).hasta).toBe('2026-11-01T16:00:00.000Z');
+        expect(cupoSimulado({ precio: 15000, separarHoras: 2 }, ahora).hasta).toBe('2026-10-31T18:00:00.000Z');
+        expect(cupoSimulado({ precio: 0, separarHoras: 24 }, ahora)).toEqual({ estado: 'agendada', hasta: null });
+        expect(cupoSimulado(null, ahora)).toEqual({ estado: 'agendada', hasta: null });
     });
 
     it('con más de dos sedes, la bienvenida sale como lista', () => {
