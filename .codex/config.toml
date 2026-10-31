@@ -1,2 +1,5 @@
 [mcp_servers.supabase]
 url = "https://mcp.supabase.com/mcp?project_ref=luebjarufsiadojhvxgi&features=docs%2Caccount%2Cdatabase%2Cdebugging%2Cdevelopment%2Cfunctions%2Cbranching%2Cstorage"
+
+[mcp_servers.whatsapp_business_tools]
+url = "https://mcp.facebook.com/whatsapp_business_tools"

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 858,
+  "count": 859,
   "head": "20261031105601",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -853,6 +853,7 @@
     {"v":"20261029161649","file":"20261029161649_cobros_abiertos_no_asistio_y_cambio_plan.sql","sha256":"7422b8a5b8afd72b7dd53912329c76d6f1bc56e0991b264bc2db3ec3a1dce28f","added":"2026-10-29","by":"Brayan Steven Lopez"},
     {"v":"20261029190004","file":"20261029190004_cobros_abiertos_tabla_propia_y_quitar_policy.sql","sha256":"9c0eeab29db7e1bc514f1cd8b31f618ca99972b0f87ad1456a7d1f24a1255643","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029190407","file":"20261029190407_platform_wa_canal_interruptor_y_auditoria.sql","sha256":"e4fa4cd8328355bef50037f3fac2a09afe622b927cc39ec3be65b28b0d135605","added":"2026-10-30","by":"Brayan Steven Lopez"},
+    {"v":"20261029191217","file":"20261029191217_evaluacion_entrenadores_aviso_al_publicar.sql","sha256":"f3f3db97b6b831ddb0e8d85cf0c660dbf5b427dbb61ddfe70a0eae34b902ab9c","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029211413","file":"20261029211413_post_entreno_plazo_dia_siguiente.sql","sha256":"45fba9c5f2fcdd334ae0e3109397522b0c6b352ac3be57f8eef4957019454eaa","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029215003","file":"20261029215003_cobro_clase_prueba.sql","sha256":"40c71260f89c02fcfed5a9e5880ec383d978ac28218533db1104403942b01fb0","added":"2026-10-30","by":"Brayan Steven Lopez"},
     {"v":"20261029222300","file":"20261029222300_open_month_ignora_clase_prueba.sql","sha256":"7d8408e7c6381be7cd1d6a6d25e3e887e54bfec7ac788a8aa68d0ce4cb2fb888","added":"2026-10-30","by":"Brayan Steven Lopez"},

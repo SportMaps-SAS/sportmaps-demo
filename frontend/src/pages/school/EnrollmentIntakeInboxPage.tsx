@@ -1,355 +1,49 @@
 /**
  * EnrollmentIntakeInboxPage — inbox de revisión de hojas de matrícula
- * (fase 4 de docs/specs/alta-atleta-por-foto-hoja-matricula.md).
+ * (fase 4 de docs/specs/alta-atleta-por-foto-hoja-matricula.md), V2.
  *
- * NO reimplementa el alta de atleta: crea el atleta llamando a
+ * NO reimplementa el alta de deportista: lo crea llamando a
  * POST /api/v1/students/create-one (mismo endpoint que el alta manual, con su
  * detección de duplicados y su guardia de mayor-de-edad ya construidas), y
  * solo después confirma acá con /mark-approved. Si create-one devuelve 409
- * (duplicado o mayor de edad mal tipado), se muestra el motivo y no se
- * reintenta solo.
+ * (duplicado o mayor de edad mal tipado), se muestra el motivo en la ficha y
+ * no se reintenta solo.
+ *
+ * Crear, descartar y completar la ficha existente se mandan a los 8 s
+ * (useEnvioConDeshacer): mientras tanto la ficha se oculta y «Deshacer» la
+ * devuelve sin tocar la base.
+ *
+ * La lógica pura (qué se pide, qué falta, estado de cada ficha) vive en
+ * enrollmentIntakeModel.ts.
  */
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { toast } from 'sonner';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { bffClient, BFFError } from '@/lib/api/bffClient';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Badge } from '@/components/ui/badge';
-import { Loader2, CheckCircle2, Link2, XCircle, AlertTriangle, Camera } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Loader2, AlertTriangle, Camera } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { todayColombia } from '@/lib/dateUtils';
-
-interface EnrollmentFormResult {
-    athleteFullName: string | null;
-    docType: string | null;
-    docNumber: string | null;
-    dateOfBirth: string | null;
-    dateOfBirthRaw: string | null;
-    ageOnForm: number | null;
-    category: string | null;
-    guardianFullName: string | null;
-    guardianDocType?: string | null;
-    guardianDocNumber: string | null;
-    guardianPhone: string | null;
-    guardianEmail: string | null;
-    athleteEmail: string | null;
-    athletePhone: string | null;
-    epsName: string | null;
-    bloodType: string | null;
-    formDate?: string | null;
-    authorizations?: Array<{ text: string; checked: boolean | null }>;
-    isEnrollmentForm: boolean;
-    missingFields: string[];
-    provider: string;
-}
-
-interface IntakeItem {
-    id: string;
-    source?: 'whatsapp' | 'app';
-    status: string;
-    extracted: EnrollmentFormResult | null;
-    photoUrl: string | null;
-    duplicateOfChildId: string | null;
-    duplicateOfChildName: string | null;
-    duplicateOfIntakeId: string | null;
-    rejectionReason: string | null;
-    createdAt: string;
-}
-
-type FormState = Partial<Record<
-    'athleteFullName' | 'docType' | 'docNumber' | 'dateOfBirth' | 'guardianFullName' |
-    'guardianPhone' | 'guardianEmail' | 'athleteEmail' | 'athletePhone' | 'epsName' | 'bloodType',
-    string
->>;
-
-function esMayorDeEdad(item: IntakeItem): boolean {
-    const e = item.extracted;
-    if (!e) return false;
-    if (e.ageOnForm != null) return e.ageOnForm >= 18;
-    if (e.dateOfBirth) {
-        const nacimiento = new Date(e.dateOfBirth);
-        const hoy = new Date();
-        let edad = hoy.getFullYear() - nacimiento.getFullYear();
-        if (hoy.getMonth() < nacimiento.getMonth() ||
-            (hoy.getMonth() === nacimiento.getMonth() && hoy.getDate() < nacimiento.getDate())) edad--;
-        return edad >= 18;
-    }
-    return false;
-}
-
-function IntakeCard({ item, onDone }: { item: IntakeItem; onDone: () => void }) {
-    const { toast } = useToast();
-    const [form, setForm] = useState<FormState>({
-        athleteFullName: item.extracted?.athleteFullName ?? '',
-        docType: item.extracted?.docType ?? 'CC',
-        docNumber: item.extracted?.docNumber ?? '',
-        dateOfBirth: item.extracted?.dateOfBirth ?? '',
-        guardianFullName: item.extracted?.guardianFullName ?? '',
-        guardianPhone: item.extracted?.guardianPhone ?? '',
-        guardianEmail: item.extracted?.guardianEmail ?? '',
-        athleteEmail: item.extracted?.athleteEmail ?? '',
-        athletePhone: item.extracted?.athletePhone ?? '',
-        epsName: item.extracted?.epsName ?? '',
-        bloodType: item.extracted?.bloodType ?? '',
-    });
-    const [working, setWorking] = useState(false);
-    const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-    const mayorDeEdad = esMayorDeEdad(item);
-    const missing = new Set(item.extracted?.missingFields ?? []);
-
-    const set = (k: keyof FormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
-        setForm((f) => ({ ...f, [k]: e.target.value }));
-
-    const camposObligatoriosFaltan = !form.athleteFullName?.trim()
-        || !form.docNumber?.trim()
-        || (!mayorDeEdad && !form.guardianEmail?.trim())
-        || (!mayorDeEdad && !form.guardianPhone?.trim());
-
-    async function crearAtleta() {
-        setWorking(true);
-        setErrorMsg(null);
-        try {
-            const startDate = todayColombia();
-            let created: { child_id?: string; unregistered_athlete_id?: string };
-
-            if (mayorDeEdad) {
-                created = await bffClient.post('/api/v1/students/create-one', {
-                    type: 'unregistered_adult',
-                    doc_type: form.docType || undefined,
-                    doc_number: form.docNumber || null,
-                    full_name: form.athleteFullName,
-                    email: form.athleteEmail || null,
-                    phone: form.athletePhone || null,
-                    date_of_birth: form.dateOfBirth || null,
-                    start_date: startDate,
-                    send_invite: Boolean(form.athleteEmail),
-                });
-                await bffClient.post(`/api/v1/enrollment-intake/${item.id}/mark-approved`, {
-                    unregisteredAthleteId: created.unregistered_athlete_id,
-                    epsName: form.epsName || undefined,
-                    bloodType: form.bloodType || undefined,
-                });
-            } else {
-                created = await bffClient.post('/api/v1/students/create-one', {
-                    type: 'child',
-                    doc_type: form.docType || 'TI',
-                    doc_number: form.docNumber || null,
-                    full_name: form.athleteFullName,
-                    date_of_birth: form.dateOfBirth || null,
-                    parent_name: form.guardianFullName || form.athleteFullName,
-                    parent_email: form.guardianEmail || null,
-                    parent_phone: (form.guardianPhone || '').replace(/\D/g, ''),
-                    start_date: startDate,
-                    send_invite: true,
-                });
-                await bffClient.post(`/api/v1/enrollment-intake/${item.id}/mark-approved`, {
-                    childId: created.child_id,
-                    epsName: form.epsName || undefined,
-                    bloodType: form.bloodType || undefined,
-                });
-            }
-
-            toast({ title: 'Atleta creado', description: `${form.athleteFullName} quedó registrado.` });
-            onDone();
-        } catch (err) {
-            if (err instanceof BFFError) {
-                setErrorMsg(err.message);
-            } else {
-                setErrorMsg('No se pudo crear el atleta.');
-            }
-        } finally {
-            setWorking(false);
-        }
-    }
-
-    async function vincular() {
-        if (!item.duplicateOfChildId) return;
-        setWorking(true);
-        setErrorMsg(null);
-        try {
-            await bffClient.post(`/api/v1/enrollment-intake/${item.id}/link`, {
-                childId: item.duplicateOfChildId,
-            });
-            toast({ title: 'Vinculado', description: `Se completaron los datos de ${item.duplicateOfChildName ?? 'el atleta existente'}.` });
-            onDone();
-        } catch (err) {
-            setErrorMsg(err instanceof BFFError ? err.message : 'No se pudo vincular.');
-        } finally {
-            setWorking(false);
-        }
-    }
-
-    async function descartar() {
-        const reason = window.prompt('¿Por qué se descarta esta foto? (opcional)') ?? undefined;
-        setWorking(true);
-        setErrorMsg(null);
-        try {
-            await bffClient.post(`/api/v1/enrollment-intake/${item.id}/reject`, { reason });
-            toast({ title: 'Descartada' });
-            onDone();
-        } catch (err) {
-            setErrorMsg(err instanceof BFFError ? err.message : 'No se pudo descartar.');
-        } finally {
-            setWorking(false);
-        }
-    }
-
-    return (
-        <Card>
-            <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <CardTitle className="text-base">{item.extracted?.athleteFullName || 'Sin nombre legible'}</CardTitle>
-                    <div className="flex gap-2">
-                        <Badge variant="outline">{item.source === 'app' ? 'Subida en la app' : 'Por WhatsApp'}</Badge>
-                        {mayorDeEdad && <Badge variant="secondary">Mayor de edad</Badge>}
-                        {item.duplicateOfChildId && <Badge variant="destructive">Ya existe: {item.duplicateOfChildName}</Badge>}
-                        {item.duplicateOfIntakeId && <Badge variant="outline">Duplicada con otra foto pendiente</Badge>}
-                    </div>
-                </div>
-            </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {item.photoUrl && (
-                    <a href={item.photoUrl} target="_blank" rel="noreferrer">
-                        <img src={item.photoUrl} alt="Hoja de matrícula" className="rounded border max-h-96 object-contain w-full" />
-                    </a>
-                )}
-                <div className="space-y-3">
-                    <div>
-                        <Label>Nombre del deportista</Label>
-                        <Input value={form.athleteFullName ?? ''} onChange={set('athleteFullName')}
-                            className={missing.has('athlete_full_name') ? 'border-amber-400' : ''} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div>
-                            <Label>Tipo doc.</Label>
-                            <Input value={form.docType ?? ''} onChange={set('docType')} />
-                        </div>
-                        <div>
-                            <Label>Documento *</Label>
-                            <Input value={form.docNumber ?? ''} onChange={set('docNumber')}
-                                className={missing.has('doc_number') ? 'border-amber-400' : ''} />
-                        </div>
-                    </div>
-                    <div>
-                        <Label>Fecha de nacimiento {item.extracted?.dateOfBirthRaw ? `(hoja dice: "${item.extracted.dateOfBirthRaw}")` : ''}</Label>
-                        <Input type="date" value={form.dateOfBirth ?? ''} onChange={set('dateOfBirth')}
-                            className={missing.has('date_of_birth') ? 'border-amber-400' : ''} />
-                    </div>
-                    {item.extracted?.formDate && (
-                        <p className="text-sm text-muted-foreground">Hoja diligenciada el <strong>{item.extracted.formDate}</strong></p>
-                    )}
-                    {item.extracted?.category && (
-                        <p className="text-sm text-muted-foreground">Categoría en la hoja: <strong>{item.extracted.category}</strong> — se asigna a equipo aparte, esto no lo hace.</p>
-                    )}
-
-                    {mayorDeEdad ? (
-                        <>
-                            <p className="text-sm font-medium mt-2">Contacto de emergencia (no se invita, es mayor de edad)</p>
-                            <div>
-                                <Label>Nombre</Label>
-                                <Input value={form.guardianFullName ?? ''} onChange={set('guardianFullName')} disabled />
-                            </div>
-                            <div>
-                                <Label>Correo del deportista (opcional, para invitarlo)</Label>
-                                <Input value={form.athleteEmail ?? ''} onChange={set('athleteEmail')}
-                                    className={missing.has('athlete_email') ? 'border-amber-400' : ''} />
-                            </div>
-                            <div>
-                                <Label>Teléfono del deportista</Label>
-                                <Input value={form.athletePhone ?? ''} onChange={set('athletePhone')}
-                                    className={missing.has('athlete_phone') ? 'border-amber-400' : ''} />
-                            </div>
-                        </>
-                    ) : (
-                        <>
-                            <p className="text-sm font-medium mt-2">Acudiente</p>
-                            <div>
-                                <Label>Nombre</Label>
-                                <Input value={form.guardianFullName ?? ''} onChange={set('guardianFullName')}
-                                    className={missing.has('guardian_full_name') ? 'border-amber-400' : ''} />
-                            </div>
-                            <div>
-                                <Label>Correo *</Label>
-                                <Input value={form.guardianEmail ?? ''} onChange={set('guardianEmail')}
-                                    className={missing.has('guardian_email') ? 'border-amber-400' : ''} />
-                            </div>
-                            <div>
-                                <Label>Teléfono *</Label>
-                                <Input value={form.guardianPhone ?? ''} onChange={set('guardianPhone')}
-                                    className={missing.has('guardian_phone') ? 'border-amber-400' : ''} />
-                            </div>
-                        </>
-                    )}
-
-                    {!mayorDeEdad && item.extracted?.guardianDocNumber && (
-                        <p className="text-sm text-muted-foreground">
-                            Documento del acudiente: <strong>{item.extracted.guardianDocType ?? ''} {item.extracted.guardianDocNumber}</strong>
-                        </p>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-2">
-                        <div>
-                            <Label>EPS</Label>
-                            <Input value={form.epsName ?? ''} onChange={set('epsName')} />
-                        </div>
-                        <div>
-                            <Label>Grupo sanguíneo / RH</Label>
-                            <Input value={form.bloodType ?? ''} onChange={set('bloodType')} />
-                        </div>
-                    </div>
-
-                    {(item.extracted?.authorizations?.length ?? 0) > 0 && (
-                        <div className="rounded border p-3 space-y-1">
-                            <p className="text-sm font-medium">Autorizaciones firmadas en la hoja</p>
-                            <ul className="space-y-1">
-                                {item.extracted!.authorizations!.map((a, i) => (
-                                    <li key={i} className="flex gap-2 text-sm">
-                                        <span aria-hidden className={a.checked ? 'text-green-600' : a.checked === false ? 'text-red-600' : 'text-amber-600'}>
-                                            {a.checked ? '☑' : a.checked === false ? '☐' : '?'}
-                                        </span>
-                                        <span className={a.checked ? '' : 'font-medium'}>
-                                            {a.text}
-                                            {a.checked === false && ' — SIN MARCAR'}
-                                            {a.checked === null && ' — no se distingue, revisa la foto'}
-                                        </span>
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-
-                    {errorMsg && (
-                        <Alert variant="destructive">
-                            <AlertTriangle className="h-4 w-4" />
-                            <AlertDescription>{errorMsg}</AlertDescription>
-                        </Alert>
-                    )}
-
-                    <div className="flex gap-2 flex-wrap pt-2">
-                        <Button onClick={crearAtleta} disabled={working || camposObligatoriosFaltan || Boolean(item.duplicateOfChildId)}>
-                            {working ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-                            Crear atleta
-                        </Button>
-                        {item.duplicateOfChildId && (
-                            <Button variant="secondary" onClick={vincular} disabled={working}>
-                                <Link2 className="h-4 w-4 mr-2" /> Vincular a {item.duplicateOfChildName}
-                            </Button>
-                        )}
-                        <Button variant="outline" onClick={descartar} disabled={working}>
-                            <XCircle className="h-4 w-4 mr-2" /> Descartar
-                        </Button>
-                    </div>
-                </div>
-            </CardContent>
-        </Card>
-    );
-}
+import { cn } from '@/lib/utils';
+import { InlineError } from '@/components/parent/v2/hijos/parts';
+import { useEnvioConDeshacer, SEGUNDOS_DESHACER } from '@/components/athlete/v2/useEnvioConDeshacer';
+import {
+    camposAPedir,
+    camposQueFaltan,
+    esMayorDeEdad,
+    estadoFicha,
+    formularioInicial,
+    soloDigitos,
+    type CampoFicha,
+    type EstadoFicha,
+    type FormState,
+    type IntakeItem,
+} from './enrollmentIntakeModel';
+import { FichaMatricula } from './enrollment-intake/FichaMatricula';
 
 /**
  * Una foto de celular pesa 3–8 MB y el BFF acepta hasta 4 MB. Se pasa a JPEG
@@ -437,10 +131,17 @@ function SubirMatricula({ onSubida, modoCoach = false }: { onSubida: () => void;
                 className="hidden"
                 onChange={onArchivo}
             />
-            <Button onClick={() => inputRef.current?.click()} disabled={subiendo}>
-                {subiendo ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Camera className="h-4 w-4 mr-2" />}
-                {subiendo ? 'Leyendo la hoja…' : 'Subir hoja de matrícula'}
-            </Button>
+            <div className="flex flex-col items-stretch gap-3 rounded-2xl border-[1.5px] border-dashed bg-card p-3 min-[421px]:flex-row min-[421px]:items-center">
+                <Button className="min-h-touch rounded-xl" onClick={() => inputRef.current?.click()} disabled={subiendo}>
+                    {subiendo ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Camera className="h-4 w-4 mr-2" />}
+                    {subiendo ? 'Leyendo la hoja…' : 'Subir hoja de matrícula'}
+                </Button>
+                {!modoCoach && (
+                    <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                        Las hojas que llegan por WhatsApp también aparecen aquí.
+                    </p>
+                )}
+            </div>
             {errorMsg && (
                 <Alert variant="destructive">
                     <AlertTriangle className="h-4 w-4" />
@@ -451,30 +152,383 @@ function SubirMatricula({ onSubida, modoCoach = false }: { onSubida: () => void;
     );
 }
 
+// ---------------------------------------------------------------------------
+
+type Filtro = 'pend' | 'listas' | 'todas';
+
+const PESTANAS: Array<{ id: Filtro; label: string }> = [
+    { id: 'pend', label: 'Por completar' },
+    { id: 'listas', label: 'Listas' },
+    { id: 'todas', label: 'Todas' },
+];
+
+interface Fila {
+    item: IntakeItem;
+    form: FormState;
+    pedir: CampoFicha[];
+    mayor: boolean;
+    faltan: CampoFicha[];
+    estado: EstadoFicha;
+    dupPendiente: boolean;
+}
+
+const coincide = (f: Fila, filtro: Filtro) =>
+    filtro === 'todas' || (filtro === 'listas' ? f.estado === 'lista' : f.estado !== 'lista');
+
+type Creado = { child_id?: string; unregistered_athlete_id?: string };
+
+function mensajeDeError(err: unknown, porDefecto: string): string {
+    return err instanceof BFFError ? err.message : porDefecto;
+}
+
+function BandejaAdmin({ schoolId, recarga }: { schoolId: string | null | undefined; recarga: number }) {
+    const envio = useEnvioConDeshacer();
+    const [items, setItems] = useState<IntakeItem[]>([]);
+    const [forms, setForms] = useState<Record<string, FormState>>({});
+    const [cargando, setCargando] = useState(true);
+    const [cargadoUnaVez, setCargadoUnaVez] = useState(false);
+    const [errorCarga, setErrorCarga] = useState<string | null>(null);
+    const [filtro, setFiltro] = useState<Filtro>('pend');
+    /**
+     * Ficha abierta. `undefined` = automático (la primera de la pestaña);
+     * `null` = la escuela cerró todas a propósito. Al tocar una ficha queda fija,
+     * así no salta a otra cuando pasa de «Por completar» a «Lista» mientras se escribe.
+     */
+    const [abierto, setAbierto] = useState<string | null | undefined>(undefined);
+    /** Fichas con envío programado (esperando los 8 s o en vuelo): no se muestran. */
+    const [ocultos, setOcultos] = useState<string[]>([]);
+    const [errores, setErrores] = useState<Record<string, string>>({});
+    /** Fichas con «ya existe» que la escuela marcó como «Es otra persona». */
+    const [otraPersona, setOtraPersona] = useState<string[]>([]);
+    const pendienteRef = useRef<string | null>(null);
+    const toastRef = useRef<string | number | null>(null);
+    /** Solo cuenta la respuesta del último pedido: una vieja revivía una ficha ya procesada. */
+    const pedidoRef = useRef(0);
+    /** Deportistas ya creados cuya hoja falta marcar (mark-approved falló), por id de ficha. */
+    const creadosRef = useRef<Record<string, Creado>>({});
+
+    // Cerrar o recargar la pestaña no desmonta React: el envío pendiente se perdería
+    // mientras el aviso ya dijo «quedó creado». El navegador pide confirmación.
+    useEffect(() => {
+        const avisar = (ev: BeforeUnloadEvent) => {
+            if (pendienteRef.current == null) return;
+            ev.preventDefault();
+            ev.returnValue = '';
+        };
+        window.addEventListener('beforeunload', avisar);
+        return () => window.removeEventListener('beforeunload', avisar);
+    }, []);
+
+    const load = useCallback(async () => {
+        if (!schoolId) { setCargando(false); return; }
+        const pedido = ++pedidoRef.current;
+        setCargando(true);
+        setErrorCarga(null);
+        try {
+            const res = await bffClient.get<{ items: IntakeItem[] }>('/api/v1/enrollment-intake');
+            if (pedido !== pedidoRef.current) return;
+            const ids = new Set(res.items.map((i) => i.id));
+            setItems(res.items);
+            // Lo escrito en fichas que siguen en la bandeja no se pierde al recargar.
+            setForms((prev) => {
+                const next: Record<string, FormState> = {};
+                for (const it of res.items) next[it.id] = prev[it.id] ?? formularioInicial(it);
+                return next;
+            });
+            setOcultos((prev) => prev.filter((id) => ids.has(id)));
+            setAbierto((prev) => (typeof prev === 'string' && !ids.has(prev) ? undefined : prev));
+            setCargadoUnaVez(true);
+        } catch (err) {
+            if (pedido !== pedidoRef.current) return;
+            setErrorCarga(mensajeDeError(err, 'No pudimos cargar las matrículas. Revisa tu conexión.'));
+        } finally {
+            if (pedido === pedidoRef.current) setCargando(false);
+        }
+    }, [schoolId]);
+
+    // `recarga` sube cuando se lee una hoja nueva: se recarga sin perder lo escrito.
+    useEffect(() => { load(); }, [load, recarga]);
+
+    // Qué se pide y si es adulto se decide una vez por ficha, con lo leído de la hoja.
+    const fijos = useMemo(() => {
+        const m: Record<string, { pedir: CampoFicha[]; mayor: boolean }> = {};
+        for (const it of items) m[it.id] = { pedir: camposAPedir(it), mayor: esMayorDeEdad(it) };
+        return m;
+    }, [items]);
+
+    const filas: Fila[] = items
+        .filter((it) => !ocultos.includes(it.id))
+        .map((item) => {
+            const form = forms[item.id] ?? formularioInicial(item);
+            const { pedir, mayor } = fijos[item.id] ?? { pedir: [], mayor: false };
+            const faltan = camposQueFaltan(form, mayor);
+            const esOtra = otraPersona.includes(item.id);
+            const estado: EstadoFicha = estadoFicha(item, form, undefined, { esOtraPersona: esOtra });
+            return { item, form, pedir, mayor, faltan, estado, dupPendiente: Boolean(item.duplicateOfChildId) && !esOtra };
+        });
+
+    const cuenta: Record<Filtro, number> = {
+        pend: filas.filter((f) => coincide(f, 'pend')).length,
+        listas: filas.filter((f) => coincide(f, 'listas')).length,
+        todas: filas.length,
+    };
+    // Si no queda nada por completar pero sí hay fichas listas, no se abre en una
+    // pestaña vacía (salvo que la escuela haya elegido «Por completar» a mano).
+    const filtroTocadoRef = useRef(false);
+    useEffect(() => {
+        if (!filtroTocadoRef.current && filtro === 'pend' && cuenta.pend === 0 && cuenta.listas > 0) setFiltro('listas');
+    }, [filtro, cuenta.pend, cuenta.listas]);
+
+    const idAbierto = abierto === undefined ? filas.find((f) => coincide(f, filtro))?.item.id ?? null : abierto;
+    // La ficha abierta se queda a la vista aunque cambie de pestaña mientras se escribe.
+    const visibles = filas.filter((f) => coincide(f, filtro) || f.item.id === idAbierto);
+
+    const cambiarFiltro = (nuevo: Filtro) => {
+        filtroTocadoRef.current = true;
+        setFiltro(nuevo);
+        const actual = filas.find((f) => f.item.id === idAbierto);
+        if (!actual || !coincide(actual, nuevo)) setAbierto(undefined);
+    };
+
+    const setCampo = (id: string) => (campo: CampoFicha, valor: string) => {
+        setAbierto(id);
+        setForms((prev) => ({ ...prev, [id]: { ...(prev[id] ?? formularioInicial(items.find((i) => i.id === id)!)), [campo]: valor } }));
+    };
+
+    const quitarError = (id: string) => setErrores((e) => {
+        if (!(id in e)) return e;
+        const { [id]: _omit, ...resto } = e;
+        void _omit;
+        return resto;
+    });
+
+    /** Oculta la ficha, abre la siguiente y manda `run` a los 8 s salvo «Deshacer». */
+    const programarAccion = (
+        id: string,
+        nombre: string,
+        mensaje: string,
+        run: (encabezados: Record<string, string> | undefined) => Promise<unknown>,
+    ) => {
+        // La escuela se fija al tocar. bffClient la vuelve a leer al mandar, y si la
+        // persona cambió de escuela en esos 8 s el deportista se creaba en la otra.
+        const encabezados = schoolId ? { 'x-school-id': schoolId } : undefined;
+        quitarError(id);
+        setOcultos((o) => [...o, id]);
+        setAbierto(undefined);
+        if (toastRef.current != null) toast.dismiss(toastRef.current);
+        pendienteRef.current = id;
+        const aviso: { id: string | number | null } = { id: null };
+        envio.programar(() => {
+            if (pendienteRef.current === id) pendienteRef.current = null;
+            // Ya salió: sonner pausa el aviso con el puntero encima, y un «Deshacer»
+            // todavía visible haría creer que se canceló.
+            if (aviso.id != null) toast.dismiss(aviso.id);
+            run(encabezados)
+                .then(() => load())
+                .catch((err: unknown) => {
+                    console.error('[matriculas-v2]', err);
+                    const msg = mensajeDeError(err, 'No se pudo completar la acción.');
+                    setErrores((e) => ({ ...e, [id]: msg }));
+                    setOcultos((o) => o.filter((x) => x !== id));
+                    setAbierto(id);
+                    toast.error(`No se pudo terminar la ficha de ${nombre}`, { description: msg });
+                });
+        });
+        aviso.id = toast.success(mensaje, {
+            duration: SEGUNDOS_DESHACER * 1000,
+            action: {
+                label: 'Deshacer',
+                onClick: () => {
+                    // Solo deshace si este envío sigue siendo el pendiente (no el de otra ficha).
+                    if (pendienteRef.current !== id || !envio.deshacer()) {
+                        toast.info('Ya se había enviado: no alcanzó a deshacerse.');
+                        return;
+                    }
+                    pendienteRef.current = null;
+                    setOcultos((o) => o.filter((x) => x !== id));
+                    setAbierto(id);
+                },
+            },
+        });
+        toastRef.current = aviso.id;
+    };
+
+    const crear = (f: Fila) => {
+        const { item, mayor } = f;
+        const form = { ...f.form };
+        const nombre = form.athleteFullName.trim();
+        // «Es otra persona» es la confirmación explícita para la que existe
+        // allow_duplicate: sin ella create-one vuelve a encontrar el mismo duplicado y da 409.
+        const duplicadoConfirmado = Boolean(item.duplicateOfChildId) && !f.dupPendiente
+            ? { allow_duplicate: true }
+            : {};
+        programarAccion(item.id, nombre, `${nombre} quedó creado.`, async (h) => {
+            const startDate = todayColombia();
+            // Si un intento anterior creó al deportista y lo que falló fue marcar la
+            // hoja, reintentar NO vuelve a llamar create-one: daba 409, o un segundo
+            // deportista cuando la hoja no traía documento.
+            let created = creadosRef.current[item.id];
+            if (!created) {
+                created = mayor
+                    ? await bffClient.post<Creado>('/api/v1/students/create-one', {
+                        type: 'unregistered_adult',
+                        doc_type: form.docType || undefined,
+                        doc_number: form.docNumber || null,
+                        full_name: form.athleteFullName,
+                        email: form.athleteEmail || null,
+                        phone: soloDigitos(form.athletePhone) || null,
+                        date_of_birth: form.dateOfBirth || null,
+                        start_date: startDate,
+                        send_invite: Boolean(form.athleteEmail),
+                        ...duplicadoConfirmado,
+                    }, h)
+                    : await bffClient.post<Creado>('/api/v1/students/create-one', {
+                        type: 'child',
+                        doc_type: form.docType || 'TI',
+                        doc_number: form.docNumber || null,
+                        full_name: form.athleteFullName,
+                        date_of_birth: form.dateOfBirth || null,
+                        parent_name: form.guardianFullName || form.athleteFullName,
+                        parent_email: form.guardianEmail || null,
+                        parent_phone: soloDigitos(form.guardianPhone || ''),
+                        start_date: startDate,
+                        send_invite: true,
+                        ...duplicadoConfirmado,
+                    }, h);
+                creadosRef.current[item.id] = created;
+            }
+            try {
+                await bffClient.post(`/api/v1/enrollment-intake/${item.id}/mark-approved`, {
+                    ...(mayor
+                        ? { unregisteredAthleteId: created.unregistered_athlete_id }
+                        : { childId: created.child_id }),
+                    epsName: form.epsName || undefined,
+                    bloodType: form.bloodType || undefined,
+                }, h);
+            } catch (err) {
+                throw new BFFError(
+                    err instanceof BFFError ? err.status : 0,
+                    `${nombre} ya quedó creado, pero no se pudo marcar la hoja como revisada`
+                        + `${err instanceof BFFError ? ` (${err.message})` : ''}. Toca «Crear deportista» para reintentar: no se crea dos veces.`,
+                );
+            }
+            delete creadosRef.current[item.id];
+        });
+    };
+
+    const descartar = (f: Fila, motivo: string | null) => {
+        const nombre = f.form.athleteFullName.trim() || 'sin nombre';
+        programarAccion(f.item.id, nombre, `Descartaste la ficha de ${nombre}.`, (h) =>
+            bffClient.post(`/api/v1/enrollment-intake/${f.item.id}/reject`, { reason: motivo ?? undefined }, h));
+    };
+
+    const completarFicha = (f: Fila) => {
+        const childId = f.item.duplicateOfChildId;
+        if (!childId) return;
+        const existente = f.item.duplicateOfChildName ?? 'el deportista existente';
+        programarAccion(f.item.id, existente, `Completamos la ficha de ${existente}.`, (h) =>
+            bffClient.post(`/api/v1/enrollment-intake/${f.item.id}/link`, { childId }, h));
+    };
+
+    if (!cargadoUnaVez && cargando) {
+        return (
+            <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando matrículas">
+                <Skeleton className="h-12 w-full rounded-2xl" />
+                <Skeleton className="h-16 w-full rounded-2xl" />
+                <Skeleton className="h-16 w-full rounded-2xl" />
+                <Skeleton className="h-16 w-full rounded-2xl" />
+            </div>
+        );
+    }
+
+    if (errorCarga && !cargadoUnaVez) {
+        return <InlineError message={errorCarga} onRetry={() => { void load(); }} />;
+    }
+
+    return (
+        <>
+            {errorCarga && <InlineError message={errorCarga} onRetry={() => { void load(); }} />}
+
+            {filas.length === 0 ? (
+                <div className="rounded-2xl border bg-card px-4 py-8 text-center">
+                    <p className="text-base font-semibold">Todo al día.</p>
+                    <p className="text-sm text-muted-foreground">Las hojas nuevas aparecen aquí.</p>
+                </div>
+            ) : (
+                <>
+                    <div role="tablist" aria-label="Filtrar fichas" className="grid grid-cols-3 gap-1 rounded-2xl bg-muted p-1">
+                        {PESTANAS.map((p) => {
+                            const activa = filtro === p.id;
+                            return (
+                                <button
+                                    key={p.id}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activa}
+                                    aria-controls="lista-matriculas"
+                                    onClick={() => cambiarFiltro(p.id)}
+                                    className={cn(
+                                        'min-h-touch rounded-xl px-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                        activa ? 'bg-card font-semibold text-foreground shadow-sm' : 'font-medium text-muted-foreground',
+                                    )}
+                                >
+                                    {p.label}
+                                    <span className="ml-1 tabular-nums opacity-75">{cuenta[p.id]}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {visibles.length === 0 ? (
+                        <div id="lista-matriculas" role="tabpanel" className="rounded-2xl border bg-card px-4 py-8 text-center">
+                            <p className="text-base font-semibold">Nada en esta pestaña</p>
+                            <p className="text-sm text-muted-foreground">Revisa las otras pestañas.</p>
+                        </div>
+                    ) : (
+                        <div id="lista-matriculas" role="tabpanel">
+                            <ul className="flex flex-col gap-2">
+                                {visibles.map((f) => (
+                                    <FichaMatricula
+                                        key={f.item.id}
+                                        item={f.item}
+                                        form={f.form}
+                                        pedir={f.pedir}
+                                        mayor={f.mayor}
+                                        estado={f.estado}
+                                        faltan={f.faltan}
+                                        dupPendiente={f.dupPendiente}
+                                        abierto={f.item.id === idAbierto}
+                                        error={errores[f.item.id] ?? null}
+                                        onToggle={() => setAbierto(f.item.id === idAbierto ? null : f.item.id)}
+                                        onCampo={setCampo(f.item.id)}
+                                        onCrear={() => crear(f)}
+                                        onDescartar={(motivo) => descartar(f, motivo)}
+                                        onCompletarFicha={() => completarFicha(f)}
+                                        onOtraPersona={() => {
+                                            setAbierto(f.item.id);
+                                            setOtraPersona((o) => (o.includes(f.item.id) ? o : [...o, f.item.id]));
+                                        }}
+                                    />
+                                ))}
+                            </ul>
+                        </div>
+                    )}
+                </>
+            )}
+        </>
+    );
+}
+
 export default function EnrollmentIntakeInboxPage() {
     const { schoolId } = useSchoolContext();
     const { profile } = useAuth();
     const { coachCanUploadEnrollmentForms, isLoading: entLoading } = useEntitlements();
-    const [items, setItems] = useState<IntakeItem[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [recarga, setRecarga] = useState(0);
 
     // Coach (si la escuela lo activó, school_settings.coach_can_upload_enrollment_forms):
     // solo SUBE la foto. La bandeja con los datos de cada ficha y la aprobación
     // siguen siendo del admin — el BFF tampoco le deja listar.
     const esCoach = profile?.role === 'coach';
-
-    const load = useCallback(async () => {
-        if (!schoolId || esCoach) { setLoading(false); return; }
-        setLoading(true);
-        try {
-            const res = await bffClient.get<{ items: IntakeItem[] }>('/api/v1/enrollment-intake');
-            setItems(res.items);
-        } finally {
-            setLoading(false);
-        }
-    }, [schoolId, esCoach]);
-
-    useEffect(() => { load(); }, [load]);
 
     if (esCoach) {
         return (
@@ -502,28 +556,17 @@ export default function EnrollmentIntakeInboxPage() {
     }
 
     return (
-        <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
+        <div className="mx-auto flex w-full max-w-page-narrow flex-col gap-4 px-4 py-5 pb-nav-safe font-poppins animate-in fade-in duration-300 md:px-0">
             <div>
-                <h1 className="text-xl font-semibold">Matrículas por revisar</h1>
-                <p className="text-sm text-muted-foreground">
-                    Toma la foto de la hoja aquí o mándala por WhatsApp. El sistema llena el formulario;
-                    revisa y confirma antes de crear el atleta — nunca se crea solo.
+                <h1 className="text-2xl font-bold leading-tight [text-wrap:balance]">Matrículas por revisar</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                    Completa lo que la hoja no trae y crea al deportista. Nada se crea solo.
                 </p>
             </div>
 
-            <SubirMatricula onSubida={load} />
+            <SubirMatricula onSubida={() => setRecarga((n) => n + 1)} />
 
-            {loading && <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>}
-
-            {!loading && items.length === 0 && (
-                <Alert>
-                    <AlertDescription>No hay fichas pendientes de revisión.</AlertDescription>
-                </Alert>
-            )}
-
-            {items.map((item) => (
-                <IntakeCard key={item.id} item={item} onDone={load} />
-            ))}
+            <BandejaAdmin key={schoolId ?? ''} schoolId={schoolId} recarga={recarga} />
         </div>
     );
 }
