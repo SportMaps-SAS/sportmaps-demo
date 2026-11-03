@@ -1638,7 +1638,12 @@ export default function PaymentsAutomationPage() {
             <TabsTrigger value="teams" className="text-xs sm:text-sm">Equipos y Planes</TabsTrigger>
             <TabsTrigger value="glosas" className="text-xs sm:text-sm">Glosas</TabsTrigger>
             <TabsTrigger value="conciliacion" className="text-xs sm:text-sm">Conciliación</TabsTrigger>
-            <TabsTrigger value="history" className="text-xs sm:text-sm">Historial</TabsTrigger>
+            {/* Antes decía «Historial» — chocaba con DOS pestañas de Finanzas:
+                "Historial de pagos" (grilla por atleta mes a mes) y la suya
+                propia "Transacciones" (TransactionsCard, más liviana). Esta es
+                la vista completa de lo que entró (con filtros, soporte y
+                origen) — "Pagos recibidos" no choca con ninguna de las dos. */}
+            <TabsTrigger value="history" className="text-xs sm:text-sm">Pagos recibidos</TabsTrigger>
             <TabsTrigger value="cierre" className="text-xs sm:text-sm">Cierre</TabsTrigger>
             <TabsTrigger value="debito" className="text-xs sm:text-sm">Débito automático</TabsTrigger>
             <TabsTrigger value="config" className="text-xs sm:text-sm">Config</TabsTrigger>
@@ -2180,13 +2185,18 @@ export default function PaymentsAutomationPage() {
           )}
         </TabsContent>
 
-        {/* ── Tab: Historial ───────────────────────────────────────────── */}
+        {/* ── Tab: Pagos recibidos ─────────────────────────────────────── */}
         <TabsContent value="history">
           <Card>
             <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>
-                <CardTitle className="text-base sm:text-lg">Transacciones</CardTitle>
-                <CardDescription>Pagos que entraron: comprobante aprobado (manual o automático), efectivo, QR y pasarela. Los cobros por cobrar no son transacciones — están en la cartera de Finanzas.</CardDescription>
+                <CardTitle className="text-base sm:text-lg">Pagos recibidos</CardTitle>
+                <CardDescription>
+                  Pagos que entraron: comprobante aprobado (manual o automático), efectivo, QR y pasarela —
+                  de cualquier origen, incluido lo que la familia paga directo. Los cobros por cobrar no son
+                  transacciones — están en la cartera de Finanzas.
+                  {showOperacionesTab && ' Si solo quieres ver lo que el equipo registró desde "Cobros y pagos", esa vista está en la pestaña Operaciones.'}
+                </CardDescription>
               </div>
               <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <Input

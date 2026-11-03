@@ -24,7 +24,7 @@ vi.mock('../config/supabase', () => {
 
 import {
     sesionesDelDia, ajusteDeSesion, excepcionesDeEscuela, limpiarCacheSemana, normalizarHora, diaDeLaSemana,
-    TTL_EXCEPCIONES_MS, type ExcepcionSemana,
+    lugarDelDia, TTL_EXCEPCIONES_MS, type ExcepcionSemana,
 } from './semana-equipo.service';
 
 // Sábado 31 de octubre y domingo 1 de noviembre de 2026.
@@ -41,6 +41,40 @@ const DYNASTY_SUBGRUPOS = [
 ];
 
 const exc = (o: Partial<ExcepcionSemana>): ExcepcionSemana => ({ team_id: 't1', fecha: SAB, tipo: 'cancelada', ...o });
+
+// Mayores Mixto Proyección de Monster (cuadro de horarios, #13).
+const REGLA_DOMINGO = '1.er domingo del mes: Pinar; 2.º a 4.º: Colegio Bilingüe La Enseñanza';
+
+describe('lugarDelDia (regla por semana del mes)', () => {
+    it('resuelve la cancha de esa fecha', () => {
+        expect(lugarDelDia(REGLA_DOMINGO, '2026-11-01')).toBe('Pinar');
+        expect(lugarDelDia(REGLA_DOMINGO, '2026-11-08')).toBe('Colegio Bilingüe La Enseñanza');
+        expect(lugarDelDia(REGLA_DOMINGO, '2026-11-22')).toBe('Colegio Bilingüe La Enseñanza');
+    });
+
+    it('semana que la regla no cubre (5.º domingo): el texto tal cual, sin adivinar', () => {
+        expect(lugarDelDia(REGLA_DOMINGO, '2026-11-29')).toBe(REGLA_DOMINGO);
+    });
+
+    it('otras formas de escribir el ordinal', () => {
+        expect(lugarDelDia('1ero: Pinar; 2do-4to: La Enseñanza', '2026-11-15')).toBe('La Enseñanza');
+        expect(lugarDelDia('1° sábado: Fesan; 2° al 5°: Pinar 2', '2026-10-31')).toBe('Pinar 2');
+    });
+
+    it('lo que no es una regla no se toca', () => {
+        expect(lugarDelDia('Parque Pinar de Suba 2', '2026-11-01')).toBe('Parque Pinar de Suba 2');
+        expect(lugarDelDia('Sede: Norte', '2026-11-01')).toBe('Sede: Norte');
+        expect(lugarDelDia('2 canchas: A y B', '2026-11-08')).toBe('2 canchas: A y B');
+        expect(lugarDelDia('1.er domingo: Pinar; cualquier otro: Fesan', '2026-11-08')).toBe('1.er domingo: Pinar; cualquier otro: Fesan');
+        expect(lugarDelDia(null, '2026-11-01')).toBeNull();
+    });
+
+    it('sesionesDelDia ya entrega la cancha de la fecha', () => {
+        const horario = [{ day: 0, time: '07:00', end: '09:00', place: REGLA_DOMINGO }];
+        expect(sesionesDelDia(horario, [], '2026-11-01')[0].lugar).toBe('Pinar');
+        expect(sesionesDelDia(horario, [], '2026-11-08')[0].lugar).toBe('Colegio Bilingüe La Enseñanza');
+    });
+});
 
 describe('sesionesDelDia', () => {
     it('sin ajustes: el horario base de ese día, tal cual y en su orden', () => {

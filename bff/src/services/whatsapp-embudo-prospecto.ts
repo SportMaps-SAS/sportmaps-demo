@@ -38,6 +38,7 @@
 
 import type { BotonInteractivo } from './whatsapp.service';
 import { supabase } from '../config/supabase';
+import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import {
     normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia,
 } from './whatsapp-clase-cortesia.service';
@@ -555,10 +556,15 @@ async function seguro<T>(f: () => Promise<T> | T | undefined): Promise<T | null>
 /** Línea de cada sede con su dirección, si la bienvenida no la dice ya. Pura. */
 export function lineasDeSedes(bienvenida: string, botones: BotonSede[], sedes: SedeEmbudo[]): string[] {
     const b = normalizar(bienvenida);
+    const renglones = bienvenida.split('\n').map(normalizar);
     return botones.flatMap((bt) => {
         const s = sedes.find((x) => x.branchId === bt.branchId);
         const dir = String(s?.direccion ?? '').trim();
         if (!dir || b.includes(normalizar(dir))) return [];
+        // La bienvenida de la escuela ya trae la sede con SU dirección («🟡 *Sede Norte* ·
+        // Calle 201 #67-12»): repetirla con el formato de la base («AV. El Polo, Cl. 201…») confunde.
+        const nombre = normalizar(sinEmojis(bt.titulo));
+        if (nombre && renglones.some((r) => r.includes(nombre) && /\d/.test(r))) return [];
         return [`${bt.titulo} · ${dir}`];
     });
 }
@@ -663,8 +669,10 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
     }
     // Con flujo abierto, un botón de OTRA cosa es una elección explícita: se suelta.
     if (boton && !esBotonEmbudo(boton)) return false;
-    // «Necesito hablar con alguien»: lo atiende el bot general (escalación).
-    if (!boton && quiereSalirDelFlujo(texto)) return false;
+    // «Necesito hablar con alguien» escrito = el botón «Hablar con alguien»: se le confirma
+    // y la escuela recibe lo que ya contó. Antes se soltaba al bot general, que con un
+    // número desconocido se queda callado (batería qa:embudo, 2026-10-31).
+    if (!boton && quiereSalirDelFlujo(texto)) return aPersona(ctx, estado.datos, 'pide_persona', null);
     if (!boton && leerOpcionDePuerta(texto) === 'club' && (estado.paso === 'sede' || estado.paso === 'pregunta')) {
         if (!ctx.yaSoyDelClub) return false;
         await ctx.yaSoyDelClub();
@@ -868,7 +876,8 @@ async function terminarPreguntas(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, d: 
     const { t } = await textos(ctx);
     const nombre = primerNombre(d.nombre);
     const sede = d.sedeTitulo ? ` en la ${sinEmojis(d.sedeTitulo)}` : '';
-    const profe = grupo.profe ? `, con el profe ${grupo.profe.trim()}` : '';
+    // «Su profe es…»: sirve igual para Iván que para Tatiana (no hay género del staff).
+    const profe = grupo.profe ? `. Su profe es ${grupo.profe.trim()}` : '';
     const porAnio = d.anio ? `Por su año (${d.anio}) a ${nombre || 'tu deportista'}` : `A ${nombre || 'tu deportista'}`;
     const evalua = d.genero === 'f' ? 'la evalúa' : d.genero === 'm' ? 'lo evalúa' : 'evalúa al deportista';
     const valor = t.precio ? `, que cuesta ${t.precio}` : t.gratis ? ', sin costo' : '';
@@ -1208,6 +1217,17 @@ export async function registrarOptInProspecto(p: {
 }
 
 /**
+ * Lo que respondería `tomar_cupo_clase_prueba` en un turno simulado: con valor
+ * se separa por las horas de la escuela (24 si no las fijó); sin valor se
+ * agenda. Pura.
+ */
+export function cupoSimulado(clase: Pick<AjustesClasePrueba, 'precio' | 'separarHoras'> | null, ahora = Date.now()): ResultadoCupo {
+    if (!clase?.precio) return { estado: 'agendada', hasta: null };
+    const horas = clase.separarHoras && clase.separarHoras > 0 ? clase.separarHoras : 24;
+    return { estado: 'separada', hasta: new Date(ahora + horas * 3600_000).toISOString() };
+}
+
+/**
  * Lo que el contexto lee de la base (Integración suma `enviar`, `avisarEscuela`,
  * `guardarLead`, `registrarOptIn`, `elegirGrupo` y, si quiere, `textosDeClase` y
  * `franjas` de B3). Imports dinámicos: cargar el motor no arrastra la agenda.
@@ -1224,8 +1244,19 @@ export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pic
             return ((data ?? []) as any[]).map((s) => ({ branchId: s.id, nombre: s.name ?? null, direccion: s.address ?? null }));
         },
         franjas: (teamId) => franjasDeEquipo(schoolId, teamId),
-        tomarCupo: async (leadId, slotId) => (await import('./clase-prueba-agenda.service')).tomarCupo(leadId, slotId),
-        soltarCupo: async (leadId) => (await import('./clase-prueba-agenda.service')).soltarCupo(leadId),
+        tomarCupo: async (leadId, slotId) => {
+            // Número de pruebas y batería de escenarios: la RPC escribe, el cortafuegos la
+            // bloquea y el motor se quedaba en «no se pudo» sin mostrar el pago.
+            if (enCortafuegos()) {
+                const { ajustesClasePrueba } = await import('./whatsapp-ajustes-escuela.service');
+                return cupoSimulado(await ajustesClasePrueba(schoolId));
+            }
+            return (await import('./clase-prueba-agenda.service')).tomarCupo(leadId, slotId);
+        },
+        soltarCupo: async (leadId) => {
+            if (enCortafuegos()) return;
+            await (await import('./clase-prueba-agenda.service')).soltarCupo(leadId);
+        },
         cuentasDePago: async () => {
             const { mediosDePago } = await import('./whatsapp-medios-de-pago.service');
             // 'clase_prueba' todavía no es categoría de payment-accounts (B4): las llaves
