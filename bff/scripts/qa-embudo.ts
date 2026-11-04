@@ -1780,6 +1780,11 @@ async function correrAnuncios(e: Escuela): Promise<Resultado[]> {
             revisarFicha(c, ev, r, it);
             await c.decir('Listo, ¿a qué número te consigno?');
             noReinicia(c, ev, r);
+            // Monster 2026-11-04: lo mandaba al buzón («ya le pasé tu mensaje a la escuela»)
+            // justo cuando la persona iba a pagar. Tiene que volver a darle a dónde consignar.
+            const t = c.ultimoTexto();
+            debe(r, /nequi|bre-?b|daviplata|llave|cuenta|\b\d{7,}\b|@\w+/i.test(t) && !/le pas[eé] tu mensaje/i.test(t),
+                'a «¿a qué número te consigno?» no le volvió a dar los datos de pago');
         }),
         conClinica('afiliado: anuncio de la clínica → su valor de afiliado', async (c, ev, r, it) => {
             await c.decir('Hola, quiero más información', null, { referral: AD_CLINICA!, rpc: { wa_es_afiliado: () => ({ afiliado: true }) } });
