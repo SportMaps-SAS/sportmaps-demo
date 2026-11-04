@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Loader2, Zap, User, FileText } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PaymentCheckoutModal } from '@/components/payment/PaymentCheckoutModal';
+import { conceptoInicialDeUrl, type ConceptoInicial } from '@/components/payment/checkoutConcepto';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
 import { GlosaRespondModal } from '@/components/payment/GlosaRespondModal';
 import { listMine as listMyGlosas, OPEN_GLOSA_STATUSES, type Glosa } from '@/lib/api/glosas';
@@ -142,7 +143,11 @@ export default function MyPaymentsPage() {
     paymentCategory?: string | null;
     /** Recargo por mora ya sumado en el cobro (apply_late_fees). Solo se muestra. */
     late_fee_amount?: number | null;
+    /** «Pagar otro concepto» con un motivo ya elegido (`?motivo=`). */
+    conceptoInicial?: ConceptoInicial;
   } | null>(null);
+  // Motivo de `?motivo=` esperando que la familia elija para quién es (varios hijos).
+  const [motivoPedido, setMotivoPedido] = useState<ConceptoInicial | null>(null);
 
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
 
@@ -555,6 +560,45 @@ export default function MyPaymentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- corre una sola vez, al terminar la carga
   }, [loading, transactions, searchParams]);
 
+  // «Pagar otro concepto» (modo create del mismo checkout) para un hijo, con el
+  // motivo ya elegido si vino de `?motivo=`.
+  const openOtroConcepto = (enroll: Enrollment, conceptoInicial?: ConceptoInicial) => {
+    setPayQueue([]);
+    setSelectedPayment({
+      childId: enroll.child_id,
+      childName: enroll.children?.full_name || 'Deportista',
+      teamId: enroll.team_id || undefined,
+      teamName: enroll.teams?.name || 'Mensualidad Deportista',
+      amount: enroll.teams?.price_monthly || 0,
+      schoolId: enroll.school_id,
+      ...(conceptoInicial ? { conceptoInicial } : {}),
+    });
+    setCheckoutMethod(undefined);
+    setShowCheckout(true);
+  };
+
+  // Atajo `?motivo=<clave>` (catálogo lib/motivosDeCobro: enlaces de WhatsApp,
+  // correos): abre «Pagar otro concepto» con ese motivo preseleccionado. Con un
+  // solo hijo, directo; con varios, primero «¿Para quién es el pago?». Una clave
+  // que no está en el catálogo se ignora. `?pay=` manda si vienen los dos. El
+  // parámetro se limpia para que un refresh no reabra el modal.
+  const motivoAbiertoRef = useRef(false);
+  useEffect(() => {
+    if (loading || motivoAbiertoRef.current || !searchParams.get('motivo')) return;
+    motivoAbiertoRef.current = true;
+    if (searchParams.get('pay')) return;
+    const motivo = conceptoInicialDeUrl(searchParams.get('motivo'));
+    setSearchParams(prev => { prev.delete('motivo'); return prev; }, { replace: true });
+    if (!motivo || enrollments.length === 0) return;
+    if (enrollments.length === 1) {
+      openOtroConcepto(enrollments[0], motivo);
+      return;
+    }
+    setMotivoPedido(motivo);
+    setShowChildPicker(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- corre una sola vez, al terminar la carga
+  }, [loading, enrollments, searchParams]);
+
   // «Pagar $ X» / «Ya transferí» con los cobros marcados. El BFF firma la
   // sesión de UN cobro (no existe pago múltiple), así que se pagan en fila con
   // el mismo modal: el primero ya, el resto al terminar cada uno con éxito.
@@ -713,7 +757,7 @@ export default function MyPaymentsPage() {
       />
 
       {/* Child Picker Dialog */}
-      <Dialog open={showChildPicker} onOpenChange={setShowChildPicker}>
+      <Dialog open={showChildPicker} onOpenChange={(o) => { setShowChildPicker(o); if (!o) setMotivoPedido(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>¿Para quién es el pago?</DialogTitle>
@@ -733,18 +777,9 @@ export default function MyPaymentsPage() {
                         ? 'bg-zinc-900 border-zinc-800 hover:border-indigo-500/50 hover:bg-zinc-950 dark:bg-zinc-950 dark:hover:bg-black' 
                         : 'bg-background hover:bg-muted/50 hover:border-primary'}`}
                     onClick={() => {
-                      setPayQueue([]);
-                      setSelectedPayment({
-                        childId: enroll.child_id,
-                        childName: enroll.children?.full_name || 'Deportista',
-                        teamId: enroll.team_id || undefined,
-                        teamName: enroll.teams?.name || 'Mensualidad Deportista',
-                        amount: enroll.teams?.price_monthly || 0,
-                        schoolId: enroll.school_id,
-                      });
+                      openOtroConcepto(enroll, motivoPedido ?? undefined);
+                      setMotivoPedido(null);
                       setShowChildPicker(false);
-                      setCheckoutMethod(undefined);
-                      setShowCheckout(true);
                     }}
                   >
                     <div className="flex items-center gap-3">
@@ -806,6 +841,7 @@ export default function MyPaymentsPage() {
           concept={selectedPayment.teamName}
           paymentCategory={selectedPayment.paymentCategory ?? null}
           initialMethod={checkoutMethod}
+          initialConceptType={selectedPayment.paymentId ? undefined : selectedPayment.conceptoInicial}
           mode={selectedPayment.paymentId ? 'update' : 'create'}
           onSuccess={handleCheckoutSuccess}
         />

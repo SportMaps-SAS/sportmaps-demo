@@ -1,12 +1,19 @@
 /**
  * Batería de escenarios del embudo del interesado contra la configuración REAL
- * de una escuela. No manda un solo mensaje ni escribe en la base.
+ * de una escuela, y contra variantes de esa configuración armadas en memoria.
+ * No manda un solo mensaje ni escribe en la base.
  *
  * Desde la RAIZ del repo o desde bff/, da igual:
  *
  *   npm run qa:embudo -- --escuela monsters-volley-club
- *   npm run qa:embudo -- --escuela <uuid|slug> --solo guiones
+ *   npm run qa:embudo -- --escuela <uuid|slug> --solo guiones,despues
+ *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
+ *
+ * Opciones: --solo matriz|guiones|despues|variantes (varias con coma; sin --solo
+ * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
+ * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
+ * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
  *
  * CÓMO
  * Cada conversación corre turno a turno por `turnoSimulado`, el mismo camino del
@@ -15,41 +22,69 @@
  * interesado contesta un «interesado automático»: lee lo que preguntó el bot y
  * responde según su perfil (sede, año, sexo, trayectoria).
  *
+ * VARIANTES. El cortafuegos sirve desde memoria las tablas de `TABLAS_VIRTUALES`.
+ * Para una variante la batería agrega a ese Set, mientras corre la variante, las
+ * tablas que cambia (`school_settings`, `school_trial_class_settings`,
+ * `school_trial_slots`, `school_signup_leads`) y siembra en la sesión las filas
+ * COMPLETAS leídas de la base (`select *`) con el cambio aplicado: con una tabla
+ * virtual TODAS sus lecturas salen de memoria. Entre variantes se limpia la caché
+ * de textos de la clase (10 min por escuela); los ajustes de WhatsApp, la clase
+ * de prueba y los medios de pago no tienen caché entre turnos.
+ *
+ * DESPUÉS DEL EMBUDO. Una conversación base llega hasta las instrucciones de
+ * pago; de ahí se BIFURCA (copia de la memoria con otro contacto) una
+ * conversación por cada cosa que escribe la familia, en dos momentos: esperando
+ * el pago y ya agendada (se inyecta el mensaje con que B4 confirma el pago, tal
+ * cual lo deja el job: sin el estado del embudo, y el lead en memoria).
+ *
  * QUÉ REVISA
  *   · Matriz: cada sede × año de nacimiento × sexo (la trayectoria rota), por
  *     botones, hasta el pago. El grupo tiene que recibir clase de prueba, no ser
  *     de Competencia, aceptar ese año y ese sexo, y ser de la sede elegida (o
- *     haberse ofrecido «otra sede»). Las franjas: de ese grupo, en los días que la
- *     escuela agenda y con la anticipación mínima. Si ningún grupo acepta ese año,
- *     pasar a una persona es lo correcto.
- *   · Guiones: texto libre (varias respuestas en un mensaje, fechas escritas de
- *     otras formas, la sede escrita, pedir una persona, decir que no al
- *     consentimiento…).
- *   · En TODO mensaje: que el bot conteste, sin «gratis» si la clase tiene valor,
- *     sin undefined/null/NaN, sin reglas de cancha sin resolver, títulos dentro
- *     del límite de WhatsApp, sin renglones repetidos y ≤ 4096 caracteres.
+ *     de la «otra sede» que se tocó). Las franjas: de ese grupo, abiertas, con
+ *     cupo («N cupos» bien contado), en los días que la escuela agenda y con la
+ *     anticipación mínima. Si ningún grupo acepta ese año, una persona.
+ *   · Guiones: texto libre y caminos sueltos (otra sede, «Hablar con alguien»,
+ *     la lista contestada por texto, sede escrita mal, «Club y torneos», adulto,
+ *     menor sin grupo, varias respuestas en otro orden, preguntas sin «?»).
+ *   · Después: matrícula, qué llevar, dónde queda, mensualidad, «ya pagué»,
+ *     cambiar de horario (escrito y botón), «no puedo ir», «gracias».
+ *   · Variantes: sin valor, sin cuentas de pago, sin sedes / una sede, sin
+ *     franjas, días, cupos llenos, horas para separar, embudo apagado.
+ *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
+ *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
+ *     sin reglas de cancha sin resolver, títulos dentro del límite de WhatsApp,
+ *     sin renglones repetidos y ≤ 4096 caracteres.
  *
- * Lo que NO mide: la redacción del LLM fuera del embudo ni la cola de
- * comprobantes (eso se prueba en el número de pruebas con una foto real).
- * Es determinista mientras no cambien los datos de la escuela: las franjas
- * son las de hoy.
+ * Cada falla sale clasificada: falla (bug del bot), esperada (silencio después
+ * del embudo, en arreglo) o limitación de la simulación (no cuenta como falla).
+ *
+ * Lo que NO mide: la cola de comprobantes con una foto real (eso se prueba en el
+ * número de pruebas). Es determinista mientras no cambien los datos de la
+ * escuela, salvo las respuestas del modelo después del embudo.
  */
 
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
 import { writeFileSync } from 'fs';
 import { supabase } from '../src/config/supabase';
-import { turnoSimulado, type SesionPrueba } from '../src/services/plataforma-wa-pruebas.service';
+import { TABLAS_VIRTUALES, type Fila } from '../src/config/cortafuegos-simulacion';
+import {
+    turnoSimulado, contactoSintetico, conversacionDePrueba, type SesionPrueba,
+} from '../src/services/plataforma-wa-pruebas.service';
 import type { SalidaSimulada } from '../src/services/whatsapp-bot.service';
 import {
-    ajustesWhatsAppDeEscuela, ajustesClasePrueba, embudoActivo,
-    type PreguntaProspecto, type BotonSede,
+    ajustesWhatsAppDeEscuela, ajustesClasePrueba, embudoActivo, ajustesDesdeFila, ajustesClasePruebaDesdeFila,
+    indicacionesCortesiaDeEscuela,
+    type PreguntaProspecto, type BotonSede, type AjustesWhatsAppEscuela, type AjustesClasePrueba, type NombreClase,
 } from '../src/services/whatsapp-ajustes-escuela.service';
-import { rangosDeEscuela, type RangoGrupo } from '../src/services/grupos-por-edad.service';
-import { BOTON_EMBUDO, ANTICIPACION_MIN_EMBUDO, sinEmojis } from '../src/services/whatsapp-embudo-prospecto';
+import { rangosDeEscuela, elegirGrupoEmbudo, type RangoGrupo } from '../src/services/grupos-por-edad.service';
+import { BOTON_EMBUDO, PASO_EMBUDO, ANTICIPACION_MIN_EMBUDO, sinEmojis } from '../src/services/whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from '../src/services/whatsapp-puerta-desconocido';
 import { normalizar } from '../src/services/whatsapp-clase-cortesia.service';
 import { diaDeLaSemana } from '../src/services/semana-equipo.service';
+import { limpiarCacheTextosClase, formatoPesos } from '../src/services/textos-clase-prueba';
+import { franjaDeAgenda, textoConfirmacion } from '../src/services/clase-prueba-agenda.service';
 
 // ─── Argumentos ──────────────────────────────────────────────────────────────
 
@@ -57,23 +92,88 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes'];
 const ESCUELA = arg('escuela');
-const SOLO = arg('solo') as 'matriz' | 'guiones' | null;
+const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
+const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
+const SOLO: Bloque[] = SOLO_CRUDO
+    ? SOLO_CRUDO.filter((s): s is Bloque => (BLOQUES as string[]).includes(s))
+    : VARIANTES_PEDIDAS ? ['variantes'] : BLOQUES;
 const ANIOS = arg('anios')?.split(',').map(Number).filter(Number.isInteger) ?? null;
 const TRANSCRIPCION = arg('transcripcion');
+const PARALELO = Math.max(1, Math.min(8, Number(arg('paralelo') ?? 3) || 3));
+const VERBOSE = process.argv.includes('--verbose');
 const MAX_TURNOS = 16;
 
+// Los logs del bot ([llm] uso, avisos del cortafuegos…) tapan el resumen: se callan.
+const log = console.log.bind(console);
+if (!VERBOSE) {
+    const nada = () => undefined;
+    console.log = nada; console.info = nada; console.warn = nada; console.error = nada; console.debug = nada;
+}
+
+// ─── Fechas (Bogotá) ─────────────────────────────────────────────────────────
+
+const hoyBogota = () => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(new Date());
+const masDias = (fecha: string, n: number) => {
+    const [y, m, d] = fecha.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
+/** El primer día `dow` (0 = domingo) desde `desde` (incluido). */
+const proximoDia = (dow: number, desde: string) => {
+    for (let i = 0; i < 7; i++) if (diaDeLaSemana(masDias(desde, i)) === dow) return masDias(desde, i);
+    return desde;
+};
+
 // ─── Contexto de la escuela (solo lectura) ───────────────────────────────────
+
+interface FranjaBase {
+    id: string; team_id: string | null; slot_date: string; start_time: string;
+    max_capacity: number | null; reserved_count: number | null;
+}
 
 interface Escuela {
     id: string;
     nombre: string;
+    embudo: boolean;
+    bienvenida: string | null;
     sedes: BotonSede[];
     preguntas: PreguntaProspecto[];
+    nombreClase: NombreClase | null;
     precio: number | null;
+    separarHoras: number | null;
     diasSemana: number[] | null;
     rangos: RangoGrupo[];
-    franjas: Map<string, { team_id: string | null; slot_date: string; start_time: string }>;
+    /** Abiertas y de hoy en adelante. */
+    franjas: Map<string, FranjaBase>;
+}
+
+function armarEscuela(
+    id: string, nombre: string, aj: AjustesWhatsAppEscuela, clase: AjustesClasePrueba | null,
+    rangos: RangoGrupo[], slots: Fila[],
+): Escuela {
+    const hoy = hoyBogota();
+    return {
+        id, nombre,
+        embudo: embudoActivo(aj),
+        bienvenida: aj.bienvenida ?? null,
+        sedes: aj.botonesSede ?? [],
+        preguntas: aj.preguntasProspecto ?? [],
+        nombreClase: clase?.nombreClase ?? null,
+        precio: clase?.precio ?? null,
+        separarHoras: clase?.separarHoras ?? null,
+        diasSemana: clase?.diasSemana ?? null,
+        rangos,
+        franjas: new Map(slots
+            .filter((s) => s.is_open !== false && String(s.slot_date).slice(0, 10) >= hoy)
+            .map((s) => [String(s.id), {
+                id: String(s.id), team_id: s.team_id ?? null, slot_date: String(s.slot_date).slice(0, 10),
+                start_time: String(s.start_time), max_capacity: s.max_capacity ?? null, reserved_count: s.reserved_count ?? null,
+            }])),
+    };
 }
 
 async function cargarEscuela(clave: string): Promise<Escuela> {
@@ -85,40 +185,85 @@ async function cargarEscuela(clave: string): Promise<Escuela> {
         ajustesWhatsAppDeEscuela(id),
         ajustesClasePrueba(id),
         rangosDeEscuela(id),
-        supabase.from('school_trial_slots').select('id, team_id, slot_date, start_time')
-            .eq('school_id', id).eq('is_open', true).gte('slot_date', new Date().toISOString().slice(0, 10)).limit(2000),
+        supabase.from('school_trial_slots').select('id, team_id, slot_date, start_time, max_capacity, reserved_count, is_open')
+            .eq('school_id', id).eq('is_open', true).gte('slot_date', hoyBogota()).limit(2000),
     ]);
     if (!embudoActivo(aj)) throw new Error('Esta escuela no tiene el embudo del interesado (wa_preguntas_prospecto).');
-    return {
-        id, nombre: (data as any).name,
-        sedes: aj.botonesSede ?? [],
-        preguntas: aj.preguntasProspecto ?? [],
-        precio: clase?.precio ?? null,
-        diasSemana: clase?.diasSemana ?? null,
-        rangos,
-        franjas: new Map(((slots.data ?? []) as any[]).map((s) => [s.id, s])),
-    };
+    return armarEscuela(id, (data as any).name, aj, clase, rangos, (slots.data ?? []) as Fila[]);
 }
+
+/** Las filas completas que las variantes modifican (una sola lectura). */
+interface FilasReales { settings: Fila; clase: Fila | null; slots: Fila[] }
+
+async function leerFilasReales(schoolId: string): Promise<FilasReales> {
+    const [ss, tc, sl] = await Promise.all([
+        supabase.from('school_settings').select('*').eq('school_id', schoolId).maybeSingle(),
+        supabase.from('school_trial_class_settings').select('*').eq('school_id', schoolId).maybeSingle(),
+        supabase.from('school_trial_slots').select('*').eq('school_id', schoolId).gte('slot_date', hoyBogota()).limit(1000),
+    ]);
+    if (ss.error || !ss.data) throw new Error(`No pude leer school_settings: ${ss.error?.message ?? 'sin fila'}`);
+    return { settings: ss.data as Fila, clase: (tc.data as Fila | null) ?? null, slots: (sl.data ?? []) as Fila[] };
+}
+
+// ─── Tablas virtuales de una variante ────────────────────────────────────────
+
+const VIRTUALES = TABLAS_VIRTUALES as unknown as Set<string>;
+
+/** Mientras corre `fn`, esas tablas se sirven desde la memoria de cada conversación. */
+async function conTablasVirtuales<T>(tablas: string[], fn: () => Promise<T>): Promise<T> {
+    const agregadas = tablas.filter((t) => !VIRTUALES.has(t));
+    for (const t of agregadas) VIRTUALES.add(t);
+    limpiarCacheTextosClase();
+    try {
+        return await fn();
+    } finally {
+        for (const t of agregadas) VIRTUALES.delete(t);
+        limpiarCacheTextosClase();
+    }
+}
+
+const copia = <T>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
 
 // ─── Conversación ────────────────────────────────────────────────────────────
 
-interface Turno { entrada: string; botonId: string | null; salidas: SalidaSimulada[]; bloqueadas: string[]; nota: string | null }
+type Fase = 'embudo' | 'despues';
+
+interface Turno {
+    entrada: string; botonId: string | null; salidas: SalidaSimulada[]; bloqueadas: string[]; nota: string | null;
+    fase: Fase;
+    /** Callar aquí es lo correcto («gracias»). */
+    silencioOk?: boolean;
+    /** Lo puso la batería (el aviso de B4), no es un turno de la familia. */
+    sistema?: boolean;
+}
+
+/** La nota del simulador al abrir el buzón: la familia no la ve. */
+const esNotaDelSimulador = (s: SalidaSimulada) => /^\[se abre en el buz[oó]n/.test(s.texto ?? '');
+const paraLaFamilia = (salidas: SalidaSimulada[]) => salidas.filter((s) => !esNotaDelSimulador(s));
+
+let contadorN = 0;
+const nuevoN = () => ++contadorN;
 
 class Conversacion {
-    readonly turnos: Turno[] = [];
-    private readonly sesion: SesionPrueba;
+    turnos: Turno[] = [];
+    /** Turnos copiados de la conversación de la que se bifurcó. */
+    heredados = 0;
+    fase: Fase = 'embudo';
+    readonly sesion: SesionPrueba;
 
-    constructor(readonly titulo: string, escuela: Escuela, n: number) {
+    constructor(readonly titulo: string, readonly schoolId: string, n: number, semilla: Record<string, Fila[]> = {}) {
         this.sesion = {
-            contact_wa_id: `5730${String(n).padStart(8, '0')}`, school_id: escuela.id, rol: 'prospecto',
-            child_id: null, parent_id: null, estado: {},
+            contact_wa_id: `5730${String(n).padStart(8, '0')}`, school_id: schoolId, rol: 'prospecto',
+            child_id: null, parent_id: null, estado: { tablas: copia(semilla) },
         };
     }
 
-    async decir(texto: string, botonId: string | null = null): Promise<SalidaSimulada[]> {
+    contacto(): string { return contactoSintetico(this.sesion.contact_wa_id); }
+
+    async decir(texto: string, botonId: string | null = null, o: { silencioOk?: boolean } = {}): Promise<SalidaSimulada[]> {
         const r = await turnoSimulado(this.sesion, { waMessageId: `qa-${randomUUID()}`, textBody: texto, botonId });
-        this.turnos.push({ entrada: texto, botonId, salidas: r.salidas, bloqueadas: r.bloqueadas, nota: r.nota });
-        return r.salidas;
+        this.turnos.push({ entrada: texto, botonId, salidas: r.salidas, bloqueadas: r.bloqueadas, nota: r.nota, fase: this.fase, ...o });
+        return paraLaFamilia(r.salidas);
     }
 
     /** Los botones/filas del último mensaje que trajo opciones. */
@@ -133,8 +278,18 @@ class Conversacion {
     }
 
     ultimoTexto(): string {
-        return (this.turnos.at(-1)?.salidas ?? []).map((s) => s.texto).join('\n');
+        return paraLaFamilia(this.turnos.at(-1)?.salidas ?? []).map((s) => s.texto).join('\n');
     }
+
+    /** ¿La familia recibió algo en el último turno? */
+    hablo(): boolean { return paraLaFamilia(this.turnos.at(-1)?.salidas ?? []).length > 0; }
+
+    /** Todo lo que le llegó a la familia en esta conversación (sin lo heredado). */
+    textos(): string {
+        return this.turnos.slice(this.heredados).flatMap((t) => paraLaFamilia(t.salidas).map((s) => s.texto)).join('\n');
+    }
+
+    salidas(): SalidaSimulada[] { return this.turnos.slice(this.heredados).flatMap((t) => paraLaFamilia(t.salidas)); }
 
     /** El estado del embudo que viaja en el payload del último saliente que lo trae. */
     datosEmbudo(): Record<string, any> | null {
@@ -146,17 +301,80 @@ class Conversacion {
         }
         return null;
     }
+
+    sembrar(tabla: string, filas: Fila[]): void {
+        (this.sesion.estado.tablas ??= {})[tabla] = copia(filas);
+    }
+
+    /**
+     * Copia la conversación (memoria y turnos) con otro contacto y otra
+     * conversación: cada bifurcación sigue por su lado sin pisar a las demás
+     * (los frenos en memoria del bot van por conversación).
+     */
+    bifurcar(titulo: string): Conversacion {
+        const nueva = new Conversacion(titulo, this.schoolId, nuevoN());
+        const viejaConv = conversacionDePrueba(this.sesion);
+        const nuevaConv = conversacionDePrueba(nueva.sesion);
+        const json = JSON.stringify(this.sesion.estado.tablas ?? {})
+            .split(viejaConv).join(nuevaConv)
+            .split(this.contacto()).join(nueva.contacto());
+        nueva.sesion.estado = { conversationId: nuevaConv, tablas: JSON.parse(json), bloqueadas: [] };
+        nueva.turnos = this.turnos.map((t) => ({ ...t }));
+        nueva.heredados = this.turnos.length;
+        nueva.fase = this.fase;
+        return nueva;
+    }
+
+    /**
+     * Un saliente que no salió de un turno del bot (p. ej. la confirmación de B4).
+     * `ai_generated: true` como lo graba el job (`wa_record_outbound_message`): con
+     * false el bot lo toma por una persona de la escuela y se calla.
+     */
+    inyectarSaliente(rotulo: string, texto: string, payload: Record<string, unknown>): void {
+        const tablas = (this.sesion.estado.tablas ??= {});
+        const conv = (tablas.whatsapp_conversations ?? [])[0];
+        const ahora = new Date(Date.now() + 1000).toISOString();
+        (tablas.whatsapp_messages ??= []).push({
+            id: randomUUID(), conversation_id: conversacionDePrueba(this.sesion), integration_id: conv?.integration_id ?? null,
+            direction: 'outbound', type: 'text', text_body: texto, payload, ai_generated: true,
+            wa_message_id: `qa-${randomUUID()}`, from_wa_id: null, to_wa_id: this.contacto(),
+            wa_timestamp: ahora, created_at: ahora, status: 'sent',
+        });
+        this.turnos.push({
+            entrada: rotulo, botonId: null, salidas: [{ texto, step: String(payload.step ?? ''), botones: [], payload } as SalidaSimulada],
+            bloqueadas: [], nota: null, fase: this.fase, sistema: true,
+        });
+    }
 }
 
 // ─── Revisión de cada mensaje ────────────────────────────────────────────────
 
 const BASURA = /\b(undefined|NaN)\b|\[object |\{\{|\bnull\b/;
 const REGLA_SIN_RESOLVER = /\d\s*\.?\s*(er|º|°|do|ro|to)\b[^\n]{0,30}(del mes)?\s*:/i;
+const GRATIS = /\b(gratis|sin costo|gratuit[ao])\b/gi;
+
+/**
+ * ¿Dice que la CLASE es gratis? En los mensajes del embudo, cualquier «gratis»
+ * cuenta. En los demás (el modelo) solo cerca de «clase/prueba/cortesía» y no
+ * pegado a otra cosa («la mensualidad de noviembre es GRATIS» es la promo de
+ * Monster, no la clase).
+ */
+function diceClaseGratis(texto: string, estricto: boolean): boolean {
+    if (estricto) return /\b(gratis|sin costo|gratuit[ao])\b/i.test(texto);
+    for (const m of texto.matchAll(GRATIS)) {
+        const i = m.index ?? 0;
+        if (/mensualidad|noviembre|matr[ií]cula|uniforme/i.test(texto.slice(Math.max(0, i - 35), i + 20))) continue;
+        if (/\bclase\b|\bprueba\b|cortes[ií]a/i.test(texto.slice(Math.max(0, i - 60), i + 30))) return true;
+    }
+    return false;
+}
 
 function revisarMensaje(s: SalidaSimulada, escuela: Escuela): string[] {
     const fallas: string[] = [];
     const texto = s.texto ?? '';
-    if (escuela.precio && /\bgratis\b|\bsin costo\b/i.test(texto)) fallas.push('dice «gratis» y la clase tiene valor');
+    if (escuela.precio && diceClaseGratis(texto, String(s.step ?? '').startsWith('embudo_'))) {
+        fallas.push('dice «gratis» y la clase tiene valor');
+    }
     if (BASURA.test(texto)) fallas.push(`texto con basura: «${texto.match(BASURA)![0]}»`);
     if (texto.length > 4096) fallas.push(`mensaje de ${texto.length} caracteres (máx. 4096)`);
     const renglones = texto.split('\n').map((r) => r.trim()).filter((r) => r.length > 12);
@@ -177,21 +395,34 @@ function revisarMensaje(s: SalidaSimulada, escuela: Escuela): string[] {
 
 // ─── El interesado automático ────────────────────────────────────────────────
 
-interface Perfil { sede: BotonSede; anio: number; genero: 'f' | 'm'; trayectoria: number; nombre: string }
+interface Perfil { sede: BotonSede | null; anio: number; genero: 'f' | 'm'; trayectoria: number; nombre: string }
 
-type Desenlace = 'pago' | 'persona' | 'sin_horarios' | 'club' | 'inicio' | 'atascado';
+type Desenlace = 'pago' | 'agendada' | 'persona' | 'sin_horarios' | 'club' | 'inicio' | 'respuesta' | 'silencio'
+    | 'atascado' | 'no_aplica';
 
 interface Resultado {
     titulo: string;
+    bloque: Bloque;
+    variante: string | null;
     desenlace: Desenlace;
+    /** Bugs del bot. */
     fallas: string[];
+    /** Fallas conocidas con arreglo en curso (silencio después del embudo). */
+    esperadas: string[];
+    /** Lo que la simulación no puede representar (no cuenta como falla). */
+    limitaciones: string[];
     avisos: string[];
     grupo: string | null;
+    /** La «otra sede» que se tocó (`sm_em_otra:`). */
+    otraSede: string | null;
+    franjasOfrecidas: string[];
+    /** Pasar a una persona es lo esperado (la pidió, sin cuentas, otra sede…). */
+    personaEsperada: boolean;
+    sinHorariosEsperado: boolean;
     conv: Conversacion;
 }
 
 const ultimaLinea = (t: string) => t.trim().split('\n').filter(Boolean).at(-1) ?? t;
-const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
 
 function preguntaEn(texto: string, preguntas: PreguntaProspecto[]): { p: PreguntaProspecto; detalle: boolean } | null {
     for (const p of preguntas) {
@@ -201,35 +432,47 @@ function preguntaEn(texto: string, preguntas: PreguntaProspecto[]): { p: Pregunt
     return null;
 }
 
+/** ¿El último turno cerró el embudo? Por el step del mensaje (y el texto, de respaldo). */
+function desenlaceDe(conv: Conversacion): Desenlace | null {
+    const ult = paraLaFamilia(conv.turnos.at(-1)?.salidas ?? []);
+    const s = ult.at(-1);
+    const texto = conv.turnos.at(-1)?.salidas.map((x) => x.texto).join('\n') ?? '';
+    if (s?.step === PASO_EMBUDO.A_PERSONA || /^\[se abre en el buz[oó]n/m.test(texto) || /te escriben por aqu[ií]/i.test(texto)) {
+        return /no tengo horarios/i.test(texto) ? 'sin_horarios' : 'persona';
+    }
+    if (s?.step === PASO_EMBUDO.PAGO || (/comprobante/i.test(texto) && /\$|valor|paga/i.test(texto))) return 'pago';
+    if (s?.step === PASO_EMBUDO.AGENDADA && !s.opciones?.length) return 'agendada';
+    return null;
+}
+
 /** Sigue contestando lo que pregunte el bot hasta un desenlace. */
 async function seguir(conv: Conversacion, escuela: Escuela, perfil: Perfil, r: Resultado): Promise<void> {
     for (let i = 0; i < MAX_TURNOS; i++) {
+        const fin = desenlaceDe(conv);
+        if (fin) { r.desenlace = fin; return; }
+        if (!conv.hablo()) { r.desenlace = 'atascado'; return; } // el silencio lo anota `cerrar`
         const texto = conv.ultimoTexto();
         const ops = conv.opciones();
-        if (/^\[se abre en el buz[oó]n/m.test(texto) || /te escriben por aqu[ií]/i.test(texto)) {
-            r.desenlace = /no tengo horarios/i.test(texto) ? 'sin_horarios' : 'persona';
-            return;
-        }
-        if (/comprobante/i.test(texto) && /\$|valor|paga/i.test(texto)) { r.desenlace = 'pago'; return; }
 
         let salidas: SalidaSimulada[] | null = null;
         if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE))) {
-            salidas = await conv.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${perfil.sede.branchId}`);
+            salidas = perfil.sede ? await conv.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${perfil.sede!.branchId}`) : null;
         } else if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA))) {
             revisarGrupoYFranjas(conv, escuela, perfil, r);
             salidas = await conv.tocar((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
         } else if (ops.some((o) => o.id === BOTON_EMBUDO.OPTIN_SI)) {
             salidas = await conv.tocar((o) => o.id === BOTON_EMBUDO.OPTIN_SI);
         } else if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.OTRA_SEDE))) {
-            r.avisos.push(`sin grupo en ${sinEmojis(perfil.sede.titulo)}: ofreció otra sede`);
-            salidas = await conv.tocar((o) => o.id.startsWith(BOTON_EMBUDO.OTRA_SEDE));
+            const otra = ops.find((o) => o.id.startsWith(BOTON_EMBUDO.OTRA_SEDE))!;
+            r.otraSede = otra.id.slice(BOTON_EMBUDO.OTRA_SEDE.length);
+            r.avisos.push(`sin grupo en ${sinEmojis(perfil.sede?.titulo ?? 'la sede')}: ofreció otra sede`);
+            salidas = await conv.tocar((o) => o.id === otra.id);
         } else {
             const q = preguntaEn(texto, escuela.preguntas);
             if (!q) { r.desenlace = 'atascado'; r.fallas.push(`no reconozco qué pide el bot: «${ultimaLinea(texto).slice(0, 90)}»`); return; }
             salidas = await contestar(conv, q.p, q.detalle, perfil);
         }
         if (!salidas) { r.desenlace = 'atascado'; r.fallas.push(`no encontré el botón que buscaba entre: ${ops.map((o) => `[${o.title}]`).join(' ')}`); return; }
-        if (!salidas.length) { r.desenlace = 'atascado'; r.fallas.push(`el bot no contestó a «${conv.turnos.at(-1)!.entrada}»`); return; }
     }
     r.desenlace = 'atascado';
     r.fallas.push(`más de ${MAX_TURNOS} turnos sin llegar a un desenlace`);
@@ -263,96 +506,132 @@ function revisarGrupoYFranjas(conv: Conversacion, escuela: Escuela, perfil: Perf
     if (rango.genero && rango.genero !== 'mixto' && rango.genero !== perfil.genero) {
         r.fallas.push(`${rango.nombre}: es ${rango.genero} y el deportista es ${perfil.genero}`);
     }
-    if (rango.branchId && rango.branchId !== perfil.sede.branchId && !r.avisos.some((a) => a.includes('otra sede'))) {
+    if (rango.branchId && perfil.sede && rango.branchId !== perfil.sede.branchId && rango.branchId !== r.otraSede) {
         r.fallas.push(`${rango.nombre}: es de otra sede y no se ofreció como tal`);
     }
+    revisarFranjas(conv, escuela, rango.teamId, r);
+}
+
+/** Las franjas del último mensaje: de ese grupo, abiertas, con cupo bien contado, en días y horas válidos. */
+function revisarFranjas(conv: Conversacion, escuela: Escuela, teamId: string, r: Resultado): void {
     const limite = Date.now() + ANTICIPACION_MIN_EMBUDO * 60_000;
-    for (const o of conv.opciones().filter((x) => x.id.startsWith(BOTON_EMBUDO.FRANJA))) {
+    const filas = conv.opciones().filter((x) => x.id.startsWith(BOTON_EMBUDO.FRANJA));
+    r.franjasOfrecidas = filas.map((o) => o.id.slice(BOTON_EMBUDO.FRANJA.length));
+    for (const o of filas) {
         const f = escuela.franjas.get(o.id.slice(BOTON_EMBUDO.FRANJA.length));
         if (!f) { r.fallas.push(`franja «${o.title}» no está abierta en la base`); continue; }
-        if (f.team_id !== rango.teamId) r.fallas.push(`franja «${o.title}» es de otro grupo`);
+        if (f.team_id !== teamId) r.fallas.push(`franja «${o.title}» es de otro grupo`);
         if (escuela.diasSemana && !escuela.diasSemana.includes(diaDeLaSemana(f.slot_date))) r.fallas.push(`franja «${o.title}» cae en un día sin agenda`);
         const inicio = Date.parse(`${f.slot_date}T${String(f.start_time).slice(0, 5)}:00-05:00`);
         if (inicio < limite) r.fallas.push(`franja «${o.title}» empieza en menos de ${ANTICIPACION_MIN_EMBUDO} min`);
+        const max = Number(f.max_capacity ?? 0);
+        const libres = max - Number(f.reserved_count ?? 0);
+        if (libres <= 0) r.fallas.push(`franja «${o.title}» está llena (${f.reserved_count}/${f.max_capacity})`);
+        else if (max < 999 && !new RegExp(`(^|\\D)${libres} cupos?\\b`).test(o.descripcion ?? '')) {
+            r.fallas.push(`franja «${o.title}» dice «${o.descripcion ?? ''}» y le quedan ${libres} cupo${libres === 1 ? '' : 's'}`);
+        }
     }
 }
 
-/** ¿Algún grupo que recibe clase de prueba acepta este año y sexo? (en la sede, o en cualquiera) */
+/** ¿Algún grupo que recibe clase de prueba acepta este año y sexo? (en la sede, o en cualquiera de las sedes con botón) */
 function hayGrupoPara(escuela: Escuela, perfil: Perfil, soloSede: boolean): boolean {
+    const sedes = new Set(escuela.sedes.map((s) => s.branchId));
     return escuela.rangos.some((x) => x.recibeClasePrueba !== false && x.admiteNuevos !== false
         && !/competen/i.test(x.nombre)
         && (x.anioMin != null || x.anioMax != null)
         && (x.anioMin == null || perfil.anio >= x.anioMin) && (x.anioMax == null || perfil.anio <= x.anioMax)
         && (!x.genero || x.genero === 'mixto' || x.genero === perfil.genero)
-        && (!soloSede || !x.branchId || x.branchId === perfil.sede.branchId));
+        && (!sedes.size || !x.branchId || sedes.has(x.branchId))
+        && (!soloSede || !perfil.sede || !x.branchId || x.branchId === perfil.sede.branchId));
 }
 
-function nuevoResultado(titulo: string, conv: Conversacion): Resultado {
-    return { titulo, desenlace: 'atascado', fallas: [], avisos: [], grupo: null, conv };
+function nuevoResultado(titulo: string, conv: Conversacion, bloque: Bloque, variante: string | null = null): Resultado {
+    return {
+        titulo, bloque, variante, desenlace: 'atascado', fallas: [], esperadas: [], limitaciones: [], avisos: [],
+        grupo: null, otraSede: null, franjasOfrecidas: [], personaEsperada: false, sinHorariosEsperado: false, conv,
+    };
 }
+
+const SILENCIO_POST = 'silencio después del embudo (arreglo en curso)';
 
 function cerrar(r: Resultado, escuela: Escuela, perfil: Perfil | null): Resultado {
-    for (const t of r.conv.turnos) {
-        if (!t.salidas.length && !r.fallas.some((f) => f.includes('no contestó'))) {
-            r.fallas.push(`el bot no contestó a «${t.entrada.slice(0, 50)}»${t.nota ? ` (${t.nota})` : ''}`);
+    let silencioAnotado = false;
+    for (const t of r.conv.turnos.slice(r.conv.heredados)) {
+        if (t.sistema) continue;
+        if (!paraLaFamilia(t.salidas).length && !t.silencioOk) {
+            const f = `el bot no le contestó nada a la familia ante «${t.entrada.slice(0, 50)}»${t.nota ? ` (${t.nota})` : ''}`;
+            if (t.fase === 'despues') r.esperadas.push(`${SILENCIO_POST}: ${f}`);
+            else if (!silencioAnotado) { r.fallas.push(f); silencioAnotado = true; }
         }
-        for (const s of t.salidas) for (const f of revisarMensaje(s, escuela)) r.fallas.push(f);
+        for (const s of paraLaFamilia(t.salidas)) for (const f of revisarMensaje(s, escuela)) r.fallas.push(f);
     }
-    if (perfil && (r.desenlace === 'persona' || r.desenlace === 'sin_horarios') && hayGrupoPara(escuela, perfil, false)) {
-        r.fallas.push(r.desenlace === 'sin_horarios'
-            ? 'hay grupo para este perfil pero no tiene franjas abiertas'
-            : 'pasó a una persona aunque hay un grupo que recibe este perfil');
+    if (perfil && !r.personaEsperada && r.desenlace === 'persona' && hayGrupoPara(escuela, perfil, false)) {
+        r.fallas.push('pasó a una persona aunque hay un grupo que recibe este perfil');
+    }
+    if (perfil && !r.sinHorariosEsperado && r.desenlace === 'sin_horarios' && hayGrupoPara(escuela, perfil, false)) {
+        r.fallas.push('hay grupo para este perfil pero no tiene franjas abiertas');
     }
     r.fallas = [...new Set(r.fallas)];
+    r.esperadas = [...new Set(r.esperadas)];
+    r.limitaciones = [...new Set(r.limitaciones)];
+    r.avisos = [...new Set(r.avisos)];
     return r;
 }
 
-// ─── Matriz ──────────────────────────────────────────────────────────────────
+// ─── Perfiles que sirven a cada escenario (de los datos de la escuela) ───────
 
 const NOMBRES_F = ['Mariana Gómez Ruiz', 'Valentina Rojas', 'Sara Lucía Pérez', 'Isabella Torres'];
 const NOMBRES_M = ['Santiago Pérez Rojas', 'Samuel Díaz', 'Juan José Martínez', 'Tomás Herrera'];
+const ANIO = new Date().getFullYear();
+const nombreDe = (genero: 'f' | 'm', k: number) => (genero === 'f' ? NOMBRES_F : NOMBRES_M)[k % 4];
+const generoTexto = (g: 'f' | 'm') => (g === 'f' ? 'mujer' : 'hombre');
+const tituloPerfil = (p: Perfil) => `${sinEmojis(p.sede?.titulo ?? 'sin sede')} · ${p.anio} · ${generoTexto(p.genero)}`;
 
-function aniosDeLaMatriz(escuela: Escuela): number[] {
-    if (ANIOS?.length) return ANIOS;
-    const hoy = new Date().getFullYear();
-    const bordes = escuela.rangos.flatMap((x) => [x.anioMin, x.anioMax]).filter((a): a is number => typeof a === 'number');
-    const desde = Math.max(hoy - 60, Math.min(...bordes, hoy - 18) - 1);
-    const hasta = Math.min(hoy - 3, Math.max(...bordes, hoy - 6) + 1);
-    const anios = new Set<number>();
-    for (let a = desde; a <= hasta; a++) if (a >= hoy - 25) anios.add(a);
-    anios.add(hoy - 30); // un adulto
-    return [...anios].sort();
-}
+const tieneFranjas = (e: Escuela, teamId: string) =>
+    [...e.franjas.values()].some((f) => f.team_id === teamId && Number(f.max_capacity ?? 0) > Number(f.reserved_count ?? 0)
+        && (!e.diasSemana || e.diasSemana.includes(diaDeLaSemana(f.slot_date))));
 
-async function correrMatriz(escuela: Escuela, n0: number): Promise<Resultado[]> {
-    const resultados: Resultado[] = [];
-    let n = n0;
-    for (const sede of escuela.sedes) {
-        for (const anio of aniosDeLaMatriz(escuela)) {
-            for (const genero of ['f', 'm'] as const) {
-                n++;
-                const nombres = genero === 'f' ? NOMBRES_F : NOMBRES_M;
-                const perfil: Perfil = { sede, anio, genero, trayectoria: n % 3, nombre: nombres[n % nombres.length] };
-                const titulo = `${sinEmojis(sede.titulo)} · ${anio} · ${genero === 'f' ? 'mujer' : 'hombre'}`;
-                const conv = new Conversacion(titulo, escuela, n);
-                const r = nuevoResultado(titulo, conv);
-                await conv.decir('Hola, quiero información para entrenar voleibol');
-                await seguir(conv, escuela, perfil, r);
-                resultados.push(cerrar(r, escuela, perfil));
-                process.stdout.write(r.fallas.length ? 'F' : '.');
-            }
-        }
+const grupoEsperado = (e: Escuela, p: Perfil) => elegirGrupoEmbudo(e.rangos, { branchId: p.sede?.branchId ?? null, anio: p.anio, genero: p.genero });
+
+/** Hasta `k` perfiles que caen en grupos DISTINTOS con franjas (alternando sede y sexo). */
+function perfilesConGrupo(e: Escuela, k: number, o: { sede?: BotonSede | null; genero?: 'f' | 'm' } = {}): Perfil[] {
+    const anios = [ANIO - 14, ANIO - 10, ANIO - 17, ANIO - 30, ANIO - 12, ANIO - 8, ANIO - 16, ANIO - 19];
+    const sedes = o.sede !== undefined ? [o.sede] : e.sedes.length ? e.sedes : [null];
+    const generos: ('f' | 'm')[] = o.genero ? [o.genero] : ['f', 'm'];
+    const salida: Perfil[] = [];
+    const equipos = new Set<string>();
+    for (const anio of anios) for (const genero of generos) for (const sede of sedes) {
+        const p: Perfil = { sede, anio, genero, trayectoria: salida.length % 3, nombre: nombreDe(genero, salida.length) };
+        const g = grupoEsperado(e, p).principal;
+        if (!g || equipos.has(g.teamId) || !tieneFranjas(e, g.teamId)) continue;
+        equipos.add(g.teamId);
+        salida.push(p);
+        if (salida.length >= k) return salida;
     }
-    process.stdout.write('\n');
-    return resultados;
+    return salida;
 }
 
-// ─── Guiones (texto libre) ───────────────────────────────────────────────────
-
-interface Guion {
-    titulo: string;
-    correr: (c: Conversacion, e: Escuela, r: Resultado) => Promise<Perfil | null>;
+/** Sin grupo en su sede, con grupo (y franjas) en otra sede con botón. */
+function perfilSinGrupoEnSede(e: Escuela, sede?: BotonSede): Perfil | null {
+    const ids = new Set(e.sedes.map((s) => s.branchId));
+    for (let anio = ANIO - 3; anio >= ANIO - 25; anio--) for (const s of sede ? [sede] : e.sedes) for (const genero of ['f', 'm'] as const) {
+        const p: Perfil = { sede: s, anio, genero, trayectoria: 0, nombre: nombreDe(genero, anio) };
+        const el = grupoEsperado(e, p);
+        if (!el.principal && el.otraSede?.branchId && ids.has(el.otraSede.branchId) && tieneFranjas(e, el.otraSede.teamId)) return p;
+    }
+    return null;
 }
+
+/** Un menor sin grupo en NINGUNA sede. */
+function perfilSinGrupo(e: Escuela): Perfil | null {
+    for (let anio = ANIO - 4; anio >= ANIO - 8; anio--) {
+        const p: Perfil = { sede: e.sedes[0] ?? null, anio, genero: 'f', trayectoria: 0, nombre: 'Sara Lucía Pérez' };
+        if (!hayGrupoPara(e, p, false)) return p;
+    }
+    return null;
+}
+
+// ─── Utilidades de los escenarios ────────────────────────────────────────────
 
 const debe = (r: Resultado, ok: boolean, falla: string) => { if (!ok) r.fallas.push(falla); };
 const preguntoClave = (texto: string, e: Escuela, clave: string) => {
@@ -360,14 +639,113 @@ const preguntoClave = (texto: string, e: Escuela, clave: string) => {
     return !!p && texto.includes(ultimaLinea(p.texto));
 };
 const claveDe = (e: Escuela, tipo: PreguntaProspecto['tipo']) => e.preguntas.find((p) => p.tipo === tipo)?.clave ?? '';
+const noAplica = (r: Resultado, porque: string): null => { r.desenlace = 'no_aplica'; r.avisos.push(`no aplica a esta escuela: ${porque}`); return null; };
+const huboPaso = (c: Conversacion, step: string) => c.salidas().some((s) => s.step === step);
+const huboOpcion = (c: Conversacion, pred: (id: string) => boolean) => c.salidas().some((s) => (s.opciones ?? []).some((o) => pred(o.id)));
 
 function perfilDe(e: Escuela, o: Partial<Perfil> = {}): Perfil {
-    return { sede: e.sedes.at(-1)!, anio: new Date().getFullYear() - 14, genero: 'f', trayectoria: 1, nombre: 'Mariana Gómez Ruiz', ...o };
+    return { sede: e.sedes.at(-1) ?? null, anio: ANIO - 14, genero: 'f', trayectoria: 1, nombre: 'Mariana Gómez Ruiz', ...o };
 }
 
-async function hastaPregunta(c: Conversacion, e: Escuela, sede: BotonSede): Promise<void> {
+async function hastaPregunta(c: Conversacion, e: Escuela, sede: BotonSede | null): Promise<void> {
     await c.decir('Hola');
-    await c.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${sede.branchId}`);
+    if (sede) await c.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${sede.branchId}`);
+}
+
+/** Como `seguir`, pero se detiene cuando aparece la opción buscada (sin tocarla). */
+async function seguirHasta(c: Conversacion, e: Escuela, perfil: Perfil, parar: (o: { id: string }) => boolean): Promise<boolean> {
+    for (let i = 0; i < MAX_TURNOS; i++) {
+        if (c.opciones().some(parar)) return true;
+        const antes = c.turnos.length;
+        const ops = c.opciones();
+        if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE)) && perfil.sede) await c.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${perfil.sede!.branchId}`);
+        else if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA))) await c.tocar((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
+        else {
+            const q = preguntaEn(c.ultimoTexto(), e.preguntas);
+            if (!q) return false;
+            await contestar(c, q.p, q.detalle, perfil);
+        }
+        if (c.turnos.length === antes) return false;
+    }
+    return false;
+}
+
+/** Corre `fn` sobre cada elemento con hasta PARALELO a la vez; conserva el orden. */
+async function enParalelo<T, R>(items: T[], fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+    const salida: R[] = new Array(items.length);
+    let k = 0;
+    await Promise.all(Array.from({ length: Math.min(PARALELO, items.length) }, async () => {
+        while (k < items.length) {
+            const i = k++;
+            salida[i] = await fn(items[i], i);
+        }
+    }));
+    return salida;
+}
+
+const progreso = (r: Resultado) => process.stdout.write(r.fallas.length ? 'F' : r.esperadas.length ? 'e' : r.limitaciones.length ? 'l' : '.');
+
+async function protegido(r: Resultado, fn: () => Promise<void>): Promise<void> {
+    try {
+        await fn();
+    } catch (e: any) {
+        r.fallas.push(`la batería falló: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+}
+
+// ─── Matriz ──────────────────────────────────────────────────────────────────
+
+function aniosDeLaMatriz(escuela: Escuela): number[] {
+    if (ANIOS?.length) return ANIOS;
+    const bordes = escuela.rangos.flatMap((x) => [x.anioMin, x.anioMax]).filter((a): a is number => typeof a === 'number');
+    const desde = Math.max(ANIO - 60, Math.min(...bordes, ANIO - 18) - 1);
+    const hasta = Math.min(ANIO - 3, Math.max(...bordes, ANIO - 6) + 1);
+    const anios = new Set<number>();
+    for (let a = desde; a <= hasta; a++) if (a >= ANIO - 25) anios.add(a);
+    anios.add(ANIO - 30); // un adulto
+    return [...anios].sort();
+}
+
+async function correrMatriz(escuela: Escuela): Promise<Resultado[]> {
+    const perfiles: Perfil[] = [];
+    for (const sede of escuela.sedes) for (const anio of aniosDeLaMatriz(escuela)) for (const genero of ['f', 'm'] as const) {
+        perfiles.push({ sede, anio, genero, trayectoria: perfiles.length % 3, nombre: nombreDe(genero, perfiles.length) });
+    }
+    const rs = await enParalelo(perfiles, async (perfil) => {
+        const conv = new Conversacion(tituloPerfil(perfil), escuela.id, nuevoN());
+        const r = nuevoResultado(conv.titulo, conv, 'matriz');
+        await protegido(r, async () => {
+            await conv.decir('Hola, quiero información para entrenar voleibol');
+            await seguir(conv, escuela, perfil, r);
+        });
+        cerrar(r, escuela, perfil);
+        progreso(r);
+        return r;
+    });
+    process.stdout.write('\n');
+    return rs;
+}
+
+// ─── Guiones (texto libre y caminos sueltos) ─────────────────────────────────
+
+interface Guion {
+    titulo: string;
+    /** Devuelve el perfil para que el interesado automático termine la conversación, o null si ya terminó. */
+    correr: (c: Conversacion, e: Escuela, r: Resultado) => Promise<Perfil | null>;
+    /** Revisión al final (después de que el interesado automático terminó). */
+    verificar?: (c: Conversacion, e: Escuela, r: Resultado) => void;
+}
+
+/** Hasta que ofrezca «Ver Sede X»; null si no aplica o no llegó. */
+async function hastaOtraSede(c: Conversacion, e: Escuela, r: Resultado): Promise<Perfil | null> {
+    const perfil = perfilSinGrupoEnSede(e);
+    if (!perfil) return noAplica(r, 'ningún perfil se queda sin grupo en una sede y lo tiene en otra');
+    await c.decir('Hola');
+    const ok = await seguirHasta(c, e, perfil, (o) => o.id.startsWith(BOTON_EMBUDO.OTRA_SEDE));
+    if (!ok) { r.fallas.push(`${tituloPerfil(perfil)}: no ofreció la otra sede`); return null; }
+    debe(r, /no tengo un grupo/i.test(c.ultimoTexto()), 'no explicó que en esa sede no hay grupo');
+    debe(r, c.opciones().some((o) => o.id === BOTON_EMBUDO.PERSONA), 'falta el botón «Hablar con alguien»');
+    return perfil;
 }
 
 const GUIONES: Guion[] = [
@@ -383,7 +761,7 @@ const GUIONES: Guion[] = [
     {
         titulo: 'varias respuestas en un mensaje (nombre, fecha y posición)',
         correr: async (c, e, r) => {
-            const perfil = perfilDe(e, { anio: new Date().getFullYear() - 17, genero: 'm', nombre: 'Santiago Pérez Rojas' });
+            const perfil = perfilDe(e, { anio: ANIO - 17, genero: 'm', nombre: 'Santiago Pérez Rojas' });
             await hastaPregunta(c, e, perfil.sede);
             const lista = e.preguntas.find((p) => p.tipo === 'lista');
             const extra = lista?.opciones?.[3]?.titulo?.toLowerCase() ?? '';
@@ -394,10 +772,27 @@ const GUIONES: Guion[] = [
             return perfil;
         },
     },
-    ...['14 de marzo de 2012', '2012-03-14', '14-03-2012', 'marzo 14 del 2012'].map((fecha): Guion => ({
+    {
+        titulo: 'varias respuestas en OTRO orden («fecha, sexo, nombre, posición»)',
+        correr: async (c, e, r) => {
+            const lista = e.preguntas.find((p) => p.tipo === 'lista');
+            const sexo = e.preguntas.find((p) => p.clave === 'sexo');
+            const perfil = perfilDe(e, { anio: ANIO - 14, genero: 'f', nombre: 'Valentina Rojas' });
+            await hastaPregunta(c, e, perfil.sede);
+            const posicion = lista?.opciones?.[3]?.titulo?.toLowerCase() ?? '';
+            await c.decir(`${perfil.anio}-05-20, mujer, Valentina Rojas${posicion ? `, ${posicion}` : ''}`);
+            const t = c.ultimoTexto();
+            debe(r, /Valentina/.test(t), 'no tomó «Valentina Rojas» como el nombre');
+            debe(r, !preguntoClave(t, e, claveDe(e, 'fecha')), 'volvió a preguntar la fecha que ya le dieron');
+            if (sexo) debe(r, !preguntoClave(t, e, sexo.clave), 'volvió a preguntar el sexo que ya le dieron');
+            if (lista) debe(r, !preguntoClave(t, e, lista.clave), `volvió a preguntar «${lista.clave}» que ya le dieron`);
+            return perfil;
+        },
+    },
+    ...[`14 de marzo de ${ANIO - 14}`, `${ANIO - 14}-03-14`, `14-03-${ANIO - 14}`, `marzo 14 del ${ANIO - 14}`].map((fecha): Guion => ({
         titulo: `fecha escrita «${fecha}»`,
         correr: async (c, e, r) => {
-            const perfil = perfilDe(e, { anio: 2012 });
+            const perfil = perfilDe(e, { anio: ANIO - 14 });
             await hastaPregunta(c, e, perfil.sede);
             await c.decir(perfil.nombre);
             await c.decir(fecha);
@@ -406,14 +801,129 @@ const GUIONES: Guion[] = [
         },
     })),
     {
+        titulo: 'adulto escribe solo el año («nació en …»)',
+        correr: async (c, e, r) => {
+            const perfil = perfilDe(e, { anio: ANIO - 36, genero: 'm', nombre: 'Juan José Martínez' });
+            await hastaPregunta(c, e, perfil.sede);
+            await c.decir(perfil.nombre);
+            await c.decir(`nació en ${perfil.anio}`);
+            debe(r, !preguntoClave(c.ultimoTexto(), e, claveDe(e, 'fecha')), `no aceptó solo el año (${perfil.anio})`);
+            return perfil;
+        },
+        verificar: (c, e, r) => debe(r, r.desenlace === 'pago' || r.desenlace === 'agendada', `el adulto terminó en «${r.desenlace}»`),
+    },
+    {
         titulo: 'escribe la sede en vez de tocar el botón',
         correr: async (c, e, r) => {
-            const sede = e.sedes.at(-1)!;
+            const sede = e.sedes.at(-1);
+            if (!sede) return noAplica(r, 'sin botones de sede');
             await c.decir('Hola');
             const palabra = normalizar(sinEmojis(sede.titulo)).split(' ').at(-1)!;
             await c.decir(palabra);
             debe(r, preguntoClave(c.ultimoTexto(), e, e.preguntas[0].clave), `no tomó «${palabra}» como la sede`);
             return perfilDe(e, { sede });
+        },
+    },
+    {
+        titulo: 'sede escrita mal dos veces → una persona',
+        correr: async (c, e, r) => {
+            if (!e.sedes.length) return noAplica(r, 'sin botones de sede');
+            await c.decir('Hola');
+            await c.decir('en el centro');
+            debe(r, c.opciones().some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE)), 'tras la primera sede que no entendió no volvió a mostrar las sedes');
+            await c.decir('cerca de mi casa');
+            r.personaEsperada = true;
+            r.desenlace = desenlaceDe(c) ?? 'atascado';
+            debe(r, r.desenlace === 'persona', 'tras dos sedes que no entendió no pasó a una persona');
+            return null;
+        },
+    },
+    {
+        titulo: 'sede sin grupo → «Ver Sede X» (botón) → sigue en la otra sede',
+        correr: async (c, e, r) => {
+            const perfil = await hastaOtraSede(c, e, r);
+            return perfil; // el interesado automático toca «Ver Sede X» y revisa que el grupo sea de esa sede
+        },
+        verificar: (c, e, r) => {
+            if (r.desenlace === 'no_aplica') return;
+            debe(r, !!r.otraSede, 'no llegó a tocar «Ver Sede X»');
+            debe(r, r.desenlace === 'pago', `después de la otra sede terminó en «${r.desenlace}»`);
+        },
+    },
+    {
+        titulo: 'sede sin grupo → contesta «sí» por texto a la otra sede',
+        correr: async (c, e, r) => {
+            const perfil = await hastaOtraSede(c, e, r);
+            if (!perfil) return null;
+            const otra = c.opciones().find((o) => o.id.startsWith(BOTON_EMBUDO.OTRA_SEDE))!;
+            await c.decir('sí, de una');
+            const franjas = c.opciones().some((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
+            debe(r, franjas, 'no entendió el «sí» a la otra sede (no mostró horarios)');
+            if (!franjas) return null;
+            r.otraSede = otra.id.slice(BOTON_EMBUDO.OTRA_SEDE.length);
+            return perfil;
+        },
+    },
+    {
+        titulo: 'sede sin grupo → toca «Hablar con alguien»',
+        correr: async (c, e, r) => {
+            const perfil = await hastaOtraSede(c, e, r);
+            if (!perfil) return null;
+            await c.tocar((o) => o.id === BOTON_EMBUDO.PERSONA);
+            r.personaEsperada = true;
+            r.desenlace = desenlaceDe(c) ?? 'atascado';
+            debe(r, r.desenlace === 'persona', '«Hablar con alguien» no pasó a una persona');
+            return null;
+        },
+    },
+    {
+        titulo: 'menor sin grupo en ninguna sede → una persona («no encontré un grupo»)',
+        correr: async (c, e, r) => {
+            const perfil = perfilSinGrupo(e);
+            if (!perfil) return noAplica(r, 'todo año de 4 a 8 años tiene grupo');
+            r.titulo = `${r.titulo} · ${perfil.anio}`;
+            await c.decir('Hola');
+            return perfil;
+        },
+        verificar: (c, e, r) => {
+            if (r.desenlace === 'no_aplica') return;
+            debe(r, r.desenlace === 'persona', `un menor sin grupo terminó en «${r.desenlace}»`);
+            debe(r, /no encontr[eé] un grupo/i.test(c.textos()), 'no le dijo que no hay un grupo para su año');
+            debe(r, !huboOpcion(c, (id) => id.startsWith(BOTON_EMBUDO.FRANJA)), 'le ofreció horarios a un menor sin grupo');
+        },
+    },
+    ...[{ que: 'el nombre', k: 2, escribir: (t: string) => normalizar(sinEmojis(t)).split(' ')[0] }, { que: 'el número', k: 1, escribir: (_t: string) => '2' }]
+        .map(({ que, k, escribir }): Guion => ({
+            titulo: `lista (posición) contestada escribiendo ${que} en vez de tocar la fila`,
+            correr: async (c, e, r) => {
+                const lista = e.preguntas.find((p) => p.tipo === 'lista');
+                if (!lista?.opciones?.[k]) return noAplica(r, 'sin pregunta de lista');
+                const perfil = perfilDe(e, { sede: e.sedes[0] ?? null, anio: ANIO - 12 });
+                await c.decir('Hola');
+                const llego = await seguirHasta(c, e, perfil, (o) => o.id.startsWith(`${BOTON_EMBUDO.OPCION}${lista.clave}:`));
+                if (!llego) { r.fallas.push(`no llegó a la pregunta «${lista.clave}»`); return null; }
+                const opcion = lista.opciones[k].titulo;
+                await c.decir(escribir(opcion));
+                debe(r, !preguntoClave(c.ultimoTexto(), e, lista.clave), `no entendió «${escribir(opcion)}» como «${opcion}»`);
+                debe(r, c.datosEmbudo()?.respuestas?.[lista.clave] === opcion,
+                    `guardó «${c.datosEmbudo()?.respuestas?.[lista.clave] ?? '—'}» y escribió «${escribir(opcion)}» (= «${opcion}»)`);
+                return perfil;
+            },
+        })),
+    {
+        titulo: 'trayectoria «Club y torneos» → pregunta en qué clubes y lo guarda',
+        correr: async (c, e, r) => {
+            const p = e.preguntas.find((x) => x.detalle && x.opciones?.length);
+            const j = p ? (p.opciones ?? []).findIndex((o) => p.detalle!.si.some((s) => normalizar(s) === normalizar(o.titulo))) : -1;
+            if (!p || j < 0) return noAplica(r, 'ninguna pregunta tiene detalle');
+            await c.decir('Hola');
+            return perfilDe(e, { sede: e.sedes[0] ?? null, anio: ANIO - 16, genero: 'm', trayectoria: j, nombre: 'Tomás Herrera' });
+        },
+        verificar: (c, e, r) => {
+            if (r.desenlace === 'no_aplica') return;
+            const p = e.preguntas.find((x) => x.detalle)!;
+            debe(r, c.textos().includes(ultimaLinea(p.detalle!.texto)), 'no preguntó el detalle de la trayectoria');
+            debe(r, !!c.datosEmbudo()?.respuestas?.[p.detalle!.clave], `no guardó «${p.detalle!.clave}»`);
         },
     },
     {
@@ -431,10 +941,11 @@ const GUIONES: Guion[] = [
     {
         titulo: 'pide una persona a mitad del embudo',
         correr: async (c, e, r) => {
-            await hastaPregunta(c, e, e.sedes[0]);
+            await hastaPregunta(c, e, e.sedes[0] ?? null);
             await c.decir('Mariana Gómez');
             await c.decir('prefiero hablar con una persona por favor');
-            debe(r, /buz[oó]n|persona|te escrib/i.test(c.ultimoTexto()), 'no pasó a una persona cuando la pidieron');
+            debe(r, /persona|te escrib/i.test(c.ultimoTexto()) || desenlaceDe(c) === 'persona', 'no pasó a una persona cuando la pidieron');
+            r.personaEsperada = true;
             r.desenlace = 'persona';
             return null;
         },
@@ -442,11 +953,12 @@ const GUIONES: Guion[] = [
     {
         titulo: 'fecha que no se entiende dos veces → persona',
         correr: async (c, e, r) => {
-            await hastaPregunta(c, e, e.sedes[0]);
+            await hastaPregunta(c, e, e.sedes[0] ?? null);
             await c.decir('Mariana Gómez');
             await c.decir('no me acuerdo');
             await c.decir('ni idea la verdad');
-            debe(r, /buz[oó]n|persona|te escrib/i.test(c.ultimoTexto()), 'tras dos respuestas sin fecha no pasó a una persona');
+            debe(r, desenlaceDe(c) === 'persona', 'tras dos respuestas sin fecha no pasó a una persona');
+            r.personaEsperada = true;
             r.desenlace = 'persona';
             return null;
         },
@@ -462,12 +974,46 @@ const GUIONES: Guion[] = [
         },
     },
     {
+        titulo: 'pregunta sin «?» en vez del nombre («cuanto vale la mensualidad»)',
+        correr: async (c, e, r) => {
+            const perfil = perfilDe(e, { sede: e.sedes[0] ?? null });
+            await hastaPregunta(c, e, perfil.sede);
+            await c.decir('cuanto vale la mensualidad');
+            const t = c.ultimoTexto();
+            const nombre = String(c.datosEmbudo()?.nombre ?? '');
+            debe(r, !/vale|mensualidad/i.test(nombre) && !/mucho gusto, cuanto/i.test(t), `tomó la pregunta como el nombre del deportista («${nombre}»)`);
+            debe(r, /\$\s?\d/.test(t), 'no contestó la pregunta de la mensualidad');
+            // La respuesta del modelo va con la nota del buzón en el mismo turno: el registro
+            // tiene que seguir donde estaba (el nombre), no darse por cerrado.
+            await c.decir(perfil.nombre);
+            debe(r, /mucho gusto/i.test(c.ultimoTexto()), 'después de la pregunta no retomó el registro en el nombre');
+            return perfil;
+        },
+    },
+    {
+        titulo: 'pregunta sin «?» al elegir horario («cuanto vale la mensualidad»)',
+        correr: async (c, e, r) => {
+            const perfil = perfilDe(e, { sede: e.sedes[0] ?? null, anio: ANIO - 13 });
+            await c.decir('Hola');
+            const llego = await seguirHasta(c, e, perfil, (o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
+            if (!llego) { r.fallas.push('no llegó a los horarios'); return null; }
+            await c.decir('cuanto vale la mensualidad');
+            const t = c.ultimoTexto();
+            debe(r, !/elige uno de los horarios/i.test(t), 'tomó la pregunta como un horario mal elegido («Elige uno de los horarios…») y gastó un intento');
+            debe(r, /\$\s?\d/.test(t), 'no contestó la pregunta de la mensualidad');
+            if (!c.opciones().some((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA))) {
+                // Sin la lista a mano, el interesado vuelve a pedir los horarios.
+                await c.decir('ok, me muestras los horarios otra vez');
+            }
+            return perfil;
+        },
+    },
+    {
         titulo: 'dice que no al consentimiento: igual recibe cómo pagar',
         correr: async (c, e, r) => {
-            const perfil = perfilDe(e, { sede: e.sedes[0], anio: new Date().getFullYear() - 13 });
+            const perfil = perfilDe(e, { sede: e.sedes[0] ?? null, anio: ANIO - 13 });
             await c.decir('Hola');
-            const tmp = nuevoResultado('', c);
-            await seguirHasta(c, e, perfil, tmp, (o) => o.id === BOTON_EMBUDO.OPTIN_SI);
+            await seguirHasta(c, e, perfil, (o) => o.id === BOTON_EMBUDO.OPTIN_SI);
             const no = await c.tocar((o) => o.id === BOTON_EMBUDO.OPTIN_NO);
             if (!no) { r.fallas.push('nunca llegó al consentimiento'); return null; }
             debe(r, /comprobante/i.test(c.ultimoTexto()), 'tras «No, gracias» no le dijo cómo pagar');
@@ -477,92 +1023,725 @@ const GUIONES: Guion[] = [
     },
 ];
 
-/** Como `seguir`, pero se detiene cuando aparece la opción buscada (sin tocarla). */
-async function seguirHasta(c: Conversacion, e: Escuela, perfil: Perfil, r: Resultado, parar: (o: { id: string }) => boolean): Promise<void> {
-    for (let i = 0; i < MAX_TURNOS; i++) {
-        if (c.opciones().some(parar)) return;
-        const antes = c.turnos.length;
-        const ops = c.opciones();
-        if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE))) await c.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${perfil.sede.branchId}`);
-        else if (ops.some((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA))) await c.tocar((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
-        else {
-            const q = preguntaEn(c.ultimoTexto(), e.preguntas);
-            if (!q) return;
-            await contestar(c, q.p, q.detalle, perfil);
-        }
-        if (c.turnos.length === antes) return;
+async function correrGuiones(escuela: Escuela): Promise<Resultado[]> {
+    const rs = await enParalelo(GUIONES, async (g) => {
+        const conv = new Conversacion(g.titulo, escuela.id, nuevoN());
+        const r = nuevoResultado(g.titulo, conv, 'guiones');
+        let perfil: Perfil | null = null;
+        await protegido(r, async () => {
+            perfil = await g.correr(conv, escuela, r);
+            // Lo que el guion dejó a medias lo termina el interesado automático.
+            if (perfil && !r.fallas.length) await seguir(conv, escuela, perfil, r);
+            if (r.desenlace !== 'no_aplica') g.verificar?.(conv, escuela, r);
+        });
+        cerrar(r, escuela, perfil);
+        progreso(r);
+        return r;
+    });
+    process.stdout.write('\n');
+    return rs;
+}
+
+// ─── Después del embudo ──────────────────────────────────────────────────────
+
+/** Dónde está la familia cuando escribe. */
+type Momento = 'esperando_pago' | 'pagada' | 'agendada_embudo';
+
+interface BaseDespues {
+    momento: Momento;
+    datos: Record<string, any>;
+    /** Número de la vía principal de la sede de su clase («201») y el de las otras sedes («152»). */
+    via?: { suya: string; otras: string[] } | null;
+}
+
+/** «AV. El Polo, Cl. 201 #67-12» → «201». Pura. */
+function viaDe(direccion: string | null | undefined): string | null {
+    return String(direccion ?? '').match(/\b(?:cl|cll|calle|ac|av|avenida|cra|kr|carrera|dg|diagonal|tv|transversal)\b\.?\s*(\d{2,3})/i)?.[1] ?? null;
+}
+
+const mencionaNumero = (texto: string, n: string) => new RegExp(`(^|\\D)${n}(\\D|$)`).test(texto);
+
+interface PostEmbudo {
+    clave: string;
+    titulo: string;
+    correr: (c: Conversacion, e: Escuela, r: Resultado, b: BaseDespues) => Promise<void>;
+}
+
+/** Que no vuelva a arrancar el embudo (bienvenida, sedes, primera pregunta). */
+function noReinicia(c: Conversacion, e: Escuela, r: Resultado): void {
+    debe(r, !c.opciones().some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE)) && !preguntoClave(c.ultimoTexto(), e, e.preguntas[0]?.clave ?? ''),
+        'volvió a empezar el embudo (sedes o primera pregunta)');
+}
+
+/** La dirección que dio es la de la sede de SU clase, no la de otra sede. */
+function revisarSede(c: Conversacion, r: Resultado, b: BaseDespues): void {
+    if (!c.hablo() || !b.via) return;
+    const t = c.ultimoTexto();
+    const otra = b.via.otras.find((n) => mencionaNumero(t, n));
+    if (otra && !mencionaNumero(t, b.via.suya)) {
+        r.fallas.push(`le dio la dirección de otra sede (vía ${otra}) y su clase es en la sede de la vía ${b.via.suya}`);
     }
 }
 
-async function correrGuiones(escuela: Escuela, n0: number): Promise<Resultado[]> {
-    const resultados: Resultado[] = [];
-    let n = n0;
-    for (const g of GUIONES) {
-        const conv = new Conversacion(g.titulo, escuela, ++n);
-        const r = nuevoResultado(g.titulo, conv);
-        const perfil = await g.correr(conv, escuela, r);
-        // Lo que el guion dejó a medias lo termina el interesado automático.
-        if (perfil && !r.fallas.length) await seguir(conv, escuela, perfil, r);
-        resultados.push(cerrar(r, escuela, perfil));
-        process.stdout.write(r.fallas.length ? 'F' : '.');
+/** Si contestó (el silencio lo anota `cerrar`), que diga lo que se espera. */
+function responde(c: Conversacion, e: Escuela, r: Resultado, re: RegExp | null, falla: string): void {
+    if (!c.hablo()) return;
+    if (re) debe(r, re.test(c.ultimoTexto()), falla);
+    noReinicia(c, e, r);
+}
+
+const DIRECCION = /\b(cl|calle|av|avenida|ac|carrera|cra|kr|diagonal|dg|transversal|tv)\b\.?\s*\d|maps\.app|goo\.gl|google\.com\/maps|direcci[oó]n/i;
+const PIDE_PAGO = (c: Conversacion) => c.salidas().some((s) => s.step === PASO_EMBUDO.PAGO) || /env[ií]a(me)?[^.\n]{0,40}comprobante/i.test(c.ultimoTexto());
+
+/** «Cambiar horario» (escrito o botón): lista del MISMO grupo, sin la franja que ya tiene; al elegir, según el momento. */
+function cambio(texto: string, boton: string | null): PostEmbudo['correr'] {
+    return async (c, e, r, b) => {
+        await c.decir(texto, boton);
+        if (!c.hablo()) return;
+        const filas = c.opciones().filter((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA));
+        if (!filas.length) {
+            const otras = c.opciones();
+            r.fallas.push(`no le ofreció los horarios de su grupo para cambiar`
+                + (otras.length ? `: mostró otro flujo con ${otras.length} opciones (p. ej. «${otras[0].title}${otras[0].descripcion ? ` · ${otras[0].descripcion}` : ''}»)` : '')
+                + (b.momento === 'pagada' ? ' — el aviso de B4 no deja el estado del embudo en el payload' : ''));
+            noReinicia(c, e, r);
+            return;
+        }
+        revisarFranjas(c, e, b.datos.teamId, r);
+        debe(r, !filas.some((o) => o.id === `${BOTON_EMBUDO.FRANJA}${b.datos.slotId}`), 'ofreció la misma franja que ya tiene');
+        if (b.momento === 'esperando_pago') {
+            debe(r, !/no tienes que pagar de nuevo/i.test(c.ultimoTexto()), 'ofrece el cambio con «No tienes que pagar de nuevo» y todavía no ha pagado');
+        }
+        if (b.momento === 'agendada_embudo' && /no tienes que pagar de nuevo/i.test(c.ultimoTexto())) {
+            r.avisos.push('ofrece el cambio con «No tienes que pagar de nuevo» y la clase no tiene valor (el texto de ofrecerCambio no mira el valor)');
+        }
+        await c.tocar((o) => o.id.startsWith(BOTON_EMBUDO.FRANJA) && o.id !== `${BOTON_EMBUDO.FRANJA}${b.datos.slotId}`);
+        if (!c.hablo()) return;
+        const t = c.ultimoTexto();
+        if (b.momento === 'esperando_pago') {
+            debe(r, PIDE_PAGO(c), 'tras cambiar de horario (sin haber pagado) no le volvió a dar cómo pagar');
+        } else if (PIDE_PAGO(c)) {
+            if (b.momento === 'pagada') {
+                r.limitaciones.push('al elegir el nuevo horario vuelve a pedir el pago: `cupoSimulado` no sabe que el lead ya pagó (la RPC tomar_cupo_clase_prueba agendaría sin cobrar)');
+            } else r.fallas.push('tras cambiar el horario de una clase sin valor pidió pago');
+        } else {
+            debe(r, /cambi[eé] el horario|qued[oó] agendada/i.test(t), 'tras elegir el nuevo horario no confirmó el cambio');
+        }
+    };
+}
+
+const POST: PostEmbudo[] = [
+    {
+        clave: 'matricula', titulo: '«Y para matricularla qué hago?»',
+        correr: async (c, e, r) => { await c.decir('Y para matricularla qué hago?'); responde(c, e, r, /matr[ií]cul|inscrib|inscripci/i, 'no le explicó cómo matricularla'); },
+    },
+    {
+        clave: 'matricular', titulo: '«quiero matricularla»',
+        correr: async (c, e, r) => { await c.decir('quiero matricularla'); responde(c, e, r, /matr[ií]cul|inscrib|inscripci/i, 'no le respondió sobre la matrícula'); },
+    },
+    {
+        clave: 'llevar', titulo: '«qué debo llevar»',
+        correr: async (c, e, r) => { await c.decir('qué debo llevar'); responde(c, e, r, /ropa|agua|tenis|camiseta|hidrat|uniforme|pantaloneta/i, 'no le dijo qué llevar'); },
+    },
+    {
+        clave: 'donde', titulo: '«dónde queda? cómo llego»',
+        correr: async (c, e, r, b) => {
+            await c.decir('dónde queda? cómo llego');
+            responde(c, e, r, DIRECCION, 'no le dio la dirección ni el mapa');
+            revisarSede(c, r, b);
+        },
+    },
+    {
+        clave: 'mensualidad', titulo: '«cuánto vale la mensualidad»',
+        correr: async (c, e, r) => { await c.decir('cuánto vale la mensualidad'); responde(c, e, r, /\$\s?\d{1,3}([.,]\d{3})+/, 'no le dio el valor de la mensualidad'); },
+    },
+    {
+        clave: 'ya_pague', titulo: '«ya pagué» (sin foto)',
+        correr: async (c, e, r, b) => {
+            await c.decir('ya pagué');
+            responde(c, e, r, b.momento === 'esperando_pago' ? /comprobante|foto|pdf|captura|imagen|soporte/i : null,
+                'no le pidió la foto o el PDF del comprobante');
+        },
+    },
+    { clave: 'cambiar', titulo: '«quiero cambiar de horario» escrito', correr: cambio('Quiero cambiar de horario', null) },
+    { clave: 'cambiar_el', titulo: '«necesito cambiar el horario» escrito', correr: cambio('Necesito cambiar el horario', null) },
+    { clave: 'cambiar_boton', titulo: 'botón «Cambiar horario» (sm_em_cambiar)', correr: cambio('Cambiar horario', BOTON_EMBUDO.CAMBIAR) },
+    { clave: 'no_puedo', titulo: '«no puedo ir»', correr: cambio('no puedo ir', null) },
+    {
+        clave: 'seguidas', titulo: 'cuatro preguntas seguidas (llevar, dónde, mensualidad, matrícula)',
+        correr: async (c, e, r, b) => {
+            const preguntas: [string, RegExp, string][] = [
+                ['qué debo llevar', /ropa|agua|tenis|camiseta|hidrat|uniforme|pantaloneta/i, 'no le dijo qué llevar'],
+                ['y dónde queda?', DIRECCION, 'no le dio la dirección ni el mapa'],
+                ['cuánto vale la mensualidad', /\$\s?\d{1,3}([.,]\d{3})+/, 'no le dio el valor de la mensualidad'],
+                ['y para matricularla qué hago?', /matr[ií]cul|inscrib|inscripci/i, 'no le explicó cómo matricularla'],
+            ];
+            for (const [texto, re, falla] of preguntas) {
+                await c.decir(texto);
+                responde(c, e, r, re, `${falla} («${texto}»)`);
+                if (re === DIRECCION) revisarSede(c, r, b);
+            }
+        },
+    },
+    {
+        clave: 'gracias', titulo: '«gracias» (cierre de cortesía: callar está bien)',
+        correr: async (c, e, r) => {
+            await c.decir('Gracias', null, { silencioOk: true });
+            if (!c.hablo()) return;
+            noReinicia(c, e, r);
+            debe(r, c.ultimoTexto().length <= 400, 'a un «gracias» contestó con un mensaje largo');
+        },
+    },
+];
+
+/** El lead como lo dejó el embudo real (en memoria: la simulación no lo guardó). */
+function leadSembrado(c: Conversacion, e: Escuela, d: Record<string, any>, momento: Momento): Fila {
+    const agendada = momento !== 'esperando_pago';
+    const ahora = new Date().toISOString();
+    return {
+        id: d.leadId ?? 'lead-simulado', school_id: e.id, full_name: d.nombre ?? null, guardian_name: null, phone: c.contacto(),
+        birth_date: d.fechaNacimiento ?? null, gender: d.genero ?? null, status: 'contacted',
+        team_id: d.teamId ?? null, branch_id: d.branchId ?? null,
+        trial_slot_id: agendada ? d.slotId ?? null : null,
+        cupo_separado_slot_id: agendada ? null : d.slotId ?? null,
+        cupo_separado_hasta: agendada ? null : d.hasta ?? null,
+        respuestas: d.respuestas ?? {},
+        source_detail: {
+            via: 'embudo', consentimiento: d.consentimiento ?? null, etapa: agendada ? 'agendado' : 'respondido',
+            // Lo que deja B4 al agendar por el comprobante: el cambio de horario ya no cobra.
+            ...(momento === 'pagada' ? { agendado_por: 'pago' } : {}),
+            embudo: { team_id: d.teamId ?? null, branch_id: d.branchId ?? null, respuestas: d.respuestas ?? {} },
+        },
+        created_at: ahora, updated_at: ahora,
+    };
+}
+
+const ROTULO_MOMENTO: Record<Momento, string> = {
+    esperando_pago: 'esperando el pago', pagada: 'ya agendada (pagó)', agendada_embudo: 'agendada (sin valor)',
+};
+
+/** Una bifurcación por cada cosa que escribe la familia. */
+async function correrPost(
+    base: Conversacion, e: Escuela, b: BaseDespues, claves: string[] | null, bloque: Bloque, variante: string | null,
+): Promise<Resultado[]> {
+    const posts = POST.filter((p) => !claves || claves.includes(p.clave));
+    return enParalelo(posts, async (p) => {
+        const c = base.bifurcar(`${ROTULO_MOMENTO[b.momento]} · ${p.titulo}`);
+        if (VIRTUALES.has('school_signup_leads')) c.sembrar('school_signup_leads', [leadSembrado(c, e, b.datos, b.momento)]);
+        c.fase = 'despues';
+        const r = nuevoResultado(c.titulo, c, bloque, variante);
+        await protegido(r, () => p.correr(c, e, r, b));
+        r.desenlace = c.turnos.slice(c.heredados).some((t) => !t.sistema && paraLaFamilia(t.salidas).length) ? 'respuesta' : 'silencio';
+        cerrar(r, e, null);
+        progreso(r);
+        return r;
+    });
+}
+
+async function correrDespues(e: Escuela): Promise<Resultado[]> {
+    const perfil = perfilesConGrupo(e, 1, { genero: 'f' })[0];
+    const base = new Conversacion('base: el interesado llega hasta las instrucciones de pago', e.id, nuevoN());
+    const rb = nuevoResultado(base.titulo, base, 'despues');
+    if (!perfil) { noAplica(rb, 'ningún perfil tiene grupo con franjas'); return [rb]; }
+    return conTablasVirtuales(['school_signup_leads'], async () => {
+        await protegido(rb, async () => {
+            await base.decir('Hola, quiero información para entrenar voleibol');
+            await seguir(base, e, perfil, rb);
+        });
+        debe(rb, rb.desenlace === 'pago', `la base terminó en «${rb.desenlace}» y no en las instrucciones de pago`);
+        const resultados = [cerrar(rb, e, perfil)];
+        progreso(rb);
+        if (rb.desenlace !== 'pago') return resultados;
+        const datos = base.datosEmbudo() ?? {};
+
+        // B4: llega el comprobante, coincide y `confirmarClasePruebaPagada` agenda. El
+        // job manda la confirmación con { step, queue_id }: sin el estado del embudo.
+        const pagada = base.bifurcar('base: pagó y B4 confirmó la clase');
+        const franja = datos.slotId ? await franjaDeAgenda(e.id, datos.slotId) : null;
+        const queLlevar = await indicacionesCortesiaDeEscuela(e.id).catch(() => null);
+        const confirmacion = franja
+            ? textoConfirmacion(franja, { deportista: datos.nombre, nombreClase: e.nombreClase, queLlevar })
+            : 'Tu clase de prueba quedó agendada 🎉';
+        pagada.inyectarSaliente('(B4: llega el comprobante, coincide y agenda)', confirmacion, { step: 'clase_prueba_agendada', queue_id: 'qa-embudo' });
+
+        // La vía de la sede de su clase (la de la franja, o la de la sede) contra las de las otras sedes.
+        const { data: sedes } = await supabase.from('school_branches').select('id, address')
+            .in('id', e.sedes.map((s) => s.branchId));
+        const suya = viaDe((franja as any)?.direccion) ?? viaDe(((sedes ?? []) as any[]).find((s) => s.id === datos.branchId)?.address);
+        const otras = ((sedes ?? []) as any[]).filter((s) => s.id !== datos.branchId).map((s) => viaDe(s.address))
+            .filter((n): n is string => !!n && n !== suya);
+        const via = suya && otras.length ? { suya, otras } : null;
+
+        resultados.push(...await correrPost(base, e, { momento: 'esperando_pago', datos, via }, null, 'despues', null));
+        resultados.push(...await correrPost(pagada, e, { momento: 'pagada', datos, via }, null, 'despues', null));
+        process.stdout.write('\n');
+        return resultados;
+    });
+}
+
+// ─── Variantes de configuración ──────────────────────────────────────────────
+
+interface CasoVariante {
+    titulo: string;
+    perfil: Perfil | null;
+    /** Primer mensaje (por defecto, pedir información). */
+    abrir?: string;
+    /** Desenlaces correctos; vacío = cualquiera. */
+    espera: Desenlace[];
+    personaEsperada?: boolean;
+    sinHorariosEsperado?: boolean;
+    /** Callar al primer mensaje es correcto (por diseño). */
+    silencioOk?: boolean;
+    /** Si el desenlace no es el esperado por una limitación conocida de la simulación, cuál. */
+    limitacion?: (r: Resultado) => string | null;
+    revisar?: (c: Conversacion, e: Escuela, r: Resultado) => void;
+    /** Claves de POST a probar después (bifurcando). */
+    despues?: string[];
+}
+
+interface Variante {
+    nombre: string;
+    descripcion: string;
+    armar: (e: Escuela, f: FilasReales) => { tablas: Record<string, Fila[]>; casos: CasoVariante[]; avisos?: string[] };
+}
+
+const claseReal = (e: Escuela, f: FilasReales): Fila => ({ ...(f.clase ?? { school_id: e.id, enabled: true }) });
+const sinCasos = (aviso: string): ReturnType<Variante['armar']> => ({ tablas: {}, casos: [], avisos: [aviso] });
+
+/** El primer mensaje ya trae la primera pregunta (sin preguntar la sede). */
+function directoALasPreguntas(c: Conversacion, e: Escuela, r: Resultado): void {
+    const primera = c.turnos[0];
+    const texto = paraLaFamilia(primera?.salidas ?? []).map((s) => s.texto).join('\n');
+    debe(r, !(primera?.salidas ?? []).some((s) => (s.opciones ?? []).some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE))),
+        'pregunta la sede con botones (debería ir directo a las preguntas)');
+    debe(r, preguntoClave(texto, e, e.preguntas[0]?.clave ?? ''), 'el primer mensaje no trae la primera pregunta');
+}
+
+function revisarSinValor(precioReal: number | null, cortesia: boolean) {
+    return (c: Conversacion, e: Escuela, r: Resultado) => {
+        const ts = c.textos();
+        debe(r, !huboPaso(c, PASO_EMBUDO.PAGO) && !/comprobante/i.test(ts), 'pidió pago o comprobante y la clase no tiene valor');
+        if (precioReal) debe(r, !ts.includes(formatoPesos(precioReal)), `mencionó ${formatoPesos(precioReal)} y la clase no tiene valor`);
+        debe(r, /qued[oó] agendada/i.test(ts), 'no confirmó que la clase quedó agendada');
+        debe(r, huboOpcion(c, (id) => id === BOTON_EMBUDO.OPTIN_SI), 'no preguntó el consentimiento');
+        if (cortesia) debe(r, /clase de cortes[ií]a/i.test(ts), 'sin nombre de clase ni valor no la llamó «clase de cortesía»');
+    };
+}
+
+/** Clones de franjas reales movidos a un miércoles y un jueves próximos (para probar los días). */
+function clonesEntreSemana(slots: Fila[], teamIds: string[]): Fila[] {
+    const desde = masDias(hoyBogota(), 2);
+    const salida: Fila[] = [];
+    for (const teamId of teamIds) {
+        const s = slots.find((x) => x.team_id === teamId && x.is_open !== false);
+        if (!s) continue;
+        for (const dow of [3, 4]) {
+            salida.push({ ...s, id: randomUUID(), slot_date: proximoDia(dow, desde), generated_from_schedule: false, reserved_count: 0 });
+        }
     }
-    process.stdout.write('\n');
-    return resultados;
+    return salida;
+}
+
+const VARIANTES: Variante[] = [
+    {
+        nombre: 'sin-valor',
+        descripcion: 'trial_price = 0: sin paso de pago; agendada + confirmación + consentimiento (puede decir «sin costo»)',
+        armar: (e, f) => ({
+            tablas: { school_trial_class_settings: [{ ...claseReal(e, f), trial_price: 0 }] },
+            casos: perfilesConGrupo(e, 3).map((p, i) => ({
+                titulo: tituloPerfil(p), perfil: p, espera: ['agendada'], revisar: revisarSinValor(e.precio, false),
+                ...(i === 0 ? { despues: ['cambiar', 'gracias'] } : {}),
+            })),
+        }),
+    },
+    {
+        nombre: 'sin-valor-null',
+        descripcion: 'trial_price y nombre_clase null: «clase de cortesía», agendada sin pago',
+        armar: (e, f) => ({
+            tablas: { school_trial_class_settings: [{ ...claseReal(e, f), trial_price: null, nombre_clase: null }] },
+            casos: perfilesConGrupo(e, 2).map((p) => ({ titulo: tituloPerfil(p), perfil: p, espera: ['agendada'], revisar: revisarSinValor(e.precio, true) })),
+        }),
+    },
+    {
+        nombre: 'sin-cuentas',
+        descripcion: 'sin cuentas de pago (Nequi, banco, Bre-B y payment_accounts vacíos): una persona y se suelta el cupo',
+        armar: (e, f) => {
+            const numero = String(f.settings.nequi_number ?? '').replace(/\D/g, '');
+            return {
+                tablas: { school_settings: [{ ...f.settings, nequi_number: null, bank_account_number: null, breb_key: null, breb_number: null, payment_accounts: [] }] },
+                casos: perfilesConGrupo(e, 2).map((p) => ({
+                    titulo: tituloPerfil(p), perfil: p, espera: ['persona'], personaEsperada: true,
+                    revisar: (c, _e, r) => {
+                        debe(r, /datos de pago/i.test(c.ultimoTexto()), 'al pasar a una persona no le dijo que le escriben con los datos de pago');
+                        debe(r, !huboPaso(c, PASO_EMBUDO.PAGO), 'dio instrucciones de pago sin cuentas cargadas');
+                        if (numero) debe(r, !c.textos().replace(/\s/g, '').includes(numero), 'mostró un número de cuenta que la escuela ya no tiene');
+                    },
+                })),
+            };
+        },
+    },
+    {
+        nombre: 'sin-sedes',
+        descripcion: 'wa_botones_sede y wa_bienvenida null: directo a las preguntas, grupo de cualquier sede',
+        armar: (e, f) => ({
+            tablas: { school_settings: [{ ...f.settings, wa_botones_sede: null, wa_bienvenida: null }] },
+            casos: perfilesConGrupo({ ...e, sedes: [] }, 2).map((p) => ({ titulo: tituloPerfil(p), perfil: p, espera: ['pago'], revisar: directoALasPreguntas })),
+        }),
+    },
+    {
+        nombre: 'sin-sedes-bienvenida-propia',
+        descripcion: 'sin botones de sede pero con la bienvenida de la escuela (que pregunta por la sede)',
+        armar: (e, f) => ({
+            tablas: { school_settings: [{ ...f.settings, wa_botones_sede: null }] },
+            casos: perfilesConGrupo({ ...e, sedes: [] }, 1).map((p) => ({
+                titulo: tituloPerfil(p), perfil: p, espera: ['pago'],
+                revisar: (c, ev, r) => {
+                    directoALasPreguntas(c, ev, r);
+                    if (/\bsede\b/i.test(c.turnos[0] ? paraLaFamilia(c.turnos[0].salidas).map((s) => s.texto).join('\n') : '')) {
+                        r.avisos.push('la bienvenida (texto de la escuela) pregunta por la sede y ya no hay botones de sede: ajustar wa_bienvenida al quitarlos');
+                    }
+                },
+            })),
+        }),
+    },
+    {
+        nombre: 'una-sede',
+        descripcion: 'un solo botón de sede (y bienvenida por defecto): directo a las preguntas en esa sede; sin «otra sede» que no tiene botón',
+        armar: (e, f) => {
+            const sede = e.sedes[0];
+            if (!sede) return sinCasos('la escuela no tiene sedes');
+            const conGrupo = perfilesConGrupo(e, 1, { sede })[0];
+            const sinGrupo = perfilSinGrupoEnSede(e, sede);
+            const casos: CasoVariante[] = [];
+            if (conGrupo) casos.push({ titulo: `${tituloPerfil(conGrupo)} (con grupo en la sede)`, perfil: conGrupo, espera: ['pago'], revisar: directoALasPreguntas });
+            if (sinGrupo) {
+                casos.push({
+                    titulo: `${tituloPerfil(sinGrupo)} (sin grupo en la única sede)`, perfil: sinGrupo, espera: ['persona'], personaEsperada: true,
+                    revisar: (c, ev, r) => {
+                        directoALasPreguntas(c, ev, r);
+                        debe(r, !huboOpcion(c, (id) => id.startsWith(BOTON_EMBUDO.OTRA_SEDE)), 'ofreció una sede que no tiene botón');
+                    },
+                });
+            }
+            return { tablas: { school_settings: [{ ...f.settings, wa_botones_sede: [{ titulo: sede.titulo, branch_id: sede.branchId }], wa_bienvenida: null }] }, casos };
+        },
+    },
+    {
+        nombre: 'sin-franjas',
+        descripcion: 'school_trial_slots vacío: «no tengo horarios» + una persona',
+        armar: (e) => ({
+            tablas: { school_trial_slots: [] },
+            casos: perfilesConGrupo(e, 2).map((p) => ({
+                titulo: tituloPerfil(p), perfil: p, espera: ['sin_horarios'], sinHorariosEsperado: true,
+                revisar: (c, _e, r) => debe(r, /no tengo horarios abiertos/i.test(c.ultimoTexto()), 'no le dijo que no hay horarios abiertos'),
+            })),
+        }),
+    },
+    {
+        nombre: 'dias-null',
+        descripcion: 'dias_semana null (todos los días) + franjas reales clonadas a miércoles y jueves: se ofrecen',
+        armar: (e, f) => {
+            const perfiles = perfilesConGrupo(e, 2);
+            const clones = clonesEntreSemana(f.slots, perfiles.map((p) => grupoEsperado(e, p).principal!.teamId));
+            const ids = new Set(clones.map((x) => String(x.id)));
+            return {
+                tablas: { school_trial_class_settings: [{ ...claseReal(e, f), dias_semana: null }], school_trial_slots: [...f.slots, ...clones] },
+                casos: perfiles.map((p) => ({
+                    titulo: tituloPerfil(p), perfil: p, espera: ['pago'],
+                    revisar: (_c, _e, r) => debe(r, r.franjasOfrecidas.some((id) => ids.has(id)), 'con dias_semana null no ofreció las franjas de entre semana'),
+                })),
+            };
+        },
+    },
+    {
+        nombre: 'dias-solo-agenda',
+        descripcion: 'dias_semana de la escuela + franjas clonadas a miércoles y jueves: NO se ofrecen',
+        armar: (e, f) => {
+            if (!e.diasSemana) return sinCasos('la escuela agenda todos los días (dias_semana null)');
+            const perfiles = perfilesConGrupo(e, 1);
+            const clones = clonesEntreSemana(f.slots, perfiles.map((p) => grupoEsperado(e, p).principal!.teamId))
+                .filter((x) => !e.diasSemana!.includes(diaDeLaSemana(String(x.slot_date))));
+            const ids = new Set(clones.map((x) => String(x.id)));
+            return {
+                tablas: { school_trial_slots: [...f.slots, ...clones] },
+                casos: perfiles.map((p) => ({
+                    titulo: tituloPerfil(p), perfil: p, espera: ['pago'],
+                    revisar: (_c, _e, r) => debe(r, !r.franjasOfrecidas.some((id) => ids.has(id)), 'ofreció franjas en días que la escuela no agenda'),
+                })),
+            };
+        },
+    },
+    {
+        nombre: 'cupos-llenos',
+        descripcion: 'grupo A con todas sus franjas llenas (→ sin horarios); grupo B con las 2 primeras llenas y las demás con 1 y 2 cupos',
+        armar: (e, f) => {
+            const [a, b] = perfilesConGrupo(e, 2);
+            if (!a || !b) return sinCasos('no hay dos grupos con franjas');
+            const ga = grupoEsperado(e, a).principal!.teamId;
+            const gb = grupoEsperado(e, b).principal!.teamId;
+            const deB = f.slots.filter((s) => s.team_id === gb)
+                .sort((x, y) => `${x.slot_date}${x.start_time}`.localeCompare(`${y.slot_date}${y.start_time}`)).map((s) => s.id);
+            const slots = f.slots.map((s) => {
+                if (s.team_id === ga) return { ...s, max_capacity: 5, reserved_count: 5 };
+                if (s.team_id !== gb) return s;
+                const k = deB.indexOf(s.id);
+                return { ...s, max_capacity: 5, reserved_count: k < 2 ? 5 : k === 2 ? 4 : 3 };
+            });
+            return {
+                tablas: { school_trial_slots: slots },
+                casos: [
+                    {
+                        titulo: `${tituloPerfil(a)} (todas llenas)`, perfil: a, espera: ['sin_horarios'], sinHorariosEsperado: true,
+                        revisar: (c, _e, r) => debe(r, /no tengo horarios abiertos/i.test(c.ultimoTexto()), 'con todo lleno no le dijo que no hay horarios'),
+                    },
+                    {
+                        titulo: `${tituloPerfil(b)} (2 llenas, 1 y 2 cupos)`, perfil: b, espera: ['pago'],
+                        revisar: (_c, _e, r) => {
+                            debe(r, !r.franjasOfrecidas.some((id) => deB.slice(0, 2).includes(id)), 'ofreció franjas llenas');
+                            debe(r, r.franjasOfrecidas.length > 0, 'no ofreció las franjas con cupo');
+                        },
+                    },
+                ],
+            };
+        },
+    },
+    {
+        nombre: 'separar-48',
+        descripcion: 'separar_horas = 48: «te separo el cupo … durante 48 horas»',
+        armar: (e, f) => ({
+            tablas: { school_trial_class_settings: [{ ...claseReal(e, f), separar_horas: 48 }] },
+            casos: perfilesConGrupo(e, 2).map((p) => ({
+                titulo: tituloPerfil(p), perfil: p, espera: ['pago'],
+                revisar: (c, _e, r) => {
+                    debe(r, /durante 48 horas/i.test(c.textos()), 'no dijo que separa el cupo durante 48 horas');
+                    const hasta = Date.parse(String(c.datosEmbudo()?.hasta ?? ''));
+                    debe(r, Number.isFinite(hasta) && Math.abs(hasta - Date.now() - 48 * 3600_000) < 15 * 60_000,
+                        `el cupo separado vence ${c.datosEmbudo()?.hasta ?? '—'} y no en 48 h`);
+                },
+            })),
+        }),
+    },
+    {
+        nombre: 'separar-null',
+        descripcion: 'separar_horas null con valor: la RPC real AGENDA sin cobrar en el bot (v_horas IS NULL)',
+        armar: (e, f) => ({
+            tablas: { school_trial_class_settings: [{ ...claseReal(e, f), separar_horas: null }] },
+            casos: perfilesConGrupo(e, 1).map((p) => ({
+                titulo: tituloPerfil(p), perfil: p, espera: ['agendada'],
+                limitacion: (r) => (r.desenlace === 'pago'
+                    ? '`cupoSimulado` separa (24 h) con separar_horas null; la RPC tomar_cupo_clase_prueba agenda sin cobrar (v_horas IS NULL): la simulación no muestra lo que vería la familia'
+                    : null),
+            })),
+        }),
+    },
+    {
+        nombre: 'embudo-apagado',
+        descripcion: 'wa_preguntas_prospecto null: no hay embudo; ¿qué contesta el bot?',
+        armar: (e, f) => {
+            const q1 = e.preguntas[0];
+            const sinEmbudo = (c: Conversacion, _e: Escuela, r: Resultado) => {
+                debe(r, !huboOpcion(c, (id) => id.startsWith('sm_em_')), 'mostró botones del embudo con el embudo apagado');
+                if (q1) debe(r, !c.textos().includes(ultimaLinea(q1.texto)), 'hizo las preguntas del embudo con el embudo apagado');
+            };
+            return {
+                tablas: { school_settings: [{ ...f.settings, wa_preguntas_prospecto: null }] },
+                casos: [
+                    {
+                        // Por diseño: sin embudo, el saludo suelto de un número nuevo no se contesta
+                        // (bienvenida al desconocido solo en WA_BIENVENIDA_DESCONOCIDOS_SCHOOL_IDS).
+                        titulo: '«Hola»', perfil: null, abrir: 'Hola', espera: [], silencioOk: true,
+                        revisar: (c, ev, r) => {
+                            sinEmbudo(c, ev, r);
+                            if (!c.hablo()) r.avisos.push('sin embudo, «Hola» de un número nuevo queda sin respuesta (por diseño: la bienvenida al desconocido solo va en WA_BIENVENIDA_DESCONOCIDOS_SCHOOL_IDS)');
+                        },
+                    },
+                    { titulo: '«quiero información… nació en …»', perfil: null, abrir: `Hola, quiero información para entrenar voleibol. Mi hija nació en ${ANIO - 14}`, espera: [], revisar: sinEmbudo },
+                    {
+                        titulo: '«cuánto vale la clase de prueba?»', perfil: null, abrir: 'Cuánto vale la clase de prueba?', espera: [],
+                        revisar: (c, ev, r) => {
+                            sinEmbudo(c, ev, r);
+                            if (e.precio && c.hablo()) debe(r, c.textos().includes(formatoPesos(e.precio)), `no dijo el valor de la clase (${formatoPesos(e.precio)})`);
+                        },
+                    },
+                ],
+            };
+        },
+    },
+];
+
+/** La escuela tal como la ve el bot en la variante (para revisar contra eso). */
+function escuelaDeVariante(e: Escuela, f: FilasReales, tablas: Record<string, Fila[]>): Escuela {
+    const settings = tablas.school_settings?.[0] ?? f.settings;
+    const clase = tablas.school_trial_class_settings?.[0] ?? f.clase;
+    const slots = tablas.school_trial_slots ?? f.slots;
+    return armarEscuela(e.id, e.nombre, ajustesDesdeFila(settings), ajustesClasePruebaDesdeFila(clase), e.rangos, slots);
+}
+
+async function correrCaso(caso: CasoVariante, ev: Escuela, semilla: Record<string, Fila[]>, variante: string): Promise<Resultado[]> {
+    const conv = new Conversacion(caso.titulo, ev.id, nuevoN(), semilla);
+    const r = nuevoResultado(caso.titulo, conv, 'variantes', variante);
+    r.personaEsperada = !!caso.personaEsperada;
+    r.sinHorariosEsperado = !!caso.sinHorariosEsperado;
+    await protegido(r, async () => {
+        await conv.decir(caso.abrir ?? 'Hola, quiero información para entrenar voleibol', null, { silencioOk: !!caso.silencioOk });
+        if (caso.perfil) await seguir(conv, ev, caso.perfil, r);
+        else r.desenlace = desenlaceDe(conv) ?? (conv.hablo() ? 'respuesta' : 'silencio');
+        if (caso.espera.length && !caso.espera.includes(r.desenlace)) {
+            const lim = caso.limitacion?.(r);
+            if (lim) r.limitaciones.push(lim);
+            else r.fallas.push(`terminó en «${r.desenlace}» y se esperaba ${caso.espera.map((x) => `«${x}»`).join(' o ')}`);
+        }
+        caso.revisar?.(conv, ev, r);
+    });
+    cerrar(r, ev, caso.perfil);
+    progreso(r);
+    const salida = [r];
+    if (caso.despues?.length && (r.desenlace === 'agendada' || r.desenlace === 'pago')) {
+        const momento: Momento = r.desenlace === 'pago' ? 'esperando_pago' : 'agendada_embudo';
+        for (const x of await correrPost(conv, ev, { momento, datos: conv.datosEmbudo() ?? {} }, caso.despues, 'variantes', variante)) {
+            x.titulo = `${caso.titulo} → ${x.titulo}`;
+            salida.push(x);
+        }
+    }
+    return salida;
+}
+
+async function correrVariantes(e: Escuela): Promise<{ resultados: Resultado[]; avisos: string[] }> {
+    const desconocidas = (VARIANTES_PEDIDAS ?? []).filter((v) => !VARIANTES.some((x) => x.nombre === v));
+    if (desconocidas.length) throw new Error(`Variante desconocida: ${desconocidas.join(', ')}. Hay: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
+    const f = await leerFilasReales(e.id);
+    const resultados: Resultado[] = [];
+    const avisos: string[] = [];
+    for (const v of VARIANTES.filter((x) => !VARIANTES_PEDIDAS || VARIANTES_PEDIDAS.includes(x.nombre))) {
+        const armado = v.armar(e, f);
+        for (const a of armado.avisos ?? []) avisos.push(`${v.nombre}: ${a}`);
+        if (!armado.casos.length) { avisos.push(`${v.nombre}: sin casos para esta escuela`); continue; }
+        const ev = escuelaDeVariante(e, f, armado.tablas);
+        process.stdout.write(`  ${v.nombre.padEnd(28)} `);
+        const rs = await conTablasVirtuales(Object.keys(armado.tablas),
+            () => enParalelo(armado.casos, (caso) => correrCaso(caso, ev, armado.tablas, v.nombre)));
+        resultados.push(...rs.flat());
+        process.stdout.write('\n');
+    }
+    return { resultados, avisos };
 }
 
 // ─── Reporte ─────────────────────────────────────────────────────────────────
 
+const esBien = (r: Resultado) => !r.fallas.length && !r.esperadas.length;
+
+function resumen(rs: Resultado[]): string {
+    const conFallas = rs.filter((r) => r.fallas.length).length;
+    const soloEsperadas = rs.filter((r) => !r.fallas.length && r.esperadas.length).length;
+    const lim = rs.filter((r) => r.limitaciones.length).length;
+    const noAplican = rs.filter((r) => r.desenlace === 'no_aplica').length;
+    return [`${rs.length} conversaciones`, `${rs.filter(esBien).length} bien`,
+        conFallas ? `${conFallas} con fallas` : '', soloEsperadas ? `${soloEsperadas} solo con fallas esperadas` : '',
+        lim ? `${lim} con limitaciones de la simulación` : '', noAplican ? `${noAplican} no aplican` : '']
+        .filter(Boolean).join(' · ');
+}
+
 function transcripcion(r: Resultado): string {
-    const lineas = [`### ${r.fallas.length ? '❌' : '✅'} ${r.titulo} — ${r.desenlace}${r.grupo ? ` · ${r.grupo}` : ''}`];
+    const icono = r.fallas.length ? '❌' : r.esperadas.length ? '⏳' : r.limitaciones.length ? '⚠️' : '✅';
+    const lineas = [`### ${icono} [${r.bloque}${r.variante ? ` · ${r.variante}` : ''}] ${r.titulo} — ${r.desenlace}${r.grupo ? ` · ${r.grupo}` : ''}`];
     for (const f of r.fallas) lineas.push(`- **Falla:** ${f}`);
+    for (const f of r.esperadas) lineas.push(`- **Esperada:** ${f}`);
+    for (const f of r.limitaciones) lineas.push(`- Limitación de la simulación: ${f}`);
     for (const a of r.avisos) lineas.push(`- Aviso: ${a}`);
     lineas.push('');
-    for (const t of r.conv.turnos) {
-        lineas.push(`> 👤 ${t.entrada}`);
+    const desde = Math.max(0, r.conv.heredados - 1);
+    if (desde > 0) lineas.push(`> _(… ${desde} turnos de la conversación base)_`, '>');
+    for (const t of r.conv.turnos.slice(desde)) {
+        lineas.push(t.sistema ? `> ⚙️ ${t.entrada}` : `> 👤 ${t.entrada}${t.botonId ? ` \`[${t.botonId.slice(0, 24)}]\`` : ''}`);
+        if (!t.salidas.length) lineas.push(`> 🤖 _(nada${t.nota ? `: ${t.nota}` : ''})_`);
         for (const s of t.salidas) {
+            if (esNotaDelSimulador(s)) { lineas.push(`> _${s.texto}_`); continue; }
             lineas.push(`> 🤖 ${s.texto.replace(/\n/g, '\n> ')}`);
             if (s.opciones?.length) lineas.push(`> ${s.opciones.map((o) => `[${o.title}${o.descripcion ? ` · ${o.descripcion}` : ''}]`).join(' ')}`);
         }
+        if (t.salidas.length && !paraLaFamilia(t.salidas).length) lineas.push(`> _(la familia no recibe nada${t.nota ? `: ${t.nota}` : ''})_`);
         lineas.push('>');
     }
     return lineas.join('\n');
 }
 
+function imprimirFallas(rs: Resultado[]): void {
+    for (const r of rs.filter((x) => x.fallas.length || x.esperadas.length || x.limitaciones.length)) {
+        const icono = r.fallas.length ? '❌' : r.esperadas.length ? '⏳' : '⚠️';
+        log(`\n${icono} [${r.bloque}${r.variante ? ` · ${r.variante}` : ''}] ${r.titulo} — ${r.desenlace}${r.grupo ? ` · ${r.grupo}` : ''}`);
+        for (const f of r.fallas) log(`   · ${f}`);
+        for (const f of r.esperadas) log(`   ⏳ ${f}`);
+        for (const f of r.limitaciones) log(`   ⚠️  ${f}`);
+    }
+}
+
 (async () => {
-    if (!ESCUELA) {
-        console.error('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones] [--anios 2009,2012] [--transcripcion archivo.md]');
+    if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes[,…]] [--variante <nombre>[,…]] '
+            + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
+        log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
     }
+    const inicio = Date.now();
     const escuela = await cargarEscuela(ESCUELA);
-    console.log(`${escuela.nombre}: ${escuela.sedes.length} sedes, ${escuela.preguntas.length} preguntas, ` +
-        `${escuela.rangos.length} grupos, ${escuela.franjas.size} franjas abiertas, clase ${escuela.precio ? `$${escuela.precio}` : 'sin valor'}`);
-    if (!escuela.franjas.size) console.log('⚠️  Sin franjas abiertas: todo interesado va a terminar en «no tengo horarios».');
+    log(`${escuela.nombre}: ${escuela.sedes.length} sedes, ${escuela.preguntas.length} preguntas, `
+        + `${escuela.rangos.length} grupos, ${escuela.franjas.size} franjas abiertas, clase ${escuela.precio ? formatoPesos(escuela.precio) : 'sin valor'}`
+        + ` · bloques: ${SOLO.join(', ')} · ${PARALELO} a la vez`);
+    if (!escuela.franjas.size) log('⚠️  Sin franjas abiertas: todo interesado va a terminar en «no tengo horarios».');
 
-    const resultados: Resultado[] = [];
-    if (SOLO !== 'guiones') resultados.push(...await correrMatriz(escuela, 0));
-    if (SOLO !== 'matriz') resultados.push(...await correrGuiones(escuela, 5000));
+    const porBloque = new Map<Bloque, Resultado[]>();
+    const avisosGenerales: string[] = [];
+    for (const b of BLOQUES.filter((x) => SOLO.includes(x))) {
+        const t0 = Date.now();
+        process.stdout.write(`\n${b}${b === 'variantes' ? '\n' : ': '}`);
+        let rs: Resultado[] = [];
+        if (b === 'matriz') rs = await correrMatriz(escuela);
+        if (b === 'guiones') rs = await correrGuiones(escuela);
+        if (b === 'despues') rs = await correrDespues(escuela);
+        if (b === 'variantes') {
+            const v = await correrVariantes(escuela);
+            rs = v.resultados;
+            avisosGenerales.push(...v.avisos);
+        }
+        porBloque.set(b, rs);
+        log(`  → ${resumen(rs)} (${Math.round((Date.now() - t0) / 1000)} s)`);
+    }
 
-    const malos = resultados.filter((r) => r.fallas.length);
+    const resultados = [...porBloque.values()].flat();
+    const malos = resultados.filter((r) => !esBien(r));
+    log(`\n══ ${resumen(resultados)} · ${Math.round((Date.now() - inicio) / 1000)} s`);
+    for (const [b, rs] of porBloque) log(`   ${b.padEnd(10)} ${resumen(rs)}`);
+    const variantes = porBloque.get('variantes') ?? [];
+    if (variantes.length) {
+        log('   Por variante:');
+        for (const v of [...new Set(variantes.map((r) => r.variante!))]) log(`     ${v.padEnd(28)} ${resumen(variantes.filter((r) => r.variante === v))}`);
+    }
     const porDesenlace = new Map<string, number>();
     for (const r of resultados) porDesenlace.set(r.desenlace, (porDesenlace.get(r.desenlace) ?? 0) + 1);
+    log(`Desenlaces: ${[...porDesenlace].map(([k, v]) => `${k} ${v}`).join(' · ')}`);
     const porGrupo = new Map<string, number>();
     for (const r of resultados) if (r.grupo) porGrupo.set(r.grupo, (porGrupo.get(r.grupo) ?? 0) + 1);
-
-    console.log(`\n${resultados.length} conversaciones · ${resultados.length - malos.length} bien · ${malos.length} con fallas`);
-    console.log(`Desenlaces: ${[...porDesenlace].map(([k, v]) => `${k} ${v}`).join(' · ')}`);
-    console.log(`Grupos asignados: ${[...porGrupo].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ')}`);
-    for (const r of malos) {
-        console.log(`\n❌ ${r.titulo} — ${r.desenlace}${r.grupo ? ` · ${r.grupo}` : ''}`);
-        for (const f of r.fallas) console.log(`   · ${f}`);
-    }
+    log(`Grupos asignados: ${[...porGrupo].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(' · ')}`);
+    for (const a of avisosGenerales) log(`Aviso: ${a}`);
+    const avisos = new Map<string, number>();
+    for (const r of resultados) for (const a of r.avisos) if (!/ofreció otra sede$/.test(a)) avisos.set(a, (avisos.get(a) ?? 0) + 1);
+    for (const [a, n] of avisos) log(`Aviso${n > 1 ? ` (×${n})` : ''}: ${a}`);
+    imprimirFallas(resultados);
     const bloqueadas = new Set(resultados.flatMap((r) => r.conv.turnos.flatMap((t) => t.bloqueadas)));
-    if (bloqueadas.size) console.log(`\nEscrituras que bloqueó el cortafuegos (esperado): ${[...bloqueadas].slice(0, 12).join(' · ')}`);
+    if (bloqueadas.size) log(`\nEscrituras que bloqueó el cortafuegos (esperado): ${[...bloqueadas].slice(0, 14).join(' · ')}`);
 
     if (TRANSCRIPCION) {
-        const md = [`# Embudo de ${escuela.nombre} — ${new Date().toISOString().slice(0, 16)}`, '',
-            ...resultados.sort((a, b) => b.fallas.length - a.fallas.length).map(transcripcion)].join('\n\n');
+        const orden = (r: Resultado) => (r.fallas.length ? 0 : r.esperadas.length ? 1 : r.limitaciones.length ? 2 : 3);
+        const md = [
+            `# Embudo de ${escuela.nombre} — ${new Date().toISOString().slice(0, 16)}`, '',
+            `**${resumen(resultados)}**`, '',
+            ...[...porBloque].map(([b, rs]) => `- ${b}: ${resumen(rs)}`),
+            ...[...new Set(variantes.map((r) => r.variante!))].map((v) => `  - ${v}: ${resumen(variantes.filter((r) => r.variante === v))}`),
+            ...avisosGenerales.map((a) => `- Aviso: ${a}`), '',
+            ...[...porBloque].flatMap(([b, rs]) => [`## ${b}`, '', ...[...rs].sort((x, y) => orden(x) - orden(y)).map(transcripcion)]),
+        ].join('\n\n');
         writeFileSync(TRANSCRIPCION, md);
-        console.log(`\nTranscripción: ${TRANSCRIPCION}`);
+        log(`\nTranscripción: ${TRANSCRIPCION}`);
     }
     process.exit(malos.length ? 1 : 0);
-})().catch((e) => { console.error(e); process.exit(1); });
+})().catch((e) => { log(e); process.exit(1); });

@@ -28,6 +28,7 @@ import {
     ajustesDesdeFila, ajustesWhatsAppDeEscuela, preguntasDesdeJson, botonesSedeDesdeJson, temasDesdeJson, embudoActivo,
     modoDiscretoDeEscuela, temasAPersonaDeEscuela, ajustesClasePrueba, ajustesClasePruebaDesdeFila, cobraClaseEnElBot,
     textoMultilinea, AJUSTES_POR_DEFECTO, AJUSTES_CLASE_PRUEBA_POR_DEFECTO,
+    modoDiscretoEfectivo, _olvidarModoDiscretoEfectivo,
 } from './whatsapp-ajustes-escuela.service';
 
 const NORTE = '11111111-1111-4111-8111-111111111111';
@@ -162,6 +163,33 @@ describe('ajustesWhatsAppDeEscuela (lectura que nunca lanza)', () => {
     it('si todo falla, los defaults', async () => {
         h.responder = () => { throw new Error('red'); };
         expect(await ajustesWhatsAppDeEscuela('x')).toEqual(AJUSTES_POR_DEFECTO);
+    });
+});
+
+describe('modoDiscretoEfectivo (envíos fuera de un turno: jobs y crons)', () => {
+    beforeEach(() => _olvidarModoDiscretoEfectivo());
+
+    it('el de la escuela manda sobre la variable; «global» o sin dato, la variable', async () => {
+        const modos: Record<string, unknown> = { monster: 'no', estricta: 'si', dynasty: 'global' };
+        h.responder = (_t, _c) => ({ data: { ...FILA_BASE, wa_modo_discreto: modos[ultimaEscuela] ?? null }, error: null });
+        let ultimaEscuela = '';
+        const leer = async (id: string, global: boolean) => { ultimaEscuela = id; return modoDiscretoEfectivo(id, global); };
+        expect(await leer('monster', true)).toBe(false);
+        expect(await leer('estricta', false)).toBe(true);
+        expect(await leer('dynasty', true)).toBe(true);
+        expect(await leer('dynasty', false)).toBe(false);
+        expect(await modoDiscretoEfectivo(null, true)).toBe(true);
+    });
+
+    it('lee school_settings una vez cada 5 min por escuela (los jobs de cada minuto no la releen por fila)', async () => {
+        h.pedidas = [];
+        h.responder = () => ({ data: { ...FILA_BASE, wa_modo_discreto: 'no' }, error: null });
+        const t0 = Date.parse('2026-11-03T12:00:00Z');
+        for (let i = 0; i < 5; i++) expect(await modoDiscretoEfectivo('monster', true, t0 + i * 1000)).toBe(false);
+        expect(h.pedidas).toHaveLength(1);
+        h.responder = () => ({ data: { ...FILA_BASE, wa_modo_discreto: 'si' }, error: null });
+        expect(await modoDiscretoEfectivo('monster', false, t0 + 5 * 60_000 + 1)).toBe(true);
+        expect(h.pedidas).toHaveLength(2);
     });
 });
 

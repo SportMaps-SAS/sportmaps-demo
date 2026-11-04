@@ -13,8 +13,9 @@ import {
     iniciarEmbudo, atenderTurnoEmbudo, BOTON_EMBUDO, leerFechaNacimiento, opcionDeTexto, leerSede, leerVarias,
     filaDeFranja, textosPorDefecto, botonDePlantilla, franjasOfrecibles, comoPagar, mensajeDeBienvenida,
     estadoParaRecordatorio, leadCompletoDeEmbudo, leadDeDatos, lineasDeSedes, cupoSimulado,
-    tituloDeGrupo, grupoDeRango,
-    type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo,
+    tituloDeGrupo, grupoDeRango, pideMatricula, textoDeMatricula, detalleDeMatricula, preguntaDonde, textoDonde,
+    estadoDeSalientes, pideCambioDeHorario,
+    type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo, type LugarDeClase,
 } from './whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
 import {
@@ -76,6 +77,8 @@ function crear(op: {
     grupos?: Record<string, RangoEmbudo | null>;
     franjas?: FranjaEmbudo[]; cupo?: ResultadoCupo; cuentas?: CuentaDePagoEmbudo[]; consentimientoPendiente?: boolean;
     yaSoyDelClub?: boolean; estado?: EstadoEmbudo | null; lead?: any;
+    /** Dónde es la clase (`lugarDeLaClase`); sin la clave, el contexto no lo trae. */
+    lugar?: LugarDeClase | null;
 } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null };
     const ctx: CtxEmbudo = {
@@ -109,6 +112,7 @@ function crear(op: {
         })),
         avisarEscuela: vi.fn(async () => {}),
         ...(op.yaSoyDelClub ? { yaSoyDelClub: vi.fn(async () => {}) } : {}),
+        ...(op.lugar !== undefined ? { lugarDeLaClase: vi.fn(async () => op.lugar ?? null) } : {}),
         leadDelContacto: vi.fn(async () => op.lead ?? null),
         leerEstado: async () => s.estado,
         ahora: () => AHORA,
@@ -330,7 +334,7 @@ describe('grupo y horarios', () => {
         const c = crear();
         await hastaHorarios(c);
         await c.turno('la 2');
-        expect(c.ctx.tomarCupo).toHaveBeenCalledWith('lead-1', 's-dom01');
+        expect(c.ctx.tomarCupo).toHaveBeenCalledWith('lead-1', 's-dom01', { pagada: false });
     });
 });
 
@@ -412,15 +416,20 @@ describe('cupo sin valor o ya pagado', () => {
     it('«Cambiar horario» de la plantilla: otra lista sin la franja actual y agenda sin volver a cobrar', async () => {
         const c = crear({
             cupo: { estado: 'agendada', hasta: null }, consentimientoPendiente: false,
-            estado: { paso: 'agendada', datos: { leadId: 'lead-1', teamId: 't-infantil-fem', slotId: 's-sab31' } },
+            // `pagada`: la confirmó B4 (el saliente de la confirmación trae el estado del embudo).
+            estado: { paso: 'agendada', datos: { leadId: 'lead-1', teamId: 't-infantil-fem', slotId: 's-sab31', pagada: true } },
         });
         expect(await c.turno('Cambiar horario', 'Cambiar horario')).toBe(true);
         expect(c.ultimo().texto).toContain('No tienes que pagar de nuevo');
+        expect(c.ctx.tomarCupo).not.toHaveBeenCalled();
         expect(c.ultimo().botones!.map((b) => b.id)).not.toContain(`${BOTON_EMBUDO.FRANJA}s-sab31`);
         await c.turno('x', `${BOTON_EMBUDO.FRANJA}s-dom01`);
+        // La simulación agenda sin cobrar porque ya pagó (`cupoSimulado` con `pagada`).
+        expect(c.ctx.tomarCupo).toHaveBeenCalledWith('lead-1', 's-dom01', { pagada: true });
         expect(c.ctx.confirmarAgenda).toHaveBeenCalledWith({ leadId: 'lead-1', slotId: 's-dom01', evento: 'cambiada' });
         expect(c.ctx.registrarConceptoEsperado).not.toHaveBeenCalled();
         expect(c.ultimo().estado?.paso).toBe('agendada');
+        expect(c.ultimo().estado?.datos.pagada).toBe(true);
     });
 
     it('«Elegir otro horario» (clase reprogramada) sin estado: recupera el lead por teléfono', async () => {
@@ -437,6 +446,252 @@ describe('cupo sin valor o ya pagado', () => {
         expect(await c.turno('Sí, claro', BOTON_EMBUDO.OPTIN_SI)).toBe(true);
         expect(c.ctx.registrarOptIn).toHaveBeenCalledTimes(1);
         expect(c.ctx.marcarLead).toHaveBeenCalledWith('lead-9', expect.objectContaining({ consentimiento: 'si' }));
+    });
+});
+
+/** Hasta «paga la clase de prueba… envíame el comprobante» (esperando_pago). */
+async function hastaElPago(c: ReturnType<typeof crear>) {
+    await hastaHorarios(c);
+    await c.turno('x', `${BOTON_EMBUDO.FRANJA}s-sab31`);
+    await c.turno('Sí, claro', BOTON_EMBUDO.OPTIN_SI);
+    expect(c.ultimo().estado?.paso).toBe('esperando_pago');
+}
+
+const MATRICULA_MARIANA = 'La matrícula se hace después de la clase de prueba: el profe evalúa a Mariana, ' +
+    'la escuela te confirma el grupo y te escribe por aquí para matricularla 🙌';
+
+describe('después del embudo: matrícula y «¿dónde queda?» (Monster 2026-11-03)', () => {
+    it('esperando el pago, «¿y para matricularla?» se contesta, la escuela recibe el aviso y el flujo sigue en el pago', async () => {
+        const c = crear();
+        await hastaElPago(c);
+        expect(await c.turno('Y para matricularla después de la clase qué tengo que hacer?')).toBe(true);
+        expect(c.ultimo().texto).toBe(MATRICULA_MARIANA);
+        expect(c.ultimo().step).toBe('embudo_matricula');
+        expect(c.ultimo().estado).toMatchObject({ paso: 'esperando_pago', datos: { slotId: 's-sab31', matriculaAvisada: true } });
+        expect(c.ctx.avisarEscuela).toHaveBeenCalledTimes(1);
+        const [motivo, detalle] = (c.ctx.avisarEscuela as any).mock.calls[0];
+        expect(motivo).toBe('pide_matricula');
+        expect(detalle).toBe('Pide la matrícula: «Y para matricularla después de la clase qué tengo que hacer?». ' +
+            'Deportista: Mariana Gómez Rojas (2011). Grupo: Infantil Femenino. Sede: Sede Norte. Clase de prueba: cupo separado, falta el pago.');
+        // Otra vez en el mismo flujo: se contesta, sin repetir el aviso.
+        expect(await c.turno('quiero matricularla en el club')).toBe(true);
+        expect(c.ultimo().texto).toBe(MATRICULA_MARIANA);
+        expect(c.ctx.avisarEscuela).toHaveBeenCalledTimes(1);
+        // El «cambiar horario» escrito sigue funcionando después; todavía no pagó: sin «no tienes que pagar».
+        expect(await c.turno('necesito cambiar el horario')).toBe(true);
+        expect(c.ultimo().texto).toMatch(/^Claro 🙌 Elige el nuevo horario\./);
+        expect(c.ultimo().texto).not.toContain('pagar de nuevo');
+    });
+
+    it('con el estado que deja un job (sin nombre): el nombre sale del lead y el género del verbo', async () => {
+        const c = crear({
+            estado: { paso: 'agendada', datos: { leadId: 'lead-9', teamId: 't-infantil-fem', slotId: 's-sab31' } },
+            lead: { leadId: 'lead-9', nombre: 'Tomás Herrera', teamId: 't-infantil-fem', branchId: NORTE, slotId: 's-sab31', separadoSlotId: null },
+        });
+        expect(await c.turno('¿Cómo hago para matricularlo?')).toBe(true);
+        expect(c.ultimo().texto).toBe('La matrícula se hace después de la clase de prueba: el profe evalúa a Tomás, ' +
+            'la escuela te confirma el grupo y te escribe por aquí para matricularlo 🙌');
+        expect(c.ultimo().estado).toMatchObject({ paso: 'agendada', datos: { leadId: 'lead-9', nombre: 'Tomás Herrera' } });
+        expect(c.ctx.avisarEscuela).toHaveBeenCalledWith('pide_matricula', expect.stringContaining('Clase de prueba: agendada.'));
+    });
+
+    it('en el consentimiento: contesta y vuelve a preguntar con los mismos botones', async () => {
+        const c = crear();
+        await hastaHorarios(c);
+        await c.turno('x', `${BOTON_EMBUDO.FRANJA}s-sab31`);
+        expect(await c.turno('y la matrícula cómo es?')).toBe(true);
+        expect(c.ultimo().texto).toBe(`${MATRICULA_MARIANA}\n\n¿Te puedo escribir por aquí el recordatorio de la clase y las novedades del club?`);
+        expect(c.ultimo().botones!.map((b) => b.id)).toEqual([BOTON_EMBUDO.OPTIN_SI, BOTON_EMBUDO.OPTIN_NO]);
+        expect(c.ultimo().estado).toMatchObject({ paso: 'consentimiento', datos: { siguiente: 'pago' } });
+        await c.turno('Sí, claro', BOTON_EMBUDO.OPTIN_SI);
+        expect(c.ultimo().texto).toMatch(/^¡Listo! 🙌 Para confirmarlo, paga la clase de prueba/);
+    });
+
+    it('en medio del registro: contesta y repite la pregunta que tocaba', async () => {
+        const c = crear();
+        await iniciarEmbudo(c.ctx);
+        await c.turno('x', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Mariana Gómez');
+        expect(await c.turno('¿Y la inscripción cómo es?')).toBe(true);
+        expect(c.ultimo().texto).toBe('La matrícula se hace después de la clase de prueba: el profe evalúa a Mariana, ' +
+            'la escuela te confirma el grupo y te escribe por aquí para hacer la matrícula 🙌\n\n' +
+            '2️⃣ ¿Cuál es su fecha de nacimiento? (día/mes/año)');
+        expect(c.ultimo().estado).toMatchObject({ paso: 'pregunta', datos: { i: 1 } });
+        expect(c.ultimo().estado?.datos.intentos ?? 0).toBe(0);
+        await c.turno('14/03/2011');
+        expect(c.ultimo().texto).toContain('¿Es hombre o mujer?');
+    });
+
+    it('el precio de la matrícula o cualquier otra pregunta siguen siendo del bot general', async () => {
+        const c = crear();
+        await hastaElPago(c);
+        const antes = c.s.enviados.length;
+        expect(await c.turno('¿cuánto vale la matrícula?')).toBe(false);
+        expect(await c.turno('qué debo llevar a la clase?')).toBe(false);
+        expect(await c.turno('ya te mandé el comprobante')).toBe(false);
+        expect(c.s.enviados.length).toBe(antes);
+        expect(c.ctx.avisarEscuela).not.toHaveBeenCalled();
+    });
+
+    it('«¿dónde queda?» con la clase elegida: la cancha de esa franja; sin el dato, el bot general', async () => {
+        const lugar: LugarDeClase = {
+            fecha: '2026-10-31', horaInicio: '08:00', lugar: 'Colegio La Enseñanza', direccion: 'Av. El Polo, Cl. 201 #67-12',
+            mapsUrl: 'https://maps.app.goo.gl/xyz', indicaciones: null,
+        };
+        const c = crear({ lugar });
+        await hastaElPago(c);
+        expect(await c.turno('dónde queda?')).toBe(true);
+        expect(c.ultimo().texto).toBe('La clase de prueba de *Mariana* es el sábado 31 de octubre a las 8:00 a. m. en:\n' +
+            '📍 Colegio La Enseñanza · Av. El Polo, Cl. 201 #67-12\nCómo llegar: https://maps.app.goo.gl/xyz');
+        expect(c.ctx.lugarDeLaClase).toHaveBeenCalledWith('s-sab31');
+        expect(c.ultimo().estado?.paso).toBe('esperando_pago');
+
+        const sinDato = crear({ lugar: { ...lugar, lugar: null, direccion: null } });
+        await hastaElPago(sinDato);
+        expect(await sinDato.turno('cuál es la dirección?')).toBe(false);
+        const sinContexto = crear();
+        await hastaElPago(sinContexto);
+        expect(await sinContexto.turno('dónde queda?')).toBe(false);
+    });
+
+    it('lecturas: pideMatricula, preguntaDonde y los textos', () => {
+        for (const t of ['Y para matricularla después de la clase qué tengo que hacer?', 'quiero matricularla en el club',
+            '¿Cómo es el proceso de inscripción?', 'queremos inscribirlo', 'qué hay que hacer para la matrícula']) {
+            expect(pideMatricula(t)).toBe(true);
+        }
+        for (const t of ['¿cuánto vale la matrícula?', 'Estuvo matriculada en el club Titanes dos años', 'la matrícula',
+            'Mariana Gómez', 'qué debo llevar?']) {
+            expect(pideMatricula(t)).toBe(false);
+        }
+        expect(preguntaDonde('Dónde queda?')).toBe(true);
+        expect(preguntaDonde('me pasas la dirección')).toBe(true);
+        expect(preguntaDonde('cómo llego?')).toBe(true);
+        expect(preguntaDonde('qué debo llevar')).toBe(false);
+        // Escuela con clase de cortesía, sin nombre ni género: nunca inventa.
+        expect(textoDeMatricula({ nombre: 'clase de cortesía' }, null, null)).toBe(
+            'La matrícula se hace después de la clase de cortesía: el profe evalúa a tu deportista, ' +
+            'la escuela te confirma el grupo y te escribe por aquí para hacer la matrícula 🙌');
+        expect(detalleDeMatricula('elegir_franja', {}, 'quiero matricularlo'))
+            .toBe('Pide la matrícula: «quiero matricularlo». Clase de prueba: todavía sin agendar (está en el registro).');
+        expect(textoDonde({ fecha: '2026-10-31', horaInicio: '08:00', lugar: null, direccion: null, mapsUrl: 'x', indicaciones: null },
+            { nombre: 'clase de prueba' }, 'Mariana')).toBeNull();
+    });
+
+    it('sin flujo abierto (vencido o tras otro saliente): «cambiar el horario», la matrícula y «¿dónde queda?» van con el lead', async () => {
+        const lead = { leadId: 'lead-9', nombre: 'Sofía Rojas', teamId: 't-infantil-fem', branchId: NORTE, slotId: 's-sab31', separadoSlotId: null };
+        const lugar: LugarDeClase = {
+            fecha: '2026-10-31', horaInicio: '08:00', lugar: 'Colegio La Enseñanza', direccion: 'Calle 201 #67-12', mapsUrl: null, indicaciones: null,
+        };
+        const c = crear({ lead, lugar, cupo: { estado: 'agendada', hasta: null } });
+        // Las franjas del MISMO grupo, sin la que ya tiene (antes: las de cortesía de todos los grupos).
+        expect(await c.turno('Necesito cambiar el horario de la clase')).toBe(true);
+        expect(c.ctx.franjas).toHaveBeenCalledWith('t-infantil-fem');
+        expect(c.ultimo().botones!.map((b) => b.id)).not.toContain(`${BOTON_EMBUDO.FRANJA}s-sab31`);
+        expect(c.ultimo().estado).toMatchObject({ paso: 'elegir_franja', datos: { leadId: 'lead-9', cambio: true } });
+        expect(c.ultimo().texto).not.toContain('pagar de nuevo');
+        // Con la clase pagada (B4 dejó `agendado_por: 'pago'` en el lead): sin volver a cobrar.
+        const p = crear({ lead: { ...lead, pagada: true }, cupo: { estado: 'agendada', hasta: null } });
+        expect(await p.turno('no puedo ir el sábado')).toBe(true);
+        expect(p.ultimo().texto).toContain('No tienes que pagar de nuevo');
+        await p.turno('x', `${BOTON_EMBUDO.FRANJA}s-dom01`);
+        expect(p.ctx.tomarCupo).toHaveBeenCalledWith('lead-9', 's-dom01', { pagada: true });
+
+        const m = crear({ lead });
+        expect(await m.turno('quiero matricularla')).toBe(true);
+        expect(m.ultimo().texto).toContain('el profe evalúa a Sofía');
+        expect(m.ultimo().estado).toMatchObject({ paso: 'agendada', datos: { leadId: 'lead-9', slotId: 's-sab31' } });
+
+        const d = crear({ lead, lugar });
+        expect(await d.turno('dónde queda?')).toBe(true);
+        expect(d.ultimo().texto).toContain('📍 Colegio La Enseñanza · Calle 201 #67-12');
+
+        // Cualquier otra cosa sigue siendo del bot general; sin lead, nada.
+        expect(await crear({ lead }).turno('qué debo llevar?')).toBe(false);
+        expect(await crear().turno('quiero cambiar el horario')).toBe(false);
+    });
+
+    it('Dynasty (sin embudo): un «quiero cambiar el horario» sin flujo no lo toca el embudo (ni lee el lead)', async () => {
+        const c = crear({ aj: ajustesDesdeFila({ wa_modo_cortesia: 'clase' }), lead: { leadId: 'l', nombre: 'X', teamId: 't', branchId: null, slotId: 's', separadoSlotId: null } });
+        expect(await c.turno('quiero cambiar el horario')).toBe(false);
+        expect(c.ctx.leadDelContacto).not.toHaveBeenCalled();
+        expect(c.s.enviados).toHaveLength(0);
+    });
+
+    it('pideCambioDeHorario: con artículo, «no puedo ir» y reprogramar; no cualquier «otra clase»', () => {
+        for (const t of ['quiero cambiar de horario', 'necesito cambiar el horario', 'Hola, ¿puedo cambiar la fecha?', 'cambio de día por favor',
+            'mejor otro día', 'no puedo ir el sábado', 'Buenas, ya no vamos a poder ir', 'hay que reprogramarla', 'cambiar mi horario']) {
+            expect(pideCambioDeHorario(t)).toBe(true);
+        }
+        for (const t of ['¿qué horarios tienen?', 'puedo ir con la hermana?', 'quiero otra clase de prueba', 'gracias']) {
+            expect(pideCambioDeHorario(t)).toBe(false);
+        }
+    });
+
+    it('en la pregunta del nombre, «cuanto vale la mensualidad» no es un nombre: la contesta el bot y el paso queda', async () => {
+        const c = crear();
+        await iniciarEmbudo(c.ctx);
+        await c.turno('x', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        const antes = c.s.enviados.length;
+        expect(await c.turno('cuanto vale la mensualidad')).toBe(false);
+        expect(c.s.enviados).toHaveLength(antes);
+        expect(c.s.estado).toMatchObject({ paso: 'pregunta', datos: { i: 0, intentos: 0 } });
+        await c.turno('Mariana Gómez');
+        expect(c.ultimo().texto).toContain('¡Mucho gusto, Mariana!');
+        // En la de la fecha tampoco gasta un intento.
+        expect(await c.turno('donde queda la sede')).toBe(false);
+        expect(c.s.estado?.datos.intentos ?? 0).toBe(0);
+    });
+
+    it('eligiendo horario, «cuanto vale la mensualidad» (sin «?») es otra conversación: no gasta intento', async () => {
+        const c = crear();
+        await hastaHorarios(c);
+        const antes = c.s.enviados.length;
+        expect(await c.turno('cuanto vale la mensualidad')).toBe(false);
+        expect(c.s.enviados).toHaveLength(antes);
+        expect(c.s.estado).toMatchObject({ paso: 'elegir_franja', datos: { intentos: 0 } });
+        expect(await c.turno('la 2')).toBe(true);
+        expect(c.ctx.tomarCupo).toHaveBeenCalledWith('lead-1', 's-dom01', { pagada: false });
+    });
+
+    it('una sola sede en los botones: queda fijada y se va directo a las preguntas («Ya soy del club» se conserva)', async () => {
+        const aj = ajustesDesdeFila({
+            wa_modo_cortesia: 'clase', wa_bienvenida: '¡Hola! 👋 Bienvenid@ a Club Monsters Volley 🏐⚡',
+            wa_botones_sede: [{ branch_id: NORTE, titulo: '🟡 Sede Norte' }],
+            wa_preguntas_prospecto: PREGUNTAS_MONSTER, wa_modo_discreto: 'no', wa_temas_a_persona: null,
+        });
+        const c = crear({ aj });
+        expect(await iniciarEmbudo(c.ctx)).toBe(true);
+        expect(c.ultimo().texto).toBe('¡Hola! 👋 Bienvenid@ a Club Monsters Volley 🏐⚡\n\n🟡 Sede Norte · Calle 201 #67-12\n\n' +
+            'Para ubicarte en la categoría correcta te hago 5 preguntas rápidas 🙌\n\n1️⃣ ¿Cuál es el nombre completo del deportista?');
+        expect(c.ultimo().botones!.map((b) => b.id)).toEqual([BOTON_PUERTA.CLUB]);
+        expect(c.ultimo().estado).toEqual({ paso: 'pregunta', datos: { i: 0, respuestas: {}, branchId: NORTE, sedeTitulo: '🟡 Sede Norte' } });
+        await c.turno('Mariana Gómez Rojas');
+        await c.turno('14/03/2011');
+        await c.turno('Mujer', `${BOTON_EMBUDO.OPCION}sexo:0`);
+        await c.turno('Punta');
+        await c.turno('Estoy empezando', `${BOTON_EMBUDO.OPCION}trayectoria:0`);
+        expect(c.ctx.elegirGrupo).toHaveBeenCalledWith({ branchId: NORTE, anio: 2011, genero: 'f' });
+        expect(c.ultimo().texto).toContain('en la Sede Norte');
+    });
+
+    it('estadoDeSalientes: una respuesta suelta del bot no cierra el flujo; otro flujo, un cierre o una persona sí', () => {
+        const embudo = { payload: { step: 'embudo_esperando_pago', flujo: 'embudo', paso_embudo: 'esperando_pago', datos_embudo: { slotId: 's-1' } } };
+        const suelta = (step: string) => ({ payload: { step } });
+        expect(estadoDeSalientes([suelta('prospecto_ia'), suelta('prospecto_seguimiento_info'), embudo]))
+            .toEqual({ paso: 'esperando_pago', datos: { slotId: 's-1' } });
+        expect(estadoDeSalientes([suelta('embudo_pregunta_a_la_escuela'), embudo])).toBeNull();
+        expect(estadoDeSalientes([{ payload: { step: 'x', flujo: 'clase_cortesia' } }, embudo])).toBeNull();
+        expect(estadoDeSalientes([suelta('embudo_a_persona'), embudo])).toBeNull();
+        expect(estadoDeSalientes([suelta('escalated'), embudo])).toBeNull();
+        expect(estadoDeSalientes([{ payload: null, humano: true }, embudo])).toBeNull();
+        // La respuesta de la cola a un comprobante sin estado (el «esperando el pago» ya no vale)…
+        expect(estadoDeSalientes([suelta('clase_prueba_agendada'), embudo])).toBeNull();
+        expect(estadoDeSalientes([suelta('resultado_comprobante'), embudo])).toBeNull();
+        // …y con el estado que ahora deja B4, ese manda.
+        expect(estadoDeSalientes([{ payload: { step: 'clase_prueba_agendada', flujo: 'embudo', paso_embudo: 'agendada', datos_embudo: { pagada: true } } }, embudo]))
+            .toEqual({ paso: 'agendada', datos: { pagada: true } });
+        expect(estadoDeSalientes([suelta('prospecto_ia')])).toBeNull();
+        expect(estadoDeSalientes([])).toBeNull();
     });
 });
 
@@ -540,7 +795,9 @@ describe('lecturas puras', () => {
         const ahora = Date.parse('2026-10-31T16:00:00Z');
         expect(cupoSimulado({ precio: 15000, separarHoras: 24 }, ahora))
             .toEqual({ estado: 'separada', hasta: '2026-11-01T16:00:00.000Z' });
-        expect(cupoSimulado({ precio: 15000, separarHoras: null }, ahora).hasta).toBe('2026-11-01T16:00:00.000Z');
+        // Como la RPC: sin horas para separar, o si ya pagó (cambio de horario), agenda.
+        expect(cupoSimulado({ precio: 15000, separarHoras: null }, ahora)).toEqual({ estado: 'agendada', hasta: null });
+        expect(cupoSimulado({ precio: 15000, separarHoras: 24 }, ahora, { pagada: true })).toEqual({ estado: 'agendada', hasta: null });
         expect(cupoSimulado({ precio: 15000, separarHoras: 2 }, ahora).hasta).toBe('2026-10-31T18:00:00.000Z');
         expect(cupoSimulado({ precio: 0, separarHoras: 24 }, ahora)).toEqual({ estado: 'agendada', hasta: null });
         expect(cupoSimulado(null, ahora)).toEqual({ estado: 'agendada', hasta: null });

@@ -223,6 +223,33 @@ export function modoDiscretoDeEscuela(a: Pick<AjustesWhatsAppEscuela, 'modoDiscr
     return global;
 }
 
+const CACHE_MODO_DISCRETO_MS = 5 * 60_000;
+const cacheModoDiscreto = new Map<string, { hasta: number; modo: ModoDiscretoEscuela | undefined }>();
+
+/**
+ * Modo discreto efectivo de una escuela para lo que sale FUERA de un turno del
+ * bot (jobs, crons, `deliver` desde un job): el de la escuela si lo fijó, si no
+ * `global` (quien llama pasa `modoDiscreto()`). Antes esos envíos usaban solo la
+ * variable global: con Monster en «no» y la global prendida, el recordatorio o
+ * el «pago confirmado» se frenaban como si fuera Dynasty. Lee `school_settings`
+ * a lo sumo una vez cada 5 min por escuela (los jobs de cada minuto no la releen
+ * por fila). Nunca lanza.
+ */
+export async function modoDiscretoEfectivo(schoolId: string | null | undefined, global: boolean, ahora = Date.now()): Promise<boolean> {
+    if (!schoolId) return global;
+    let c = cacheModoDiscreto.get(schoolId);
+    if (!c || c.hasta <= ahora) {
+        c = { hasta: ahora + CACHE_MODO_DISCRETO_MS, modo: (await ajustesWhatsAppDeEscuela(schoolId)).modoDiscreto };
+        cacheModoDiscreto.set(schoolId, c);
+    }
+    return modoDiscretoDeEscuela({ modoDiscreto: c.modo }, global);
+}
+
+/** Solo para pruebas. */
+export function _olvidarModoDiscretoEfectivo(): void {
+    cacheModoDiscreto.clear();
+}
+
 /** Temas que pasan a una persona: los de la escuela si los fijó; si no, la lista global. Pura. */
 export function temasAPersonaDeEscuela<T extends string>(
     a: Pick<AjustesWhatsAppEscuela, 'temasAPersona'> | null | undefined, global: readonly T[],

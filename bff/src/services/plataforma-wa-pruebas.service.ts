@@ -265,11 +265,18 @@ export async function turnoSimulado(
     conv.updated_at = ahoraIso;
     tablas.whatsapp_conversations = [conv];
     tablas.whatsapp_settings = [ajustes];
+    // El entrante va siempre DESPUÉS de lo que ya está en la memoria: una persona escribe
+    // después de leer. Turnos seguidos (la batería qa:embudo) caían en el mismo milisegundo
+    // que la respuesta anterior y `escribioDespuesDeLaRespuesta` los tomaba por una ráfaga
+    // ya contestada: el bot «se callaba» solo en la simulación.
+    const ultimoEnMemoria = Math.max(0, ...(tablas.whatsapp_messages ?? [])
+        .map((m) => new Date(String(m.wa_timestamp ?? m.created_at ?? 0)).getTime() || 0));
+    const entranteIso = new Date(Math.max(ahora, ultimoEnMemoria + 1)).toISOString();
     tablas.whatsapp_messages = [...(tablas.whatsapp_messages ?? []), {
         id: randomUUID(), conversation_id: conversationId, integration_id: integ.id, direction: 'inbound',
         type: msg.botonId ? 'interactive' : 'text', text_body: texto, payload: msg.botonId ? { boton_id: msg.botonId } : {},
         ai_generated: false, wa_message_id: msg.waMessageId, from_wa_id: contacto, to_wa_id: null,
-        wa_timestamp: ahoraIso, created_at: ahoraIso, status: null,
+        wa_timestamp: entranteIso, created_at: entranteIso, status: null,
     }];
 
     const identificacion = () => {

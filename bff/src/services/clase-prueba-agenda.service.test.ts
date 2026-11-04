@@ -180,6 +180,16 @@ describe('confirmarClasePruebaPagada (contrato B4 → B2)', () => {
         const r = await confirmarClasePruebaPagada(P, d);
         expect(r.botones).toBeUndefined();
         expect(r.texto).not.toContain('¿Te puedo escribir');
+        // El embudo queda en «agendada» y sabe que ya pagó (cambiar horario sin volver a cobrar).
+        expect(r.payload).toMatchObject({
+            flujo: 'embudo', paso_embudo: 'agendada',
+            datos_embudo: { leadId: 'lead-1', slotId: FRANJA.id, nombre: LEAD.nombre, pagada: true },
+        });
+    });
+
+    it('con el consentimiento pendiente, el embudo queda en ese paso («sí» escrito también vale)', async () => {
+        const r = await confirmarClasePruebaPagada(P, depsAgenda({}));
+        expect(r.payload).toMatchObject({ flujo: 'embudo', paso_embudo: 'consentimiento', datos_embudo: { pagada: true, siguiente: 'fin' } });
     });
 
     it('sin_cupo → «Elegir horario» sin cobrar de nuevo', async () => {

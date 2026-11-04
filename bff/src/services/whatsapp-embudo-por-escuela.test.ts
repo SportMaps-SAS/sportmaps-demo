@@ -93,7 +93,9 @@ import { handleBotTurn } from '../routes/whatsapp';
 import { ajustesWhatsAppDeEscuela, embudoActivo } from './whatsapp-ajustes-escuela.service';
 import { iniciarEmbudo, atenderTurnoEmbudo, depsEmbudoDeSupabase, type CtxEmbudo } from './whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
-import { BOTON, _olvidarReservasDePaso, seguimientoQueContesta, claseConValor, lineaPrimeraClase } from './whatsapp-bot.service';
+import {
+    BOTON, _olvidarReservasDePaso, seguimientoQueContesta, claseConValor, lineaPrimeraClase, lineaDeDireccionDelInteresado,
+} from './whatsapp-bot.service';
 import { textosDeClase } from './textos-clase-prueba';
 
 const INTEGRATION = { id: 'int-1', school_id: 'school-1' } as any;
@@ -190,8 +192,31 @@ const mensaje = (textBody: string, waMessageId: string, botonId: string | null =
     type: botonId ? 'interactive' : 'text', textBody, botonId, raw: {}, waTimestamp: null,
 }) as any;
 
+/**
+ * La base con la historia de verdad: los frenos por step cuentan los salientes de
+ * `filas` (el de 30 días incluido) y las listas de salientes las devuelven
+ * ordenadas. Monster ya pagó la clase de prueba de su escuela ($15.000).
+ */
+function conHistoria(filas: Fila[]) {
+    const orig = h.state.resolve;
+    h.state.resolve = (table, ops) => {
+        if (table === 'school_trial_class_settings') return { data: { nombre_clase: 'prueba', trial_price: 15000 }, error: null };
+        if (table === 'whatsapp_messages') {
+            const eqs = ops.filter(([m]) => m === 'eq').map(([, a]) => a);
+            const paso = eqs.find((a) => String(a[0]).endsWith('>>step'))?.[1];
+            const direccion = eqs.find((a) => a[0] === 'direction')?.[1];
+            const salientes = filas.filter((f) => f.direction === 'outbound').sort((a, b) => b.created_at.localeCompare(a.created_at));
+            if (paso) return { count: salientes.filter((f) => f.payload?.step === paso).length, error: null };
+            if (direccion === 'outbound' && !ops.some(([m]) => m === 'maybeSingle')) return { data: salientes, error: null };
+        }
+        return orig(table, ops);
+    };
+}
+
 /** Lo que el bot hace HOY con ese mensaje: texto, step y botones del borrador. */
-async function respuesta(escuela: Escuela, texto: string, op: { botonId?: string | null; atender?: boolean; previos?: Fila[] } = {}) {
+async function respuesta(escuela: Escuela, texto: string, op: {
+    botonId?: string | null; atender?: boolean; previos?: Fila[]; historia?: boolean;
+} = {}) {
     vi.clearAllMocks();
     _olvidarReservasDePaso();
     h.state.inserts = [];
@@ -202,6 +227,7 @@ async function respuesta(escuela: Escuela, texto: string, op: { botonId?: string
         { wa_message_id: 'wamid.0', direction: 'inbound', text_body: texto, ai_generated: false, created_at: hace(2) },
     ];
     base(escuela, filas);
+    if (op.historia) conHistoria(filas);
     h.debeAtender.mockResolvedValue(op.atender
         ? { atender: true, tipo: 'desconocido', botEncendido: true, tomada: false }
         : { atender: false, tipo: 'desconocido', botEncendido: true, tomada: false });
@@ -352,6 +378,115 @@ describe('Monster con el bot cableado: el embudo reemplaza la cortesía, la puer
         } finally {
             process.env.WHATSAPP_MODO_DISCRETO = antes;
         }
+    });
+});
+
+// ─── Después del embudo (Monster 2026-11-03): nunca silencio ─────────────────
+describe('Monster: el interesado que ya pasó por el embudo nunca queda en silencio', () => {
+    const DATOS = {
+        leadId: 'lead-1', nombre: 'Mariana Gómez', genero: 'f', anio: 2012, branchId: NORTE, sedeTitulo: '🟡 Sede Norte',
+        teamId: 't-1', grupo: 'Infantil Femenino', slotId: 's-a', consentimiento: 'si',
+    };
+    const BIENVENIDA: Fila = {
+        wa_message_id: 'wamid.b', direction: 'outbound', text_body: '¡Hola! ¿cuál sede?', ai_generated: true, created_at: hace(900),
+        payload: { step: 'desconocido_tema_escolar', flujo: 'embudo', paso_embudo: 'sede', datos_embudo: {} },
+    };
+    const PAGO: Fila = {
+        wa_message_id: 'wamid.pago', direction: 'outbound', ai_generated: true, created_at: hace(120),
+        text_body: '¡Listo! 🙌 Para confirmarlo, paga la clase de prueba ($15.000) por Nequi… envíame el comprobante 📸',
+        payload: { step: 'embudo_esperando_pago', flujo: 'embudo', paso_embudo: 'esperando_pago', datos_embudo: DATOS },
+    };
+    const previos = [BIENVENIDA, PAGO];
+
+    it('«Y para matricularla…?» después del pago: la respuesta de la matrícula y la escuela avisada', async () => {
+        const r = await respuesta('monster', 'Y para matricularla después de la clase qué tengo que hacer?', { previos, historia: true });
+        expect(r).toHaveLength(1);
+        expect(r[0]).toMatchObject({ step: 'embudo_matricula', flujo: 'embudo' });
+        expect(r[0].texto).toBe('La matrícula se hace después de la clase de prueba: el profe evalúa a Mariana, ' +
+            'la escuela te confirma el grupo y te escribe por aquí para matricularla 🙌');
+        expect(h.chatWithTools).not.toHaveBeenCalled();
+        // Aviso a la escuela (push) aunque la conversación ya estuviera abierta.
+        expect(h.sendToUser).toHaveBeenCalled();
+    });
+
+    it('«ya te mandé el comprobante» (pagos sin precio: antes silencio total) → acuse, estado intacto y aviso', async () => {
+        const r = await respuesta('monster', 'ya te mandé el comprobante', { previos, historia: true });
+        expect(r).toHaveLength(1);
+        expect(r[0]).toMatchObject({ step: 'embudo_pregunta_a_la_escuela', flujo: 'embudo' });
+        expect(r[0].texto).toBe('¡Gracias por escribir! 🙌 Ya le pasé tu mensaje a la escuela y te responde por aquí.');
+        const borrador = borradores()[0];
+        expect(borrador.tool_context).toMatchObject({ paso_embudo: 'esperando_pago', datos_embudo: { slotId: 's-a' } });
+        expect(h.sendToUser).toHaveBeenCalled();
+    });
+
+    it('con el acuse de 24 h ya gastado y sin modelo: acuse corto; ni silencio ni las franjas de cortesía de otro flujo', async () => {
+        const acuse: Fila = {
+            wa_message_id: 'wamid.acuse', direction: 'outbound', ai_generated: true, created_at: hace(40),
+            text_body: '¡Gracias! 🙌 Ya pasé tu mensaje a la escuela y alguien te responde por aquí.',
+            payload: { step: 'prospecto_seguimiento' },
+        };
+        const r = await respuesta('monster', 'Hola, y qué debo llevar a la clase de prueba?', { previos: [...previos, acuse], historia: true });
+        expect(r).toHaveLength(1);
+        expect(r[0]).toMatchObject({ step: 'embudo_pregunta_a_la_escuela', flujo: 'embudo' });
+        expect(r[0].texto).toBe('Anotado 🙌 También se lo pasé a la escuela y te responde por aquí.');
+    });
+
+    it('un cierre de cortesía no se contesta; con una persona de la escuela escribiendo, tampoco', async () => {
+        expect(await respuesta('monster', 'Muchas gracias, quedo atenta', { previos, historia: true })).toEqual([]);
+        const persona: Fila = {
+            wa_message_id: 'wamid.h', direction: 'outbound', ai_generated: false, created_at: hace(60),
+            text_body: 'Hola, ya revisamos tu comprobante', payload: {},
+        };
+        expect(await respuesta('monster', 'ya te mandé el comprobante', { previos: [...previos, persona], historia: true })).toEqual([]);
+    });
+
+    it('«¿dónde queda la sede?» a mitad del registro: la de SU sede (antes, la dirección de la escuela: Suba a la Norte)', async () => {
+        const interes: Fila = {
+            wa_message_id: 'wamid.i', direction: 'inbound', text_body: 'Hola, quiero información para entrenar voleibol',
+            ai_generated: false, created_at: hace(1000),
+        };
+        const pregunta: Fila = {
+            wa_message_id: 'wamid.q', direction: 'outbound', ai_generated: true, created_at: hace(120),
+            text_body: '¡Genial, 🟡 Sede Norte! 🙌\n\n1️⃣ ¿Cuál es el nombre completo del deportista?',
+            payload: { step: 'embudo_pregunta', flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0, respuestas: {}, branchId: NORTE, sedeTitulo: '🟡 Sede Norte' } },
+        };
+        const r = await respuesta('monster', 'donde queda la sede', { previos: [interes, BIENVENIDA, pregunta], historia: true });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('prospecto_seguimiento_info');
+        expect(r[0].texto).toContain('📍 La *Sede Norte* queda en Calle 201 #67-12.');
+        expect(r[0].texto).not.toContain('Calle 152');
+    });
+
+    it('«cuanto vale la mensualidad» a mitad del registro de quien solo escribió «Hola»: el valor (antes, solo el acuse)', async () => {
+        const hola: Fila = { wa_message_id: 'wamid.h0', direction: 'inbound', text_body: 'Hola', ai_generated: false, created_at: hace(1000) };
+        const pregunta: Fila = {
+            wa_message_id: 'wamid.q', direction: 'outbound', ai_generated: true, created_at: hace(120),
+            text_body: '1️⃣ ¿Cuál es el nombre completo del deportista?',
+            payload: { step: 'embudo_pregunta', flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0, respuestas: {}, branchId: NORTE } },
+        };
+        const r = await respuesta('monster', 'cuanto vale la mensualidad', { previos: [hola, BIENVENIDA, pregunta], historia: true });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('prospecto_seguimiento_precios');
+        expect(r[0].texto).toMatch(/\$\s?150\.000/);
+        // No se tomó como el nombre («¡Mucho gusto, Cuanto!»).
+        expect(r[0].texto).not.toMatch(/mucho gusto/i);
+    });
+
+    it('lineaDeDireccionDelInteresado: la cancha de su clase, su sede o todas las del embudo', () => {
+        const sedes = [{ id: NORTE, nombre: 'Sede Norte', direccion: 'Calle 201 #67-12' }, { id: SUBA, nombre: 'Sede Suba', direccion: 'Calle 152 #94A-67' }];
+        expect(lineaDeDireccionDelInteresado({ lugar: { lugar: 'La Enseñanza', direccion: 'Calle 201 #67-12', mapsUrl: 'https://maps.app.goo.gl/x' }, branchId: SUBA, sedes }))
+            .toBe('📍 La clase es en *La Enseñanza · Calle 201 #67-12*.\nCómo llegar: https://maps.app.goo.gl/x');
+        expect(lineaDeDireccionDelInteresado({ branchId: SUBA, sedes })).toBe('📍 La *Sede Suba* queda en Calle 152 #94A-67.');
+        expect(lineaDeDireccionDelInteresado({ sedes, sedesDelEmbudo: [NORTE, SUBA] }))
+            .toBe('📍 Nuestras sedes:\n• *Sede Norte*: Calle 201 #67-12\n• *Sede Suba*: Calle 152 #94A-67');
+        expect(lineaDeDireccionDelInteresado({ sedes: [] })).toBeNull();
+    });
+
+    it('Dynasty (sin embudo) con el mismo mensaje sigue igual: sin acuse del embudo', async () => {
+        const sinColumnas = await respuesta('sin_columnas', 'ya te mandé el comprobante', { historia: true });
+        const conNull = await respuesta('columnas_null', 'ya te mandé el comprobante', { historia: true });
+        expect(conNull).toEqual(sinColumnas);
+        expect(JSON.stringify(conNull)).not.toMatch(/embudo/);
     });
 });
 

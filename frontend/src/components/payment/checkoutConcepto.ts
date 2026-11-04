@@ -12,6 +12,7 @@
 import {
     TIPOS_DE_SERVICIO,
     definicionDeMotivo,
+    esMotivoDeCobro,
     esTipoDeServicio,
     exentoDeUnicidadDePeriodo,
     type MotivoDeCobro,
@@ -104,6 +105,17 @@ export function conceptoInicial(m: ConceptoInicial | null | undefined, montoPlan
     if (m === 'mensualidad' || m === 'articulos' || m === 'otro') return m;
     if (esTipoDeServicio(m)) return `servicio:${m}`;
     return 'mensualidad';
+}
+
+/**
+ * `?motivo=<clave>` de un enlace (WhatsApp, correo) → el concepto con que abre el
+ * checkout. Solo claves del catálogo (`motivosDeCobro`) o las dos inscripciones de
+ * siempre; cualquier otra cosa se ignora (null). Pura.
+ */
+export function conceptoInicialDeUrl(v: string | null | undefined): ConceptoInicial | null {
+    const c = String(v ?? '').trim().toLowerCase();
+    if (c === 'inscripcion_fija' || c === 'inscripcion_variable') return c;
+    return esMotivoDeCobro(c) ? c : null;
 }
 
 /** Equivalente cuando el pedido no está: la otra inscripción, o los servicios «otro». */

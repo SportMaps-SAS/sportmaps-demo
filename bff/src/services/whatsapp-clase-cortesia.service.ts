@@ -405,9 +405,11 @@ export function quiereSalirDelFlujo(texto: string | null | undefined): boolean {
 
 /**
  * Pregunta de otro tema escrita sin «?» («cuanto vale la mensualidad»,
- * «donde queda»): no es elegir franja. Solo se usa en `elegir_franja`.
+ * «donde queda»): no es elegir franja. La usan `elegir_franja` de la cortesía y,
+ * desde 2026-11-03, el embudo del interesado (la franja y las preguntas del
+ * registro: «cuanto vale la mensualidad» en la del nombre era «¡Mucho gusto, Cuanto!»).
  */
-function esPreguntaDeOtroTema(texto: string): boolean {
+export function esPreguntaDeOtroTema(texto: string): boolean {
     // «Y cuáles son los valores», «En dónde se encuentran», «pero cuánto vale»
     // (auditoría 2026-10-28, X-03): el conector de adelante no cambia la pregunta.
     const n = normalizar(texto)

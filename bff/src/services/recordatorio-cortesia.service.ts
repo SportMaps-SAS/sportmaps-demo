@@ -58,7 +58,9 @@ import {
     FLUJO_CORTESIA, QUE_LLEVAR, BOTON_CANCELAR_MI_CLASE, bloqueFranja, sedeConDireccion,
     fechaLegible, horaLegible, enriquecerFranja, type FranjaCortesia,
 } from './whatsapp-clase-cortesia.service';
-import { indicacionesCortesiaDeEscuela, ajustesWhatsAppDeEscuela, embudoActivo } from './whatsapp-ajustes-escuela.service';
+import {
+    indicacionesCortesiaDeEscuela, ajustesWhatsAppDeEscuela, embudoActivo, modoDiscretoDeEscuela,
+} from './whatsapp-ajustes-escuela.service';
 import { lugaresDeEscuela, type LugarDeEscuela } from './grupos-por-edad.service';
 import { textosClaseDeEscuela, TEXTOS_POR_DEFECTO, type TextosClase } from './textos-clase-prueba';
 import type { BotonInteractivo } from './whatsapp.service';
@@ -192,13 +194,21 @@ export interface DepsRecordatorio {
         embudo?: boolean;
         /** Nombre y valor de su clase (B3). */
         textos?: TextosClase;
+        /**
+         * Modo discreto EFECTIVO de la escuela (B6: `wa_modo_discreto` 'si'/'no'; 'global' o
+         * sin la columna = la variable de siempre). Sin el dato, la variable global.
+         */
+        discreto?: boolean;
     }>;
     /** 'ok' = este BFF lo tomó; 'ya' = otro lo tomó; 'sin_tabla' = migración sin aplicar. */
     reservar: (r: ReservaParaRecordar, tipo: TipoRecordatorio, waId: string) => Promise<{ estado: 'ok'; id: string } | { estado: 'ya' | 'sin_tabla' | 'error'; detalle?: string }>;
     cerrar: (id: string, c: Cierre) => Promise<void>;
     botEncendido: (integrationId: string) => Promise<boolean>;
     tomada: (conversationId: string) => Promise<boolean>;
-    /** Modo discreto: ¿una persona de la escuela escribió en el chat en las últimas 12 h? */
+    /**
+     * ¿Una persona de la escuela escribió en el chat en las últimas 12 h? Solo se
+     * pregunta si el modo discreto de ESA escuela está prendido (`escuela().discreto`).
+     */
     escuelaActiva?: (conversationId: string) => Promise<boolean>;
     dadoDeBaja: (integrationId: string, waId: string) => Promise<boolean>;
     enviarTexto: (integ: WhatsAppIntegration, waId: string, texto: string, botones?: BotonInteractivo[]) => Promise<SendTextResult>;
@@ -250,17 +260,19 @@ const DEPS: DepsRecordatorio = {
         return (data as any) ?? null;
     },
     async escuela(schoolId) {
-        const [{ data: s }, { data: b }, indicaciones, lugares, ajustes, textos] = await Promise.all([
+        const [{ data: s }, { data: b }, indicaciones, lugares, ajustes, textos, { modoDiscreto }] = await Promise.all([
             supabase.from('schools').select('name').eq('id', schoolId).maybeSingle(),
             supabase.from('school_branches').select('name, address, is_main').eq('school_id', schoolId).limit(50),
             indicacionesCortesiaDeEscuela(schoolId),
             lugaresDeEscuela(schoolId).catch(() => [] as LugarDeEscuela[]),
             ajustesWhatsAppDeEscuela(schoolId),
             textosClaseDeEscuela(schoolId).catch(() => TEXTOS_POR_DEFECTO),
+            import('./whatsapp-modo-discreto'),
         ]);
         return {
             nombre: (s as any)?.name ?? 'la escuela', sedes: ((b as any[]) ?? []), indicaciones,
             lugares, embudo: embudoActivo(ajustes), textos,
+            discreto: modoDiscretoDeEscuela(ajustes, modoDiscreto()),
         };
     },
     async reservar(r, tipo, waId) {
@@ -290,8 +302,8 @@ const DEPS: DepsRecordatorio = {
         return conversacionTomada(conversationId);
     },
     async escuelaActiva(conversationId) {
-        const { modoDiscreto, escuelaActiva } = await import('./whatsapp-modo-discreto');
-        return modoDiscreto() && escuelaActiva(conversationId);
+        const { escuelaActiva } = await import('./whatsapp-modo-discreto');
+        return escuelaActiva(conversationId);
     },
     async dadoDeBaja(integrationId, waId) {
         const { estaDadoDeBaja } = await import('./whatsapp-optin.service');
@@ -392,14 +404,16 @@ async function enviarUno(
 ): Promise<Cierre> {
     if (!(await d.botEncendido(integ.id))) return { estado: 'no_enviado', motivo: 'bot_apagado' };
     if (conv && await d.tomada(conv.id)) return { estado: 'no_enviado', motivo: 'conversacion_tomada' };
-    // Modo discreto: si la escuela está coordinando en el chat, el recordatorio
-    // automático puede contradecirla (Milena reprogramó a mano y salió el de la franja vieja).
-    if (conv && d.escuelaActiva && await d.escuelaActiva(conv.id)) {
-        return { estado: 'no_enviado', motivo: 'escuela_en_la_conversacion' };
-    }
 
     if (!escuelas.has(r.schoolId)) escuelas.set(r.schoolId, await d.escuela(r.schoolId));
     const esc = escuelas.get(r.schoolId)!;
+    // Modo discreto: si la escuela está coordinando en el chat, el recordatorio
+    // automático puede contradecirla (Milena reprogramó a mano y salió el de la franja vieja).
+    // El de ESA escuela (B6), como el bot y «sigue en fila»: Monster lo tiene en «no».
+    const { modoDiscreto } = await import('./whatsapp-modo-discreto');
+    if (conv && (esc.discreto ?? modoDiscreto()) && d.escuelaActiva && await d.escuelaActiva(conv.id)) {
+        return { estado: 'no_enviado', motivo: 'escuela_en_la_conversacion' };
+    }
     const textos = esc.textos ?? TEXTOS_POR_DEFECTO;
     // Dirección de la cancha por coincidencia EXACTA (sin canchas cargadas, la de la sede como antes).
     const franja: FranjaCortesia = enriquecerFranja({

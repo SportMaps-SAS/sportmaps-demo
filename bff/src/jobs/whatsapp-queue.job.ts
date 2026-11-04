@@ -81,6 +81,7 @@ import {
 } from '../services/whatsapp-comprobante-guiado.service';
 import { categoriaDelCobro, etiquetaDelCobro } from '../services/tipo-de-cobro';
 import { modoDiscreto, escuelaActiva } from '../services/whatsapp-modo-discreto';
+import { modoDiscretoEfectivo } from '../services/whatsapp-ajustes-escuela.service';
 import type { Verdict } from '../services/receipt-verdict';
 import type { Motivo } from '../services/motivos-de-cobro';
 import { MOTIVO_DE_OTRO_CONCEPTO } from '../services/whatsapp-otro-concepto.service';
@@ -480,8 +481,12 @@ export interface ContextoAplicacion {
     /** sha256 de la imagen. Es la llave del dedup: no se recalcula, se pasa. */
     sha: string;
     ocr: Awaited<ReturnType<typeof extractReceipt>>;
-    /** `linea` (plan B4): lo que el asistente decidió de este comprobante, para el resumen de la ráfaga. */
-    responder: (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo) => Promise<unknown>;
+    /**
+     * `linea` (plan B4): lo que el asistente decidió de este comprobante, para el resumen de la ráfaga.
+     * `payload`: se mezcla en el del saliente (el estado del embudo tras agendar la clase de prueba).
+     */
+    responder: (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo,
+        payload?: Record<string, unknown>) => Promise<unknown>;
     /** Qué hacer ante un fallo transitorio. El worker reintenta; la respuesta no. */
     alFallar: (motivo: string) => Promise<void>;
     log?: Logger;
@@ -494,7 +499,7 @@ export type ResultadoAplicacion =
 
 /** Reemplaza la respuesta a la familia después de aplicar (B3: «Tu clase quedó el sábado…»). */
 export type AlAplicar = (r: { action: string; veredicto: Verdict; pago: PagoPendiente }) =>
-    Promise<{ texto: string; botones?: BotonInteractivo[]; paso?: string } | null>;
+    Promise<{ texto: string; botones?: BotonInteractivo[]; paso?: string; payload?: Record<string, unknown> } | null>;
 
 /**
  * Estampa el comprobante en UN pago, con su veredicto, y le cuenta al acudiente.
@@ -720,6 +725,7 @@ export async function aplicarComprobante(
     // (Plan B4) Otra respuesta para la familia: la agenda de la clase de prueba.
     let paso = 'resultado_comprobante';
     let botones: BotonInteractivo[] | undefined;
+    let payloadExtra: Record<string, unknown> | undefined;
     if (extra.alAplicar) {
         try {
             const otra = await extra.alAplicar({ action: resultado.action, veredicto: estampado.veredicto.verdict, pago });
@@ -727,6 +733,7 @@ export async function aplicarComprobante(
                 respuesta = otra.texto;
                 paso = otra.paso ?? paso;
                 botones = otra.botones?.length ? otra.botones : undefined;
+                payloadExtra = otra.payload;
             }
         } catch (e: any) {
             ctx.log?.warn?.({ queueId: ctx.queueId, err: e?.message }, '[wa-queue] alAplicar falló: sale la respuesta de siempre');
@@ -742,7 +749,7 @@ export async function aplicarComprobante(
             + restantes.map((r) => `• ${describirPago(r)}`).join('\n');
     }
 
-    const salida = await ctx.responder(respuesta, paso, botones, extra.linea) as { ok?: boolean; error?: string } | undefined;
+    const salida = await ctx.responder(respuesta, paso, botones, extra.linea, payloadExtra) as { ok?: boolean; error?: string } | undefined;
     // En revisión y Meta rechazó el texto por ventana cerrada (cola atrasada
     // más de 24 h): `comprobante_en_revision` si está aprobada; si no, como antes.
     if (resultado.action !== 'approved' && resultado.action !== 'rejected'
@@ -1394,7 +1401,7 @@ async function motivoPorMontoDeFamilia(a: ArgsB4, o: { motivos?: Motivo[] } = {}
 /** Contrato con B3 (plan maestro §3). B4 la carga con import dinámico; si falta, no agenda y pasa a una persona. */
 export interface AgendaClasePrueba {
     confirmarClasePruebaPagada(a: { schoolId: string; leadId: string; paymentId: string; telefono: string }):
-        Promise<{ texto: string; botones?: { id: string; title: string }[]; step?: string }>;
+        Promise<{ texto: string; botones?: { id: string; title: string }[]; step?: string; payload?: Record<string, unknown> }>;
 }
 
 /** Ruta en variable: el módulo de B3 puede no existir todavía (se compila y se prueba sin él). */
@@ -1471,6 +1478,8 @@ function agendaDeClasePrueba(p: ArgsProspecto, leadId: string, destino: DestinoE
                             texto: r.texto,
                             botones: r.botones?.map((b) => ({ id: b.id, title: b.title })),
                             paso: r.step ?? 'clase_prueba_agendada',
+                            // El estado del embudo (agendada): lo que escriba después lo sigue atendiendo él.
+                            ...(r.payload ? { payload: r.payload } : {}),
                         };
                     }
                 } catch (e: any) {
@@ -1628,8 +1637,9 @@ async function continuarComoComprobante(
         }
         // Modo discreto: «cuenta ajena» alarmaba a familias que le habían pagado al
         // Nequi de la dueña o a la cuenta del entrenador para el torneo (3 de 3
-        // falsos en un lote del análisis 2026-10-29). Lo revisa la escuela.
-        if (modoDiscreto()) {
+        // falsos en un lote del análisis 2026-10-29). Lo revisa la escuela. El modo
+        // de ESA escuela (B6), no solo la variable global.
+        if (await modoDiscretoEfectivo(fila.school_id, modoDiscreto())) {
             await responder(M.escaladoSinAcudiente.replace('para que lo aplique', 'para que lo revise contigo'), 'destino_ajeno');
             await cerrar(fila.id, 'ignored', {
                 result_type: 'escalated', matched_parent_id: parentId, error_message: 'destino no es de la escuela',
@@ -3163,7 +3173,8 @@ async function procesarFilaInterna(
         return enviado;
     };
 
-    const responder = async (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo) => {
+    const responder = async (texto: string, paso: string, botones?: BotonInteractivo[], linea?: LineaDeMotivo,
+        payload?: Record<string, unknown>) => {
         if (tomada) {
             log?.info?.({ queueId: fila.id, paso }, '[wa-queue] conversación tomada: no se le escribe a la familia');
             return { ok: true, silenciado: true };
@@ -3186,7 +3197,7 @@ async function procesarFilaInterna(
             rafaga.enviar = enviar;
             return { ok: true, enRafaga: true };
         }
-        return enviar(texto, { step: paso, queue_id: fila.id }, paso === 'resultado_comprobante', botones);
+        return enviar(texto, { ...(payload ?? {}), step: paso, queue_id: fila.id }, paso === 'resultado_comprobante', botones);
     };
 
     /**
@@ -3246,7 +3257,9 @@ async function procesarFilaInterna(
     // chat en las últimas 12 h, el comprobante se procesa y se aplica igual, pero
     // no se le escribe a la familia: ella está en la charla y confirma a su modo
     // (Dynasty 10-06: «Quedo septiembre al día» y el bot, encima, «octubre al día» ×3).
-    if (!tomada && conversationId && modoDiscreto() && await escuelaActiva(conversationId)) tomada = true;
+    // El modo de ESA escuela (B6): con «no», la escuela escribiendo no calla al bot.
+    if (!tomada && conversationId && await modoDiscretoEfectivo(fila.school_id, modoDiscreto())
+        && await escuelaActiva(conversationId)) tomada = true;
 
     // Solo se pregunta si administra la escuela cuando la respuesta puede
     // cambiar algo: familias que también son dueñas (ver `decidirAdjunto`).

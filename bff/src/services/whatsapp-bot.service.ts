@@ -105,7 +105,7 @@ import { atenderAusenciaEnBot } from './whatsapp-ausencias.service';
 import { modoDiscreto, escuelaActiva, escuelaActivaEn, revisarPendientesSinRespuesta } from './whatsapp-modo-discreto';
 import {
     ajustesWhatsAppDeEscuela, atencionPresencialDeEscuela, embudoActivo, modoDiscretoDeEscuela, temasAPersonaDeEscuela,
-    type AjustesWhatsAppEscuela,
+    modoDiscretoEfectivo, type AjustesWhatsAppEscuela,
 } from './whatsapp-ajustes-escuela.service';
 import { mensajeSemanaDeCortesia } from './whatsapp-cortesia-semana.service';
 import { atenderTurnoVenta, esSi } from './whatsapp-venta-servicios.service';
@@ -122,7 +122,7 @@ import {
 } from './whatsapp-reclamo-valor.service';
 import {
     iniciarEmbudo, atenderTurnoEmbudo, depsEmbudoDeSupabase, payloadDeEstado, leadCompletoDeEmbudo,
-    registrarOptInProspecto, type CtxEmbudo,
+    registrarOptInProspecto, leerEstadoDeEmbudoDeSupabase, FLUJO_EMBUDO, sinEmojis, type CtxEmbudo,
 } from './whatsapp-embudo-prospecto';
 import {
     textosClaseDeEscuela, textosDeClase, reglaDeClaseParaPrompt, TEXTOS_POR_DEFECTO, type TextosClase,
@@ -184,6 +184,16 @@ const escuelaDelTurno = new AsyncLocalStorage<EscuelaDelTurno>();
 /** Modo discreto efectivo: el de la escuela del turno; fuera de un turno, el global. */
 function discretoEnBot(): boolean {
     return escuelaDelTurno.getStore()?.discreto ?? modoDiscreto();
+}
+
+/**
+ * El modo discreto para un envío de `deliver`: dentro de un turno, el del turno;
+ * fuera (los jobs que mandan por `deliver`: seguimiento de 20 h, después de la
+ * clase, «sigue en fila»), el de ESA escuela y no solo la variable global (B6).
+ */
+function discretoParaEnviar(schoolId: string): Promise<boolean> | boolean {
+    if (escuelaDelTurno.getStore()) return discretoEnBot();
+    return modoDiscretoEfectivo(schoolId, modoDiscreto());
 }
 
 /** Ajustes de la escuela, leídos una vez por turno. Nunca lanza (`ajustesWhatsAppDeEscuela` no lanza). */
@@ -2443,6 +2453,105 @@ async function darBienvenidaDeEmbudo(
     }
 }
 
+/** step del acuse al interesado del embudo cuya pregunta no contestó nadie más. */
+export const PASO_EMBUDO_ACUSE = 'embudo_pregunta_a_la_escuela';
+
+/** El acuse: completo la primera vez en el día, corto si ya se le dijo. Pura. */
+export function textoAcuseDelEmbudo(repetido: boolean): string {
+    return repetido
+        ? 'Anotado 🙌 También se lo pasé a la escuela y te responde por aquí.'
+        : '¡Gracias por escribir! 🙌 Ya le pasé tu mensaje a la escuela y te responde por aquí.';
+}
+
+/**
+ * ¿Hay algo que contestar? Sin saludos, «gracias», «quedo atenta», «ok» ni un
+ * emoji; con una pregunta o al menos dos palabras («ya pagué»). Pura.
+ */
+export function mensajeConContenido(texto: string, equipo: ReadonlyMap<string, string> = new Map()): boolean {
+    const lineas = texto.split('\n').map((l) => l.trim()).filter(Boolean)
+        .filter((l) => !saludoSinContenido(l, equipo) && !esCierreSuelto(l, equipo) && !esCierreDeCortesia(l, equipo));
+    if (!lineas.length) return false;
+    const t = lineas.join(' ');
+    return t.includes('?') || (t.match(/\p{L}{2,}/gu) ?? []).length >= 2;
+}
+
+/**
+ * 'seguimiento' si la escuela tiene embudo, responde a interesados
+ * (`responder_prospectos`) y este contacto ya pasó por el embudo; si no, null.
+ * Dynasty y las demás: siempre null (no leen nada). Nunca lanza.
+ */
+async function seguimientoDelEmbudo(integration: WhatsAppIntegration, conversationId: string): Promise<PuertaDeProspecto | null> {
+    try {
+        if (!embudoActivo(await ajustesDeLaEscuela(integration.school_id))) return null;
+        if (!(await ajustesDeAtencion(integration.id)).responderProspectos) return null;
+        return (await pasoPorElEmbudo(conversationId)) ? 'seguimiento' : null;
+    } catch {
+        return null;
+    }
+}
+
+/** ¿El bot le habló con el embudo en los últimos 30 días (paso abierto o cerrado)? Nunca lanza. */
+async function pasoPorElEmbudo(conversationId: string): Promise<boolean> {
+    try {
+        const desde = new Date(Date.now() - FRENO_DESCONOCIDO_DIAS * 24 * 3600_000).toISOString();
+        const { data } = await supabase.from('whatsapp_messages').select('payload')
+            .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
+            .order('created_at', { ascending: false }).limit(40);
+        return ((data ?? []) as any[]).some((m) => m?.payload?.flujo === FLUJO_EMBUDO
+            || String(m?.payload?.step ?? '').startsWith('embudo_'));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Red del interesado que pasó por el embudo (Monster 2026-11-03): después del
+ * «envíame el comprobante» le preguntó al bot por la matrícula, qué llevar o «ya
+ * pagué», y el camino general lo dejaba en silencio con la conversación en el
+ * buzón: el freno de 30 días con el modelo caído o en su tope, el acuse de 24 h
+ * ya gastado, o «ya te mandé el comprobante» (tema de pagos sin precio, que ni
+ * siquiera abría el buzón). Si nada más le contestó: un acuse (completo una vez
+ * al día, corto después) con el estado del embudo intacto, y la escuela recibe
+ * su mensaje (con aviso a lo sumo una vez por hora). Solo escuelas con embudo;
+ * no con una persona de la escuela escribiendo, ni a un cierre de cortesía, ni a
+ * un mensaje de una ráfaga que ya se contestó. true = acusó. Nunca lanza.
+ */
+async function acuseDelEmbudo(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    inboundText: string | null, botonId: string | null, rafaga: string | null,
+): Promise<boolean> {
+    try {
+        const texto = (inboundText || '').trim();
+        if (botonId || !texto) return false;
+        if (!embudoActivo(await ajustesDeLaEscuela(integration.school_id))) return false;
+        const equipo = await vocativosDeEscuela(integration.school_id);
+        if (!mensajeConContenido([rafaga, texto].filter(Boolean).join('\n'), equipo)) return false;
+        if (!(await botEncendido(integration.id))) return false;
+        const recientes = await mensajesRecientes(conversationId);
+        if (humanoReciente(recientes, SILENCIO_HUMANO_MIN) || !escribioDespuesDeLaRespuesta(recientes)) return false;
+        const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+        if (!estado && !(await pasoPorElEmbudo(conversationId))) return false;
+
+        const [repetido, avisadoHaceRato] = await Promise.all([
+            Promise.all([pasoReciente(conversationId, PASO_EMBUDO_ACUSE, 24), pasoReciente(conversationId, PASO_PROSPECTO_SEGUIMIENTO, 24)])
+                .then(([a, b]) => a || b),
+            pasoReciente(conversationId, PASO_EMBUDO_ACUSE, 1),
+        ]);
+        await deliver(integration, conversationId, contactWaId, textoAcuseDelEmbudo(repetido),
+            { step: PASO_EMBUDO_ACUSE, ...payloadDeEstado(estado) });
+        const nombre = estado?.datos?.nombre ?? estado?.datos?.respuestas?.nombre ?? null;
+        await abrirEnBuzon(integration, conversationId, contactWaId, avisadoHaceRato ? undefined : {
+            motivo: 'puerta_otro',
+            detalle: `Clase de prueba por WhatsApp (pregunta sin responder): ${nombre ? `Interesado: ${nombre}. ` : ''}` +
+                `Escribió: «${texto.slice(0, 300)}».`,
+        });
+        return true;
+    } catch (err: any) {
+        console.error('[whatsapp-bot] acuse del embudo falló', err?.message || err);
+        return false;
+    }
+}
+
 /**
  * B4: tocó (o escribió) [Sí, está bien] / [Cambiar un motivo] y el último saliente
  * es el resumen de motivos de una ráfaga. Solo lee la base si el texto ES el título
@@ -2776,7 +2885,7 @@ export type ResultadoDesconocido =
     | 'consentimiento_sin_cuenta'
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
-    | 'embudo'
+    | 'embudo' | 'embudo_acuse'
     | 'frenado' | 'silencio';
 
 /**
@@ -2855,8 +2964,16 @@ export async function atenderDesconocido(
 ): Promise<ResultadoDesconocido> {
     // El webhook la llama fuera de `runBotTurn`: la escuela del turno (modo discreto
     // por escuela, embudo, temas a persona) se pone acá.
-    return conEscuela(integration.school_id, () => atenderDesconocidoEnEscuela(
-        integration, conversationId, contactWaId, inboundText, botonId, rafaga, origen));
+    return conEscuela(integration.school_id, async () => {
+        const r = await atenderDesconocidoEnEscuela(
+            integration, conversationId, contactWaId, inboundText, botonId, rafaga, origen);
+        if (r !== 'silencio' && r !== 'frenado') return r;
+        // Quien pasó por el embudo del interesado nunca queda sin nada: si lo de
+        // arriba se calló (freno, modelo caído, «ya te mandé el comprobante»), se le
+        // confirma que la escuela le responde y la escuela recibe su mensaje.
+        return (await acuseDelEmbudo(integration, conversationId, contactWaId, inboundText, botonId, rafaga))
+            ? 'embudo_acuse' : r;
+    });
 }
 
 async function atenderDesconocidoEnEscuela(
@@ -3081,7 +3198,11 @@ async function atenderDesconocidoEnEscuela(
     // Sin la regla 4 («mi hija» + escuela = familia): quien llega sin señal propia de
     // cliente no recibe «No reconozco este número entre las familias».
     const tema = temaEscolar(text, { sinFamiliaImplicita: true });
-    const prospecto = await puertaDeProspectoEn(integration, conversationId, text);
+    // Quien pasó por el embudo del interesado ES un interesado aunque solo haya escrito
+    // «Hola» y sus respuestas al registro (la regla de palabras no lo marca): «cuanto vale
+    // la mensualidad» a mitad del registro quedaba solo con el acuse, sin el valor.
+    const prospecto = await puertaDeProspectoEn(integration, conversationId, text)
+        ?? await seguimientoDelEmbudo(integration, conversationId);
     if (!tema && !prospecto) {
         // Escuela con embudo (B2, P4): el «Hola» de un número nuevo recibe SU bienvenida con sus sedes.
         if (await darBienvenidaDeEmbudo(integration, conversationId, contactWaId, text, botonId)) return 'bienvenida';
@@ -3476,11 +3597,17 @@ async function responderSeguimientoDeProspecto(
         : '';
 
     // 2. Horarios, para quién es («tengo 23 años, soy mujer»), cortesía o visita.
-    const pideHorarios = intereses.some((i) => i === 'horarios' || i === 'cortesia' || i === 'visita')
-        || perfilNuevo !== null;
+    // Con el embudo del interesado (B2) la clase se agenda en el embudo, por grupo y
+    // sede: ofrecer acá las franjas de cortesía de TODOS los grupos era otro flujo de
+    // reserva encima del suyo (Monster 2026-11-03: «¿qué debo llevar a la clase de
+    // prueba?» después de pagar recibió 9 horarios de otros grupos). Esas preguntas
+    // las contesta el modelo con la ficha, o el acuse.
+    const conEmbudo = embudoActivo(p.ajustesEscuela);
+    const pideHorarios = !conEmbudo && (intereses.some((i) => i === 'horarios' || i === 'cortesia' || i === 'visita')
+        || perfilNuevo !== null);
     // «¿Qué grupo le corresponde a mi hija de 12?»: el grupo y «¿te reservo?»
     // (hasta 3 horarios), aunque la lista completa ya haya salido.
-    if (preguntaGrupoPorEdad(nuevo)
+    if (!conEmbudo && preguntaGrupoPorEdad(nuevo)
         && await grupoPorEdadEnBot(integration, conversationId, contactWaId, null, nuevo, PASO_PROSPECTO_HORARIOS)) {
         return 'prospecto_horarios';
     }
@@ -3488,7 +3615,7 @@ async function responderSeguimientoDeProspecto(
         || await pasoReciente(conversationId, PASO_PROSPECTO_HORARIOS, 24));
     // «Para mañana miércoles» después de ver los horarios (Dynasty 2026-10-27,
     // …5543 quedó sin nada): los de ESE día, aunque la lista haya salido hace poco.
-    const diaPedido = diaPedidoEn(nuevo);
+    const diaPedido = conEmbudo ? null : diaPedidoEn(nuevo);
     if (diaPedido && (pideHorarios || await pasoReciente(conversationId, PASO_PROSPECTO_HORARIOS, 24)
         || await pasoReciente(conversationId, 'cortesia_ofrecer', 24))) {
         const ofrecidas = await ofrecerHorariosDeCortesia(ctxCortesia(integration, conversationId, contactWaId, null), {
@@ -3555,9 +3682,9 @@ async function responderSeguimientoDeProspecto(
     const preguntaSede = PREGUNTA_SEDE.test(n);
     if (preguntaSede || intereses.includes('edades') || intereses.includes('inscripcion')) {
         if (await pasoReciente(conversationId, PASO_PROSPECTO_INFO, 24)) return 'frenado';
-        const direccion = preguntaSede ? await direccionDeEscuela(integration.school_id) : null;
+        const lineaSede = preguntaSede ? await lineaDeDireccion(integration.school_id, conversationId, contactWaId) : null;
         const partes = [
-            direccion ? `📍 Estamos en *${direccion}*.` : '',
+            lineaSede ?? '',
             intereses.includes('edades') ? 'La escuela te confirma por aquí el grupo que corresponde según la edad.' : '',
             enlace ? `En este enlace ves los grupos y los valores, y puedes hacer la inscripción: ${enlace}` : '',
         ].filter(Boolean);
@@ -3781,6 +3908,71 @@ async function direccionDeEscuela(schoolId: string): Promise<string | null> {
     } catch {
         return null;
     }
+}
+
+/** Una sede con su dirección, para la línea de «¿dónde queda?». */
+export interface SedeConDireccion { id: string; nombre: string; direccion: string }
+
+/**
+ * La línea de «¿dónde queda?» para un interesado de una escuela con embudo y varias
+ * sedes. Pura:
+ *  - con su clase elegida: la cancha de esa franja (y Maps si está cargado);
+ *  - con la sede elegida (estado del embudo o lead): esa sede;
+ *  - sin nada: todas las sedes del embudo, cada una con su dirección.
+ * null = no hay con qué (quien llama usa la dirección de la escuela, como antes).
+ */
+export function lineaDeDireccionDelInteresado(p: {
+    lugar?: { lugar: string | null; direccion: string | null; mapsUrl: string | null } | null;
+    branchId?: string | null;
+    sedes: SedeConDireccion[];
+    sedesDelEmbudo?: string[];
+}): string | null {
+    const cancha = [p.lugar?.lugar, p.lugar?.direccion].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+    if (cancha) return `📍 La clase es en *${cancha}*.${p.lugar?.mapsUrl ? `\nCómo llegar: ${p.lugar.mapsUrl}` : ''}`;
+    const propia = p.branchId ? p.sedes.find((s) => s.id === p.branchId) : undefined;
+    if (propia) return `📍 La *${sinEmojis(propia.nombre)}* queda en ${propia.direccion}.`;
+    const lista = p.sedesDelEmbudo?.length ? p.sedes.filter((s) => p.sedesDelEmbudo!.includes(s.id)) : p.sedes;
+    if (!lista.length) return null;
+    if (lista.length === 1) return `📍 La *${sinEmojis(lista[0].nombre)}* queda en ${lista[0].direccion}.`;
+    return ['📍 Nuestras sedes:', ...lista.map((s) => `• *${sinEmojis(s.nombre)}*: ${s.direccion}`)].join('\n');
+}
+
+/**
+ * «📍 Estamos en …» del camino general. Con embudo del interesado (B2), la de SU
+ * sede o la cancha de SU clase: antes salía siempre `schools.address` y a una
+ * familia de la Sede Norte le llegaba la dirección de Suba (batería qa:embudo,
+ * 2026-11-03). Sin embudo, la línea de siempre. Nunca lanza.
+ */
+async function lineaDeDireccion(schoolId: string, conversationId: string, contactWaId: string): Promise<string | null> {
+    try {
+        const aj = await ajustesDeLaEscuela(schoolId);
+        if (embudoActivo(aj)) {
+            const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+            let branchId = estado?.datos?.branchId ?? null;
+            let slotId = estado?.datos?.slotId ?? null;
+            if (!branchId && !slotId) {
+                const { leadDelEmbudo } = await import('./whatsapp-prospecto-lead.service');
+                const lead = await leadDelEmbudo(schoolId, contactWaId).catch(() => null);
+                branchId = lead?.branchId ?? null;
+                slotId = lead?.slotId ?? lead?.separadoSlotId ?? null;
+            }
+            const [lugar, { data }] = await Promise.all([
+                slotId
+                    ? import('./clase-prueba-agenda.service').then((m) => m.franjaDeAgenda(schoolId, slotId!)).catch(() => null)
+                    : Promise.resolve(null),
+                supabase.from('school_branches').select('id, name, address').eq('school_id', schoolId).limit(50),
+            ]);
+            const sedes = (((data ?? []) as any[]))
+                .filter((s) => String(s?.address ?? '').trim())
+                .map((s) => ({ id: String(s.id), nombre: String(s.name ?? 'Sede'), direccion: String(s.address).trim() }));
+            const linea = lineaDeDireccionDelInteresado({
+                lugar, branchId, sedes, sedesDelEmbudo: (aj.botonesSede ?? []).map((b) => b.branchId),
+            });
+            if (linea) return linea;
+        }
+    } catch { /* la de siempre */ }
+    const dir = await direccionDeEscuela(schoolId);
+    return dir ? `📍 Estamos en *${dir}*.` : null;
 }
 
 /**
@@ -4968,8 +5160,8 @@ export async function deliver(
     // la base JUSTO antes de enviar: el turno revisa al empezar, pero el modelo
     // tarda segundos y Milena puede escribir en el medio. La confirmación de una
     // baja sí sale: es una instrucción al sistema, no una charla.
-    if (discretoEnBot() && !PASOS_CON_LA_ESCUELA_ACTIVA.has(String((context as any)?.step ?? ''))
-        && await escuelaActiva(conversationId)) {
+    if (!PASOS_CON_LA_ESCUELA_ACTIVA.has(String((context as any)?.step ?? ''))
+        && await discretoParaEnviar(integration.school_id) && await escuelaActiva(conversationId)) {
         console.info('[whatsapp-bot] modo discreto: la escuela escribió hace poco; no se envía',
             { conversationId, step: (context as any)?.step ?? null });
         await marcarAbiertaSinAviso(conversationId);
@@ -6033,8 +6225,8 @@ async function responderLoQueSeSabe(
         if (PREGUNTA_SEDE.test(n)) {
             pregunto = true;
             if (!sedeDada) {
-                const dir = await direccionDeEscuela(integration.school_id).catch(() => null);
-                if (dir) { partes.push(`📍 Estamos en *${dir}*.`); sedeDada = true; }
+                const linea = await lineaDeDireccion(integration.school_id, conversationId, contactWaId).catch(() => null);
+                if (linea) { partes.push(linea); sedeDada = true; }
             }
             if (!sedeDada) queda();
         }
