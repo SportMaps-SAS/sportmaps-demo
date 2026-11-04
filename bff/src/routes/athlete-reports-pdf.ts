@@ -23,8 +23,11 @@ import { resolveSchoolBranding } from '../utils/schoolBrandingResolver';
 import {
     INK, MUTED, HAIRLINE,
     loadSportmapsLogo, fetchSchoolLogo, fmt, capitalize,
-    sectionTitle, noteBox, addFooterToAllPages,
+    sectionTitle, noteBox, addFooterToAllPages, drawBrandHeader,
 } from '../utils/reportPdfHelpers';
+import { groupSessionMetrics, drawSessionMetric } from '../utils/sessionMetricsPdf';
+import { drawRadarChart } from '../utils/radarPdf';
+import { drawCalendarHeatmap } from '../utils/calendarHeatmapPdf';
 
 const router = Router();
 
@@ -117,18 +120,9 @@ router.get(
 
             // ── Header: logo (propio si hay whitelabel, si no SportMaps) + línea de acento ──
             // Con marca blanca nunca cae al logo de SportMaps: si el propio no
-            // descarga, va el nombre de la escuela en texto (rama de abajo).
+            // descarga, va el nombre de la escuela en texto.
             const headerLogo = branding.hasWhitelabel ? schoolLogo : (schoolLogo ?? sportmapsLogo);
-            if (headerLogo) {
-                try {
-                    doc.image(headerLogo, 60, 50, { height: 34 });
-                } catch {
-                    doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-                }
-            } else {
-                doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-            }
-            doc.fillColor(MUTED).fontSize(9).font('Helvetica').text('Informe Mensual del Atleta', 60, 92);
+            const accentY = drawBrandHeader(doc, headerLogo, branding.schoolName, 'Informe Mensual del Atleta');
 
             doc.fillColor(MUTED).fontSize(9).font('Helvetica')
                 .text(capitalize(snapshot.period.label), doc.page.width - 220, 55, { width: 160, align: 'right' });
@@ -137,14 +131,22 @@ router.get(
                     .text(snapshot.governing_team.name, doc.page.width - 220, 69, { width: 160, align: 'right' });
             }
 
-            const accentY = 112;
             doc.rect(60, accentY, doc.page.width - 120, 2.5).fill(branding.primaryColor);
+            doc.x = 60;
             doc.y = accentY + 24;
 
             // ── Atleta ──
             doc.fillColor(MUTED).fontSize(9).font('Helvetica-Bold').text('ATLETA', 60, doc.y, { characterSpacing: 0.5 });
             doc.fillColor(INK).fontSize(18).font('Helvetica-Bold').text(snapshot.athlete.name, 60, doc.y + 2);
-            doc.moveDown(1);
+            doc.moveDown(0.3);
+            // Una frase que reconoce el esfuerzo del mes -- el informe es para
+            // que un papá o una mamá lo lea con ganas, no una planilla.
+            const primerNombre = (snapshot.athlete.name as string).split(' ')[0];
+            const fraseMotivacion = snapshot.highlights?.length > 0
+                ? `¡${primerNombre} tuvo un gran mes! Así le fue en ${capitalize(snapshot.period.label)}.`
+                : `Cada entreno cuenta. Así va ${primerNombre} en ${capitalize(snapshot.period.label)}.`;
+            doc.fillColor(MUTED).fontSize(10).font('Helvetica-Oblique').text(fraseMotivacion, 60, doc.y);
+            doc.moveDown(0.8);
 
             // ── Fila de cajas: fútbol + asistencia ──
             const boxesTop = doc.y;
@@ -174,7 +176,50 @@ router.get(
                 doc.fillColor(MUTED).fontSize(7).font('Helvetica')
                     .text(label.toUpperCase(), x, boxesTop + 38, { width: boxW, align: 'center', characterSpacing: 0.3 });
             });
+            // Las cajas de arriba se dibujan con x explícito por caja; sin
+            // devolver el cursor al margen izquierdo, el próximo .text() sin
+            // x/y (sectionTitle) arranca desde la ÚLTIMA caja (la de más a la
+            // derecha) y el título se parte en 3 líneas angostas -- bug real,
+            // visto renderizando el PDF.
+            doc.x = 60;
             doc.y = boxesTop + boxH + 22;
+
+            // ── Panorama completo (radar) ──
+            // TODAS las métricas con historia, no solo las de este mes --
+            // pedido explícito: "que se alimente de todo lo que se le puede
+            // medir a un deportista". Mismo radar que ve el coach en el
+            // roster (PlayerCard.tsx), congelado acá para el padre.
+            if (snapshot.radar?.length >= 3) {
+                sectionTitle(doc, 'Panorama completo', INK);
+                doc.fillColor(MUTED).fontSize(9).font('Helvetica')
+                    .text(`${snapshot.radar.length} métricas medidas en total`, 60, doc.y);
+                doc.moveDown(0.4);
+                const radarTop = doc.y;
+                const radarRadius = 78;
+                const cx = 60 + radarRadius + 10;
+                const cy = radarTop + radarRadius;
+                drawRadarChart(doc, snapshot.radar, cx, cy, radarRadius, branding.primaryColor);
+
+                const destacadas = snapshot.radar.filter((m: any) => m.band === 'green');
+                const listX = cx + radarRadius + 30;
+                const listW = doc.page.width - 60 - listX;
+                let listY = radarTop + 4;
+                doc.fillColor('#15803d').font('Helvetica-Bold').fontSize(9).text('LO QUE MÁS DESTACA', listX, listY, { width: listW, characterSpacing: 0.3 });
+                listY += 16;
+                if (destacadas.length === 0) {
+                    doc.fillColor(MUTED).font('Helvetica-Oblique').fontSize(9).text('Todavía nada en banda verde.', listX, listY, { width: listW });
+                } else {
+                    for (const m of destacadas.slice(0, 6)) {
+                        doc.fillColor(INK).font('Helvetica').fontSize(9.5)
+                            .text(`${m.label}: ${fmt(m.value, m.unit)}`, listX, listY, { width: listW });
+                        listY += 14;
+                    }
+                }
+                doc.x = 60; // la lista de destacados quedó dibujada a la derecha (listX)
+                doc.y = Math.max(radarTop + radarRadius * 2 + 10, listY + 6);
+                doc.fillColor(INK);
+                doc.moveDown(0.6);
+            }
 
             // ── Destacados ──
             if (snapshot.highlights?.length > 0) {
@@ -204,6 +249,34 @@ router.get(
                 sectionTitle(doc, CATEGORY_LABEL[cat], INK);
                 for (const m of rows) drawMetricLine(doc, m);
                 doc.moveDown(0.5);
+            }
+
+            // ── Autoevaluación después de cada entreno (§3.4) ──
+            // Lo que se mide VARIAS veces al mes (cansancio, comprensión,
+            // esfuerzo, satisfacción, aspectos a mejorar, rating del coach por
+            // sesión) no entra en `metrics` arriba -- esa sección solo compara
+            // última-vs-anterior, que es ruido para algo que se registra 8-18
+            // veces. Sin esto el informe salía incompleto: el padre veía estos
+            // datos en "Historial y Evolución" pero nunca en el informe mensual.
+            const sessionGroups = groupSessionMetrics(snapshot.metrics_session ?? []);
+            if (sessionGroups.length > 0) {
+                if (doc.y > doc.page.height - 150) doc.addPage();
+                sectionTitle(doc, 'Después de cada entreno', INK);
+                for (const { section, metrics } of sessionGroups) {
+                    if (doc.y > doc.page.height - 130) doc.addPage();
+                    doc.fillColor(MUTED).font('Helvetica-Bold').fontSize(9)
+                        .text(section.title.toUpperCase(), 60, doc.y, { characterSpacing: 0.3 });
+                    doc.moveDown(0.3);
+                    for (const m of metrics) drawSessionMetric(doc, m, branding.primaryColor);
+                    doc.moveDown(0.3);
+                }
+            }
+
+            // ── Día a día (mapa de calor) ──
+            if (snapshot.calendar?.length > 0) {
+                if (doc.y > doc.page.height - 260) doc.addPage();
+                sectionTitle(doc, `${capitalize(snapshot.period.label)}, día a día`, INK);
+                drawCalendarHeatmap(doc, snapshot.calendar, snapshot.period.year, snapshot.period.month, branding.primaryColor);
             }
 
             // ── Notas ──
