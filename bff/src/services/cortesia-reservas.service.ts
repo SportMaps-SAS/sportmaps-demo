@@ -206,7 +206,7 @@ const COLUMNAS_LEAD = 'id, full_name, guardian_name, phone, birth_date, notes, s
 export async function listarCortesias(schoolId: string, f: FiltroCortesias = {}, ahora = Date.now()): Promise<ListadoCortesias> {
     const hoy = hoyBogota(ahora);
     let q = supabase.from('school_signup_leads')
-        .select(`${COLUMNAS_LEAD}, school_trial_slots!inner(id, label, slot_date, start_time, end_time, location)`)
+        .select(`${COLUMNAS_LEAD}, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, label, slot_date, start_time, end_time, location)`)
         .eq('school_id', schoolId)
         .not('trial_slot_id', 'is', null)
         .neq('status', 'discarded');

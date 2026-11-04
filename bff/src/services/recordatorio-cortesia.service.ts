@@ -216,8 +216,11 @@ export interface DepsRecordatorio {
     enviarPlantilla: typeof enviarCobroPorPlantilla;
 }
 
+// La pista `!school_signup_leads_trial_slot_id_fkey` es obligatoria: desde M1 (20261030123543)
+// el lead tiene DOS FK a school_trial_slots (agendada y cupo separado) y sin ella PostgREST
+// responde PGRST201 y el recordatorio no sale. Ver embeds-franja.test.ts.
 const SELECT_LEAD = 'id, school_id, full_name, guardian_name, phone, status, created_at, trial_slot_id, source_detail, '
-    + 'school_trial_slots!inner(id, label, slot_date, start_time, end_time, location, team_id)';
+    + 'school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, label, slot_date, start_time, end_time, location, team_id)';
 
 const DEPS: DepsRecordatorio = {
     async reservasDelDia(fecha) {

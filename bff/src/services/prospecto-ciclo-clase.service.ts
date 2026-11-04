@@ -87,7 +87,7 @@ const DEPS_LLEGADA: DepsLlegada = {
         const variantes = variantesTelefonoLead(contactWaId);
         if (!variantes.length) return null;
         const { data, error } = await supabase.from('school_signup_leads')
-            .select('id, full_name, source_detail, status, school_trial_slots!inner(id, label, slot_date, start_time, end_time, location)')
+            .select('id, full_name, source_detail, status, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, label, slot_date, start_time, end_time, location)')
             .eq('school_id', schoolId)
             .in('phone', variantes)
             .in('status', ['new', 'contacted', 'converted'])
@@ -231,7 +231,7 @@ const DEPS_SEGUIMIENTO: DepsSeguimiento = {
     async reservasDelDia(fecha) {
         const { data, error } = await supabase.from('school_signup_leads')
             .select('id, school_id, full_name, guardian_name, phone, status, trial_slot_id, source_detail, '
-                + 'school_trial_slots!inner(id, slot_date, start_time, end_time)')
+                + 'school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, slot_date, start_time, end_time)')
             .not('trial_slot_id', 'is', null)
             .in('status', ['new', 'contacted'])
             .eq('school_trial_slots.slot_date', fecha)
@@ -490,7 +490,7 @@ export async function yaReservoClase(schoolId: string, contactWaId: string, ahor
         if (!variantes.length) return false;
         const desde = ahoraBogota(new Date(ahora.getTime() - DIAS_RESERVA_RECIENTE * 86400_000)).iso;
         const { data, error } = await supabase.from('school_signup_leads')
-            .select('id, school_trial_slots!inner(slot_date)')
+            .select('id, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(slot_date)')
             .eq('school_id', schoolId)
             .in('phone', variantes)
             .neq('status', 'discarded')
