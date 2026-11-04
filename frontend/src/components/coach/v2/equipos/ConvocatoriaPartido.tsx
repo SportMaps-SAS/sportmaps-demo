@@ -12,9 +12,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Check } from 'lucide-react';
+import { Check, Search, UserPlus, X } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { InlineError, SectionSkeleton } from '@/components/parent/v2/hijos/parts';
 import {
@@ -26,10 +27,22 @@ import {
   nombreCorto,
   refuerzosDe,
   sujetoDe,
+  type ConvocadoPrevio,
   type Partido,
 } from '../coachV2Logic';
-import { useConvocatoria, useDeportistasEquipo, useNombresConvocados, useRespuestasConvocatoria } from '../useCoachV2Data';
+import { useBuscarRefuerzos, useConvocatoria, useDeportistasEquipo, useNombresConvocados, useRespuestasConvocatoria } from '../useCoachV2Data';
 import { useAccionConDeshacer } from '../useAccionConDeshacer';
+
+/** Debounce simple (350ms): evita una consulta por tecla contra una escuela que
+ *  puede tener cientos de deportistas. */
+function useTextoDebounced(valor: string, demora = 350): string {
+  const [debounced, setDebounced] = useState(valor);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(valor), demora);
+    return () => clearTimeout(t);
+  }, [valor, demora]);
+  return debounced;
+}
 
 export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta = 'Próximo partido' }: {
   schoolId: string; teamId: string; partido: Partido; todos: Partido[];
@@ -48,14 +61,46 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
   const [editando, setEditando] = useState(false);
   const [sel, setSel] = useState<Set<string> | null>(null);
   const [enviada, setEnviada] = useState(false);
+  // Refuerzos sumados por búsqueda en ESTA sesión (todavía no guardados). Se
+  // fusionan con los que ya traía la convocatoria para que armarConvocatoria
+  // los incluya al guardar. El nombre se guarda acá mismo (ya lo trajo la
+  // búsqueda): no hace falta esperar a useNombresConvocados para mostrarlo.
+  const [nuevos, setNuevos] = useState<Array<ConvocadoPrevio & { nombre: string }>>([]);
+  const [busqueda, setBusqueda] = useState('');
+  const [buscando, setBuscando] = useState(false);
+  const textoBuscado = useTextoDebounced(busqueda);
 
   const roster = useMemo(() => deportistas.data ?? [], [deportistas.data]);
   const claveSujeto = claveConvocado;
   // Convocados de ESTE partido que no están en el roster activo (refuerzos de otra
-  // categoría o inactivos sumados en la pantalla clásica): se conservan y se
-  // muestran aparte; solo salen si el profe los quita.
-  const refuerzos = useMemo(() => refuerzosDe(roster, conv.data?.players ?? []), [roster, conv.data]);
-  const nombres = useNombresConvocados(schoolId, refuerzos);
+  // categoría o inactivos sumados desde el buscador de acá abajo o desde la
+  // pantalla clásica): se conservan y se muestran aparte; solo salen si el
+  // profe los quita.
+  const refuerzosPrevios = useMemo(() => refuerzosDe(roster, conv.data?.players ?? []), [roster, conv.data]);
+  const refuerzos = useMemo(() => {
+    const vistas = new Set(refuerzosPrevios.map(claveSujeto));
+    return [...refuerzosPrevios, ...nuevos.filter((n) => !vistas.has(claveSujeto(n)))];
+  }, [refuerzosPrevios, nuevos, claveSujeto]);
+  const nombres = useNombresConvocados(schoolId, refuerzosPrevios);
+  const nombreDe = (r: { subject_type: string; subject_id: string }): string | undefined => {
+    const k = claveSujeto(r);
+    return nombres.data?.get(k) ?? nuevos.find((n) => claveSujeto(n) === k)?.nombre;
+  };
+
+  const resultadosBusqueda = useBuscarRefuerzos(schoolId, teamId, textoBuscado);
+  const refuerzosKeys = useMemo(() => new Set(refuerzos.map(claveSujeto)), [refuerzos, claveSujeto]);
+  const sugerencias = useMemo(
+    () => (resultadosBusqueda.data ?? []).filter((r) => !refuerzosKeys.has(claveSujeto(r))),
+    [resultadosBusqueda.data, refuerzosKeys, claveSujeto],
+  );
+
+  const sumarRefuerzo = (r: { subject_type: 'child' | 'profile' | 'unregistered'; subject_id: string; nombre: string }) => {
+    const k = claveSujeto(r);
+    setNuevos((prev) => (prev.some((p) => claveSujeto(p) === k) ? prev : [...prev, { subject_type: r.subject_type, subject_id: r.subject_id, nombre: r.nombre }]));
+    setSel((s) => new Set(s ?? []).add(k));
+    setBusqueda('');
+    setBuscando(false);
+  };
 
   // Selección inicial: convocatoria actual (con refuerzos) > la del partido anterior (solo roster) > todos.
   useEffect(() => {
@@ -77,7 +122,7 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
 
   const convocar = () => {
     if (!sel || n === 0) return;
-    const p_players = armarConvocatoria(roster, sel, conv.data?.players ?? []);
+    const p_players = armarConvocatoria(roster, sel, conv.data?.players ?? [], nuevos);
     const familias = p_players.length;
     setEnviada(true);
     setEditando(false);
@@ -94,6 +139,7 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
           return;
         }
         toast.success(avisaFamilias ? `Avisamos a ${familias} familias. Pueden responder «Va» o «No va».` : `Convocaste a ${familias} deportistas.`);
+        setNuevos([]);
         qc.invalidateQueries({ queryKey: ['coach-v2', 'convocatoria', partido.id] });
         qc.invalidateQueries({ queryKey: ['coach-v2', 'partidos-proximos'] });
       },
@@ -150,7 +196,7 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
             {refuerzos.map((r) => {
               const k = claveSujeto(r);
               const on = !!sel?.has(k);
-              const nombre = nombres.data?.get(k);
+              const nombre = nombreDe(r);
               return (
                 <button
                   key={k}
@@ -180,6 +226,59 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
               Los refuerzos no son de este equipo (otra categoría o inactivos). Siguen convocados salvo que los quites.
             </p>
           )}
+          <div className="px-4 pb-2">
+            {!buscando ? (
+              <button
+                type="button"
+                onClick={() => setBuscando(true)}
+                className="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed px-2.5 text-sm font-medium text-muted-foreground hover:border-primary/50 hover:text-primary"
+              >
+                <UserPlus className="h-4 w-4" aria-hidden /> Convocar de otra categoría
+              </button>
+            ) : (
+              <div className="rounded-xl border-2 border-dashed p-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    autoFocus
+                    placeholder="Buscar por nombre en toda la escuela..."
+                    value={busqueda}
+                    onChange={(e) => setBusqueda(e.target.value)}
+                    className="h-9 pl-8 pr-8 text-sm"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Cerrar búsqueda"
+                    onClick={() => { setBuscando(false); setBusqueda(''); }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {textoBuscado.trim().length >= 2 && (
+                  <div className="mt-1.5 max-h-48 overflow-y-auto">
+                    {resultadosBusqueda.isLoading ? (
+                      <p className="px-1 py-2 text-xs text-muted-foreground">Buscando...</p>
+                    ) : sugerencias.length === 0 ? (
+                      <p className="px-1 py-2 text-xs italic text-muted-foreground">Sin resultados en la escuela.</p>
+                    ) : (
+                      sugerencias.map((r) => (
+                        <button
+                          key={claveSujeto(r)}
+                          type="button"
+                          onClick={() => sumarRefuerzo(r)}
+                          className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-muted"
+                        >
+                          <span className="truncate">{nombreCorto(r.nombre)}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{r.equipo ?? 'Sin equipo'}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           {partido.nota && (
             <p className="mx-4 mb-2 rounded-xl bg-muted px-3 py-2.5 text-sm text-muted-foreground">{partido.nota}</p>
           )}

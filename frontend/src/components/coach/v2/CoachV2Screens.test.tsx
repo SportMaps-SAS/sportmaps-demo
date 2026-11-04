@@ -24,6 +24,7 @@ const st = vi.hoisted(() => ({
   presentes: null as unknown,
   sesiones: null as unknown,
   conv: null as unknown,
+  buscar: null as unknown,
   partidos: null as unknown,
   informes: null as unknown,
   escuela: { schoolId: 'school-1' as string | null, loading: false },
@@ -49,6 +50,7 @@ vi.mock('./useCoachV2Data', () => ({
   useConvocatoria: (matchId: string | null) => (matchId === 'm1' ? st.conv : { data: null, isLoading: false }),
   useRespuestasConvocatoria: () => ({ data: undefined }),
   useNombresConvocados: () => ({ data: new Map([['child:r9', 'Juan Refuerzo'], ['profile:u7', 'Pedro Inactivo']]) }),
+  useBuscarRefuerzos: (_s: string, _t: string, texto: string) => (texto.trim().length >= 2 ? st.buscar : { data: [], isLoading: false }),
   useUltimaJugada: () => st.ultimaJugada,
 }));
 vi.mock('@/components/support/SupportChatModal', () => ({ SupportChatModal: () => null }));
@@ -370,6 +372,26 @@ describe('Partidos › convocatoria con refuerzos', () => {
     // El refuerzo conserva su rol y dorsal; el de siempre, su posición.
     expect(jugadores.find((j) => j.subject_id === 'r9')).toMatchObject({ role: 'bench', jersey_number: 14 });
     expect(jugadores.find((j) => j.subject_id === 'c1')).toMatchObject({ position_code: 'GK', jersey_number: 1 });
+  });
+
+  it('buscar y convocar a un deportista de otra categoría lo suma a la convocatoria', async () => {
+    st.buscar = q([{ subject_type: 'child', subject_id: 'c5', nombre: 'Camila Otra Categoría', equipo: '2012' }]);
+    pintar(<CoachTeamsV2 hoy={HOY} />, '/teams?equipo=t11&tab=partidos');
+    fireEvent.click(screen.getByRole('button', { name: /Cambiar convocatoria/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Convocar de otra categoría/ }));
+    fireEvent.change(screen.getByPlaceholderText(/Buscar por nombre/), { target: { value: 'Camila' } });
+    await act(async () => { vi.advanceTimersByTime(350); });
+    fireEvent.click(screen.getByRole('button', { name: /Camila.*2012/ }));
+    // Queda convocada como refuerzo nuevo, ya marcada.
+    const refuerzosTras = screen.getAllByTestId('convocado-refuerzo');
+    expect(refuerzosTras).toHaveLength(3);
+    const nuevoRefuerzo = refuerzosTras.find((el) => /Camila/.test(el.textContent ?? ''));
+    expect(nuevoRefuerzo).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /Convocar a 4/ }));
+    await act(async () => { vi.advanceTimersByTime(8000); });
+    const [, args] = st.rpc.mock.calls[0];
+    const jugadores = (args as { p_players: Array<Record<string, unknown>> }).p_players;
+    expect(jugadores.map((j) => `${j.subject_type}:${j.subject_id}`)).toContain('child:c5');
   });
 
   it('si falla, el aviso es en español y sin el mensaje crudo del servidor', async () => {
