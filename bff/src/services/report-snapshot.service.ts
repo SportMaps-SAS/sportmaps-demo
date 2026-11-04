@@ -55,6 +55,23 @@ export interface FootballSummary {
     assists: number;
     yellow_cards: number;
     red_cards: number;
+    /** Un partido por fecha, para el mapa de calor del mes. */
+    match_days: { date: string; minutes_played: number }[];
+}
+
+/** Un día del periodo para el mapa de calor del informe: si hubo entreno,
+ *  qué tan duro fue (promedio de `rpe_borg` ese día) y si fue día de
+ *  partido. Complemento visual -- si las consultas fallan, el informe sale
+ *  igual sin esta sección (mismo criterio que loadAttendance/loadFootballSummary). */
+export interface CalendarDay {
+    date: string;
+    day: number;
+    has_session: boolean;
+    attended: boolean | null;
+    /** Promedio de `rpe_borg` (0-10) registrado ese día; null si no se cargó. */
+    effort: number | null;
+    is_match: boolean;
+    minutes_played: number | null;
 }
 
 /** Carga de entrenamiento del mes (PER-6 mitad B) -- sRPE de Foster, mismo
@@ -109,6 +126,14 @@ export interface ReportSnapshot {
     metrics: SnapshotMetric[];
     /** Agregados de sesión del periodo (BORG, esfuerzo, comprensión, satisfacción, aspectos a mejorar). */
     metrics_session: SessionMetricSummary[];
+    /** TODAS las métricas con medición hasta la fecha (no solo este mes) con
+     *  su última banda -- el radar "panorama completo" que pidió Besser,
+     *  misma idea que `PlayerCard.tsx`. `delta`/`previous`/`score` van null:
+     *  acá no se compara con nada, es una foto del estado actual. */
+    radar: SnapshotMetric[];
+    /** Día a día del mes, para el mapa de calor (§ Besser 2026-11-03: "algo
+     *  muy completo para los padres"). [] si no se pudo calcular. */
+    calendar: CalendarDay[];
     football: FootballSummary | null;
     training_load: TrainingLoadSummary | null;
 }
@@ -157,6 +182,11 @@ function improvementScore(def: MetricDefinition, current: number, previous: numb
 /**
  * Una medición por métrica: la última del periodo, más la anterior a ella (de
  * cualquier fecha) para poder calcular el delta. Sin la previa no hay «mejoró».
+ *
+ * También devuelve `allTime`: la última medición de CADA métrica hasta
+ * `periodEnd`, sin exigir que caiga dentro del periodo -- es el insumo del
+ * radar «panorama completo» (misma idea que `PlayerCard.tsx`, pero con lo que
+ * ya se trajo acá: no agrega una consulta nueva).
  */
 async function loadMetricSeries(
     schoolId: string,
@@ -185,16 +215,84 @@ async function loadMetricSeries(
 
     // Solo entran las métricas medidas DENTRO del periodo: el informe de agosto
     // no habla de una métrica que solo se midió en junio.
-    const resultado = new Map<string, { current: { value: number; recorded_at: string }; previous: number | null }>();
+    const periodFiltered = new Map<string, { current: { value: number; recorded_at: string }; previous: number | null }>();
+    const allTime = new Map<string, { value: number; recorded_at: string }>();
     for (const [key, serie] of porMetrica) {
         const ultima = serie[serie.length - 1];
+        allTime.set(key, ultima);
         if (new Date(ultima.recorded_at) < periodStart) continue;
-        resultado.set(key, {
+        periodFiltered.set(key, {
             current: ultima,
             previous: serie.length >= 2 ? serie[serie.length - 2].value : null,
         });
     }
-    return resultado;
+    return { periodFiltered, allTime };
+}
+
+/**
+ * Día a día del periodo, para el mapa de calor del informe (pedido explícito
+ * de Besser: "algo muy completo para los padres"). `rpe_borg` (cansancio
+ * autopercibido, se carga después de cada entreno) da la intensidad; los
+ * `matchDays` ya calculados por `loadFootballSummary` marcan los partidos.
+ * Complemento visual -- si algo falla, el informe sale igual sin esta sección.
+ */
+async function loadCalendarDays(
+    schoolId: string,
+    subjectType: SubjectType,
+    subjectId: string,
+    year: number,
+    month: number,
+    periodStart: Date,
+    periodEnd: Date,
+    matchDays: { date: string; minutes_played: number }[],
+): Promise<CalendarDay[]> {
+    try {
+        const columna = athleteColumn(subjectType);
+        const [{ data: attRows }, { data: rpeRows }] = await Promise.all([
+            supabase.from('attendance_records').select('attendance_date, status')
+                .eq('school_id', schoolId).eq(columna, subjectId)
+                .gte('attendance_date', periodStart.toISOString().slice(0, 10))
+                .lte('attendance_date', periodEnd.toISOString().slice(0, 10)),
+            supabase.from('performance_entries').select('value, recorded_at')
+                .eq('school_id', schoolId).eq('subject_type', subjectType).eq('subject_id', subjectId)
+                .eq('metric_key', 'rpe_borg').eq('context_type', 'session')
+                .gte('recorded_at', periodStart.toISOString()).lte('recorded_at', periodEnd.toISOString()),
+        ]);
+
+        const attByDate = new Map<string, string>();
+        for (const r of (attRows ?? []) as any[]) attByDate.set(r.attendance_date, r.status);
+
+        const rpeByDate = new Map<string, number[]>();
+        for (const r of (rpeRows ?? []) as any[]) {
+            const date = (r.recorded_at as string).slice(0, 10);
+            const arr = rpeByDate.get(date) ?? [];
+            arr.push(Number(r.value));
+            rpeByDate.set(date, arr);
+        }
+
+        const matchByDate = new Map(matchDays.map((m) => [m.date, m.minutes_played]));
+
+        const daysInMonth = periodEnd.getUTCDate();
+        const days: CalendarDay[] = [];
+        for (let day = 1; day <= daysInMonth; day++) {
+            const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            const status = attByDate.get(date);
+            const rpeValues = rpeByDate.get(date);
+            const minutesPlayed = matchByDate.get(date) ?? null;
+            days.push({
+                date,
+                day,
+                has_session: status !== undefined || rpeValues !== undefined || minutesPlayed !== null,
+                attended: status !== undefined ? (status === 'present' || status === 'late') : null,
+                effort: rpeValues?.length ? Math.round((rpeValues.reduce((a, b) => a + b, 0) / rpeValues.length) * 10) / 10 : null,
+                is_match: minutesPlayed !== null,
+                minutes_played: minutesPlayed,
+            });
+        }
+        return days;
+    } catch {
+        return [];
+    }
 }
 
 /**
@@ -265,29 +363,48 @@ async function loadFootballSummary(
 
         const [teamMatchesInPeriod, tournamentMatchesInPeriod] = await Promise.all([
             teamMatchIds.length > 0
-                ? supabase.from('match_results').select('id')
+                ? supabase.from('match_results').select('id, match_date')
                     .in('id', teamMatchIds)
                     .gte('match_date', periodStartDate)
                     .lte('match_date', periodEndDate)
-                : Promise.resolve({ data: [] as { id: string }[] }),
+                : Promise.resolve({ data: [] as { id: string; match_date: string }[] }),
             tournamentMatchIds.length > 0
-                ? supabase.from('tournament_matches').select('id')
+                ? supabase.from('tournament_matches').select('id, scheduled_at')
                     .in('id', tournamentMatchIds)
                     .gte('scheduled_at', periodStart.toISOString())
                     .lte('scheduled_at', periodEnd.toISOString())
-                : Promise.resolve({ data: [] as { id: string }[] }),
+                : Promise.resolve({ data: [] as { id: string; scheduled_at: string }[] }),
         ]);
 
-        const qualifyingIds = new Set([
-            ...((teamMatchesInPeriod.data ?? []) as { id: string }[]).map((m) => m.id),
-            ...((tournamentMatchesInPeriod.data ?? []) as { id: string }[]).map((m) => m.id),
-        ]);
+        const teamDateById = new Map(
+            ((teamMatchesInPeriod.data ?? []) as { id: string; match_date: string }[]).map((m) => [m.id, m.match_date]),
+        );
+        const tournamentDateById = new Map(
+            ((tournamentMatchesInPeriod.data ?? []) as { id: string; scheduled_at: string }[])
+                .map((m) => [m.id, m.scheduled_at.slice(0, 10)]),
+        );
+        const qualifyingIds = new Set([...teamDateById.keys(), ...tournamentDateById.keys()]);
 
         const rowsInPeriod = rows.filter((r) => qualifyingIds.has(r.match_lineups.source_id));
         if (rowsInPeriod.length === 0) return null;
 
         const matches_played = rowsInPeriod.filter((r) => r.minutes_played && r.minutes_played > 0).length;
         const minutes_played = rowsInPeriod.reduce((sum, r) => sum + (r.minutes_played ?? 0), 0);
+
+        // Un partido por fecha (dos alineaciones el mismo día se suman) -- el
+        // mapa de calor del informe marca el día, no el partido.
+        const matchDaysMap = new Map<string, number>();
+        for (const r of rowsInPeriod) {
+            const sourceId = r.match_lineups.source_id;
+            const date = r.match_lineups.source_type === 'team_match'
+                ? teamDateById.get(sourceId)
+                : tournamentDateById.get(sourceId);
+            if (!date || !r.minutes_played) continue;
+            matchDaysMap.set(date, (matchDaysMap.get(date) ?? 0) + r.minutes_played);
+        }
+        const match_days = [...matchDaysMap.entries()]
+            .map(([date, minutesPlayed]) => ({ date, minutes_played: minutesPlayed }))
+            .sort((a, b) => a.date.localeCompare(b.date));
 
         const { data: eventRows, error: eventsErr } = await supabase
             .from('football_match_events')
@@ -309,7 +426,7 @@ async function loadFootballSummary(
             else if (e.type === 'red') counts.red_cards++;
         }
 
-        return { matches_played, minutes_played, ...counts };
+        return { matches_played, minutes_played, ...counts, match_days };
     } catch {
         return null;
     }
@@ -508,12 +625,17 @@ export async function buildReportSnapshot(input: BuildSnapshotInput): Promise<Re
     }
 
     // ── Métricas ─────────────────────────────────────────────────────────────
-    const [series, attendance, football, trainingLoad] = await Promise.all([
+    const [seriesResult, attendance, football, trainingLoad] = await Promise.all([
         loadMetricSeries(schoolId, subjectType, subjectId, periodEnd, periodStart),
         loadAttendance(schoolId, subjectType, subjectId, periodStart, periodEnd),
         isFootball ? loadFootballSummary(schoolId, subjectType, subjectId, periodStart, periodEnd) : Promise.resolve(null),
         loadTrainingLoad(schoolId, subjectType, subjectId, year, month),
     ]);
+    const { periodFiltered: series, allTime } = seriesResult;
+    // Depende de `football.match_days`, así que corre después del Promise.all.
+    const calendar = await loadCalendarDays(
+        schoolId, subjectType, subjectId, year, month, periodStart, periodEnd, football?.match_days ?? [],
+    );
 
     // getMetricCatalog devuelve un array; se indexa por metric_key para no
     // recorrerlo una vez por medición.
@@ -546,6 +668,32 @@ export async function buildReportSnapshot(input: BuildSnapshotInput): Promise<Re
             score: improvementScore(def, punto.current.value, punto.previous),
             band: computeBand(punto.current.value, def.thresholds),
             measured_at: punto.current.recorded_at,
+        });
+    }
+
+    // Panorama completo: última banda de CADA métrica con historia, sin
+    // exigir que se haya tocado este mes -- es lo que ve PlayerCard.tsx desde
+    // el roster, acá congelado para el informe del padre. A propósito INCLUYE
+    // las de sesión (BORG, esfuerzo...): PlayerCard también las grafica con su
+    // última lectura cruda, sin importar que en `metrics_session` arriba se
+    // promedien distinto -- son dos lecturas legítimas del mismo dato.
+    const radar: SnapshotMetric[] = [];
+    for (const [key, punto] of allTime) {
+        const def = catalogo.get(key);
+        if (!def) continue;
+        radar.push({
+            metric_key: key,
+            label: def.parent_label ?? def.display_name,
+            hint: def.parent_hint,
+            category: def.category,
+            unit: def.unit,
+            higher_is_better: def.higher_is_better,
+            value: punto.value,
+            previous: null,
+            delta: null,
+            score: null,
+            band: computeBand(punto.value, def.thresholds),
+            measured_at: punto.recorded_at,
         });
     }
 
@@ -583,6 +731,8 @@ export async function buildReportSnapshot(input: BuildSnapshotInput): Promise<Re
         to_work_on: toWorkOn,
         metrics,
         metrics_session: metricsSession,
+        radar,
+        calendar,
         football,
         training_load: trainingLoad,
     };

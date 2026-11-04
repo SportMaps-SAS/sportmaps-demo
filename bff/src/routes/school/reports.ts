@@ -35,7 +35,7 @@ import { resolveSchoolBranding } from '../../utils/schoolBrandingResolver';
 import {
     INK, MUTED,
     loadSportmapsLogo, fetchSchoolLogo, capitalize,
-    sectionTitle, noteBox, addFooterToAllPages, drawDistributionBar,
+    sectionTitle, noteBox, addFooterToAllPages, drawDistributionBar, drawBrandHeader,
 } from '../../utils/reportPdfHelpers';
 
 const router = Router();
@@ -1061,27 +1061,17 @@ router.get(
 
             // ── Header: logo + branding, igual que el informe por atleta ─────────
             // Con marca blanca nunca cae al logo de SportMaps: si el propio no
-            // descarga, va el nombre de la escuela en texto (rama de abajo).
+            // descarga, va el nombre de la escuela en texto.
             const headerLogo = branding.hasWhitelabel ? schoolLogo : (schoolLogo ?? sportmapsLogo);
-            if (headerLogo) {
-                try {
-                    doc.image(headerLogo, 60, 50, { height: 34 });
-                } catch {
-                    doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-                }
-            } else {
-                doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-            }
-            doc.fillColor(MUTED).fontSize(9).font('Helvetica')
-                .text('Evaluación post-entrenamiento — informe de equipo', 60, 92);
+            const accentY = drawBrandHeader(doc, headerLogo, branding.schoolName, 'Evaluación post-entrenamiento — informe de equipo');
 
             doc.fillColor(MUTED).fontSize(9).font('Helvetica')
                 .text(capitalize(snapshot.period.label), doc.page.width - 220, 55, { width: 160, align: 'right' });
             doc.fillColor(INK).fontSize(11).font('Helvetica-Bold')
                 .text(snapshot.team.name, doc.page.width - 220, 69, { width: 160, align: 'right' });
 
-            const accentY = 112;
             doc.rect(60, accentY, doc.page.width - 120, 2.5).fill(branding.primaryColor);
+            doc.x = 60;
             doc.y = accentY + 20;
 
             // ── Aviso de borrador — el spec pide "BORRADOR — sin publicar" visible ──
