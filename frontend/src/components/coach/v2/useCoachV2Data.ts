@@ -15,10 +15,12 @@ import { getFootballLineup, getFootballLineups, type LineupDetail } from '@/lib/
 import { agendaPersonalDelDia, agendaPersonalSinAcceso } from './agendaPersonal';
 import { estadoConvocatoria, estadoPagoEquipo, listarFelicitaciones, type SujetoDeportista } from '@/lib/api/v2Contratos';
 import {
+  claveConvocado,
   comoDesdeEffort,
   isoDia,
   leerFranjas,
   mapaEstadosPago,
+  sujetoDe,
   type ComoLeFue,
   type Deportista,
   type EquipoHorario,
@@ -96,6 +98,52 @@ export function useDeportistasEquipo(schoolId: string | null | undefined, teamId
           acudiente: (r.parent_name as string) ?? null,
           telefonoAcudiente: (r.parent_phone as string) ?? null,
         });
+      }
+      return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+    },
+  });
+}
+
+export interface ResultadoBusquedaRefuerzo {
+  subject_type: 'child' | 'profile' | 'unregistered';
+  subject_id: string;
+  nombre: string;
+  /** Categoría/equipo actual del deportista, para no confundir homónimos. */
+  equipo: string | null;
+}
+
+/**
+ * Deportistas ACTIVOS de la escuela (cualquier categoría, excepto `teamId`) por
+ * nombre, para convocarlos como refuerzo a un partido que no es el de su
+ * equipo. Los de `teamId` ya se marcan desde la cuadrícula del roster, así que
+ * se excluyen acá para no duplicar la fila. Sin consulta por debajo de 2
+ * caracteres: la escuela puede tener cientos de deportistas.
+ */
+export function useBuscarRefuerzos(schoolId: string | null | undefined, teamId: string | null | undefined, texto: string) {
+  const q = texto.trim();
+  return useQuery({
+    queryKey: ['coach-v2', 'buscar-refuerzos', schoolId, teamId, q],
+    enabled: !!schoolId && q.length >= 2,
+    queryFn: async (): Promise<ResultadoBusquedaRefuerzo[]> => {
+      const { data, error } = await db
+        .from('school_athletes')
+        .select('id, user_id, athlete_type, full_name, enrolled_team_id, team_name')
+        .eq('school_id', schoolId)
+        .eq('is_active', true)
+        .ilike('full_name', `%${q}%`)
+        .limit(15);
+      if (error) throw error;
+      const vistos = new Set<string>();
+      const out: ResultadoBusquedaRefuerzo[] = [];
+      for (const r of (data ?? []) as Array<Record<string, unknown>>) {
+        const id = r.id ? String(r.id) : null;
+        if (!id || (teamId && r.enrolled_team_id === teamId)) continue;
+        const tipo: TipoDeportista = r.athlete_type === 'child' ? 'child' : r.athlete_type === 'unregistered' ? 'unregistered' : 'adult';
+        const sujeto = sujetoDe({ id, tipo, userId: (r.user_id as string) ?? null });
+        const k = claveConvocado(sujeto);
+        if (vistos.has(k)) continue;
+        vistos.add(k);
+        out.push({ ...sujeto, nombre: String(r.full_name ?? 'Deportista'), equipo: (r.team_name as string) ?? null });
       }
       return out.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
     },

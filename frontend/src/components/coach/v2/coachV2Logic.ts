@@ -195,18 +195,21 @@ export function refuerzosDe(roster: Array<Pick<Deportista, 'id' | 'tipo' | 'user
 
 /**
  * `p_players` para `save_match_roster` (borra y reinserta TODO): los del roster
- * marcados + los refuerzos que siguen marcados, conservando rol, posición,
- * dorsal y minutos de la convocatoria anterior.
+ * marcados + los refuerzos (de la convocatoria anterior o recién buscados en
+ * esta sesión) que siguen marcados, conservando rol, posición, dorsal y
+ * minutos de la convocatoria anterior cuando ya existían.
  */
 export function armarConvocatoria(
   roster: Array<Pick<Deportista, 'id' | 'tipo' | 'userId'>>,
   seleccion: Set<string>,
   previos: ConvocadoPrevio[],
+  nuevosRefuerzos: Array<{ subject_type: 'child' | 'profile' | 'unregistered'; subject_id: string }> = [],
 ) {
   const previoDe = new Map(previos.map((p) => [claveConvocado(p), p]));
   const sujetos = [
     ...roster.map(sujetoDe),
     ...refuerzosDe(roster, previos).map((p) => ({ subject_type: p.subject_type, subject_id: p.subject_id })),
+    ...nuevosRefuerzos,
   ];
   const vistos = new Set<string>();
   return sujetos
