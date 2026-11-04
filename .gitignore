@@ -4,6 +4,9 @@
 .idea/
 .vscode/
 
+# Local shell helpers (no compartir ni commitear)
+tools/sportmaps-shell.ps1
+
 # Dependencies
 node_modules/
 /node_modules

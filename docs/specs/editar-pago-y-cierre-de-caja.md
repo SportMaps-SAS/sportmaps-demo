@@ -87,7 +87,11 @@ guardar, con lo que arrastra: horas, vigencia y caja.
   pagado. En modo `rolling` no se toca y la vista previa lo avisa.
 - **Torniquete:** nada directo. Si el cobro queda pendiente y ya venció, el cron de mora lo pasa a
   vencido y ahí actúa el bloqueo de siempre (si la escuela lo tiene prendido).
-- **Lote de Cobros y pagos:** no se toca; la corrección queda en el historial del pago.
+- **Lote de Cobros y pagos:** no se toca; la corrección queda en el historial del pago. Desde
+  `20261031121849` (sesión 2a, aplicada el 31-oct), el pago de un cobro que ya existía queda con
+  `charge_batch_id` (antes `NULL`, como en el caso de Santiago). Así, «Ver detalle» del lote en
+  Operaciones lo muestra, y ahí también debe verse la marca «corregido». `annul_charge_batch` sigue
+  sin anular nada pagado.
 - **Libro (`cash_ledger`):** es una vista sobre `payments`, así que el ingreso cambia en el mes donde
   estaba. Por eso el bloqueo 4. El reverso con fecha propia llega con contabilidad v2.
 
@@ -106,7 +110,8 @@ Solo **dueño o administrador de la escuela del pago** (`user_admin_school_ids()
 
 - **Pantalla de «Listo» de Cobros y pagos**, cuando la operación registró pagos: «Corregir pago».
   Es donde la persona de Dreamers lo habría buscado.
-- **Gestión de Pagos → Historial**: acción «Editar pago» en la fila.
+- **Gestión de Pagos → Pagos recibidos** (antes «Historial», renombrada en b92d6f87): acción
+  «Editar pago» en la fila.
 
 ---
 
@@ -210,7 +215,8 @@ Mismo patrón que `charge-batches` (validación, errores con código, idempotenc
 
 - `EditarPagoDialog`: campos de §2.1, vista previa «antes → después», motivo, bloqueos explicados.
 - `ResultScreen`: «Corregir pago» cuando `payments_registered > 0`.
-- Gestión de Pagos → Historial: acción «Editar pago». Detalle del pago: historial de correcciones.
+- Gestión de Pagos → Pagos recibidos: acción «Editar pago». Detalle del pago y detalle del lote en
+  Operaciones: historial de correcciones.
 - `CajaDeHoyCard` arriba de Gestión de Pagos + `CerrarCajaDialog` + pestaña «Caja» con el historial
   de cierres y «Reabrir».
 - Cobros y pagos, método efectivo: línea «Entra a la caja de hoy · Sede X».
