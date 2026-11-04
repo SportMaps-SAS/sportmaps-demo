@@ -1999,7 +1999,7 @@ export async function reservaVigenteDeSupabase(schoolId: string, contactWaId: st
             ? [...new Set([t10, `57${t10}`, `+57${t10}`, digitos, `+${digitos}`])]
             : [digitos, `+${digitos}`];
         const { data, error } = await supabase.from('school_signup_leads')
-            .select('id, full_name, created_at, school_trial_slots(id, label, slot_date, start_time, end_time, location)')
+            .select('id, full_name, created_at, school_trial_slots!school_signup_leads_trial_slot_id_fkey(id, label, slot_date, start_time, end_time, location)')
             .eq('school_id', schoolId)
             .in('phone', variantes)
             .in('status', ['new', 'contacted', 'converted'])
