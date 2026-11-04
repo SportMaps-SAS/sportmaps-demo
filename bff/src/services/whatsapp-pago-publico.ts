@@ -30,7 +30,9 @@ const DE_SU_CUENTA = /\b(cuanto (debo|me falta|tengo pendiente|es lo que debo)|m
 /** «cancelar» es pagar SOLO con lo que se paga: «cancelar la clase» es otra cosa. */
 const CANCELAR_PAGO = /\b(cancelar|cancelo|cancela|cancelamos|cancelaria)\b(\s+\w+){0,3}\s+(la |el |las |los )?(mensualidad(es)?|mes|meses|cuotas?|matricula|pension|inscripcion|valor|saldo|deuda|pagos?)\b/;
 const VERBO_PAGAR = /\b(pagar|pago|pagos|pagarle|pagarles|consignar|consigno|consignacion|transferir|transfiero|transferencia|abonar|abono)\b/;
-const COMO_O_DONDE = /\b(como|donde|cuando|por donde|en donde|a donde|a que cuenta|a cual cuenta|que horario|en que horario|a que hora|hasta que hora|se puede|puedo|podemos|forma|formas|medios?|metodos?)\b/;
+// «¿A qué número te consigno?» (Monster 2026-11-04, después de la ficha de la clínica): el
+// número, el Nequi o la llave también son «a dónde», no solo la cuenta.
+const COMO_O_DONDE = /\b(como|donde|cuando|por donde|en donde|a donde|a que cuenta|a cual cuenta|a que (numero|nequi|daviplata|llave)|a cual (numero|nequi|daviplata|llave)|que horario|en que horario|a que hora|hasta que hora|se puede|puedo|podemos|forma|formas|medios?|metodos?)\b/;
 const DATOS_DE_PAGO = [
     /\b(medios|formas|metodos|opciones) de pago\b/,
     /\b(numero|datos) de (la )?cuenta\b/,
