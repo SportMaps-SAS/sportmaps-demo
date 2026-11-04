@@ -29,10 +29,7 @@
  */
 
 import { supabase } from '../config/supabase';
-import { decryptToken } from './whatsapp.service';
-
-const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_VERSION || 'v21.0';
-const GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+import { estadoDelNumero, recordarTier } from './whatsapp-campanas-cupo';
 
 /** Umbrales del plan B5: bajas sobre lo enviado y fallos sobre lo enviado, en 24 h. */
 export const UMBRAL_BAJAS = 0.05;
@@ -160,26 +157,15 @@ export interface IntegracionParaFreno {
     access_token_encrypted: string | null;
 }
 
-/** GET del color del número. Una llamada por tick y número; null si Graph no responde. */
-export async function calidadDelNumero(integ: IntegracionParaFreno): Promise<string | null> {
-    if (!integ.access_token_encrypted) return null;
-    let token: string;
-    try {
-        token = decryptToken(integ.access_token_encrypted);
-    } catch {
-        return null;
-    }
-    try {
-        const r = await fetch(`${GRAPH}/${integ.phone_number_id}?fields=quality_rating`, {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(15_000),
-        });
-        const j: any = await r.json().catch(() => ({}));
-        if (!r.ok) return null;
-        return typeof j?.quality_rating === 'string' ? j.quality_rating : null;
-    } catch {
-        return null;
-    }
+/**
+ * GET del color del número. Una llamada por tick y número; null si Graph no
+ * responde. La MISMA llamada trae `messaging_limit_tier`, que queda en la caché
+ * del cupo (whatsapp-campanas-cupo): el paso 8 del tick no vuelve a Graph.
+ */
+export async function calidadDelNumero(integ: IntegracionParaFreno, ahora = Date.now()): Promise<string | null> {
+    const e = await estadoDelNumero(integ);
+    if (e) recordarTier(integ.id, e.tier, ahora);
+    return e?.calidad ?? null;
 }
 
 /**
@@ -198,7 +184,7 @@ export async function leerSenales(p: {
     if (p.calidadCache?.has(p.integ.id)) {
         calidadNumero = p.calidadCache.get(p.integ.id) ?? null;
     } else {
-        calidadNumero = await calidadDelNumero(p.integ);
+        calidadNumero = await calidadDelNumero(p.integ, p.ahora);
         p.calidadCache?.set(p.integ.id, calidadNumero);
     }
 

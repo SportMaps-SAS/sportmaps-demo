@@ -20,6 +20,13 @@
 
 import { desgloseMora, textoDesgloseMora } from '../utils/desglose-mora';
 
+/**
+ * Clínicas, campamentos y vacacionales, sobre texto ya normalizado
+ * (`normalizarFrase`). UNA regla para la campaña (whatsapp-audiencias: quién
+ * pidió una clínica) y para el destino por anuncio (whatsapp-anuncio-destino).
+ */
+export const EVENTO_DE_SERVICIO = /\b(clinicas?|campamentos?|vacacional(es)?|vacaciones recreativas)\b/;
+
 export function normalizarFrase(t: string | null | undefined): string {
     return (t || '')
         .toLowerCase()

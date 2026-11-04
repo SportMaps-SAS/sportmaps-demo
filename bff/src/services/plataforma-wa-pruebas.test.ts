@@ -58,7 +58,9 @@ vi.mock('./whatsapp-bot.service', async () => {
     };
 });
 
-import { turnoSimulado, parsearComandoPrueba, contactoSintetico, type SesionPrueba } from './plataforma-wa-pruebas.service';
+import {
+    turnoSimulado, parsearComandoPrueba, contactoSintetico, payloadDeEntranteSimulado, type SesionPrueba,
+} from './plataforma-wa-pruebas.service';
 import { runBotTurn } from './whatsapp-bot.service';
 
 beforeEach(() => { h.reales.length = 0; });
@@ -129,5 +131,17 @@ describe('turnoSimulado', () => {
         const r = await turnoSimulado(sesion, { waMessageId: 'wamid.t2', textBody: 'hola', botonId: null });
         expect(r.salidas[0].texto).toBe('eco: hola · sin · desconocido');
         expect(h.reales).toEqual([]);
+    });
+
+    it('el clic en un anuncio: el entrante queda con el `referral` en el payload (como lo guarda el webhook)', async () => {
+        const sesion: SesionPrueba = { contact_wa_id: '573128463555', school_id: 'esc', rol: 'prospecto', child_id: null, parent_id: null, estado: {} };
+        const referral = { source_id: 'ad-1', source_type: 'ad', headline: 'Clínica de armadores y atacantes' };
+        await turnoSimulado(sesion, { waMessageId: 'wamid.t4', textBody: 'Hola', botonId: null, referral });
+        const entrante = sesion.estado.tablas!.whatsapp_messages.find((m) => m.direction === 'inbound');
+        expect(entrante.payload).toEqual({ referral });
+        // El mensaje crudo de Meta también vale (el número de pruebas lo pasa tal cual).
+        expect(payloadDeEntranteSimulado({ waMessageId: 'w', textBody: 'Hola', botonId: null, raw: { type: 'text', referral } }))
+            .toEqual({ type: 'text', referral });
+        expect(payloadDeEntranteSimulado({ waMessageId: 'w', textBody: 'Sí', botonId: 'sm_x' })).toEqual({ boton_id: 'sm_x' });
     });
 });

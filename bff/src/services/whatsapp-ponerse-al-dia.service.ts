@@ -205,7 +205,10 @@ export async function listarPorResponder(
             .order('created_at', { ascending: false })
             .limit(300);
         const lista = ((msgs ?? []) as any[]).sort((a, b) => tiempo(a) - tiempo(b));
-        const entrantes = lista.filter((m) => m.direction === 'inbound');
+        // Lo importado del historial de Coexistence (`payload.historial`) es de
+        // ANTES del alta: nunca es «sin responder» (Meta no abre la ventana con
+        // eso y el bot no contesta mensajes viejos). Solo cuenta lo que entró en vivo.
+        const entrantes = lista.filter((m) => m.direction === 'inbound' && m.payload?.historial !== true);
         if (!entrantes.length) continue;
         const ultimoEntranteMs = tiempo(entrantes[entrantes.length - 1]);
         const restanteMs = ultimoEntranteMs + VENTANA_MS - ahora;

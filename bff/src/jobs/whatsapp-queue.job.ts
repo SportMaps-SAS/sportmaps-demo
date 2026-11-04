@@ -1538,8 +1538,14 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
 
     if (esperado) {
         if (esperado.monto === null) {
-            const delMotivo = precios.filter((x) => x.motivo === esperado!.motivo && !x.esAbono);
-            if (delMotivo.length === 1) esperado = { ...esperado, monto: delMotivo[0].monto };
+            // Sin monto = cualquier precio vigente de ese motivo (la ficha de la clínica por
+            // anuncio, whatsapp-anuncio-destino: el completo, el de afiliado o el abono del 50 %).
+            // Primero el que coincide con el comprobante; si ninguno, el único completo.
+            const delMotivo = precios.filter((x) => x.motivo === esperado!.motivo);
+            const exacto = delMotivo.find((x) => mismoMonto(x.monto, monto));
+            const completos = delMotivo.filter((x) => !x.esAbono);
+            if (exacto) esperado = { ...esperado, monto: exacto.monto };
+            else if (completos.length === 1) esperado = { ...esperado, monto: completos[0].monto };
         }
         const dec = decidirConEsperado(esperado, monto, destino, a.pendientes);
         if (dec.tipo === 'seguir') return false;

@@ -39,10 +39,20 @@ export interface CampanaVista {
 interface PlantillaMarketing {
     nombre: string; idioma: string; estado: string; lista: boolean; motivo: string | null; texto: string; botones: string[];
 }
+/**
+ * Cupo de Meta del día (whatsapp-campanas-cupo del BFF): la campaña frena en
+ * límite − reserva para que los avisos a los interesados que respondan sigan
+ * saliendo. `usados_24h` null = no se pudo contar.
+ */
+export interface CupoCampanas {
+    limite_meta: number; tier: string | null; fuente: 'graph' | 'evento' | 'por_defecto'; reserva: number;
+    usados_24h: number | null; tope_diario: number; enviados_hoy: number; cupo_hoy: number; disponible_hoy: number;
+}
 export interface ResumenCampanas {
     disponible: boolean;
     habilitadas?: boolean;
     integracion?: string;
+    cupo?: CupoCampanas | null;
     ajustes?: { base_consentimiento: string; tope_diario: number; lote_piloto: number; pausada: boolean; pausa_motivo: string | null };
     audiencia?: { total: number; porInteres: Record<string, number>; porSede: Record<string, number> };
     sedes?: { id: string; nombre: string }[];
@@ -95,6 +105,18 @@ const ERRORES: Record<string, string> = {
 export function enviadosDe(a: Avance | null | undefined): number {
     if (!a) return 0;
     return a.enviado + a.incierto + a.respondio_si + a.respondio_luego + a.baja;
+}
+
+/** «Cupo de hoy: X de Y · reserva Z para interesados y avisos». */
+export function textoCupo(c: CupoCampanas): string {
+    return `Cupo de hoy: ${c.disponible_hoy} de ${c.cupo_hoy} · reserva ${c.reserva} para interesados y avisos`;
+}
+
+/** El límite de Meta en palabras, con lo ya usado de la ventana de 24 h. */
+export function textoLimiteMeta(c: CupoCampanas): string {
+    const usados = c.usados_24h === null ? '' : ` · en las últimas 24 h: ${c.usados_24h}`;
+    const supuesto = c.fuente === 'por_defecto' ? ' (Meta no lo informó: se asume el más bajo)' : '';
+    return `Límite de Meta: ${c.limite_meta} personas distintas cada 24 h${supuesto}${usados}`;
 }
 
 // ─── Componente ─────────────────────────────────────────────────────────────
@@ -232,6 +254,14 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                     </Button>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                    {resumen.cupo && (
+                        <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm" data-testid="cupo-campanas"
+                            title="La campaña se detiene antes del límite de Meta para que los avisos a los interesados que respondan (clase de prueba, cupos, pagos) sigan saliendo. Retoma sola cuando se libera la ventana.">
+                            <p className="font-medium">{textoCupo(resumen.cupo)}</p>
+                            <p className="text-xs text-muted-foreground">{textoLimiteMeta(resumen.cupo)}</p>
+                        </div>
+                    )}
+
                     {audiencia && Object.keys(audiencia.porInteres).length > 0 && (
                         <div className="flex flex-wrap gap-2">
                             {Object.entries(audiencia.porInteres).sort((a, b) => b[1] - a[1]).map(([k, v]) => (
@@ -340,7 +370,9 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                                             )}
                                             <p className="text-xs text-muted-foreground">
                                                 Sale de a poco y solo en horario: el primer día {resumen.ajustes?.lote_piloto} personas,
-                                                luego hasta {resumen.ajustes?.tope_diario} por día. Si Meta baja la calidad de tu número, se pausa sola.
+                                                luego hasta {resumen.cupo?.cupo_hoy ?? resumen.ajustes?.tope_diario} por día
+                                                {resumen.cupo ? `, siempre dejando ${resumen.cupo.reserva} para los avisos a los interesados` : ''}.
+                                                Si Meta baja la calidad de tu número, se pausa sola.
                                             </p>
                                             <Button size="sm" disabled={ocupado !== null || (!!resumen.declaracion && !acepto)}
                                                 onClick={() => void aprobar(c)}>

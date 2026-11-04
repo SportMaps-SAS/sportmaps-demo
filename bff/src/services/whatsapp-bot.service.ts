@@ -127,6 +127,11 @@ import {
 import {
     textosClaseDeEscuela, textosDeClase, reglaDeClaseParaPrompt, TEXTOS_POR_DEFECTO, type TextosClase,
 } from './textos-clase-prueba';
+import {
+    atenderDestinoDeAnuncio, mapeoDeAnuncio, serviciosDeAnuncio, MARCA_DESTINO,
+    type CtxAnuncio, type ResultadoAnuncio,
+} from './whatsapp-anuncio-destino';
+import { esAfiliado } from './wa-afiliado.service';
 
 const OTP_TTL_MIN = 10;
 
@@ -2422,6 +2427,80 @@ async function iniciarEmbudoEnBot(
     }
 }
 
+// ─── Destino por anuncio (Monster 2026-11-04, whatsapp-anuncio-destino) ──────
+//
+// El interesado que llega por el anuncio de la clínica (o escribe «info de la
+// clínica») recibe la ficha del servicio con el precio de hoy, las cuentas y el
+// motivo esperado; el del anuncio de la clase de prueba, el embudo. Solo escuelas
+// con embudo (`wa_preguntas_prospecto`) o con ventas por WhatsApp
+// (`wa_ventas_habilitadas`): Dynasty y las demás no leen nada.
+
+function ctxAnuncio(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, recientes: FilaReciente[],
+): CtxAnuncio {
+    const schoolId = integration.school_id;
+    const saludo = async () => saludoDePresentacion(conversationId, await nombreDeEscuela(schoolId));
+    return {
+        schoolId,
+        recientes: async () => recientes,
+        mapeo: (sourceId) => mapeoDeAnuncio(schoolId, sourceId),
+        servicios: () => serviciosDeAnuncio(schoolId),
+        afiliado: async () => (await esAfiliado(schoolId, contactWaId)).afiliado,
+        cuentas: async (motivo) => (await mediosDePago(schoolId, { categoria: motivo })).cuentas
+            .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular })),
+        saludo,
+        yaContestado: () => yaSeLeContestoEscolar(conversationId),
+        guardarLead: async (l) => {
+            // Número de pruebas y batería: no se escribe (el esperado se intenta y el cortafuegos lo bloquea).
+            if (enSimulacion()) return null;
+            const r = await registrarLeadDeProspecto({
+                schoolId, conversationId, contactWaId,
+                nombre: await nombreDelContacto(conversationId),
+                textos: await entrantesDeTexto(conversationId, DIAS_MARCA_PROSPECTO),
+                estado: l.estado, servicio: l.servicio, anuncio: l.anuncio,
+            });
+            return r?.leadId ?? null;
+        },
+        // B4: sin monto = cualquier precio vigente del servicio (completo, afiliado o abono).
+        registrarEsperado: async (e) => {
+            const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
+            return registrarConceptoEsperado(schoolId, contactWaId, { motivo: e.motivo, leadId: e.leadId });
+        },
+        // Mismo step que la primera respuesta al prospecto: cuenta para el freno de 30 días y
+        // lo que escriba después lo atiende el seguimiento del interesado (nunca silencio).
+        enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto,
+            { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'anuncio', ...contexto }),
+        avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle }),
+        iniciarEmbudo: async () => iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+            { saludo: await saludo(), step: PASO_DESCONOCIDO_ESCOLAR }),
+    };
+}
+
+/**
+ * Destino por anuncio o por intención escrita. `fase` 'anuncio' = solo con anuncio
+ * (antes del embudo abierto); 'texto' = solo sin anuncio (después de los flujos
+ * abiertos). null = sigue el bot de siempre. Nunca lanza.
+ */
+async function atenderAnuncioEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, fase: 'anuncio' | 'texto',
+    /** Las dos fases del mismo turno leen los mensajes UNA vez (entre una y otra no sale nada). */
+    cache: { recientes?: FilaReciente[] } = {},
+): Promise<ResultadoAnuncio | null> {
+    if (botonId || !text) return null;
+    try {
+        const ajustes = await ajustesDeLaEscuela(integration.school_id);
+        if (!embudoActivo(ajustes) && !ajustes.ventasHabilitadas) return null;
+        const recientes = cache.recientes ??= await mensajesRecientes(conversationId);
+        // Si una persona de la escuela está escribiendo, la conversación es suya.
+        if (humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return null;
+        return await atenderDestinoDeAnuncio(ctxAnuncio(integration, conversationId, contactWaId, recientes), text, fase);
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] destino por anuncio falló', { conversationId, err: e?.message });
+        return null;
+    }
+}
+
 /**
  * Saludo suelto («Hola») de un número nuevo en una escuela con embudo (B2, P4):
  * recibe la bienvenida del embudo con sus sedes, sin la variable de entorno de la
@@ -2477,7 +2556,8 @@ export function mensajeConContenido(texto: string, equipo: ReadonlyMap<string, s
 
 /**
  * 'seguimiento' si la escuela tiene embudo, responde a interesados
- * (`responder_prospectos`) y este contacto ya pasó por el embudo; si no, null.
+ * (`responder_prospectos`) y este contacto ya pasó por el embudo (o recibió la
+ * ficha de un servicio por el destino de un anuncio); si no, null.
  * Dynasty y las demás: siempre null (no leen nada). Nunca lanza.
  */
 async function seguimientoDelEmbudo(integration: WhatsAppIntegration, conversationId: string): Promise<PuertaDeProspecto | null> {
@@ -2490,17 +2570,25 @@ async function seguimientoDelEmbudo(integration: WhatsAppIntegration, conversati
     }
 }
 
-/** ¿El bot le habló con el embudo en los últimos 30 días (paso abierto o cerrado)? Nunca lanza. */
-async function pasoPorElEmbudo(conversationId: string): Promise<boolean> {
+/**
+ * ¿El bot le habló con el embudo en los últimos 30 días (paso abierto o cerrado)?
+ * 'anuncio': no pasó por el embudo pero recibió la ficha de un servicio (o el aviso
+ * de que lo atiende una persona) por el destino de un anuncio: es un interesado y
+ * lo que escriba después tampoco se queda sin respuesta. Nunca lanza.
+ */
+async function pasoPorElEmbudo(conversationId: string): Promise<'embudo' | 'anuncio' | null> {
     try {
         const desde = new Date(Date.now() - FRENO_DESCONOCIDO_DIAS * 24 * 3600_000).toISOString();
         const { data } = await supabase.from('whatsapp_messages').select('payload')
             .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
             .order('created_at', { ascending: false }).limit(40);
-        return ((data ?? []) as any[]).some((m) => m?.payload?.flujo === FLUJO_EMBUDO
-            || String(m?.payload?.step ?? '').startsWith('embudo_'));
+        const filas = (data ?? []) as any[];
+        if (filas.some((m) => m?.payload?.flujo === FLUJO_EMBUDO || String(m?.payload?.step ?? '').startsWith('embudo_'))) {
+            return 'embudo';
+        }
+        return filas.some((m) => m?.payload?.[MARCA_DESTINO]) ? 'anuncio' : null;
     } catch {
-        return false;
+        return null;
     }
 }
 
@@ -2530,7 +2618,8 @@ async function acuseDelEmbudo(
         const recientes = await mensajesRecientes(conversationId);
         if (humanoReciente(recientes, SILENCIO_HUMANO_MIN) || !escribioDespuesDeLaRespuesta(recientes)) return false;
         const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
-        if (!estado && !(await pasoPorElEmbudo(conversationId))) return false;
+        const via = estado ? 'embudo' : await pasoPorElEmbudo(conversationId);
+        if (!via) return false;
 
         const [repetido, avisadoHaceRato] = await Promise.all([
             Promise.all([pasoReciente(conversationId, PASO_EMBUDO_ACUSE, 24), pasoReciente(conversationId, PASO_PROSPECTO_SEGUIMIENTO, 24)])
@@ -2542,8 +2631,8 @@ async function acuseDelEmbudo(
         const nombre = estado?.datos?.nombre ?? estado?.datos?.respuestas?.nombre ?? null;
         await abrirEnBuzon(integration, conversationId, contactWaId, avisadoHaceRato ? undefined : {
             motivo: 'puerta_otro',
-            detalle: `Clase de prueba por WhatsApp (pregunta sin responder): ${nombre ? `Interesado: ${nombre}. ` : ''}` +
-                `Escribió: «${texto.slice(0, 300)}».`,
+            detalle: `${via === 'anuncio' ? 'Interesado por un anuncio' : 'Clase de prueba por WhatsApp'} (pregunta sin responder): ` +
+                `${nombre ? `Interesado: ${nombre}. ` : ''}Escribió: «${texto.slice(0, 300)}».`,
         });
         return true;
     } catch (err: any) {
@@ -2886,6 +2975,7 @@ export type ResultadoDesconocido =
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
     | 'embudo' | 'embudo_acuse'
+    | ResultadoAnuncio
     | 'frenado' | 'silencio';
 
 /**
@@ -3010,6 +3100,14 @@ async function atenderDesconocidoEnEscuela(
         if (resuelta) return 'pregunta_de_comprobante';
     }
 
+    // 0a'''. Vino de un ANUNCIO (clic a WhatsApp, Monster 2026-11-04): el destino del
+    //        anuncio manda (la ficha de la clínica, una persona o el embudo de la clase
+    //        de prueba). Va antes del embudo abierto: tocar el anuncio de la clínica es
+    //        una elección explícita, no la respuesta a «¿nombre del deportista?».
+    const cacheAnuncio: { recientes?: FilaReciente[] } = {};
+    const porAnuncio = await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'anuncio', cacheAnuncio);
+    if (porAnuncio) return porAnuncio;
+
     // 0a''. Embudo del interesado POR ESCUELA (B2), solo si la escuela lo tiene
     //       (`wa_preguntas_prospecto`): continúa el flujo abierto, sus botones
     //       (también los de sus plantillas: «Cambiar horario», «Elegir otro
@@ -3067,6 +3165,13 @@ async function atenderDesconocidoEnEscuela(
     // 0''. Contesta el seguimiento de 20 h («¿Te funciona el sábado…?» → «Si»).
     const alSeguimiento = await responderAlSeguimiento(integration, conversationId, contactWaId, text, botonId, rafaga);
     if (alSeguimiento) return alSeguimiento;
+
+    // 0'''. «Info de la clínica», «precio de la clínica?», «quiero inscribirme a la
+    //       clínica» sin anuncio (o el número de la lista de servicios): la ficha del
+    //       servicio activo que calce, no el embudo de la clase de prueba. Después de
+    //       los flujos abiertos, que contestan primero lo suyo.
+    const porServicio = await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'texto', cacheAnuncio);
+    if (porServicio) return porServicio;
 
     // 1a. Un código SOLO cuenta si hay un OTP vigente para este contacto. Seis
     //     dígitos seguidos también son un monto («son 170000») o un pedazo de

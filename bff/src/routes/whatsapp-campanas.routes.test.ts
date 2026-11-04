@@ -54,6 +54,16 @@ vi.mock('../services/whatsapp-campanas.service', () => {
     };
 });
 
+vi.mock('../services/whatsapp-campanas-cupo', () => ({
+    cupoDeCampanasHoy: vi.fn(async (integ: any, tope: number) => {
+        est.llamadas.push({ fn: 'cupo', args: [integ, tope] });
+        return {
+            limite: 250, tier: 'TIER_250', fuente: 'graph', reserva: 50, usados24h: 50, limiteCampanas: 200,
+            disponibleCampanas: 150, topeDiario: tope, enviadosHoy: 30, cupoHoy: 200, disponibleHoy: 150,
+        };
+    }),
+}));
+
 import router from './whatsapp-campanas.routes';
 
 const ESCUELA = 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c';
@@ -117,6 +127,12 @@ describe('GET /:schoolId/campanas', () => {
             sedes: [{ id: 'S1', nombre: 'Suba' }],
             declaracion: { version: 'contacto_previo_v1', texto: 'Declaro que Monster´s Volley Club (180 días)' },
         });
+        // «Cupo de hoy: 150 de 200 · reserva 50 para interesados y avisos», con el tope de la escuela.
+        expect(j.cupo).toEqual({
+            limite_meta: 250, tier: 'TIER_250', fuente: 'graph', reserva: 50, usados_24h: 50,
+            tope_diario: 200, enviados_hoy: 30, cupo_hoy: 200, disponible_hoy: 150,
+        });
+        expect(est.llamadas.find((l) => l.fn === 'cupo')?.args).toEqual([{ id: 'integ-1', waba_id: 'w' }, 200]);
         expect(j.campanas[0]).toMatchObject({ id: 'c-borrador', conteo_previsto: 1, avance: null });
         expect(j.campanas[1]).toMatchObject({ id: 'c-curso', conteo_previsto: null, avance: { total: 10, enviado: 4 } });
     });

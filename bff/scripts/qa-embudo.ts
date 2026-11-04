@@ -10,7 +10,7 @@
  *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
  *
- * Opciones: --solo matriz|guiones|despues|variantes (varias con coma; sin --solo
+ * Opciones: --solo matriz|guiones|despues|variantes|anuncios (varias con coma; sin --solo
  * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
  * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
  * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
@@ -51,6 +51,13 @@
  *     cambiar de horario (escrito y botón), «no puedo ir», «gracias».
  *   · Variantes: sin valor, sin cuentas de pago, sin sedes / una sede, sin
  *     franjas, días, cupos llenos, horas para separar, embudo apagado.
+ *   · Anuncios (whatsapp-anuncio-destino): el primer mensaje trae el `referral` de
+ *     Meta. Anuncio de la clínica sin mapeo (la tabla real todavía no existe) y con
+ *     mapeo (`whatsapp_anuncio_destino` virtual), mapeo a una persona, anuncio de la
+ *     clase de prueba, anuncio desconocido, evento sin servicio activo, «info de la
+ *     clínica» sin anuncio, afiliado y la clínica a mitad del embudo. Que vaya al
+ *     destino correcto, con el precio de HOY, sin el embudo equivocado, con el motivo
+ *     esperado intentado (el cortafuegos bloquea su insert) y nunca en silencio.
  *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
  *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
  *     sin reglas de cancha sin resolver, títulos dentro del límite de WhatsApp,
@@ -85,6 +92,7 @@ import { normalizar } from '../src/services/whatsapp-clase-cortesia.service';
 import { diaDeLaSemana } from '../src/services/semana-equipo.service';
 import { limpiarCacheTextosClase, formatoPesos } from '../src/services/textos-clase-prueba';
 import { franjaDeAgenda, textoConfirmacion } from '../src/services/clase-prueba-agenda.service';
+import { serviciosDeAnuncio, inferirServicio, MARCA_DESTINO, type ItemConFicha } from '../src/services/whatsapp-anuncio-destino';
 
 // ─── Argumentos ──────────────────────────────────────────────────────────────
 
@@ -92,8 +100,8 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
-type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes';
-const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes'];
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios'];
 const ESCUELA = arg('escuela');
 const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
 const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
@@ -260,9 +268,18 @@ class Conversacion {
 
     contacto(): string { return contactoSintetico(this.sesion.contact_wa_id); }
 
-    async decir(texto: string, botonId: string | null = null, o: { silencioOk?: boolean } = {}): Promise<SalidaSimulada[]> {
-        const r = await turnoSimulado(this.sesion, { waMessageId: `qa-${randomUUID()}`, textBody: texto, botonId });
-        this.turnos.push({ entrada: texto, botonId, salidas: r.salidas, bloqueadas: r.bloqueadas, nota: r.nota, fase: this.fase, ...o });
+    /**
+     * `referral`: el mensaje viene de un anuncio (lo que Meta trae en `messages[].referral`).
+     * `rpc`: respuestas fijas de RPC en este turno (p. ej. `wa_es_afiliado`).
+     */
+    async decir(texto: string, botonId: string | null = null, o: {
+        silencioOk?: boolean; referral?: Record<string, unknown>; rpc?: Record<string, (args: any) => unknown>;
+    } = {}): Promise<SalidaSimulada[]> {
+        const r = await turnoSimulado(this.sesion,
+            { waMessageId: `qa-${randomUUID()}`, textBody: texto, botonId, ...(o.referral ? { referral: o.referral } : {}) },
+            Date.now(), o.rpc ? { rpc: o.rpc } : {});
+        const entrada = o.referral ? `${texto} ⟵ anuncio «${String(o.referral.headline ?? o.referral.source_id ?? '')}»` : texto;
+        this.turnos.push({ entrada, botonId, salidas: r.salidas, bloqueadas: r.bloqueadas, nota: r.nota, fase: this.fase, silencioOk: o.silencioOk });
         return paraLaFamilia(r.salidas);
     }
 
@@ -1626,6 +1643,214 @@ async function correrVariantes(e: Escuela): Promise<{ resultados: Resultado[]; a
     return { resultados, avisos };
 }
 
+// ─── Anuncios con clic a WhatsApp (whatsapp-anuncio-destino) ────────────────
+
+/**
+ * El precio de hoy calculado APARTE (no con la función del bot): el de afiliado si
+ * lo es; si no, el último tramo de `precios_por_fecha` cuya fecha ya llegó, o el de lista.
+ */
+function precioDeHoyEsperado(it: ItemConFicha, afiliado: boolean): number | null {
+    if (afiliado && Number(it.precio_afiliado) > 0) return Number(it.precio_afiliado);
+    let precio = Number(it.price) > 0 ? Number(it.price) : null;
+    const tramos = (Array.isArray(it.precios_por_fecha) ? it.precios_por_fecha as any[] : [])
+        .filter((t) => t && /^\d{4}-\d{2}-\d{2}/.test(String(t.desde)) && Number(t.precio) > 0)
+        .sort((a, b) => String(a.desde).localeCompare(String(b.desde)));
+    for (const t of tramos) if (String(t.desde).slice(0, 10) <= hoyBogota()) precio = Number(t.precio);
+    return precio;
+}
+
+const anuncio = (id: string, headline: string, body: string): Record<string, unknown> => ({
+    source_id: id, source_type: 'ad', source_url: 'https://fb.me/qa-embudo', headline, body, media_type: 'image', ctwa_clid: `qa-clid-${id}`,
+});
+
+const MOTIVOS_DE_ITEM = ['torneo', 'viaje', 'clase_extra', 'vacacional', 'otro'];
+
+/** El último turno trajo la ficha de ESE servicio: precio de hoy, abono, cómo pagar, motivo esperado y nada del embudo. */
+function revisarFicha(c: Conversacion, e: Escuela, r: Resultado, it: ItemConFicha, o: { afiliado?: boolean } = {}): void {
+    const t = c.turnos.at(-1)!;
+    const s = paraLaFamilia(t.salidas).at(-1);
+    if (!s) return; // el silencio lo anota `cerrar`
+    const p = (s.payload ?? {}) as Record<string, any>;
+    debe(r, p[MARCA_DESTINO] === 'servicio' && p.servicio_id === it.id,
+        `no fue a la ficha de «${it.name}» (destino: ${p[MARCA_DESTINO] ?? '—'}, step: ${s.step ?? '—'})`);
+    debe(r, s.texto.includes(`*${it.name}*`), 'la ficha no trae el nombre del servicio');
+    const hoy = precioDeHoyEsperado(it, !!o.afiliado);
+    if (hoy) debe(r, s.texto.includes(formatoPesos(hoy)), `la ficha no dice el precio de hoy (${formatoPesos(hoy)})`);
+    if (o.afiliado && Number(it.precio_afiliado) > 0) debe(r, /afiliado/i.test(s.texto), 'no le dijo que es su valor de afiliado');
+    const pct = Number(it.abono_minimo_pct);
+    if (hoy && it.allow_installments === true && pct >= 1 && pct < 100) {
+        debe(r, s.texto.includes(formatoPesos(Math.ceil((hoy * pct) / 100))), `no dice el abono mínimo (${pct} %)`);
+    }
+    debe(r, /comprobante|datos de pago/i.test(s.texto), 'no le dice cómo pagar ni que la escuela le manda los datos de pago');
+    debe(r, !paraLaFamilia(t.salidas).some((x) => (x.opciones ?? []).some((op) => op.id.startsWith('sm_em_'))) && p.flujo !== 'embudo',
+        'mostró el embudo de la clase de prueba (sedes o preguntas)');
+    debe(r, !e.preguntas.length || !preguntoClave(s.texto, e, e.preguntas[0].clave), 'hizo la primera pregunta del embudo');
+    const motivo = MOTIVOS_DE_ITEM.includes(String(it.kind)) ? String(it.kind) : 'otro';
+    debe(r, p.motivo_esperado?.motivo === motivo, `no dejó el motivo esperado «${motivo}» en el saliente`);
+    // En simulación no se escribe: que se INTENTÓ lo prueba el insert que bloqueó el cortafuegos.
+    debe(r, t.bloqueadas.some((b) => /^(insert|update) whatsapp_conceptos_esperados$/.test(b)),
+        'no intentó registrar el motivo esperado (el cortafuegos no vio el insert)');
+}
+
+/** El último turno arrancó el embudo de la clase de prueba (sedes o la primera pregunta), sin ficha de servicio. */
+function revisarEmbudoDeClase(c: Conversacion, e: Escuela, r: Resultado, servicio: ItemConFicha | undefined): void {
+    const s = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []).at(-1);
+    if (!s) return;
+    const arranco = e.sedes.length > 1
+        ? (s.opciones ?? []).some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE))
+        : preguntoClave(s.texto, e, e.preguntas[0]?.clave ?? '');
+    debe(r, arranco, 'no arrancó el embudo de la clase de prueba');
+    debe(r, (s.payload as any)?.[MARCA_DESTINO] !== 'servicio' && (!servicio || !s.texto.includes(servicio.name)),
+        'mandó la ficha de un servicio a quien llegó por la clase de prueba');
+}
+
+/** El último turno: «alguien te responde», el buzón con aviso y nada del embudo. */
+function revisarPersona(c: Conversacion, r: Resultado): void {
+    const t = c.turnos.at(-1)!;
+    const fam = paraLaFamilia(t.salidas);
+    if (!fam.length) return;
+    debe(r, fam.some((s) => /te responde/i.test(s.texto)), 'no le confirmó que una persona le responde');
+    debe(r, t.salidas.some(esNotaDelSimulador), 'no abrió la conversación en el buzón con aviso a la escuela');
+    debe(r, !fam.some((s) => (s.opciones ?? []).some((o) => o.id.startsWith('sm_em_'))), 'mostró el embudo de la clase de prueba');
+}
+
+interface CasoAnuncio {
+    titulo: string;
+    /** Filas de `whatsapp_anuncio_destino` (la tabla va virtual mientras corren estos casos). */
+    mapeo?: Fila[];
+    correr: (c: Conversacion, e: Escuela, r: Resultado) => Promise<void>;
+}
+
+async function correrCasoAnuncio(caso: CasoAnuncio, e: Escuela): Promise<Resultado> {
+    const conv = new Conversacion(caso.titulo, e.id, nuevoN(), caso.mapeo ? { whatsapp_anuncio_destino: caso.mapeo } : {});
+    const r = nuevoResultado(caso.titulo, conv, 'anuncios');
+    r.desenlace = 'respuesta';
+    await protegido(r, () => caso.correr(conv, e, r));
+    cerrar(r, e, null);
+    progreso(r);
+    return r;
+}
+
+async function correrAnuncios(e: Escuela): Promise<Resultado[]> {
+    const items = await serviciosDeAnuncio(e.id);
+    const clinica = items.find((it) => /\bclinicas?\b/.test(normalizar(it.name)));
+    const vacacional = items.find((it) => it.kind === 'vacacional');
+    // Un anuncio de un evento que la escuela NO tiene activo (el primero que no calza con nada del catálogo).
+    const eventoSinServicio = ['Torneo relámpago de diciembre', 'Campamento de vacaciones', 'Clínica de líberos']
+        .find((h) => inferirServicio([h], items).tipo === 'evento_sin_servicio') ?? null;
+    const AD_CLASE = anuncio('qa-ad-clase', 'Ven a tu clase de prueba de voleibol', `Entrena con ${e.nombre}.`);
+    const AD_MARCA = anuncio('qa-ad-marca', e.nombre, 'Entrena con nosotros. ¡Te esperamos!');
+    const AD_GENERICO = anuncio('qa-ad-generico', '¡Inscríbete ya!', 'Cupos limitados.');
+    const AD_CLINICA = clinica ? anuncio('qa-ad-clinica', clinica.name, 'Separa tu cupo con el 50 %.') : null;
+    const perfil = perfilesConGrupo(e, 1, { genero: 'f' })[0] ?? null;
+    const conClinica = (titulo: string, correr: (c: Conversacion, e: Escuela, r: Resultado, it: ItemConFicha) => Promise<void>, mapeo?: (it: ItemConFicha) => Fila[]): CasoAnuncio => ({
+        titulo,
+        ...(clinica && mapeo ? { mapeo: mapeo(clinica) } : {}),
+        correr: async (c, ev, r) => {
+            if (!clinica) { noAplica(r, 'la escuela no tiene una clínica activa en el catálogo'); return; }
+            await correr(c, ev, r, clinica);
+        },
+    });
+    const fila = (sourceId: string, destino: string, servicioId: string | null): Fila =>
+        ({ id: randomUUID(), school_id: e.id, source_id: sourceId, destino, servicio_id: servicioId });
+
+    // Contra la base real: la tabla del mapeo todavía no existe (o no tiene estos anuncios).
+    const sinMapeo: CasoAnuncio[] = [
+        conClinica('anuncio de la clínica (sin mapeo) + «quiero más información» → la ficha; y lo que pregunta después', async (c, ev, r, it) => {
+            await c.decir('Hola, quiero más información', null, { referral: AD_CLINICA! });
+            revisarFicha(c, ev, r, it);
+            await c.decir('Listo, ¿a qué número te consigno?');
+            noReinicia(c, ev, r);
+        }),
+        conClinica('afiliado: anuncio de la clínica → su valor de afiliado', async (c, ev, r, it) => {
+            await c.decir('Hola, quiero más información', null, { referral: AD_CLINICA!, rpc: { wa_es_afiliado: () => ({ afiliado: true }) } });
+            revisarFicha(c, ev, r, it, { afiliado: true });
+        }),
+        ...['Buenas, info de la clínica', '¿Cuánto vale la clínica?', 'quiero inscribirme a la clínica'].map((texto) =>
+            conClinica(`sin anuncio: «${texto}» → la ficha`, async (c, ev, r, it) => {
+                await c.decir(texto);
+                revisarFicha(c, ev, r, it);
+            })),
+        conClinica('la clínica a mitad del embudo de la clase de prueba: la ficha, y el embudo sigue donde iba', async (c, ev, r, it) => {
+            await c.decir('Hola, quiero información para entrenar voleibol');
+            const sede = ev.sedes.at(-1);
+            if (sede && ev.sedes.length > 1) await c.tocar((o) => o.id === `${BOTON_EMBUDO.SEDE}${sede.branchId}`);
+            await c.decir('¿cuánto vale la clínica?');
+            revisarFicha(c, ev, r, it);
+            await c.decir('Mariana Gómez Ruiz');
+            const s = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []).at(-1);
+            debe(r, !!s && String(s.step ?? '').startsWith('embudo_'), `después de la ficha el embudo no siguió con su pregunta (step: ${s?.step ?? 'nada'})`);
+        }),
+        {
+            titulo: 'anuncio de la clase de prueba → el embudo de siempre, hasta el pago',
+            correr: async (c, ev, r) => {
+                await c.decir('Hola, quiero más información', null, { referral: AD_CLASE });
+                revisarEmbudoDeClase(c, ev, r, clinica);
+                r.desenlace = 'inicio';
+                if (perfil && !r.fallas.length) {
+                    await seguir(c, ev, perfil, r);
+                    // `seguir` cambia el desenlace (TS no lo ve): se lee como Desenlace.
+                    const fin = r.desenlace as Desenlace;
+                    debe(r, fin === 'pago' || fin === 'agendada', `el embudo del anuncio terminó en «${fin}»`);
+                }
+            },
+        },
+        {
+            titulo: 'anuncio sin palabra de servicio (la marca) → el embudo de siempre',
+            correr: async (c, ev, r) => {
+                await c.decir('Hola', null, { referral: AD_MARCA });
+                revisarEmbudoDeClase(c, ev, r, clinica);
+                r.desenlace = 'inicio';
+            },
+        },
+        {
+            titulo: `anuncio de un evento que no está activo («${eventoSinServicio ?? '—'}») → una persona (nunca la clase de prueba)`,
+            correr: async (c, ev, r) => {
+                if (!eventoSinServicio) { noAplica(r, 'la escuela tiene activos un torneo, un vacacional y una clínica'); return; }
+                await c.decir('Hola, me interesa', null, { referral: anuncio('qa-ad-sin-servicio', eventoSinServicio, 'Inscripciones abiertas') });
+                revisarPersona(c, r);
+                r.desenlace = 'persona';
+            },
+        },
+        {
+            titulo: 'anuncio del vacacional → su ficha con las opciones y sus valores',
+            correr: async (c, ev, r) => {
+                if (!vacacional) { noAplica(r, 'la escuela no tiene un vacacional activo'); return; }
+                await c.decir('Hola, quiero más información', null, { referral: anuncio('qa-ad-vacacional', vacacional.name, 'Inscripciones abiertas') });
+                revisarFicha(c, ev, r, vacacional);
+                const texto = c.ultimoTexto();
+                for (const o of (Array.isArray(vacacional.opciones) ? vacacional.opciones as any[] : [])) {
+                    if (Number(o?.precio) > 0) debe(r, texto.includes(formatoPesos(Number(o.precio))), `no dice el valor de «${o.etiqueta}» (${formatoPesos(Number(o.precio))})`);
+                }
+                debe(r, !clinica || !texto.includes(clinica.name), 'mezcló la clínica en la ficha del vacacional');
+            },
+        },
+    ];
+
+    // Con el mapeo de la escuela (tabla virtual sembrada): el mapeo manda sobre la inferencia.
+    const conMapeo: CasoAnuncio[] = [
+        conClinica('anuncio genérico («¡Inscríbete ya!») mapeado a la clínica → la ficha', async (c, ev, r, it) => {
+            await c.decir('Hola', null, { referral: AD_GENERICO });
+            revisarFicha(c, ev, r, it);
+        }, (it) => [fila('qa-ad-generico', 'servicio', it.id)]),
+        conClinica('anuncio de la clínica mapeado a una persona → buzón y «alguien te responde»', async (c, _ev, r) => {
+            await c.decir('Hola, quiero más información', null, { referral: AD_CLINICA! });
+            revisarPersona(c, r);
+            r.desenlace = 'persona';
+        }, () => [fila('qa-ad-clinica', 'persona', null)]),
+        conClinica('anuncio de la clínica mapeado a la clase de prueba → el embudo (el mapeo manda)', async (c, ev, r, it) => {
+            await c.decir('Hola, quiero más información', null, { referral: AD_CLINICA! });
+            revisarEmbudoDeClase(c, ev, r, it);
+            r.desenlace = 'inicio';
+        }, () => [fila('qa-ad-clinica', 'clase_prueba', null)]),
+    ];
+
+    const rs = await enParalelo(sinMapeo, (caso) => correrCasoAnuncio(caso, e));
+    rs.push(...await conTablasVirtuales(['whatsapp_anuncio_destino'], () => enParalelo(conMapeo, (caso) => correrCasoAnuncio(caso, e))));
+    process.stdout.write('\n');
+    return rs;
+}
+
 // ─── Reporte ─────────────────────────────────────────────────────────────────
 
 const esBien = (r: Resultado) => !r.fallas.length && !r.esperadas.length;
@@ -1677,7 +1902,7 @@ function imprimirFallas(rs: Resultado[]): void {
 
 (async () => {
     if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
-        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes[,…]] [--variante <nombre>[,…]] '
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios[,…]] [--variante <nombre>[,…]] '
             + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
         log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
@@ -1698,6 +1923,7 @@ function imprimirFallas(rs: Resultado[]): void {
         if (b === 'matriz') rs = await correrMatriz(escuela);
         if (b === 'guiones') rs = await correrGuiones(escuela);
         if (b === 'despues') rs = await correrDespues(escuela);
+        if (b === 'anuncios') rs = await correrAnuncios(escuela);
         if (b === 'variantes') {
             const v = await correrVariantes(escuela);
             rs = v.resultados;

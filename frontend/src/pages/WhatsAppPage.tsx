@@ -27,6 +27,7 @@ import { AvisosSportMaps } from '@/components/whatsapp/AvisosSportMaps';
 import { ImportarChatExportado } from '@/components/whatsapp/ImportarChatExportado';
 import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/BandejaComprobantes';
 import { Campanas } from '@/components/whatsapp/Campanas';
+import { Anuncios } from '@/components/whatsapp/Anuncios';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -39,6 +40,7 @@ import { Switch } from '@/components/ui/switch';
 import {
     MessageSquare, RefreshCw, AlertTriangle, Clock, FileText, Inbox, Settings, Plus, Loader2, Power, BarChart3, CalendarCheck,
     Megaphone,
+    Target,
 } from 'lucide-react';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
@@ -427,6 +429,9 @@ export default function WhatsAppPage() {
                     <TabsTrigger value="campanas" className="h-full">
                         <Megaphone className="h-4 w-4 mr-1" /> Campañas
                     </TabsTrigger>
+                    <TabsTrigger value="anuncios" className="h-full">
+                        <Target className="h-4 w-4 mr-1" /> Anuncios
+                    </TabsTrigger>
                     <TabsTrigger value="metricas" className="h-full">
                         <BarChart3 className="h-4 w-4 mr-1" /> Métricas
                     </TabsTrigger>
@@ -530,6 +535,11 @@ export default function WhatsAppPage() {
                 {/* ── Campañas: un mensaje a quienes preguntaron por clases (plan B5) ── */}
                 <TabsContent value="campanas">
                     {schoolId && <Campanas schoolId={schoolId} />}
+                </TabsContent>
+
+                {/* ── Anuncios: qué pasa después del clic en un anuncio con botón de WhatsApp ── */}
+                <TabsContent value="anuncios">
+                    {schoolId && <Anuncios schoolId={schoolId} />}
                 </TabsContent>
 
                 {/* ── Bandeja ── */}

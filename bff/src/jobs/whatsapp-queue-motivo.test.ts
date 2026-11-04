@@ -505,6 +505,42 @@ describe('prospecto con motivo esperado: clase de prueba de $15.000 (Monster)', 
     });
 });
 
+// La ficha de la clínica por anuncio (whatsapp-anuncio-destino, 2026-11-04) deja el
+// esperado SIN monto: vale cualquier precio vigente de la clínica (completo o abono).
+describe('prospecto con esperado SIN monto (la clínica por anuncio): completo o abono, se aplica solo', () => {
+    const CLINICA = {
+        id: 'srv-clinica', name: 'Clínica de armadores y atacantes', kind: 'clase_extra', price: 300000, active: true,
+        event_id: null, starts_at: '2030-11-21T05:00:00Z', ends_at: '2030-11-23T04:59:00Z', allow_installments: true,
+        precio_afiliado: 250000, precios_por_fecha: null, abono_minimo_pct: 50, opciones: null,
+    };
+    const ESPERADO_CLINICA = () => ({
+        id: 'e3', school_id: 'school-1', telefono: '573005550101', motivo: 'clase_extra', monto: null,
+        signup_lead_id: 'lead-1', child_id: null, origen: 'bot', vence_en: FUTURO(), created_at: new Date().toISOString(),
+    });
+    beforeEach(() => {
+        prospecto();
+        state.servicios = [CLINICA];
+        state.esperados = [ESPERADO_CLINICA()];
+    });
+
+    it.each([[150000, 'el abono del 50 %'], [300000, 'el valor completo']])('$%i (%s) → cobro de la clínica a nombre del lead, con el esperado', async (monto) => {
+        extractReceiptMock.mockResolvedValue(comprobante(monto));
+        await runWhatsAppQueue();
+        expect(crearLlamadas()).toEqual([expect.objectContaining({
+            p_categoria: 'clase_extra', p_monto: monto, p_fuente: 'tournament_item', p_fuente_id: 'srv-clinica',
+            p_signup_lead_id: 'lead-1', p_concepto_esperado_id: 'e3',
+        })]);
+        expect(bot.abrirConsultaParaLaEscuela).not.toHaveBeenCalled();
+    });
+
+    it('un monto que no es ningún precio de la clínica → a la escuela, sin crear nada', async () => {
+        extractReceiptMock.mockResolvedValue(comprobante(200000));
+        await runWhatsAppQueue();
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(cierre().error_message).toMatch(/^motivo_esperado_no_coincide \(monto\): se esperaba clase extra por \$300\.000 y llegó \$200\.000/);
+    });
+});
+
 describe('prospecto SIN motivo esperado: el lead por teléfono y el monto', () => {
     beforeEach(() => {
         prospecto();

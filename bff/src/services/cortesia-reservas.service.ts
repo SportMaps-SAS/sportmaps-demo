@@ -227,7 +227,7 @@ export async function listarCortesias(schoolId: string, f: FiltroCortesias = {},
         supabase.from('whatsapp_conversations')
             .select('id, contact_wa_id')
             .eq('school_id', schoolId)
-            .order('last_message_at', { ascending: false })
+            .order('last_message_at', { ascending: false, nullsFirst: false })
             .limit(1000),
     ]);
     if (conSlot.error) throw new Error(conSlot.error.message);

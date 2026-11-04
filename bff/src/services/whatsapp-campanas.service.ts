@@ -42,6 +42,7 @@ import {
 import { escuelaActivaEn, HORAS_SILENCIO_ESCUELA } from './whatsapp-modo-discreto';
 import { marcaPorNombre } from './whatsapp-tipo-contacto';
 import { frenoDeCalidad, MOTIVO_LEGIBLE, type MotivoFreno } from './whatsapp-campanas-freno';
+import { cupoMetaDelNumero, inicioDelDiaCot } from './whatsapp-campanas-cupo';
 import { adminsDeEscuela } from './plataforma-wa.service';
 import { correosDeSoporte, enviarConReserva, uuidDeClave } from './avisos-correo.service';
 import { sendToUser } from './push.service';
@@ -272,25 +273,12 @@ export function armarPayloadCampana(p: {
 
 // ─── Cupo y horario ──────────────────────────────────────────────────────────
 
-/** Sin evento de Meta todavía, el tope más bajo de un número nuevo con Coexistence. */
-export const LIMITE_META_POR_DEFECTO = 250;
+// El límite de Meta, la reserva para avisos e interesados y lo usado en 24 h
+// viven en whatsapp-campanas-cupo (se re-exporta lo que ya se usaba de acá).
+export { LIMITE_META_POR_DEFECTO, limiteDeTier, inicioDelDiaCot } from './whatsapp-campanas-cupo';
+
 /** Cada cuánto corre el cron (lo registra Integración en maintenance.job). */
 export const MINUTOS_POR_TICK = 10;
-
-/** 'TIER_250' → 250, 'TIER_1K' → 1000, 'TIER_UNLIMITED' → 1 000 000. Pura. */
-export function limiteDeTier(tier: string | null | undefined): number | null {
-    const t = String(tier ?? '').toUpperCase().trim();
-    if (t === 'TIER_UNLIMITED' || t === 'UNLIMITED') return 1_000_000;
-    const m = t.match(/^TIER_(\d+)(K)?$/);
-    if (!m) return null;
-    return Number(m[1]) * (m[2] ? 1000 : 1);
-}
-
-/** Inicio del día de hoy en Bogotá (UTC-5, sin horario de verano), como instante. */
-export function inicioDelDiaCot(ahora: Date): Date {
-    const cot = new Date(ahora.getTime() - 5 * 3600_000);
-    return new Date(Date.UTC(cot.getUTCFullYear(), cot.getUTCMonth(), cot.getUTCDate()) + 5 * 3600_000);
-}
 
 /**
  * Ticks que le quedan al día dentro del horario de `dentroDeHorarioDeCobranza`
@@ -318,6 +306,7 @@ export function cupoDelTick(p: {
     primerDia: boolean;
     enviadosHoyEscuela: number;
     enviadosHoyCampana: number;
+    /** Lo que las campañas pueden ocupar de la ventana de Meta: límite − reserva (whatsapp-campanas-cupo). */
     limiteMeta: number;
     /** Destinatarios de plantillas en las últimas 24 h (la RPC también lo descuenta). */
     usadosMeta?: number;
@@ -468,20 +457,6 @@ async function contar(consulta: PromiseLike<{ count: number | null; error: any }
         return error ? 0 : Number(count ?? 0);
     } catch {
         return 0;
-    }
-}
-
-/** El último límite de envío que Meta informó para el número (`current_limit`). */
-export async function limiteMetaDeIntegracion(integrationId: string): Promise<number> {
-    try {
-        const { data } = await supabase.from('whatsapp_account_events')
-            .select('nuevo_estado, payload, created_at')
-            .eq('integration_id', integrationId).eq('field', 'phone_number_quality_update')
-            .order('created_at', { ascending: false }).limit(1);
-        const ev = (data as any[] | null)?.[0];
-        return limiteDeTier(ev?.payload?.value?.current_limit ?? ev?.nuevo_estado) ?? LIMITE_META_POR_DEFECTO;
-    } catch {
-        return LIMITE_META_POR_DEFECTO;
     }
 }
 
@@ -704,26 +679,34 @@ async function tickDeCampana(
     // 7. Lo que Meta rechazó después de aceptar (131050, 131049…).
     r.conciliados += await conciliarFallosAsincronos(c, ahoraMs);
 
-    // 8. Cupo del tick.
+    // 8. Cupo del tick. La campaña frena ANTES del límite de Meta: deja la
+    //    reserva para los avisos e interesados (whatsapp-campanas-cupo) y
+    //    descuenta a quien ya recibió una plantilla en las últimas 24 h.
     const inicioHoy = inicioDelDiaCot(ahora).toISOString();
-    const [enviadosHoyEscuela, enviadosHoyCampana, enviadosAntes, limiteMeta] = await Promise.all([
+    const [enviadosHoyEscuela, enviadosHoyCampana, enviadosAntes, meta] = await Promise.all([
         contar(supabase.from('whatsapp_campana_envios').select('id', { count: 'exact', head: true })
             .eq('school_id', c.school_id).gte('enviado_at', inicioHoy)),
         contar(supabase.from('whatsapp_campana_envios').select('id', { count: 'exact', head: true })
             .eq('campana_id', c.id).gte('enviado_at', inicioHoy)),
         contar(supabase.from('whatsapp_campana_envios').select('id', { count: 'exact', head: true })
             .eq('campana_id', c.id).lt('enviado_at', inicioHoy)),
-        limiteMetaDeIntegracion(integ.id),
+        cupoMetaDelNumero(integ, ahoraMs),
     ]);
     const cupo = cupoDelTick({
         topeDiario: ajustes.topeDiarioMax, lotePiloto: ajustes.lotePiloto, primerDia: enviadosAntes === 0,
-        enviadosHoyEscuela, enviadosHoyCampana, limiteMeta, ticksRestantes: ticksRestantesDelDia(ahora),
+        enviadosHoyEscuela, enviadosHoyCampana,
+        limiteMeta: meta.limiteCampanas, usadosMeta: meta.usados24h ?? 0,
+        ticksRestantes: ticksRestantesDelDia(ahora),
     });
-    if (cupo <= 0) return saltar(r, 'sin_cupo');
+    // 'cupo_meta': la ventana de 24 h ya llegó a límite − reserva. Se retoma
+    // sola en el tick en que la ventana libere cupo.
+    if (cupo <= 0) return saltar(r, meta.disponibleCampanas <= 0 ? 'cupo_meta' : 'sin_cupo');
 
-    // 9. Lote (a lo sumo una vez: lease, SKIP LOCKED, omitidos adentro).
+    // 9. Lote (a lo sumo una vez: lease, SKIP LOCKED, omitidos adentro). La RPC
+    //    vuelve a descontar, bajo su candado, las plantillas de 24 h y lo que
+    //    está en curso de `p_limite_meta`: por eso va límite − reserva.
     const { data: tomados, error: errLote } = await supabase.rpc('wa_campana_tomar_lote', {
-        p_campana_id: c.id, p_max: cupo, p_limite_meta: limiteMeta,
+        p_campana_id: c.id, p_max: cupo, p_limite_meta: meta.limiteCampanas,
     });
     if (errLote) {
         console.error('[campanas] wa_campana_tomar_lote falló', { campanaId: c.id, err: errLote.message });

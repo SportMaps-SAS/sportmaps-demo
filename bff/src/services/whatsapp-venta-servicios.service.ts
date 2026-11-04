@@ -198,10 +198,20 @@ export function tipoNombrado(texto: string | null | undefined): TipoServicio | n
 export function preguntaPorServicio(texto: string | null | undefined, nombres: string[] = []): boolean {
     const crudo = (texto ?? '').trim();
     const t = normalizarFrase(crudo);
+    if (!pideOQuiereServicio(crudo)) return false;
+    return tipoNombrado(t) !== null || nombres.some((n) => tokensDistintivos(n).some((k) => t.split(' ').includes(k)));
+}
+
+/**
+ * ¿El texto PREGUNTA o QUIERE algo (precio, información, inscribirse, «?»), y no
+ * avisa que ya pagó ni que manda el comprobante? Sin mirar QUÉ servicio nombra:
+ * lo usa también el destino por anuncio (whatsapp-anuncio-destino). Pura.
+ */
+export function pideOQuiereServicio(texto: string | null | undefined): boolean {
+    const crudo = (texto ?? '').trim();
+    const t = normalizarFrase(crudo);
     if (!t) return false;
     if (YA_PAGO.test(t) || anunciaComprobante(crudo)) return false;
-    const nombra = tipoNombrado(t) !== null || nombres.some((n) => tokensDistintivos(n).some((k) => t.split(' ').includes(k)));
-    if (!nombra) return false;
     return PIDE.test(t) || crudo.includes('?');
 }
 

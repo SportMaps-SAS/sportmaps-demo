@@ -213,9 +213,27 @@ function conHistoria(filas: Fila[]) {
     };
 }
 
+/**
+ * El catálogo de servicios y el mapeo de anuncios (whatsapp-anuncio-destino). Sin
+ * `mapeo`, la tabla todavía no existe (PGRST205), como hoy en la base.
+ */
+function conCatalogo(items: any[], mapeo?: any) {
+    const orig = h.state.resolve;
+    h.state.resolve = (table, ops) => {
+        if (table === 'school_tournament_items') return { data: items, error: null };
+        if (table === 'whatsapp_anuncio_destino') {
+            return mapeo ? { data: [mapeo], error: null }
+                : { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.whatsapp_anuncio_destino' in the schema cache" } };
+        }
+        return orig(table, ops);
+    };
+}
+
 /** Lo que el bot hace HOY con ese mensaje: texto, step y botones del borrador. */
 async function respuesta(escuela: Escuela, texto: string, op: {
     botonId?: string | null; atender?: boolean; previos?: Fila[]; historia?: boolean;
+    /** El payload del entrante (el mensaje crudo de Meta: `referral` si vino de un anuncio). */
+    payload?: any; catalogo?: any[]; mapeo?: any;
 } = {}) {
     vi.clearAllMocks();
     _olvidarReservasDePaso();
@@ -224,10 +242,12 @@ async function respuesta(escuela: Escuela, texto: string, op: {
     h.state.deletes = [];
     const filas: Fila[] = [
         ...(op.previos ?? []),
-        { wa_message_id: 'wamid.0', direction: 'inbound', text_body: texto, ai_generated: false, created_at: hace(2) },
+        { wa_message_id: 'wamid.0', direction: 'inbound', text_body: texto, ai_generated: false, created_at: hace(2),
+            ...(op.payload ? { payload: op.payload } : {}) },
     ];
     base(escuela, filas);
     if (op.historia) conHistoria(filas);
+    if (op.catalogo || op.mapeo) conCatalogo(op.catalogo ?? [], op.mapeo);
     h.debeAtender.mockResolvedValue(op.atender
         ? { atender: true, tipo: 'desconocido', botEncendido: true, tomada: false }
         : { atender: false, tipo: 'desconocido', botEncendido: true, tomada: false });
@@ -487,6 +507,87 @@ describe('Monster: el interesado que ya pasó por el embudo nunca queda en silen
         const conNull = await respuesta('columnas_null', 'ya te mandé el comprobante', { historia: true });
         expect(conNull).toEqual(sinColumnas);
         expect(JSON.stringify(conNull)).not.toMatch(/embudo/);
+    });
+});
+
+// ─── Anuncios con clic a WhatsApp (Monster 2026-11-04, whatsapp-anuncio-destino) ─
+describe('anuncios: el destino del anuncio manda (la clínica nunca cae en el embudo de la clase de prueba)', () => {
+    const hoy = new Date(Date.now() - 5 * 3600_000);
+    const enDias = (n: number) => new Date(hoy.getTime() + n * 86400_000).toISOString().slice(0, 10);
+    const CLINICA = {
+        id: 'srv-clinica', name: 'Clínica de armadores y atacantes', kind: 'clase_extra', price: 300000, active: true,
+        event_id: null, starts_at: '2030-11-21T05:00:00Z', ends_at: '2030-11-23T04:59:00Z', allow_installments: true,
+        precio_afiliado: 250000, precios_por_fecha: [{ desde: enDias(7), precio: 350000 }], abono_minimo_pct: 50, opciones: null,
+        description: 'Clínica con Jorge Mesa. Incluye camiseta oficial y fotografía con los ponentes.', image_url: null,
+    };
+    const ANUNCIO_CLINICA = {
+        referral: { source_id: '120210000000001', source_type: 'ad', headline: 'Clínica de armadores y atacantes', body: 'Separa tu cupo', ctwa_clid: 'ARAk1' },
+    };
+    const ANUNCIO_CLASE = {
+        referral: { source_id: '120210000000002', source_type: 'ad', headline: 'Tu clase de prueba de voleibol', body: 'Sede Norte o Suba' },
+    };
+    const IDS_BIENVENIDA = [`sm_em_sede:${NORTE}`, `sm_em_sede:${SUBA}`, BOTON_PUERTA.CLUB];
+
+    beforeEach(async () => {
+        const { mediosDePago } = await import('./whatsapp-medios-de-pago.service');
+        (mediosDePago as any).mockResolvedValue({ cuentas: [{ tipo: 'Nequi', numero: '3194505150', titular: null }] });
+    });
+
+    it('clic en el anuncio de la clínica + «quiero información»: la ficha con el precio de hoy, no las sedes', async () => {
+        const r = await respuesta('monster', 'Hola, quiero más información', { payload: ANUNCIO_CLINICA, catalogo: [CLINICA] });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('desconocido_tema_escolar');
+        expect(r[0].flujo).toBeNull();
+        expect(r[0].botones ?? []).toEqual([]);
+        expect(r[0].texto).toContain('*Clínica de armadores y atacantes*');
+        expect(r[0].texto).toContain('Valor hoy: *$300.000*');
+        expect(r[0].texto).toContain('*$350.000*');
+        expect(r[0].texto).toContain('abono mínimo de *$150.000* (50 %)');
+        expect(r[0].texto).toContain('por Nequi al número 3194505150');
+        expect(r[0].texto).not.toMatch(/sede|nombre completo|gratis/i);
+        // El motivo esperado (B4) y el lead con el servicio y el anuncio quedan registrados.
+        const esperado = h.state.inserts.find((i) => i.table === 'whatsapp_conceptos_esperados')?.row;
+        expect(esperado).toMatchObject({ motivo: 'clase_extra', monto: null, telefono: TEL });
+        const lead = h.state.inserts.find((i) => i.table === 'school_signup_leads')?.row;
+        expect(lead?.source_detail).toMatchObject({
+            servicio_interes: { id: 'srv-clinica', nombre: 'Clínica de armadores y atacantes', tipo: 'clase_extra' },
+            anuncio: { source_id: '120210000000001', headline: 'Clínica de armadores y atacantes', ctwa_clid: 'ARAk1' },
+        });
+        expect(borradores()[0].tool_context).toMatchObject({ destino_anuncio: 'servicio', servicio_id: 'srv-clinica' });
+    });
+
+    it('con el mapeo de la escuela: un anuncio que no dice «clínica» va a la clínica', async () => {
+        const r = await respuesta('monster', 'Hola', {
+            payload: { referral: { source_id: 'ad-generico', headline: '¡Inscríbete ya!' } },
+            catalogo: [CLINICA], mapeo: { destino: 'servicio', servicio_id: 'srv-clinica' },
+        });
+        expect(r).toHaveLength(1);
+        expect(r[0].texto).toContain('*Clínica de armadores y atacantes*');
+    });
+
+    it('clic en el anuncio de la clase de prueba: el embudo de siempre (bienvenida con sedes)', async () => {
+        const r = await respuesta('monster', 'Hola, quiero más información', { payload: ANUNCIO_CLASE, catalogo: [CLINICA] });
+        expect(r).toHaveLength(1);
+        expect(r[0]).toMatchObject({ step: 'desconocido_tema_escolar', flujo: 'embudo' });
+        expect(r[0].botones.map((b: any) => b.id)).toEqual(IDS_BIENVENIDA);
+        expect(r[0].texto).not.toContain('Clínica');
+    });
+
+    it('«info de la clínica» sin anuncio: la ficha de la clínica', async () => {
+        const r = await respuesta('monster', 'Buenas, info de la clínica', { catalogo: [CLINICA] });
+        expect(r).toHaveLength(1);
+        expect(r[0].texto).toContain('*Clínica de armadores y atacantes*');
+        expect(JSON.stringify(r)).not.toMatch(/sm_em_/);
+    });
+
+    it('Dynasty (sin embudo ni ventas): el mismo mensaje con o sin anuncio recibe lo de siempre', async () => {
+        for (const escuela of ['sin_columnas', 'columnas_null'] as const) {
+            const sinAnuncio = await respuesta(escuela, 'Hola, quiero información de las clases para mi hija');
+            const conAnuncio = await respuesta(escuela, 'Hola, quiero información de las clases para mi hija',
+                { payload: ANUNCIO_CLINICA, catalogo: [CLINICA] });
+            expect(conAnuncio).toEqual(sinAnuncio);
+            expect(JSON.stringify(conAnuncio)).not.toContain('Clínica');
+        }
     });
 });
 

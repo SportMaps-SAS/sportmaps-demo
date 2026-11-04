@@ -129,7 +129,7 @@ export async function armarResumenEscuela(
     const { data: convs } = await supabase.from('whatsapp_conversations')
         .select('id, contact_name, contact_wa_id, contact_kind, status, last_inbound_at')
         .eq('school_id', schoolId)
-        .order('last_message_at', { ascending: false })
+        .order('last_message_at', { ascending: false, nullsFirst: false })
         .limit(500);
     const porId = new Map<string, any>(((convs ?? []) as any[]).map((c) => [c.id, c]));
 

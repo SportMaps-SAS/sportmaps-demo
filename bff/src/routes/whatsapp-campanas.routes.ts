@@ -1,7 +1,7 @@
 /**
  * whatsapp-campanas.routes — WhatsApp › Campañas (plan B5 T5).
  *
- *   GET  /api/v1/whatsapp/:schoolId/campanas                       ajustes, audiencia, plantillas y campañas con su avance
+ *   GET  /api/v1/whatsapp/:schoolId/campanas                       ajustes, cupo de hoy, audiencia, plantillas y campañas con su avance
  *   POST /api/v1/whatsapp/:schoolId/campanas                       crea el borrador
  *   GET  /api/v1/whatsapp/:schoolId/campanas/:campanaId/simulacion conteo previsto («Lista: N personas»)
  *   POST /api/v1/whatsapp/:schoolId/campanas/:campanaId/aprobar    { declaracion_aceptada } → foto de la audiencia
@@ -24,6 +24,7 @@ import {
     integracionActivaDeEscuela, leerAjustesCampanas, pausarCampana, plantillasDeMarketing, reanudarCampana,
     simularCampana, type ResultadoOperacion,
 } from '../services/whatsapp-campanas.service';
+import { cupoDeCampanasHoy } from '../services/whatsapp-campanas-cupo';
 
 const router = Router();
 
@@ -69,17 +70,24 @@ router.get('/:schoolId/campanas', requireAuth, async (req: AuthenticatedRequest,
         };
         if (typeof integ === 'string') return res.json({ ...base, integracion: integ, campanas: [], plantillas: [] });
 
-        const [filas, campanas, plantillas, { data: sedes }, escuela] = await Promise.all([
+        const [filas, campanas, plantillas, { data: sedes }, escuela, cupo] = await Promise.all([
             audienciaVigente(integ.id, ajustes),
             campanasDeEscuela(schoolId),
             plantillasDeMarketing(integ),
             supabase.from('school_branches').select('id, name').eq('school_id', schoolId),
             nombreDeEscuela(schoolId),
+            cupoDeCampanasHoy(integ, ajustes.topeDiarioMax),
         ]);
         const avance = await avanceDeCampanas(campanas.filter((c) => c.estado !== 'borrador').map((c) => c.id));
         return res.json({
             ...base,
             integracion: 'ok',
+            // «Cupo de hoy: X de Y · reserva Z para interesados y avisos» (null si no se pudo leer).
+            cupo: cupo && {
+                limite_meta: cupo.limite, tier: cupo.tier, fuente: cupo.fuente, reserva: cupo.reserva,
+                usados_24h: cupo.usados24h, tope_diario: cupo.topeDiario, enviados_hoy: cupo.enviadosHoy,
+                cupo_hoy: cupo.cupoHoy, disponible_hoy: cupo.disponibleHoy,
+            },
             audiencia: contarFilas(filas),
             sedes: ((sedes as any[]) ?? []).map((s) => ({ id: s.id, nombre: s.name })),
             plantillas,

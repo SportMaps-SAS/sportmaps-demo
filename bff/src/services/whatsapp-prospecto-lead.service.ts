@@ -107,6 +107,26 @@ export interface ParamsLeadWa {
         /** Quién completó el registro. Por defecto la puerta única ('puerta_v2'). */
         via?: 'puerta_v2' | 'embudo';
     };
+    /**
+     * Servicio del catálogo por el que preguntó (anuncio de la clínica, «info del
+     * vacacional»): `source_detail.servicio_interes`. El último manda.
+     */
+    servicio?: { id: string; nombre: string; tipo: string } | null;
+    /**
+     * Anuncio de Meta del que llegó (clic a WhatsApp, whatsapp-anuncio-destino):
+     * `source_detail.anuncio`. Atribución por PRIMER toque: si el lead ya tenía uno, no se pisa.
+     */
+    anuncio?: Record<string, unknown> | null;
+}
+
+/** Lo que el destino por anuncio agrega a `source_detail` (pura). `previo` = el source_detail que ya tenía. */
+export function detalleDeAnuncio(
+    p: Pick<ParamsLeadWa, 'servicio' | 'anuncio'>, previo: Record<string, any> | null, ahora: string,
+): Record<string, unknown> {
+    return {
+        ...(p.servicio ? { servicio_interes: { ...p.servicio, at: ahora } } : {}),
+        ...(p.anuncio && !previo?.anuncio ? { anuncio: { ...p.anuncio, at: ahora } } : {}),
+    };
 }
 
 /** Columnas del embudo que llegan con la migración nueva (pueden no existir todavía). */
@@ -208,6 +228,7 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                     ultima_actividad: ahora,
                     ...(p.estado === 'respondido' ? { respondido_at: sd.respondido_at ?? ahora } : {}),
                     ...(c?.detalle ?? {}),
+                    ...detalleDeAnuncio(p, sd, ahora),
                 },
                 updated_at: ahora,
             });
@@ -245,6 +266,7 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                 ultima_actividad: ahora,
                 ...(p.estado === 'respondido' ? { respondido_at: ahora } : {}),
                 ...(c?.detalle ?? {}),
+                ...detalleDeAnuncio(p, null, ahora),
             },
         });
         let { data, error } = await supabase.from('school_signup_leads').insert(nueva(nuevoCompleto)).select('id').single();
