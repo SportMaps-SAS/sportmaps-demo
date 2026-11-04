@@ -66,6 +66,7 @@ import { ventanaAbierta } from './whatsapp-plantillas.service';
 import { estaDadoDeBaja, AVISO_DADO_DE_BAJA } from './whatsapp-optin.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
 import { modoDiscreto, escuelaActiva } from './whatsapp-modo-discreto';
+import { modoDiscretoEfectivo } from './whatsapp-ajustes-escuela.service';
 import { botEncendido } from './whatsapp-atencion.service';
 import {
     calcularCandidatosDePago, deportistasEsperados, textoPropuesta, motivoConPropuesta,
@@ -1305,8 +1306,8 @@ export async function avisarRecuperacion(
     const abierta = ventanaAbierta((conv as any)?.last_inbound_at ?? null);
     if (!(await botEncendido(fila.integration_id))) return 'bot_apagado';
     if (await conversacionTomada(convId)) return 'conversacion_tomada';
-    // Modo discreto: con la escuela en la conversación (12 h) no se le escribe.
-    if (modoDiscreto() && await escuelaActiva(convId)) return 'escuela_en_la_conversacion';
+    // Modo discreto (el de ESA escuela, B6): con la escuela en la conversación (12 h) no se le escribe.
+    if (await modoDiscretoEfectivo(fila.school_id, modoDiscreto()) && await escuelaActiva(convId)) return 'escuela_en_la_conversacion';
     if (!abierta) {
         // Fuera de la ventana el texto no llega (131047). La plantilla, si la
         // WABA la tiene aprobada y hay opt-in; si no, como antes: nada ahora.

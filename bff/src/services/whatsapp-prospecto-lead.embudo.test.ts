@@ -128,7 +128,14 @@ describe('leadDelEmbudo', () => {
         h.lead = { fila: { id: 'lead-1', full_name: 'Mariana', trial_slot_id: 's-1', team_id: 't-1', branch_id: NORTE, cupo_separado_slot_id: null, source_detail: { consentimiento: 'si' } } };
         expect(await leadDelEmbudo('monster', '573001112233')).toEqual({
             leadId: 'lead-1', nombre: 'Mariana', teamId: 't-1', branchId: NORTE, slotId: 's-1', separadoSlotId: null, consentimiento: 'si',
+            pagada: false,
         });
+    });
+
+    it('agendada con el comprobante (B4: agendado_por = pago): pagada', async () => {
+        h.lead = { fila: { id: 'lead-1', full_name: 'Mariana', trial_slot_id: 's-1', team_id: 't-1', branch_id: NORTE, cupo_separado_slot_id: null,
+            source_detail: { agendado_por: 'pago', payment_id: 'pay-1' } } };
+        expect(await leadDelEmbudo('monster', '573001112233')).toMatchObject({ slotId: 's-1', pagada: true });
     });
 
     it('sin la migración lee el grupo de source_detail.embudo', async () => {

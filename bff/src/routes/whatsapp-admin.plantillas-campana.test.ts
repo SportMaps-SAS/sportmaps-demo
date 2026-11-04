@@ -2,6 +2,10 @@
  * POST /:schoolId/plantillas con pie y botones rápidos (plan B5 T5): sin los
  * campos nuevos, el cuerpo que va a Meta es IDÉNTICO al de antes; con ellos,
  * FOOTER y BUTTONS de QUICK_REPLY. Router real, Meta interceptado.
+ *
+ * Además, el gate `administraEstaEscuela` (el que usan las rutas de campañas):
+ * el administrador de plataforma ACTIVO pasa, igual que en wa_campana_aprobar
+ * desde 20261103202610.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'http';
@@ -12,7 +16,7 @@ const est = vi.hoisted(() => ({ aMeta: [] as any[] }));
 
 vi.mock('../config/supabase', () => {
     const tablas: Record<string, any[]> = {
-        platform_admins: [],
+        platform_admins: [{ profile_id: 'plataforma-1', is_active: true }, { profile_id: 'ex-plataforma', is_active: false }],
         schools: [{ id: 'school-1', owner_id: 'admin-1' }],
         school_members: [],
         school_whatsapp_integrations: [{ school_id: 'school-1', waba_id: 'waba-1', access_token_encrypted: 'gcm:x' }],
@@ -41,7 +45,7 @@ vi.mock('../services/whatsapp.service', () => ({
 }));
 vi.mock('../services/whatsapp-onboarding.service', () => ({ conectarEscuela: vi.fn() }));
 
-import router, { cuerpoDePlantilla } from './whatsapp-admin.routes';
+import router, { administraEstaEscuela, cuerpoDePlantilla } from './whatsapp-admin.routes';
 
 let server: http.Server;
 let base = '';
@@ -106,5 +110,17 @@ describe('POST /:schoolId/plantillas', () => {
     it('cuerpoDePlantilla es pura y no agrega nada sin los campos nuevos', () => {
         expect(cuerpoDePlantilla({ name: 'a_b', language: 'es_CO', category: 'UTILITY', body: 'Hola, texto sin variables.', ejemplos: [] }))
             .toEqual({ name: 'a_b', language: 'es_CO', category: 'UTILITY', components: [{ type: 'BODY', text: 'Hola, texto sin variables.' }] });
+    });
+});
+
+// 20261103202610: wa_campana_aprobar acepta al administrador de plataforma con la
+// MISMA fuente (platform_admins activo). Si este gate y el de la RPC divergen, la
+// pantalla deja entrar y la aprobación falla con 409 'no_se_pudo_aprobar'.
+describe('administraEstaEscuela (gate de las rutas de campañas)', () => {
+    it('pasan el dueño y el administrador de plataforma activo; el desactivado y un extraño no', async () => {
+        expect(await administraEstaEscuela('admin-1', 'school-1')).toBe(true);
+        expect(await administraEstaEscuela('plataforma-1', 'school-1')).toBe(true);
+        expect(await administraEstaEscuela('ex-plataforma', 'school-1')).toBe(false);
+        expect(await administraEstaEscuela('extrano', 'school-1')).toBe(false);
     });
 });

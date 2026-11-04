@@ -536,6 +536,8 @@ export interface LeadDelEmbudo {
     separadoSlotId: string | null;
     /** Lo que contestó a «¿Te puedo escribir por aquí…?» (null = no contestó). */
     consentimiento: 'si' | 'no' | null;
+    /** La clase quedó agendada con un pago (B4: `agendado_por = 'pago'`). */
+    pagada?: boolean;
 }
 
 /** El lead abierto más reciente de ese teléfono en la escuela. Nunca lanza. */
@@ -564,6 +566,8 @@ export async function leadDelEmbudo(schoolId: string, contactWaId: string): Prom
             separadoSlotId: l.cupo_separado_slot_id ?? null,
             consentimiento: l.source_detail?.consentimiento === 'si' || l.source_detail?.consentimiento === 'no'
                 ? l.source_detail.consentimiento : null,
+            // B4 deja `agendado_por: 'pago'` y el pago al agendar con el comprobante.
+            pagada: l.source_detail?.agendado_por === 'pago' || !!l.source_detail?.payment_id,
         };
     } catch {
         return null;

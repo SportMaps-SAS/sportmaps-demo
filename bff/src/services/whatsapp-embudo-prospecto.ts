@@ -22,6 +22,9 @@
  *      Agendada (sin valor o ya pagó) → confirmación + consentimiento.
  *   5. «Cambiar horario» / «Elegir otro horario» vuelve a la lista del mismo grupo
  *      y `tomarCupo` agenda sin volver a cobrar (el pago está atado al lead).
+ *   6. «¿Y para matricularla?» con el flujo abierto: la matrícula va DESPUÉS de la
+ *      clase (el profe evalúa y la escuela define el grupo), se le dice eso y la
+ *      escuela recibe el aviso con los datos del interesado (Monster 2026-11-03).
  *
  * Solo corre si la escuela tiene `wa_preguntas_prospecto` válido
  * (`embudoActivo`); Dynasty y las demás no lo ven nunca.
@@ -40,11 +43,12 @@ import type { BotonInteractivo } from './whatsapp.service';
 import { supabase } from '../config/supabase';
 import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import {
-    normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia,
+    normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia, esPreguntaDeOtroTema,
 } from './whatsapp-clase-cortesia.service';
 import { BOTON_PUERTA, leerNombreDeDeportista, leerOpcionDePuerta } from './whatsapp-puerta-desconocido';
 import {
-    embudoActivo, type AjustesClasePrueba, type AjustesWhatsAppEscuela, type BotonSede, type PreguntaProspecto,
+    embudoActivo, cobraClaseEnElBot,
+    type AjustesClasePrueba, type AjustesWhatsAppEscuela, type BotonSede, type PreguntaProspecto,
 } from './whatsapp-ajustes-escuela.service';
 import type { ResultadoCupo } from './clase-prueba-agenda.service';
 
@@ -96,6 +100,10 @@ export const PASO_EMBUDO = {
     PAGO: 'embudo_esperando_pago',
     AGENDADA: 'embudo_agendada',
     A_PERSONA: 'embudo_a_persona',
+    /** «¿Y la matrícula?» contestado sin cerrar el flujo. */
+    MATRICULA: 'embudo_matricula',
+    /** «¿Dónde queda?» con la clase elegida. */
+    DONDE: 'embudo_donde',
 } as const;
 
 export type PasoEmbudo =
@@ -129,6 +137,10 @@ export interface DatosEmbudo {
     consentimiento?: 'si' | 'no' | null;
     /** Qué sigue después del consentimiento. */
     siguiente?: 'pago' | 'fin';
+    /** Ya se le avisó a la escuela que pide la matrícula: en este flujo no se repite el aviso. */
+    matriculaAvisada?: boolean;
+    /** La clase ya está pagada (la confirmó B4 al recibir el comprobante). */
+    pagada?: boolean;
 }
 
 export interface EstadoEmbudo { paso: PasoEmbudo; datos: DatosEmbudo }
@@ -193,7 +205,18 @@ export interface LeadEmbudo {
     respuestas: Record<string, string>;
 }
 
-export type MotivoPersona = 'sin_grupo' | 'sin_horarios' | 'sin_cuentas_de_pago' | 'no_entendio' | 'error' | 'pide_persona';
+export type MotivoPersona = 'sin_grupo' | 'sin_horarios' | 'sin_cuentas_de_pago' | 'no_entendio' | 'error' | 'pide_persona'
+    | 'pide_matricula';
+
+/** Lo que `franjaDeAgenda` (clase-prueba-agenda) sabe de dónde es la clase. */
+export interface LugarDeClase {
+    fecha: string;
+    horaInicio: string;
+    lugar: string | null;
+    direccion: string | null;
+    mapsUrl: string | null;
+    indicaciones: string | null;
+}
 
 export interface LeadDelContacto {
     leadId: string;
@@ -203,6 +226,8 @@ export interface LeadDelContacto {
     slotId: string | null;
     separadoSlotId: string | null;
     consentimiento?: 'si' | 'no' | null;
+    /** La clase quedó agendada con un pago (B4). */
+    pagada?: boolean;
 }
 
 export interface CtxEmbudo {
@@ -232,7 +257,11 @@ export interface CtxEmbudo {
     guardarLead: (l: LeadEmbudo) => Promise<string | null>;
     /** Mezcla `extra` en source_detail del lead (consentimiento). */
     marcarLead?: (leadId: string, extra: Record<string, unknown>) => Promise<void>;
-    tomarCupo: (leadId: string, slotId: string) => Promise<ResultadoCupo>;
+    /**
+     * `o.pagada`: el lead ya pagó la clase (cambio de horario tras pagar). La RPC lo sabe
+     * por su cuenta; solo lo usa la simulación (`cupoSimulado`) para no volver a cobrar.
+     */
+    tomarCupo: (leadId: string, slotId: string, o?: { pagada?: boolean }) => Promise<ResultadoCupo>;
     soltarCupo: (leadId: string) => Promise<void>;
     cuentasDePago: () => Promise<CuentaDePagoEmbudo[]>;
     /** B4. Por defecto, import dinámico de ./wa-concepto-esperado.service (si no existe, se sigue sin él). */
@@ -247,6 +276,8 @@ export interface CtxEmbudo {
     yaSoyDelClub?: () => Promise<void>;
     /** Lead del contacto, para botones que llegan sin estado (plantilla, B4). */
     leadDelContacto?: () => Promise<LeadDelContacto | null>;
+    /** Cancha, dirección e indicaciones de la franja elegida («¿dónde queda?»). Sin él, lo contesta el bot general. */
+    lugarDeLaClase?: (slotId: string) => Promise<LugarDeClase | null>;
     leerEstado?: (conversationId: string) => Promise<EstadoEmbudo | null>;
     ahora?: () => Date;
 }
@@ -617,19 +648,24 @@ export async function iniciarEmbudo(ctx: CtxEmbudo, opciones: { saludo?: string;
     const botones = aj.botonesSede ?? null;
     const step = opciones.step ?? PASO_EMBUDO.BIENVENIDA;
     const contexto = aj.bienvenida ? { texto_de_la_escuela: true } : undefined;
-    if (botones?.length) {
-        const sedes = (await seguro(() => ctx.sedes(botones.map((b) => b.branchId)))) ?? [];
+    const sedes = botones?.length ? (await seguro(() => ctx.sedes(botones.map((b) => b.branchId)))) ?? [] : [];
+    if (botones && botones.length > 1) {
         const m = mensajeDeBienvenida(aj.bienvenida ?? null, botones, sedes, opciones.saludo ?? '');
         await ctx.enviar(m.texto, step, { paso: 'sede', datos: {} }, m.botones, m.enTexto, contexto);
         return true;
     }
-    // Sin pregunta de sede: la bienvenida y la primera pregunta van juntas.
+    // Sin pregunta de sede, o con UNA sola (no hay nada que elegir: antes salía un botón de
+    // sede solo junto a «Ya soy del club»): la sede queda fijada y la bienvenida va junto a la
+    // primera pregunta. «Ya soy del club» sigue como botón si esa pregunta no trae los suyos;
+    // si los trae, escribirlo también lleva a la puerta (`leerOpcionDePuerta`).
+    const unica = botones?.length === 1 ? botones[0] : null;
     const base = aj.bienvenida ?? (opciones.saludo || '¡Hola! 👋 Gracias por escribirnos.');
+    const lineaSede = unica ? lineasDeSedes(base, [unica], sedes).join('\n') : '';
     const p0 = preguntas[0];
     const b = botonesDePregunta(p0);
     const conClub = !b.botones;
-    await ctx.enviar([base, introPreguntas(preguntas), textoPregunta(preguntas, 0)].filter(Boolean).join('\n\n'), step,
-        { paso: 'pregunta', datos: { i: 0, respuestas: {} } },
+    await ctx.enviar([base, lineaSede, introPreguntas(preguntas), textoPregunta(preguntas, 0)].filter(Boolean).join('\n\n'), step,
+        { paso: 'pregunta', datos: { i: 0, respuestas: {}, ...(unica ? { branchId: unica.branchId, sedeTitulo: unica.titulo } : {}) } },
         conClub ? [{ id: BOTON_PUERTA.CLUB, title: 'Ya soy del club' }] : b.botones,
         conClub ? 'Si ya eres del club, responde *Ya soy del club*.' : b.enTexto, contexto);
     return true;
@@ -665,6 +701,7 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
             return elegirSede(ctx, aj, boton.slice(BOTON_EMBUDO.SEDE.length), {});
         }
         if (boton?.startsWith(BOTON_EMBUDO.FRANJA)) return franjaSinEstado(ctx, boton.slice(BOTON_EMBUDO.FRANJA.length));
+        if (!boton) return textoSinEstado(ctx, texto);
         return false;
     }
     // Con flujo abierto, un botón de OTRA cosa es una elección explícita: se suelta.
@@ -682,6 +719,10 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
 
     const aj = await ajustesDe(ctx);
     if (!embudoActivo(aj)) return false;
+    // «Y para matricularla qué tengo que hacer?» con el flujo abierto (Monster 2026-11-03):
+    // caía al bot general, que contestaba con el modelo («paga ya la matrícula») o se
+    // quedaba callado. Se contesta acá, sin perder el paso en que va.
+    if (!boton && pideMatricula(texto) && await responderMatricula(ctx, aj, estado, texto)) return true;
     switch (estado.paso) {
         case 'sede': return pasoSede(ctx, aj, estado, texto, boton);
         case 'pregunta': return pasoPregunta(ctx, aj, estado, texto, boton);
@@ -692,10 +733,12 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
         case 'esperando_pago':
         case 'agendada':
         case 'reprogramar':
-            // «Cambiar horario» escrito; lo demás (una pregunta, el comprobante) es del bot general / B4.
-            if (!boton && /\b(cambiar|cambio|otro) (de )?(horario|dia|fecha|hora)\b|^no (puedo|podemos) ir\b/.test(normalizar(texto))) {
-                return ofrecerCambio(ctx, estado);
-            }
+            // «Cambiar horario» escrito; lo demás (una pregunta, el comprobante) es del bot general / B4,
+            // que nunca deja en silencio a quien pasó por el embudo (`acuseDelEmbudo` del bot).
+            if (!boton && pideCambioDeHorario(texto)) return ofrecerCambio(ctx, estado);
+            // «¿Dónde queda?» con la clase elegida: la cancha de ESA franja. El bot general
+            // contestaba con la dirección de la escuela (la de Suba a una familia de la Norte).
+            if (!boton && preguntaDonde(texto)) return responderDonde(ctx, estado);
             return false;
         default: return false;
     }
@@ -710,8 +753,9 @@ async function pasoSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: Esta
     const sedes = (await seguro(() => ctx.sedes(botones.map((b) => b.branchId)))) ?? [];
     const branchId = leerSede(texto, botones, sedes);
     if (branchId) return elegirSede(ctx, aj, branchId, estado.datos);
-    // Una pregunta o una frase larga es otra conversación: la contesta el bot general.
-    if (texto.includes('?') || texto.split(/\s+/).length > 7) return false;
+    // Una pregunta (también sin «?»: «cuanto vale la mensualidad») o una frase larga es
+    // otra conversación: la contesta el bot general.
+    if (texto.includes('?') || texto.split(/\s+/).length > 7 || esPreguntaDeOtroTema(texto)) return false;
     const intentos = (estado.datos.intentos ?? 0) + 1;
     if (intentos >= MAX_INTENTOS) return aPersona(ctx, estado.datos, 'no_entendio', 'No eligió sede.');
     const m = mensajeDeBienvenida(null, botones, [], '');
@@ -798,6 +842,10 @@ async function pasoPregunta(
         }
     }
 
+    // «cuanto vale la mensualidad» en la pregunta del nombre se leía como nombre («¡Mucho
+    // gusto, Cuanto!»). Una pregunta de otro tema sin «?» de la que no salió más que un
+    // «nombre» es otra conversación: la contesta el bot y el paso queda donde iba.
+    if (!boton && esPreguntaDeOtroTema(texto) && Object.keys(leidas.respuestas).every((k) => k === 'nombre')) return false;
     const d = aplicar(estado.datos, leidas, preguntas);
     if (!(p.clave in leidas.respuestas)) {
         // Un mensaje que es otra conversación («¿cuánto vale?») no gasta un intento: lo contesta el bot.
@@ -972,7 +1020,9 @@ async function pasoFranja(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: string, b
         }
     }
     if (!slotId) {
-        if (texto.includes('?') || texto.split(/\s+/).length > 7) return false;
+        // Otra conversación («cuanto vale la mensualidad», sin «?»): la contesta el bot sin
+        // gastar un intento, como en la sede y en las preguntas.
+        if (texto.includes('?') || texto.split(/\s+/).length > 7 || esPreguntaDeOtroTema(texto)) return false;
         const intentos = (d.intentos ?? 0) + 1;
         if (intentos >= MAX_INTENTOS) return aPersona(ctx, d, 'no_entendio', 'No eligió horario.');
         return ofrecerFranjas(ctx, { ...d, intentos }, 'Elige uno de los horarios de la lista 👇');
@@ -995,6 +1045,7 @@ function datosDeLead(l: LeadDelContacto): DatosEmbudo {
     return {
         leadId: l.leadId, nombre: l.nombre, teamId: l.teamId, branchId: l.branchId,
         slotId: l.slotId ?? l.separadoSlotId ?? null, consentimiento: l.consentimiento ?? null, respuestas: {},
+        ...(l.pagada ? { pagada: true } : {}),
     };
 }
 
@@ -1004,7 +1055,7 @@ async function tomar(ctx: CtxEmbudo, d: DatosEmbudo, slotId: string): Promise<bo
     if (!d.leadId) return aPersona(ctx, d, 'error', 'Sin registro para tomar el cupo.');
     // La franja se lee ANTES de tomar el cupo: si era el último, después ya no sale en la lista.
     const franja = ((await seguro(() => ctx.franjas(d.teamId ?? ''))) ?? []).find((f) => f.id === slotId) ?? null;
-    const r = await seguro(() => ctx.tomarCupo(d.leadId!, slotId));
+    const r = await seguro(() => ctx.tomarCupo(d.leadId!, slotId, { pagada: d.pagada === true }));
     const estado = r?.estado ?? 'error';
     if (estado === 'lleno' || estado === 'cerrada') {
         return ofrecerFranjas(ctx, { ...d, desde: 0 }, `Ese horario ${estado === 'lleno' ? 'se acaba de llenar' : 'ya no está disponible'} 😕 Elige otro:`);
@@ -1116,17 +1167,200 @@ async function responderConsentimiento(ctx: CtxEmbudo, estado: EstadoEmbudo | nu
 
 // ── Cambiar horario (sin volver a cobrar) ───────────────────────────────────
 
-async function ofrecerCambio(ctx: CtxEmbudo, estado: EstadoEmbudo | null): Promise<boolean> {
+/**
+ * «Quiero cambiar el horario», «necesito cambiar de día», «no puedo ir»: pide otro
+ * horario (con o sin artículo: antes «necesito cambiar el horario» no entraba). Pura.
+ */
+export function pideCambioDeHorario(texto: string | null | undefined): boolean {
+    const n = normalizar(texto).replace(/^((hola|buenas|buenos dias|buenas tardes|buenas noches|profe|disculpa|perdon|oye) )+/, '');
+    const art = '(de |el |la |mi |su |los |las |del )?';
+    return new RegExp(`\\b(cambiar(la|lo)?|cambio|mover(la|lo)?) ${art}(horario|dia|fecha|hora|clase)\\b`).test(n)
+        || new RegExp(`\\b(otro|otra) ${art}(horario|dia|fecha|hora)\\b`).test(n)
+        || /\breprogramar(la|lo)?\b/.test(n)
+        || /^(no|ya no) (puedo|podemos|voy a poder|vamos a poder|podre|podremos|alcanzo|alcanzamos) (ir|asistir|llegar)\b/.test(n);
+}
+
+async function ofrecerCambio(ctx: CtxEmbudo, estado: EstadoEmbudo | null, conocido?: LeadDelContacto | null): Promise<boolean> {
     const aj = await ajustesDe(ctx);
     if (!embudoActivo(aj)) return false;
     let d: DatosEmbudo = estado?.datos ?? {};
     if (!d.leadId || !d.teamId) {
-        const lead = await seguro(() => ctx.leadDelContacto?.());
+        const lead = conocido ?? await seguro(() => ctx.leadDelContacto?.());
         if (!lead?.leadId) return false;
         d = { ...datosDeLead(lead), ...d, leadId: d.leadId ?? lead.leadId, teamId: d.teamId ?? lead.teamId };
     }
     if (!d.teamId) return aPersona(ctx, d, 'sin_grupo', 'Pidió cambiar el horario y no tiene grupo asignado.');
-    return ofrecerFranjas(ctx, { ...d, cambio: true, desde: 0 }, 'Claro, elige el nuevo horario. No tienes que pagar de nuevo 🙌');
+    // «No tienes que pagar de nuevo» solo con la clase ya pagada (la confirmó B4): esperando
+    // el pago, o con una clase sin valor, la frase prometía algo que no aplica.
+    return ofrecerFranjas(ctx, { ...d, cambio: true, desde: 0 },
+        d.pagada ? 'Claro, elige el nuevo horario. No tienes que pagar de nuevo 🙌' : 'Claro 🙌 Elige el nuevo horario.');
+}
+
+/**
+ * Texto de un interesado SIN flujo abierto (vencido a las 24 h, o el último saliente
+ * fue otra cosa) que ya tiene su clase: «quiero cambiar el horario», «¿y la
+ * matrícula?» y «¿dónde queda?» se atienden con su lead, igual que los botones de las
+ * plantillas. Antes caían al bot general: las franjas de cortesía de todos los grupos
+ * o la dirección de la otra sede. Lo demás sigue siendo del bot general.
+ */
+async function textoSinEstado(ctx: CtxEmbudo, texto: string): Promise<boolean> {
+    const cambio = pideCambioDeHorario(texto);
+    const matricula = !cambio && pideMatricula(texto);
+    if (!cambio && !matricula && !preguntaDonde(texto)) return false;
+    const aj = await ajustesDe(ctx);
+    if (!embudoActivo(aj)) return false;
+    const lead = await seguro(() => ctx.leadDelContacto?.());
+    if (!lead?.leadId) return false;
+    if (cambio) return ofrecerCambio(ctx, null, lead);
+    const paso: PasoEmbudo | null = lead.slotId ? 'agendada' : lead.separadoSlotId ? 'esperando_pago' : null;
+    if (!paso) return false;
+    const estado: EstadoEmbudo = { paso, datos: datosDeLead(lead) };
+    return matricula ? responderMatricula(ctx, aj, estado, texto) : responderDonde(ctx, estado);
+}
+
+// ── Dónde es la clase ───────────────────────────────────────────────────────
+
+/** «¿Dónde queda?», «la dirección», «¿cómo llego?». Pura. */
+export function preguntaDonde(texto: string | null | undefined): boolean {
+    return /\b(donde (queda|quedan|es|son|sera|seria|esta|estan|entrenan|practican|juegan)|en donde|direccion|ubicacion|ubicados|como (llego|llegar|llegamos)|que (lugar|sitio|cancha|parque|colegio))\b/
+        .test(normalizar(texto));
+}
+
+/**
+ * «La clase de prueba de Mariana es el sábado 7 de noviembre a las 8:00 a. m. en
+ * 📍 Colegio La Enseñanza · Calle …», con el enlace de Maps y las indicaciones de
+ * la cancha si están cargados. null si no se sabe el lugar (nunca se inventa). Pura.
+ */
+export function textoDonde(l: LugarDeClase, t: Pick<TextosClase, 'nombre'>, nombre: string | null | undefined): string | null {
+    const lugar = [l.lugar, l.direccion].map((x) => String(x ?? '').trim()).filter(Boolean).join(' · ');
+    if (!lugar) return null;
+    const quien = primerNombre(nombre);
+    return [
+        `La ${t.nombre}${quien ? ` de *${quien}*` : ''} es el ${cuandoEs(l)} en:`,
+        `📍 ${lugar}`,
+        l.mapsUrl ? `Cómo llegar: ${l.mapsUrl}` : '',
+        l.indicaciones ?? '',
+    ].filter(Boolean).join('\n');
+}
+
+async function responderDonde(ctx: CtxEmbudo, estado: EstadoEmbudo): Promise<boolean> {
+    const d = estado.datos;
+    if (!d.slotId || !ctx.lugarDeLaClase) return false;
+    const l = await seguro(() => ctx.lugarDeLaClase!(d.slotId!));
+    const { t } = await textos(ctx);
+    const texto = l ? textoDonde(l, t, d.nombre ?? d.respuestas?.nombre) : null;
+    if (!texto) return false;
+    await ctx.enviar(texto, PASO_EMBUDO.DONDE, { paso: estado.paso, datos: d });
+    return true;
+}
+
+// ── Matrícula (después de la clase) ─────────────────────────────────────────
+//
+// Monster 2026-11-03: tras la clase de prueba el profe da su feedback y la escuela
+// define el grupo; recién ahí se matricula. Al interesado que lo pregunta con el
+// flujo abierto se le dice eso (nunca «paga ya la matrícula») y la escuela recibe
+// el aviso con lo que contó, porque es alguien que ya quiere quedarse.
+
+const MATRICULA = /\b(matricul\w*|inscrib\w*|inscripcion(es)?)\b/;
+const PIDE_PRECIO = /\b(cuanto|cuantos|valor(es)?|precios?|costos?|vale|valen|cuesta|cuestan|tarifas?)\b/;
+const PIDE_ALGO = new RegExp('\\b(quiero|queremos|quisiera|quisieramos|deseo|deseamos|como|cual|cuales|cuando|donde|'
+    + 'proceso|pasos?|requisitos?|puedo|podemos|se puede|hay que|que (tengo|tenemos|hay|debo|debemos|necesito|necesitamos|sigue))\\b');
+
+/**
+ * ¿Pregunta por la matrícula o la inscripción? «quiero matricularla», «¿y para
+ * inscribirlo qué hago?». No cuentan el precio («¿cuánto vale la matrícula?»: lo
+ * contesta el bot con los valores) ni contarlo («estuvo matriculada en otro
+ * club», la respuesta a la trayectoria). Pura.
+ */
+export function pideMatricula(texto: string | null | undefined): boolean {
+    const crudo = String(texto ?? '');
+    const n = normalizar(crudo);
+    if (!MATRICULA.test(n) || PIDE_PRECIO.test(n)) return false;
+    return crudo.includes('?') || PIDE_ALGO.test(n);
+}
+
+/** «matricularla» / «inscribirlo»: el género que dice el verbo. Pura. */
+function generoDelVerbo(texto: string): 'f' | 'm' | null {
+    const n = normalizar(texto);
+    if (/\b(matricular|inscribir)la\b/.test(n)) return 'f';
+    if (/\b(matricular|inscribir)lo\b/.test(n)) return 'm';
+    return null;
+}
+
+/**
+ * «La matrícula se hace después de la clase de prueba: el profe evalúa a
+ * Mariana, la escuela te confirma el grupo y te escribe por aquí para
+ * matricularla 🙌». Con el nombre de la clase de la escuela. Pura.
+ */
+export function textoDeMatricula(t: Pick<TextosClase, 'nombre'>, nombre: string | null | undefined, genero: 'f' | 'm' | null | undefined): string {
+    const quien = primerNombre(nombre) || 'tu deportista';
+    const para = genero === 'f' ? 'matricularla' : genero === 'm' ? 'matricularlo' : 'hacer la matrícula';
+    return `La matrícula se hace después de la ${t.nombre}: el profe evalúa a ${quien}, ` +
+        `la escuela te confirma el grupo y te escribe por aquí para ${para} 🙌`;
+}
+
+/** Cómo va la clase, para el aviso. */
+function estadoDeLaClase(paso: PasoEmbudo, d: DatosEmbudo): string {
+    if (paso === 'esperando_pago' || (paso === 'consentimiento' && d.siguiente === 'pago')) return 'cupo separado, falta el pago';
+    if (paso === 'agendada' || paso === 'consentimiento') return 'agendada';
+    if (paso === 'reprogramar') return 'por reprogramar';
+    return 'todavía sin agendar (está en el registro)';
+}
+
+/** El aviso a la escuela: qué pidió y lo que el interesado ya contó. Pura. */
+export function detalleDeMatricula(paso: PasoEmbudo, d: DatosEmbudo, texto: string): string {
+    const nombre = d.nombre ?? d.respuestas?.nombre ?? null;
+    return [
+        `Pide la matrícula: «${recortar(texto, 160)}».`,
+        nombre ? `Deportista: ${nombre}${d.anio ? ` (${d.anio})` : ''}.` : '',
+        d.grupo ? `Grupo: ${d.grupo}.` : '',
+        d.sedeTitulo ? `Sede: ${sinEmojis(d.sedeTitulo)}.` : '',
+        `Clase de prueba: ${estadoDeLaClase(paso, d)}.`,
+    ].filter(Boolean).join(' ');
+}
+
+/**
+ * Contesta lo de la matrícula y sigue donde iba: con la clase ya elegida queda en
+ * el mismo paso (el consentimiento pendiente se vuelve a preguntar); en el
+ * registro, la respuesta va encima de la pregunta o la lista que tocaba. false =
+ * un paso donde no aplica (lo atiende lo de siempre). Avisa a la escuela una vez
+ * por flujo.
+ */
+async function responderMatricula(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: EstadoEmbudo, texto: string): Promise<boolean> {
+    const paso = estado.paso;
+    const botonesSede = aj.botonesSede ?? [];
+    const aplica = ['esperando_pago', 'agendada', 'reprogramar', 'consentimiento', 'pregunta', 'elegir_franja'].includes(paso)
+        || (paso === 'sede' && botonesSede.length > 0);
+    if (!aplica) return false;
+    let d = estado.datos;
+    // El estado que dejan los jobs (recordatorio, confirmación de B4) no trae el nombre: el lead sí.
+    if (!d.nombre && !d.respuestas?.nombre) {
+        const lead = await seguro(() => ctx.leadDelContacto?.());
+        if (lead?.nombre) d = { ...d, nombre: lead.nombre, leadId: d.leadId ?? lead.leadId };
+    }
+    const { t } = await textos(ctx);
+    const respuesta = textoDeMatricula(t, d.nombre ?? d.respuestas?.nombre, d.genero ?? generoDelVerbo(texto));
+    if (!d.matriculaAvisada) await seguro(() => ctx.avisarEscuela('pide_matricula', detalleDeMatricula(paso, d, texto)));
+    const datos: DatosEmbudo = { ...d, matriculaAvisada: true };
+    if (paso === 'consentimiento') {
+        await ctx.enviar(`${respuesta}\n\n${PREGUNTA_CONSENTIMIENTO}`, PASO_EMBUDO.MATRICULA,
+            { paso, datos }, BOTONES_CONSENTIMIENTO, EN_TEXTO_CONSENTIMIENTO);
+        return true;
+    }
+    if (paso === 'pregunta') {
+        const preguntas = aj.preguntasProspecto!;
+        const i = Math.min(Math.max(datos.i ?? 0, 0), preguntas.length - 1);
+        return preguntar(ctx, preguntas, { ...datos, i }, respuesta);
+    }
+    if (paso === 'elegir_franja') return ofrecerFranjas(ctx, datos, respuesta);
+    if (paso === 'sede') {
+        const m = mensajeDeBienvenida(null, botonesSede, [], '');
+        await ctx.enviar(`${respuesta}\n\nPara empezar, elige la sede que te queda más cerca 👇`, PASO_EMBUDO.BIENVENIDA,
+            { paso, datos }, m.botones, m.enTexto);
+        return true;
+    }
+    await ctx.enviar(respuesta, PASO_EMBUDO.MATRICULA, { paso, datos });
+    return true;
 }
 
 // ── Paso a una persona ──────────────────────────────────────────────────────
@@ -1143,25 +1377,57 @@ async function aPersona(ctx: CtxEmbudo, d: DatosEmbudo, motivo: MotivoPersona, d
 
 // ─── Integración con la base (defaults para el contexto) ─────────────────────
 
-/** Estado = el payload del último saliente del bot (o del borrador pendiente). Nunca lanza. */
+/** Salientes que se miran hacia atrás buscando el estado (dentro de la vigencia). */
+const SALIENTES_PARA_ESTADO = 8;
+
+/** Un saliente (o borrador) visto por `estadoDeSalientes`. */
+export interface SalienteDeEstado {
+    payload: Record<string, any> | null;
+    /** Lo escribió una persona de la escuela (`ai_generated = false`). */
+    humano?: boolean;
+}
+
+/**
+ * El estado del embudo según los salientes, del más nuevo al más viejo. Lo decide
+ * el último saliente que «sabe» de flujos: el del embudo con su paso; otro flujo,
+ * un cierre del embudo (step `embudo_*` sin estado) o una persona de la escuela lo
+ * cierran. Las respuestas sueltas del bot a una pregunta en medio (el modelo con
+ * la ficha, el acuse, la dirección) NO lo cierran: antes el estado era solo el
+ * último saliente y «¿qué debo llevar?» contestado por el modelo dejaba al
+ * interesado fuera del embudo (su «quiero matricularla» o «cambiar horario»
+ * siguiente ya no lo atendía nadie). Pura.
+ */
+export function estadoDeSalientes(salientes: SalienteDeEstado[]): EstadoEmbudo | null {
+    for (const s of salientes) {
+        const p = s.payload ?? {};
+        if (p.flujo === FLUJO_EMBUDO && p.paso_embudo) return { paso: p.paso_embudo, datos: p.datos_embudo ?? {} };
+        const step = String(p.step ?? '');
+        if (s.humano || p.flujo || step.startsWith('embudo_') || step === 'escalated') return null;
+        // Lo que contesta la cola a un comprobante (B4) sin estado: el paso guardado («esperando
+        // el pago») ya no vale. Sin estado, lo que escriba después lo atiende el embudo con el lead
+        // (`textoSinEstado`: agendada, y si fue con pago).
+        if (/^(clase_prueba_|comprobante_)/.test(step) || step === 'resultado_comprobante') return null;
+    }
+    return null;
+}
+
+/** Estado = el de los últimos salientes del bot (y borradores pendientes) en la vigencia. Nunca lanza. */
 export async function leerEstadoDeEmbudoDeSupabase(conversationId: string): Promise<EstadoEmbudo | null> {
     try {
         const desde = new Date(Date.now() - VIGENCIA_FLUJO_EMBUDO_MS).toISOString();
-        const [msg, borrador] = await Promise.all([
-            supabase.from('whatsapp_messages').select('payload, created_at')
+        const [msgs, borradores] = await Promise.all([
+            supabase.from('whatsapp_messages').select('payload, created_at, ai_generated')
                 .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
-                .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+                .order('created_at', { ascending: false }).limit(SALIENTES_PARA_ESTADO),
             supabase.from('whatsapp_message_drafts').select('tool_context, created_at')
                 .eq('conversation_id', conversationId).eq('status', 'pending').gte('created_at', desde)
-                .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+                .order('created_at', { ascending: false }).limit(SALIENTES_PARA_ESTADO),
         ]);
-        const m = (msg as any)?.data;
-        const b = (borrador as any)?.data;
-        const ultimo = !m ? b?.tool_context
-            : !b ? m.payload
-            : (new Date(b.created_at) > new Date(m.created_at) ? b.tool_context : m.payload);
-        if (!ultimo || ultimo.flujo !== FLUJO_EMBUDO || !ultimo.paso_embudo) return null;
-        return { paso: ultimo.paso_embudo, datos: ultimo.datos_embudo ?? {} };
+        const filas = [
+            ...(((msgs as any)?.data ?? []) as any[]).map((m) => ({ payload: m.payload, humano: m.ai_generated === false, en: m.created_at })),
+            ...(((borradores as any)?.data ?? []) as any[]).map((b) => ({ payload: b.tool_context, humano: false, en: b.created_at })),
+        ].sort((a, b) => new Date(b.en).getTime() - new Date(a.en).getTime());
+        return estadoDeSalientes(filas);
     } catch {
         return null;
     }
@@ -1217,14 +1483,17 @@ export async function registrarOptInProspecto(p: {
 }
 
 /**
- * Lo que respondería `tomar_cupo_clase_prueba` en un turno simulado: con valor
- * se separa por las horas de la escuela (24 si no las fijó); sin valor se
- * agenda. Pura.
+ * Lo que respondería `tomar_cupo_clase_prueba` en un turno simulado, con su misma
+ * regla (mig. 20261030123543): agenda si la clase no tiene valor, si la escuela no
+ * fijó horas para separar (`cobraClaseEnElBot`) o si el lead ya la pagó (cambio de
+ * horario tras pagar); en el resto separa por esas horas. Antes separaba siempre
+ * que hubiera valor y la batería veía un cobro que la RPC no hace. Pura.
  */
-export function cupoSimulado(clase: Pick<AjustesClasePrueba, 'precio' | 'separarHoras'> | null, ahora = Date.now()): ResultadoCupo {
-    if (!clase?.precio) return { estado: 'agendada', hasta: null };
-    const horas = clase.separarHoras && clase.separarHoras > 0 ? clase.separarHoras : 24;
-    return { estado: 'separada', hasta: new Date(ahora + horas * 3600_000).toISOString() };
+export function cupoSimulado(
+    clase: Pick<AjustesClasePrueba, 'precio' | 'separarHoras'> | null, ahora = Date.now(), o: { pagada?: boolean } = {},
+): ResultadoCupo {
+    if (!clase || !cobraClaseEnElBot(clase) || o.pagada) return { estado: 'agendada', hasta: null };
+    return { estado: 'separada', hasta: new Date(ahora + clase.separarHoras! * 3600_000).toISOString() };
 }
 
 /**
@@ -1234,7 +1503,7 @@ export function cupoSimulado(clase: Pick<AjustesClasePrueba, 'precio' | 'separar
  */
 export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pick<CtxEmbudo,
     'ajustes' | 'clase' | 'sedes' | 'franjas' | 'tomarCupo' | 'soltarCupo' | 'cuentasDePago'
-    | 'confirmarAgenda' | 'marcarLead' | 'leadDelContacto' | 'leerEstado'> {
+    | 'confirmarAgenda' | 'marcarLead' | 'leadDelContacto' | 'leerEstado' | 'lugarDeLaClase'> {
     return {
         ajustes: async () => (await import('./whatsapp-ajustes-escuela.service')).ajustesWhatsAppDeEscuela(schoolId),
         clase: async () => (await import('./whatsapp-ajustes-escuela.service')).ajustesClasePrueba(schoolId),
@@ -1244,12 +1513,12 @@ export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pic
             return ((data ?? []) as any[]).map((s) => ({ branchId: s.id, nombre: s.name ?? null, direccion: s.address ?? null }));
         },
         franjas: (teamId) => franjasDeEquipo(schoolId, teamId),
-        tomarCupo: async (leadId, slotId) => {
+        tomarCupo: async (leadId, slotId, o) => {
             // Número de pruebas y batería de escenarios: la RPC escribe, el cortafuegos la
             // bloquea y el motor se quedaba en «no se pudo» sin mostrar el pago.
             if (enCortafuegos()) {
                 const { ajustesClasePrueba } = await import('./whatsapp-ajustes-escuela.service');
-                return cupoSimulado(await ajustesClasePrueba(schoolId));
+                return cupoSimulado(await ajustesClasePrueba(schoolId), Date.now(), { pagada: o?.pagada });
             }
             return (await import('./clase-prueba-agenda.service')).tomarCupo(leadId, slotId);
         },
@@ -1274,6 +1543,8 @@ export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pic
             return l;
         },
         leerEstado: leerEstadoDeEmbudoDeSupabase,
+        // La misma cancha, dirección y Maps de la confirmación de la clase (facilities por nombre).
+        lugarDeLaClase: async (slotId) => (await import('./clase-prueba-agenda.service')).franjaDeAgenda(schoolId, slotId),
     };
 }
 

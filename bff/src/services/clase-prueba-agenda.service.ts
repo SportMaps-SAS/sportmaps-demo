@@ -78,6 +78,12 @@ export interface ConfirmacionClasePrueba {
     texto: string;
     botones?: { id: string; title: string }[];
     step?: string;
+    /**
+     * El estado del embudo para el payload del saliente (`flujo`, `paso_embudo`,
+     * `datos_embudo`): con la clase ya pagada y agendada, «cambiar el horario» o
+     * «¿y la matrícula?» escritos después los sigue atendiendo el embudo.
+     */
+    payload?: Record<string, unknown>;
 }
 
 /** Franja con todo lo que necesita la confirmación. */
@@ -547,10 +553,22 @@ export async function confirmarClasePruebaPagada(
     const texto = franja
         ? textoConfirmacion(franja, { deportista: lead.nombre, nombreClase: aj.nombreClase, queLlevar })
         : `Tu ${clase} quedó agendada 🎉 La escuela te confirma los detalles por aquí.`;
+    // Pagada y agendada: el embudo queda en ese paso (antes el saliente iba sin estado y
+    // «quiero cambiar de horario» escrito caía a las franjas de cortesía de todos los grupos).
+    const datosEmbudo = {
+        leadId: lead.id, slotId: slotId ?? null, teamId: franja?.teamId ?? null, nombre: lead.nombre ?? null, pagada: true,
+        ...(/^[fm]$/i.test(String(lead.genero ?? '')) ? { genero: String(lead.genero).toLowerCase() } : {}),
+    };
     if (faltaConsentimiento(lead.sourceDetail)) {
-        return { texto: `${texto}\n\n${PREGUNTA_CONSENTIMIENTO}`, botones: BOTONES_CONSENTIMIENTO, step: 'clase_prueba_agendada' };
+        return {
+            texto: `${texto}\n\n${PREGUNTA_CONSENTIMIENTO}`, botones: BOTONES_CONSENTIMIENTO, step: 'clase_prueba_agendada',
+            payload: { flujo: FLUJO_EMBUDO_AGENDA, paso_embudo: 'consentimiento', datos_embudo: { ...datosEmbudo, siguiente: 'fin' } },
+        };
     }
-    return { texto, step: 'clase_prueba_agendada' };
+    return {
+        texto, step: 'clase_prueba_agendada',
+        payload: { flujo: FLUJO_EMBUDO_AGENDA, paso_embudo: 'agendada', datos_embudo: datosEmbudo },
+    };
 }
 
 /**

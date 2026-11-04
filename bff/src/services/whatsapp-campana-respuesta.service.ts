@@ -30,6 +30,7 @@ import { supabase } from '../config/supabase';
 import { sendTextMessage, type ParsedInboundMessage, type WhatsAppIntegration } from './whatsapp.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
 import { escuelaActiva, modoDiscreto } from './whatsapp-modo-discreto';
+import { modoDiscretoEfectivo } from './whatsapp-ajustes-escuela.service';
 import { registrarLeadDeProspecto } from './whatsapp-prospecto-lead.service';
 import { etiquetaDeContacto } from './avisos-correo.service';
 import { nombreDeEscuela } from './plataforma-wa.service';
@@ -107,7 +108,9 @@ async function enviarDirecto(a: {
 }): Promise<boolean> {
     try {
         if (!a.aunConLaEscuela && await conversacionTomada(a.conversationId)) return false;
-        if (!a.aunConLaEscuela && modoDiscreto() && await escuelaActiva(a.conversationId)) return false;
+        // El modo discreto de ESA escuela (B6), no solo la variable global.
+        if (!a.aunConLaEscuela && await modoDiscretoEfectivo(a.integration.school_id, modoDiscreto())
+            && await escuelaActiva(a.conversationId)) return false;
         const sent = await sendTextMessage(a.integration, a.contactWaId, a.texto);
         const id = sent.waMessageId || `local-${crypto.randomUUID()}`;
         await supabase.rpc('wa_record_outbound_message', {

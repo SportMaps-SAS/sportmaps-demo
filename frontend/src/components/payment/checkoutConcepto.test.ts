@@ -4,6 +4,7 @@ import {
     conceptoDeServicios,
     conceptoDisponible,
     conceptoInicial,
+    conceptoInicialDeUrl,
     esConceptoDeCarrito,
     itemDeServicio,
     lineasDeServicio,
@@ -95,6 +96,16 @@ describe('motivo preseleccionado (enlace de cobro)', () => {
         ['reserva', 0, 'mensualidad'],
     ] as const)('%s (tarifa %s) → %s', (motivo, monto, esperado) => {
         expect(conceptoInicial(motivo, monto)).toBe(esperado);
+    });
+
+    it('?motivo= de la URL: solo claves del catálogo (o las dos inscripciones); lo demás se ignora', () => {
+        expect(conceptoInicialDeUrl('torneo')).toBe('torneo');
+        expect(conceptoInicialDeUrl(' Vacacional ')).toBe('vacacional');
+        expect(conceptoInicialDeUrl('inscripcion_fija')).toBe('inscripcion_fija');
+        expect(conceptoInicialDeUrl('uniformes')).toBeNull();
+        expect(conceptoInicialDeUrl('servicio:torneo')).toBeNull();
+        expect(conceptoInicialDeUrl('')).toBeNull();
+        expect(conceptoInicialDeUrl(null)).toBeNull();
     });
 
     it('si la escuela no lo ofrece: su equivalente o la primera opción', () => {

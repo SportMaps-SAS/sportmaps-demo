@@ -113,6 +113,42 @@ describe('víspera', () => {
         expect(cierres[0]).toMatchObject({ estado: 'enviado', canal: 'plantilla' });
     });
 
+    it('modo discreto POR ESCUELA (B6): con la escuela escribiendo calla la que lo tiene prendido, no la que está en «no»', async () => {
+        const escuelaActiva = vi.fn(async () => true);
+        const sede = { name: 'Coliseo Dynasty DC', address: 'Cl. 12 Bis #71g-09', is_main: true };
+        // Prendido para la escuela: la persona de la escuela está en el chat → no se manda.
+        deps.escuela = vi.fn(async () => ({ nombre: 'Dynasty Volley Club', sedes: [sede], discreto: true }));
+        await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps: { ...deps, escuelaActiva } });
+        expect(cierres[0]).toMatchObject({ estado: 'no_enviado', motivo: 'escuela_en_la_conversacion' });
+        expect(deps.enviarPlantilla).not.toHaveBeenCalled();
+
+        // «no» (Monster) aunque la variable global esté prendida: sale, sin preguntar por el chat.
+        reservados = [];
+        cierres = [];
+        escuelaActiva.mockClear();
+        deps.escuela = vi.fn(async () => ({ nombre: 'Monster´s Volley Club', sedes: [sede], discreto: false }));
+        const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps: { ...deps, escuelaActiva } });
+        expect(r.enviados).toBe(1);
+        expect(escuelaActiva).not.toHaveBeenCalled();
+    });
+
+    it('sin el modo de la escuela, la variable global de siempre', async () => {
+        const escuelaActiva = vi.fn(async () => true);
+        const antes = process.env.WHATSAPP_MODO_DISCRETO;
+        try {
+            delete process.env.WHATSAPP_MODO_DISCRETO;
+            await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps: { ...deps, escuelaActiva } });
+            expect(cierres[0]).toMatchObject({ estado: 'no_enviado', motivo: 'escuela_en_la_conversacion' });
+            reservados = [];
+            cierres = [];
+            process.env.WHATSAPP_MODO_DISCRETO = 'false';
+            const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps: { ...deps, escuelaActiva } });
+            expect(r.enviados).toBe(1);
+        } finally {
+            if (antes === undefined) delete process.env.WHATSAPP_MODO_DISCRETO; else process.env.WHATSAPP_MODO_DISCRETO = antes;
+        }
+    });
+
     it('idempotente: la segunda corrida (otro BFF) no manda nada', async () => {
         await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });
         const r2 = await runRecordatorioCortesia('vispera', { ahora: VISPERA, deps });

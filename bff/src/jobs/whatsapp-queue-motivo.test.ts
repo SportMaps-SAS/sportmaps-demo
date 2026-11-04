@@ -427,6 +427,18 @@ describe('prospecto con motivo esperado: clase de prueba de $15.000 (Monster)', 
         expect(bot.abrirConsultaParaLaEscuela).not.toHaveBeenCalled();
     });
 
+    it('el estado del embudo que devuelve B3 viaja en el saliente («cambiar horario» escrito después lo sigue atendiendo el embudo)', async () => {
+        const estado = { flujo: 'embudo', paso_embudo: 'agendada', datos_embudo: { leadId: 'lead-1', slotId: 's-1', pagada: true } };
+        _fijarCargadorAgenda(async () => ({
+            confirmarClasePruebaPagada: vi.fn(async () => ({
+                texto: 'Listo ✅ Tu clase de prueba quedó agendada.', step: 'clase_prueba_agendada', payload: estado,
+            })),
+        }));
+        await runWhatsAppQueue();
+        expect(enviados()).toEqual(['Listo ✅ Tu clase de prueba quedó agendada.']);
+        expect(registrados[0].p_payload).toMatchObject({ step: 'clase_prueba_agendada', queue_id: 'f1', ...estado });
+    });
+
     it('sin el módulo de B3 (en esta rama todavía no existe): el cobro se crea igual, NO se agenda y pasa a una persona', async () => {
         await runWhatsAppQueue();
         expect(crearLlamadas()).toHaveLength(1);
