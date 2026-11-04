@@ -739,7 +739,10 @@ export default function PaymentsAutomationPage() {
             : {}),
         require_payment_proof: billing.require_payment_proof,
         bank_name: billing.bank_name,
-        bank_account_type: billing.bank_account_type,
+        // El <select> de tipo de cuenta tiene un placeholder con value="" (línea
+        // ~2977): sin normalizar, "" viola school_settings_bank_account_type_check
+        // (NULL o ahorros/corriente/billetera_digital) y tumba TODO el upsert.
+        bank_account_type: billing.bank_account_type || null,
         bank_account_number: billing.bank_account_number,
         bank_titular_name: billing.bank_titular_name,
         bank_titular_id: billing.bank_titular_id,
