@@ -10,7 +10,7 @@
  *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
  *
- * Opciones: --solo matriz|guiones|despues|variantes|anuncios (varias con coma; sin --solo
+ * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows (varias con coma; sin --solo
  * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
  * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
  * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
@@ -58,6 +58,12 @@
  *     clínica» sin anuncio, afiliado y la clínica a mitad del embudo. Que vaya al
  *     destino correcto, con el precio de HOY, sin el embudo equivocado, con el motivo
  *     esperado intentado (el cortafuegos bloquea su insert) y nunca en silencio.
+ *   · Flows (formularios de WhatsApp, fase F-a): con el formulario publicado (fila
+ *     virtual de whatsapp_flows) la ficha va seguida del formulario (datos que
+ *     caben en el JSON, token de 72 h, respaldo por chat); la respuesta
+ *     (`nfm_reply`) completa/abono × afiliado o no, sin consentimiento, token
+ *     inválido o vencido, servicio desactivado, precio cambiado y duplicada; y
+ *     borrador/apagado/bloqueado/sin salud → solo la ficha.
  *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
  *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
  *     sin reglas de cancha sin resolver, títulos dentro del límite de WhatsApp,
@@ -93,6 +99,12 @@ import { diaDeLaSemana } from '../src/services/semana-equipo.service';
 import { limpiarCacheTextosClase, formatoPesos } from '../src/services/textos-clase-prueba';
 import { franjaDeAgenda, textoConfirmacion } from '../src/services/clase-prueba-agenda.service';
 import { serviciosDeAnuncio, inferirServicio, MARCA_DESTINO, type ItemConFicha } from '../src/services/whatsapp-anuncio-destino';
+import { integracionParaSimular } from '../src/services/plataforma-wa-pruebas.service';
+import {
+    leerFlowDelRepo, validarFlowJson, validarDatosDeEntrada, firmarTokenFormulario, verificarTokenFormulario,
+    payloadDeFormulario, ENV_SECRETO_TOKEN,
+} from '../src/services/whatsapp-flows.service';
+import { FORMULARIO_SERVICIO, PANTALLA_INICIAL_SERVICIO, CTA_FORMULARIO_SERVICIO } from '../src/services/whatsapp-formulario-servicio';
 
 // ─── Argumentos ──────────────────────────────────────────────────────────────
 
@@ -100,8 +112,8 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
-type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios';
-const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios'];
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows'];
 const ESCUELA = arg('escuela');
 const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
 const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
@@ -274,11 +286,16 @@ class Conversacion {
      */
     async decir(texto: string, botonId: string | null = null, o: {
         silencioOk?: boolean; referral?: Record<string, unknown>; rpc?: Record<string, (args: any) => unknown>;
+        /** El mensaje crudo de Meta (p. ej. un formulario terminado, `interactive.nfm_reply`). */
+        raw?: Record<string, unknown>; rotulo?: string; waMessageId?: string;
     } = {}): Promise<SalidaSimulada[]> {
         const r = await turnoSimulado(this.sesion,
-            { waMessageId: `qa-${randomUUID()}`, textBody: texto, botonId, ...(o.referral ? { referral: o.referral } : {}) },
+            {
+                waMessageId: o.waMessageId ?? `qa-${randomUUID()}`, textBody: texto, botonId,
+                ...(o.referral ? { referral: o.referral } : {}), ...(o.raw ? { raw: o.raw } : {}),
+            },
             Date.now(), o.rpc ? { rpc: o.rpc } : {});
-        const entrada = o.referral ? `${texto} ⟵ anuncio «${String(o.referral.headline ?? o.referral.source_id ?? '')}»` : texto;
+        const entrada = o.rotulo ?? (o.referral ? `${texto} ⟵ anuncio «${String(o.referral.headline ?? o.referral.source_id ?? '')}»` : texto);
         this.turnos.push({ entrada, botonId, salidas: r.salidas, bloqueadas: r.bloqueadas, nota: r.nota, fase: this.fase, silencioOk: o.silencioOk });
         return paraLaFamilia(r.salidas);
     }
@@ -1668,7 +1685,9 @@ const MOTIVOS_DE_ITEM = ['torneo', 'viaje', 'clase_extra', 'vacacional', 'otro']
 /** El último turno trajo la ficha de ESE servicio: precio de hoy, abono, cómo pagar, motivo esperado y nada del embudo. */
 function revisarFicha(c: Conversacion, e: Escuela, r: Resultado, it: ItemConFicha, o: { afiliado?: boolean } = {}): void {
     const t = c.turnos.at(-1)!;
-    const s = paraLaFamilia(t.salidas).at(-1);
+    // La ficha (si después salió el formulario, la ficha es la de antes).
+    const s = paraLaFamilia(t.salidas).filter((x) => (x.payload as any)?.[MARCA_DESTINO] === 'servicio').at(-1)
+        ?? paraLaFamilia(t.salidas).at(-1);
     if (!s) return; // el silencio lo anota `cerrar`
     const p = (s.payload ?? {}) as Record<string, any>;
     debe(r, p[MARCA_DESTINO] === 'servicio' && p.servicio_id === it.id,
@@ -1851,6 +1870,326 @@ async function correrAnuncios(e: Escuela): Promise<Resultado[]> {
     return rs;
 }
 
+// ─── Formularios de WhatsApp (Flows, fase F-a) ──────────────────────────────
+
+/**
+ * Las tablas del formulario van VIRTUALES (whatsapp_flows sembrada con el estado
+ * que pide cada caso, las respuestas y los consentimientos en memoria) y el
+ * catálogo también (el caso «servicio desactivado» apaga la clínica en SU copia).
+ * El secreto del token, si el .env no lo trae, es uno local de la batería.
+ */
+const TABLAS_FLOWS = ['whatsapp_flows', 'whatsapp_flow_respuestas', 'whatsapp_consentimientos', 'school_tournament_items'];
+const SECRETO_QA = 'qa-embudo-flows-secreto-local';
+
+/** El formulario terminado tal como lo trae el webhook (`interactive.nfm_reply`). */
+const nfm = (token: string | null, datos: Record<string, unknown>): Record<string, unknown> => ({
+    type: 'interactive',
+    interactive: {
+        type: 'nfm_reply',
+        nfm_reply: { name: 'flow', body: 'Sent', response_json: JSON.stringify({ ...(token ? { flow_token: token } : {}), ...datos }) },
+    },
+});
+
+interface CasoFlow {
+    titulo: string;
+    /** Cambios a la fila virtual de whatsapp_flows (estado, activo, salud). */
+    fila?: Partial<Fila>;
+    correr: (c: Conversacion, e: Escuela, r: Resultado, x: CtxFlows) => Promise<void>;
+}
+
+interface CtxFlows {
+    clinica: ItemConFicha;
+    integrationId: string;
+    flowJson: Record<string, any>;
+}
+
+/** La primera vuelta: anuncio de la clínica → la ficha y DESPUÉS el formulario, bien armado. */
+async function hastaFormulario(c: Conversacion, e: Escuela, r: Resultado, x: CtxFlows): Promise<SalidaSimulada | null> {
+    await c.decir('Hola, quiero más información', null, {
+        referral: anuncio('qa-ad-clinica', x.clinica.name, 'Separa tu cupo con el 50 %.'),
+    });
+    revisarFicha(c, e, r, x.clinica);
+    const fam = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+    const iForm = fam.findIndex((s) => s.formulario);
+    const iFicha = fam.findIndex((s) => (s.payload as any)?.[MARCA_DESTINO] === 'servicio');
+    debe(r, iForm >= 0, 'no mandó el formulario aunque está publicado, prendido y sano');
+    if (iForm < 0) return null;
+    debe(r, iFicha >= 0 && iFicha < iForm, 'el formulario tiene que ir DESPUÉS de la ficha (si no abre, la ficha ya tiene cómo pagar)');
+    const s = fam[iForm];
+    const f = s.formulario!;
+    debe(r, f.cta === CTA_FORMULARIO_SERVICIO && f.pantalla === PANTALLA_INICIAL_SERVICIO, `botón/pantalla inesperados: ${f.cta} · ${f.pantalla}`);
+    const problemas = validarDatosDeEntrada(x.flowJson, PANTALLA_INICIAL_SERVICIO, f.data);
+    debe(r, !problemas.length, `los datos inyectados no caben en el JSON: ${problemas.map((p) => `${p.ruta} ${p.problema}`).join('; ')}`);
+    const hoy = precioDeHoyEsperado(x.clinica, false);
+    if (hoy) debe(r, String(f.data.valor ?? '').includes(formatoPesos(hoy)), `la ficha del formulario no dice el precio de hoy (${formatoPesos(hoy)})`);
+    if (Number(x.clinica.precio_afiliado) > 0) {
+        debe(r, String(f.data.valor_afiliado ?? '').includes(formatoPesos(Number(x.clinica.precio_afiliado))), 'la ficha del formulario no dice el valor de afiliado');
+    }
+    const v = verificarTokenFormulario(f.token);
+    debe(r, v.ok, `el token no verifica (${v.ok ? '' : v.motivo})`);
+    if (v.ok) {
+        debe(r, v.token.servicioId === x.clinica.id && v.token.contactWaId === c.contacto()
+            && v.token.conversationId === conversacionDePrueba(c.sesion), 'el token no es de esta conversación / servicio');
+        debe(r, Math.abs(v.token.venceEn - Date.now() - 72 * 3600_000) < 120_000, 'el token no vence a las 72 h');
+    }
+    debe(r, !!payloadDeFormulario(c.contacto(), { flowId: f.flowId, cta: f.cta, cuerpo: s.texto, token: f.token, pantalla: f.pantalla, data: f.data }),
+        'el mensaje del formulario no cabe en los límites de Meta');
+    debe(r, !!f.respaldo && /comprobante|te escribe/i.test(f.respaldo), 'el formulario no lleva respaldo por chat');
+    return s;
+}
+
+/** Lo que llenaría la persona, con lo que el formulario mostró. */
+function llenado(s: SalidaSimulada, o: { afiliado?: 'si' | 'no'; abono?: boolean; novedades?: boolean; datos?: boolean } = {}): Record<string, unknown> {
+    const d = s.formulario!.data as Record<string, any>;
+    return {
+        formulario: FORMULARIO_SERVICIO,
+        nombre_deportista: 'Mariana Gómez Ruiz',
+        fecha_nacimiento: `${ANIO - 14}-05-09`,
+        afiliado: o.afiliado ?? 'no',
+        talla: d.pide_talla ? String(d.tallas?.[0]?.id ?? 'M') : '',
+        acepta_datos: o.datos ?? true,
+        acepta_novedades: o.novedades ?? true,
+        forma_pago: d.hay_abono ? (o.abono ? 'abono' : 'completo') : '',
+    };
+}
+
+async function responder(c: Conversacion, token: string | null, datos: Record<string, unknown>, rotulo: string,
+    o: { waMessageId?: string; silencioOk?: boolean; rpc?: Record<string, (args: any) => unknown> } = {}): Promise<SalidaSimulada[]> {
+    return c.decir('Formulario enviado', null, {
+        raw: nfm(token, datos), rotulo: `📝 formulario: ${rotulo}`, waMessageId: o.waMessageId, silencioOk: o.silencioOk, rpc: o.rpc,
+    });
+}
+
+const respuestasEnMemoria = (c: Conversacion) => (c.sesion.estado.tablas?.whatsapp_flow_respuestas ?? []) as Fila[];
+const consentimientosEnMemoria = (c: Conversacion) => (c.sesion.estado.tablas?.whatsapp_consentimientos ?? []) as Fila[];
+const bloqueadasDelTurno = (c: Conversacion) => c.turnos.at(-1)?.bloqueadas ?? [];
+
+/** Una respuesta procesada: un mensaje con el monto, el esperado intentado, consentimientos y la fila cerrada. */
+function revisarProcesada(c: Conversacion, r: Resultado, o: { monto: number; resultado: string; novedades: boolean; afiliadoTexto?: RegExp }): void {
+    const fam = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+    debe(r, fam.length === 1, `la respuesta al formulario tiene que ser UN mensaje (salieron ${fam.length})`);
+    const s = fam[0];
+    if (!s) return;
+    const p = (s.payload ?? {}) as Record<string, any>;
+    debe(r, s.step === 'formulario_respuesta' && p.resultado === o.resultado, `resultado ${p.resultado ?? '—'} (se esperaba ${o.resultado})`);
+    debe(r, p.monto === o.monto, `monto ${p.monto} (se esperaba ${o.monto})`);
+    debe(r, s.texto.includes(formatoPesos(o.monto)), `no le dice el valor a pagar (${formatoPesos(o.monto)})`);
+    debe(r, /comprobante|te escribe por aqu[ií] con los datos de pago/i.test(s.texto), 'no le dice cómo pagar');
+    if (o.afiliadoTexto) debe(r, o.afiliadoTexto.test(s.texto), `no menciona lo del afiliado (${o.afiliadoTexto})`);
+    debe(r, bloqueadasDelTurno(c).some((b) => /^(insert|update) whatsapp_conceptos_esperados$/.test(b)),
+        'no intentó registrar el motivo esperado con el monto (el cortafuegos no vio el insert)');
+    debe(r, p.motivo_esperado?.monto === o.monto, 'el motivo esperado no lleva el monto elegido');
+    const filas = respuestasEnMemoria(c);
+    debe(r, filas.length >= 1 && filas.at(-1)!.resultado === o.resultado, `whatsapp_flow_respuestas: ${filas.at(-1)?.resultado ?? 'sin fila'}`);
+    const cons = consentimientosEnMemoria(c).filter((x) => x.contact_wa_id === c.contacto());
+    debe(r, cons.some((x) => x.tipo === 'datos' && x.aceptado === true && x.canal === 'formulario' && x.version_politica),
+        'no guardó el consentimiento de datos');
+    debe(r, cons.some((x) => x.tipo === 'novedades' && x.aceptado === o.novedades), 'no guardó el consentimiento de novedades');
+    debe(r, bloqueadasDelTurno(c).includes('rpc wa_register_optin') === o.novedades,
+        o.novedades ? 'aceptó novedades y no intentó el opt-in' : 'registró opt-in sin que aceptara novedades');
+}
+
+/** Ni lead, ni esperado, ni consentimientos: el formulario no aplicó nada. */
+function revisarNoAplico(c: Conversacion, r: Resultado, resultado: string, texto: RegExp): void {
+    const t = c.turnos.at(-1)!;
+    const fam = paraLaFamilia(t.salidas);
+    debe(r, fam.some((s) => texto.test(s.texto)), `no le explicó (${texto})`);
+    debe(r, t.salidas.some(esNotaDelSimulador), 'no avisó a la escuela por el buzón');
+    debe(r, !t.bloqueadas.some((b) => /whatsapp_conceptos_esperados|wa_register_optin/.test(b)), 'aplicó algo (esperado u opt-in) con un formulario que no vale');
+    debe(r, !consentimientosEnMemoria(c).length, 'guardó consentimientos con un formulario que no vale');
+    const fila = respuestasEnMemoria(c).at(-1);
+    debe(r, fila?.resultado === resultado, `whatsapp_flow_respuestas: ${fila?.resultado ?? 'sin fila'} (se esperaba ${resultado})`);
+    debe(r, !fila || !('nombre_deportista' in (fila.response_json ?? {})), 'guardó datos personales de un formulario que no vale');
+}
+
+async function correrFlows(e: Escuela): Promise<Resultado[]> {
+    if (!process.env[ENV_SECRETO_TOKEN] || process.env[ENV_SECRETO_TOKEN]!.length < 16) process.env[ENV_SECRETO_TOKEN] = SECRETO_QA;
+    const items = await serviciosDeAnuncio(e.id);
+    const clinica = items.find((it) => /\bclinicas?\b/.test(normalizar(it.name)) && !(Array.isArray(it.opciones) && it.opciones.length));
+    const integ = await integracionParaSimular(e.id);
+    const flowJson = leerFlowDelRepo(FORMULARIO_SERVICIO).json;
+    const { data: catalogo } = await supabase.from('school_tournament_items').select('*').eq('school_id', e.id).limit(200);
+    const filaFlow = (cambios: Partial<Fila> = {}): Fila => ({
+        id: randomUUID(), school_id: e.id, integration_id: integ.id, nombre: FORMULARIO_SERVICIO, flow_id: '900000000000001',
+        estado: 'PUBLISHED', activo: true, health_can_send: 'AVAILABLE', health_revisado_at: new Date().toISOString(), config: {},
+        ...cambios,
+    });
+    const x: CtxFlows | null = clinica ? { clinica, integrationId: integ.id, flowJson } : null;
+    const firmar = (c: Conversacion, o: { ahora?: number; secreto?: string; lista?: number } = {}) => firmarTokenFormulario({
+        schoolId: e.id, conversationId: conversacionDePrueba(c.sesion), contactWaId: c.contacto(), formulario: FORMULARIO_SERVICIO,
+        servicioId: clinica!.id,
+        precios: { lista: o.lista ?? precioDeHoyEsperado(clinica!, false), afiliado: Number(clinica!.precio_afiliado) > 0 ? Number(clinica!.precio_afiliado) : null, abonoPct: Number(clinica!.abono_minimo_pct) || null },
+    }, { ahora: o.ahora, secreto: o.secreto })!;
+    const pct = clinica && clinica.allow_installments === true ? Number(clinica.abono_minimo_pct) : NaN;
+    const abonoDe = (precio: number) => (pct >= 1 && pct < 100 ? Math.ceil((precio * pct) / 100) : precio);
+    const lista = clinica ? precioDeHoyEsperado(clinica, false)! : 0;
+    const afiliado = clinica && Number(clinica.precio_afiliado) > 0 ? Number(clinica.precio_afiliado) : null;
+
+    const CASOS: CasoFlow[] = [
+        {
+            titulo: 'el JSON del repo pasa la validación local y EXIGE el consentimiento de datos',
+            correr: async (_c, _e, r) => {
+                const problemas = validarFlowJson(flowJson);
+                debe(r, !problemas.length, `el Flow JSON no pasa: ${problemas.map((p) => `${p.ruta} ${p.problema}`).join('; ')}`);
+                const optin = (flowJson.screens as any[]).flatMap((s) => s.layout?.children ?? []).find((ch: any) => ch.name === 'acepta_datos');
+                debe(r, optin?.type === 'OptIn' && optin?.required === true, 'el OptIn de datos no es obligatorio: el formulario se podría enviar sin aceptarlo');
+                r.desenlace = 'respuesta';
+            },
+        },
+        {
+            titulo: 'completo · no afiliado: consentimientos + opt-in, esperado con el valor de hoy y los datos de pago',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, s.formulario!.token, llenado(s), 'completo · no afiliado');
+                revisarProcesada(c, r, { monto: lista, resultado: 'procesada', novedades: true });
+            },
+        },
+        {
+            titulo: 'abono · no afiliado: el esperado es el abono',
+            correr: async (c, ev, r, xx) => {
+                if (!(pct >= 1 && pct < 100)) { noAplica(r, 'la clínica no tiene abono'); return; }
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, s.formulario!.token, llenado(s, { abono: true, novedades: false }), 'abono · no afiliado');
+                revisarProcesada(c, r, { monto: abonoDe(lista), resultado: 'procesada', novedades: false });
+            },
+        },
+        {
+            titulo: 'completo · dice que es afiliado (el número no lo confirma): valor de afiliado, se lo dice y avisa',
+            correr: async (c, ev, r, xx) => {
+                if (!afiliado) { noAplica(r, 'la clínica no tiene precio de afiliado'); return; }
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, s.formulario!.token, llenado(s, { afiliado: 'si' }), 'completo · afiliado declarado');
+                revisarProcesada(c, r, { monto: afiliado, resultado: 'procesada', novedades: true, afiliadoTexto: /la escuela confirma/ });
+                debe(r, c.turnos.at(-1)!.salidas.some(esNotaDelSimulador), 'no avisó a la escuela que confirme el afiliado');
+            },
+        },
+        {
+            titulo: 'abono · afiliado confirmado por el número: el abono del valor de afiliado',
+            correr: async (c, ev, r, xx) => {
+                if (!afiliado || !(pct >= 1 && pct < 100)) { noAplica(r, 'la clínica no tiene afiliado con abono'); return; }
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, s.formulario!.token, llenado(s, { afiliado: 'no', abono: true }), 'abono · afiliado por el número',
+                    { rpc: { wa_es_afiliado: () => ({ afiliado: true }) } });
+                revisarProcesada(c, r, { monto: abonoDe(afiliado), resultado: 'procesada', novedades: true, afiliadoTexto: /afiliado/ });
+                debe(r, !/la escuela confirma/.test(c.ultimoTexto()), 'pidió confirmar un afiliado que el número ya confirma');
+            },
+        },
+        {
+            titulo: 'sin consentimiento de datos: nada personal guardado, lo pide y reenvía el formulario',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, s.formulario!.token, llenado(s, { datos: false }), 'sin aceptar datos');
+                const t = c.turnos.at(-1)!;
+                const fam = paraLaFamilia(t.salidas);
+                debe(r, fam.some((m) => /aceptes la pol[ií]tica/.test(m.texto)), 'no le pidió aceptar la política');
+                debe(r, fam.some((m) => m.formulario), 'no le reenvió el formulario');
+                debe(r, !t.bloqueadas.some((b) => /whatsapp_conceptos_esperados|wa_register_optin/.test(b)), 'aplicó esperado u opt-in sin consentimiento');
+                debe(r, !consentimientosEnMemoria(c).length, 'guardó consentimientos sin aceptar los datos');
+                const fila = respuestasEnMemoria(c).at(-1);
+                debe(r, fila?.resultado === 'sin_consentimiento', `whatsapp_flow_respuestas: ${fila?.resultado ?? 'sin fila'}`);
+                debe(r, !!fila && !('nombre_deportista' in (fila.response_json ?? {})) && !('fecha_nacimiento' in (fila.response_json ?? {})),
+                    'guardó el nombre o la fecha sin consentimiento');
+            },
+        },
+        {
+            titulo: 'token inválido (firma de otro secreto): no aplica nada y avisa al buzón',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, firmar(c, { secreto: 'otro-secreto-que-no-es-el-del-bff' }), llenado(s), 'token inválido');
+                revisarNoAplico(c, r, 'token_invalido', /No pude validar este formulario/);
+            },
+        },
+        {
+            titulo: 'token vencido (enviado hace 73 h): no aplica nada, se lo dice y avisa',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, firmar(c, { ahora: Date.now() - 73 * 3600_000 }), llenado(s), 'token vencido');
+                revisarNoAplico(c, r, 'token_vencido', /ya venci[oó]/);
+            },
+        },
+        {
+            titulo: 'el servicio se desactivó entre el envío y la respuesta: a una persona, sin esperado',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                for (const it of (c.sesion.estado.tablas?.school_tournament_items ?? []) as Fila[]) if (it.id === xx.clinica.id) it.active = false;
+                await responder(c, s.formulario!.token, llenado(s), 'servicio desactivado');
+                const t = c.turnos.at(-1)!;
+                debe(r, paraLaFamilia(t.salidas).some((m) => /ya no est[aá] abierta/.test(m.texto)), 'no le dijo que la inscripción ya no está abierta');
+                debe(r, t.salidas.some(esNotaDelSimulador), 'no pasó a una persona');
+                debe(r, !t.bloqueadas.some((b) => /whatsapp_conceptos_esperados/.test(b)), 'registró un esperado de un servicio inactivo');
+                debe(r, respuestasEnMemoria(c).at(-1)?.resultado === 'servicio_inactivo', 'la respuesta no quedó como servicio_inactivo');
+                r.desenlace = 'persona';
+            },
+        },
+        {
+            titulo: 'el precio cambió entre el envío y la respuesta: cobra el vigente y se lo dice',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                await responder(c, firmar(c, { lista: lista - 20000 }), llenado(s), 'precio cambiado');
+                revisarProcesada(c, r, { monto: lista, resultado: 'procesada_precio_nuevo', novedades: true });
+                debe(r, /el valor cambi[oó]/i.test(c.ultimoTexto()) && c.ultimoTexto().includes(formatoPesos(lista - 20000)),
+                    'no le dijo que el valor cambió (y cuál vio)');
+            },
+        },
+        {
+            titulo: 'respuesta duplicada (mismo wa_message_id): la segunda no hace nada',
+            correr: async (c, ev, r, xx) => {
+                const s = await hastaFormulario(c, ev, r, xx);
+                if (!s) return;
+                const id = `qa-nfm-${randomUUID()}`;
+                await responder(c, s.formulario!.token, llenado(s), 'primera', { waMessageId: id });
+                await responder(c, s.formulario!.token, llenado(s), 'duplicada', { waMessageId: id, silencioOk: true });
+                debe(r, !paraLaFamilia(c.turnos.at(-1)!.salidas).length, 'contestó dos veces el mismo formulario');
+                debe(r, respuestasEnMemoria(c).length === 1, `quedaron ${respuestasEnMemoria(c).length} filas en whatsapp_flow_respuestas`);
+                debe(r, !c.turnos.at(-1)!.bloqueadas.some((b) => /whatsapp_conceptos_esperados|wa_register_optin/.test(b)), 'la duplicada volvió a aplicar');
+            },
+        },
+        ...([
+            ['en borrador (no publicado)', { estado: 'DRAFT' }],
+            ['apagado por la escuela (activo = false)', { activo: false }],
+            ['bloqueado contra el número (negocio sin verificar)', { health_can_send: 'BLOCKED' }],
+            ['sin dato de salud', { health_can_send: null, health_revisado_at: null }],
+        ] as [string, Partial<Fila>][]).map(([que, fila]): CasoFlow => ({
+            titulo: `formulario ${que} → solo la ficha (el chat de hoy)`,
+            fila,
+            correr: async (c, ev, r, xx) => {
+                await c.decir('Hola, quiero más información', null, { referral: anuncio('qa-ad-clinica', xx.clinica.name, 'Separa tu cupo.') });
+                revisarFicha(c, ev, r, xx.clinica);
+                debe(r, !paraLaFamilia(c.turnos.at(-1)!.salidas).some((s) => s.formulario), 'mandó un formulario que no se puede mandar');
+            },
+        })),
+    ];
+
+    const rs = await conTablasVirtuales(TABLAS_FLOWS, () => enParalelo(CASOS, async (caso) => {
+        const conv = new Conversacion(caso.titulo, e.id, nuevoN(), {
+            whatsapp_flows: [filaFlow(caso.fila)],
+            whatsapp_flow_respuestas: [],
+            whatsapp_consentimientos: [],
+            school_tournament_items: (catalogo ?? []) as Fila[],
+        });
+        const r = nuevoResultado(caso.titulo, conv, 'flows');
+        r.desenlace = 'respuesta';
+        await protegido(r, async () => {
+            if (!x) { noAplica(r, 'la escuela no tiene una clínica activa con un solo precio'); return; }
+            await caso.correr(conv, e, r, x);
+        });
+        cerrar(r, e, null);
+        progreso(r);
+        return r;
+    }));
+    process.stdout.write('\n');
+    return rs;
+}
+
 // ─── Reporte ─────────────────────────────────────────────────────────────────
 
 const esBien = (r: Resultado) => !r.fallas.length && !r.esperadas.length;
@@ -1902,7 +2241,7 @@ function imprimirFallas(rs: Resultado[]): void {
 
 (async () => {
     if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
-        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios[,…]] [--variante <nombre>[,…]] '
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows[,…]] [--variante <nombre>[,…]] '
             + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
         log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
@@ -1924,6 +2263,7 @@ function imprimirFallas(rs: Resultado[]): void {
         if (b === 'guiones') rs = await correrGuiones(escuela);
         if (b === 'despues') rs = await correrDespues(escuela);
         if (b === 'anuncios') rs = await correrAnuncios(escuela);
+        if (b === 'flows') rs = await correrFlows(escuela);
         if (b === 'variantes') {
             const v = await correrVariantes(escuela);
             rs = v.resultados;

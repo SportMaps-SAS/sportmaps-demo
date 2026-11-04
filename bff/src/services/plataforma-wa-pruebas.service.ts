@@ -30,7 +30,10 @@ import {
 import { integracionDePlataforma, registrarMensaje, soloDigitos, type CanalPlataforma } from './plataforma-wa.service';
 import { uuidDeClave } from './avisos-correo.service';
 import { debeAtender } from './whatsapp-atencion.service';
-import { runBotTurn, atenderDesconocido, simularEnvios, type SalidaSimulada } from './whatsapp-bot.service';
+import {
+    runBotTurn, atenderDesconocido, simularEnvios, atenderRespuestaDeFormularioEnBot, type SalidaSimulada,
+} from './whatsapp-bot.service';
+import { esRespuestaDeFormulario } from './whatsapp-flows.service';
 import {
     esAdjuntoDeComprobante, bajarAdjuntoDePrueba, comprobanteSimulado, plantillaSimulada, textoListaPlantillas,
     avanzarSimulado, trabajoDeAvanzar, TEXTO_AYUDA_AVANZAR, type EscenarioPrueba,
@@ -169,6 +172,10 @@ export async function mandarSalidas(canal: CanalPlataforma, to: string, salidas:
         } else if (s.cta) {
             r = await sendCtaUrl(integ, to, cuerpo, s.cta.texto, s.cta.url);
             if (!r.ok) r = await sendTextMessage(integ, to, `${cuerpo}\n\n${s.cta.texto}: ${s.cta.url}`.slice(0, 4096));
+        } else if (s.formulario) {
+            // El formulario vive en la WABA de la escuela: el número de SportMaps no lo puede abrir.
+            r = await sendTextMessage(integ, to,
+                `${cuerpo}\n\n[Formulario «${s.formulario.cta}» (${s.formulario.pantalla}): en el número de pruebas no se abre]`.slice(0, 4096));
         } else {
             r = await sendTextMessage(integ, to, cuerpo.slice(0, 4096));
         }
@@ -271,6 +278,8 @@ export async function turnoSimulado(
     const conversationId = conversacionDePrueba(sesion);
     const ahoraIso = new Date(ahora).toISOString();
     const texto = msg.textBody ?? '';
+    // Formulario terminado (WhatsApp Flows): `raw.interactive.nfm_reply`.
+    const esFormulario = esRespuestaDeFormulario(msg.raw);
 
     const tablas: Record<string, Fila[]> = { ...(sesion.estado.tablas ?? {}) };
     const conv: Fila = (tablas.whatsapp_conversations ?? [])[0] ?? {
@@ -295,7 +304,7 @@ export async function turnoSimulado(
     const entranteIso = new Date(Math.max(ahora, ultimoEnMemoria + 1)).toISOString();
     tablas.whatsapp_messages = [...(tablas.whatsapp_messages ?? []), {
         id: randomUUID(), conversation_id: conversationId, integration_id: integ.id, direction: 'inbound',
-        type: msg.botonId ? 'interactive' : 'text', text_body: texto, payload: payloadDeEntranteSimulado(msg),
+        type: msg.botonId || esFormulario ? 'interactive' : 'text', text_body: texto, payload: payloadDeEntranteSimulado(msg),
         ai_generated: false, wa_message_id: msg.waMessageId, from_wa_id: contacto, to_wa_id: null,
         wa_timestamp: entranteIso, created_at: entranteIso, status: null,
     }];
@@ -324,6 +333,13 @@ export async function turnoSimulado(
 
     let nota: string | null = null;
     const { salidas } = await conCortafuegos(ctx, () => simularEnvios(async () => {
+        // Igual que el webhook: el formulario terminado lo atiende su handler, para cualquier contacto.
+        if (esFormulario) {
+            const resultado = await atenderRespuestaDeFormularioEnBot(integ, conversationId, contacto,
+                { waMessageId: msg.waMessageId, raw: msg.raw });
+            nota = `formulario → ${String(resultado)}`;
+            return;
+        }
         const d = await debeAtender(integ, conversationId, contacto);
         if (d.atender) {
             nota = `runBotTurn (contacto: ${d.tipo})`;

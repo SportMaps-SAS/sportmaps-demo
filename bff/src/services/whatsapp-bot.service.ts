@@ -45,7 +45,7 @@ import {
     type Urgencia, type CategoriaUrgente, type TemaEscalacion,
 } from './whatsapp-escalaciones.service';
 import {
-    sendTextMessage, sendInteractiveButtons, sendCtaUrl, sendImage, aFormatoWhatsApp, markAsRead,
+    sendTextMessage, sendInteractiveButtons, sendCtaUrl, sendImage, aFormatoWhatsApp, markAsRead, resolveIntegration,
     type WhatsAppIntegration, type BotonInteractivo,
 } from './whatsapp.service';
 import { conEnlacesDePago, conTipoDeCobro, lineaPagar, botonPagarUnico, TEXTO_BOTON_IR_A_PAGAR } from './whatsapp-enlaces-de-pago.service';
@@ -128,10 +128,22 @@ import {
     textosClaseDeEscuela, textosDeClase, reglaDeClaseParaPrompt, TEXTOS_POR_DEFECTO, type TextosClase,
 } from './textos-clase-prueba';
 import {
-    atenderDestinoDeAnuncio, mapeoDeAnuncio, serviciosDeAnuncio, MARCA_DESTINO,
-    type CtxAnuncio, type ResultadoAnuncio,
+    atenderDestinoDeAnuncio, mapeoDeAnuncio, serviciosDeAnuncio, servicioDeAnuncioPorId, servicioVigente, motivoDeServicio,
+    MARCA_DESTINO, type CtxAnuncio, type ResultadoAnuncio, type ItemConFicha,
 } from './whatsapp-anuncio-destino';
+import type { Motivo } from './motivos-de-cobro';
 import { esAfiliado } from './wa-afiliado.service';
+import {
+    sendFlowMessage, formularioDisponible, filaDeFlow, firmarTokenFormulario, respuestaDeFormulario,
+    validarDatosDeEntrada, leerFlowDelRepo,
+} from './whatsapp-flows.service';
+import {
+    armarFormularioServicio, atenderRespuestaDeFormulario, textoRespaldoFormulario,
+    FORMULARIO_SERVICIO, PANTALLA_INICIAL_SERVICIO, CTA_FORMULARIO_SERVICIO,
+    PASO_FORMULARIO_ENVIADO, PASO_FORMULARIO_RESPALDO,
+    type CtxRespuestaFormulario, type ResultadoFormulario,
+} from './whatsapp-formulario-servicio';
+import { hoyBogota } from './wa-cobro-desde-comprobante.service';
 
 const OTP_TTL_MIN = 10;
 
@@ -261,6 +273,11 @@ export interface SalidaSimulada {
     opciones?: { id: string; title: string; descripcion?: string }[];
     /** Botón URL (cta_url) que habría salido. */
     cta?: { texto: string; url: string };
+    /**
+     * Formulario de WhatsApp (Flows) que habría salido: el flow, el token firmado,
+     * la pantalla y los datos inyectados, y el respaldo por chat si no abría.
+     */
+    formulario?: FormularioDeSalida & { respaldo: string | null };
     /**
      * El `context` con que `deliver` lo habría guardado en el payload del
      * saliente. Los flujos de varios pasos (cortesía, puerta) leen de ahí dónde
@@ -2473,7 +2490,199 @@ function ctxAnuncio(
         avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle }),
         iniciarEmbudo: async () => iniciarEmbudoEnBot(integration, conversationId, contactWaId,
             { saludo: await saludo(), step: PASO_DESCONOCIDO_ESCOLAR }),
+        ofrecerFormulario: ({ item, sinCuentas }) =>
+            mandarFormularioDeServicio(integration, conversationId, contactWaId, item, { sinCuentas }),
     };
+}
+
+// ─── Formularios de WhatsApp (Flows, fase F-a) ───────────────────────────────
+//
+// docs/specs/whatsapp-plan-v2-anuncios-campanas-formularios.md §3. El formulario
+// de inscripción a un servicio sale DESPUÉS de la ficha del destino por anuncio,
+// solo si la escuela lo tiene publicado, prendido (`whatsapp_flows.activo`) y
+// sano contra su número. La respuesta (`nfm_reply`) la atiende
+// `atenderRespuestaDeFormularioEnBot`; si el formulario no se entrega (131026),
+// `seguirPorChatTrasFormularioFallido` manda el respaldo por chat.
+
+let flowServicioDelRepo: Record<string, any> | null | undefined;
+
+/** Los datos inyectados caben en el JSON del repo (si el archivo no está en el despliegue, no se valida). */
+function datosDelFormularioValidos(data: Record<string, unknown>): boolean {
+    if (flowServicioDelRepo === undefined) {
+        try { flowServicioDelRepo = leerFlowDelRepo(FORMULARIO_SERVICIO).json; } catch { flowServicioDelRepo = null; }
+    }
+    if (!flowServicioDelRepo) return true;
+    const problemas = validarDatosDeEntrada(flowServicioDelRepo, PANTALLA_INICIAL_SERVICIO, data);
+    if (problemas.length) console.warn('[whatsapp-bot] los datos del formulario no caben; sigue el chat', { problemas: problemas.slice(0, 5) });
+    return !problemas.length;
+}
+
+/**
+ * Manda el formulario de inscripción a `item` si la escuela lo tiene listo.
+ * true = salió por `deliver` (si Meta lo rechaza, sale el respaldo por chat).
+ * false = sigue el chat de hoy (sin formulario, apagado, sin secreto, sin
+ * precio único). Nunca lanza.
+ */
+export async function mandarFormularioDeServicio(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, item: ItemConFicha,
+    o: { sinCuentas: boolean; reenvio?: boolean },
+): Promise<boolean> {
+    try {
+        const listo = await formularioDisponible(integration, FORMULARIO_SERVICIO);
+        if (!listo) return false;
+        const escuela = await nombreDeEscuela(integration.school_id);
+        const armado = armarFormularioServicio({ item, escuela, hoy: hoyBogota(Date.now()), config: listo.config });
+        if (!armado || !datosDelFormularioValidos(armado.data)) return false;
+        const tokenId = crypto.randomBytes(9).toString('base64url');
+        const token = firmarTokenFormulario({
+            id: tokenId, schoolId: integration.school_id, conversationId, contactWaId,
+            formulario: FORMULARIO_SERVICIO, servicioId: item.id, precios: armado.precios,
+        });
+        if (!token) {
+            console.warn('[whatsapp-bot] sin WHATSAPP_FLOW_TOKEN_SECRET (>= 16 caracteres): no se manda el formulario');
+            return false;
+        }
+        const respaldo = textoRespaldoFormulario(!o.sinCuentas);
+        await deliver(integration, conversationId, contactWaId, armado.cuerpo, {
+            step: PASO_FORMULARIO_ENVIADO, intencion: 'anuncio', repetible: true,
+            formulario: {
+                nombre: FORMULARIO_SERVICIO, fila_id: listo.filaId, flow_id: listo.flowId, servicio_id: item.id,
+                token_id: tokenId, respaldo, sin_cuentas: o.sinCuentas, ...(o.reenvio ? { reenvio: true } : {}),
+            },
+        }, {
+            botones: [], enTexto: respaldo,
+            formulario: {
+                flowId: listo.flowId, cta: CTA_FORMULARIO_SERVICIO, token,
+                pantalla: PANTALLA_INICIAL_SERVICIO, data: armado.data,
+            },
+        });
+        return true;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo mandar el formulario', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
+const UUID_FORMULARIO = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Un formulario terminado (`interactive.nfm_reply`). null = el mensaje no es
+ * uno. Corre aunque el contacto sea desconocido (el formulario lo mandó el bot);
+ * lo que sale va por `deliver` (bot apagado, conversación tomada y modo discreto
+ * se respetan). Nunca lanza.
+ */
+export async function atenderRespuestaDeFormularioEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    msg: { waMessageId: string; raw: unknown },
+): Promise<ResultadoFormulario | null> {
+    const r = respuestaDeFormulario(msg.raw);
+    if (!r) return null;
+    const schoolId = integration.school_id;
+    const ahora = () => new Date().toISOString();
+    const cuentasDe = async (motivo: Motivo) => (await mediosDePago(schoolId, { categoria: motivo })).cuentas
+        .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular }));
+    const ctx: CtxRespuestaFormulario = {
+        schoolId, contactWaId, conversationId,
+        escuela: await nombreDeEscuela(schoolId).catch(() => null),
+        guardarRespuesta: async (x) => {
+            const fila = x.formulario ? await filaDeFlow(integration.id, x.formulario) : null;
+            const nueva = (servicioId: string | null) => supabase.from('whatsapp_flow_respuestas').insert({
+                flow_id: fila?.id ?? null,
+                nombre_formulario: x.formulario && /^[a-z0-9_]{1,60}$/.test(x.formulario) ? x.formulario : null,
+                school_id: schoolId, integration_id: integration.id, conversation_id: conversationId,
+                contact_wa_id: contactWaId, wa_message_id: msg.waMessageId, token_id: x.tokenId?.slice(0, 64) ?? null,
+                servicio_id: servicioId, response_json: x.responseJson, resultado: 'recibida',
+            }).select('id').single();
+            let { data, error } = await nueva(x.servicioId && UUID_FORMULARIO.test(x.servicioId) ? x.servicioId : null);
+            // El servicio ya no existe (FK): la respuesta se guarda igual.
+            if (error?.code === '23503') ({ data, error } = await nueva(null));
+            if (error?.code === '23505') return { estado: 'duplicada', id: null };
+            if (error || !(data as any)?.id) return { estado: 'sin_registro', id: null };
+            return { estado: 'nueva', id: String((data as any).id) };
+        },
+        cerrarRespuesta: async (id, resultado, detalle) => {
+            if (!id) return;
+            await supabase.from('whatsapp_flow_respuestas')
+                .update({ resultado, detalle, procesada_at: ahora() }).eq('id', id);
+        },
+        servicio: (id) => servicioDeAnuncioPorId(schoolId, id),
+        afiliado: async () => (await esAfiliado(schoolId, contactWaId)).afiliado,
+        cuentas: cuentasDe,
+        guardarConsentimientos: async (lista, fuenteId) => {
+            const { error } = await supabase.from('whatsapp_consentimientos').insert(lista.map((c) => ({
+                school_id: schoolId, integration_id: integration.id, contact_wa_id: contactWaId,
+                tipo: c.tipo, aceptado: c.aceptado, version_politica: c.versionPolitica, texto: c.texto,
+                canal: 'formulario', fuente_id: fuenteId,
+            })));
+            if (error) console.warn('[whatsapp-bot] no se guardaron los consentimientos', { conversationId, code: error.code });
+            return !error;
+        },
+        registrarOptin: async (fuenteId) => {
+            const { error } = await supabase.rpc('wa_register_optin', {
+                p_integration_id: integration.id, p_school_id: schoolId, p_contact_wa_id: contactWaId,
+                p_source: 'formulario_wa', p_source_ref: fuenteId, p_parent_id: null, p_opt_out: false,
+            });
+            return !error;
+        },
+        guardarLead: async (l) => {
+            if (enSimulacion()) return null;
+            const res = await registrarLeadDeProspecto({
+                schoolId, conversationId, contactWaId,
+                nombre: await nombreDelContacto(conversationId),
+                textos: await entrantesDeTexto(conversationId, DIAS_MARCA_PROSPECTO),
+                estado: 'respondido', servicio: l.servicio,
+                completo: { deportista: l.deportista, fechaNacimiento: l.fechaNacimiento, via: 'formulario', formulario: l.formulario },
+            });
+            return res?.leadId ?? null;
+        },
+        registrarEsperado: async (e) => {
+            const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
+            return registrarConceptoEsperado(schoolId, contactWaId, { motivo: e.motivo, leadId: e.leadId, monto: e.monto });
+        },
+        enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto, { ...contexto, repetible: true }),
+        reenviarFormulario: async (servicioId) => {
+            const item = servicioId ? await servicioDeAnuncioPorId(schoolId, servicioId) : null;
+            if (!item || !servicioVigente(item)) return false;
+            const sinCuentas = !(await cuentasDe(motivoDeServicio(item)).catch(() => [])).length;
+            return mandarFormularioDeServicio(integration, conversationId, contactWaId, item, { sinCuentas, reenvio: true });
+        },
+        avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle }),
+    };
+    return atenderRespuestaDeFormulario(ctx, r);
+}
+
+/**
+ * El webhook de estados dice que un saliente falló. Si era un formulario (131026:
+ * la app de la persona no lo abre, u otro rechazo de Meta), el bot sigue por chat
+ * con el respaldo que quedó en el payload, UNA vez por conversación al día.
+ * true = salió el respaldo. Nunca lanza.
+ */
+export async function seguirPorChatTrasFormularioFallido(
+    phoneNumberId: string, waMessageId: string, errorCode: number | null = null,
+): Promise<boolean> {
+    try {
+        if (!phoneNumberId || !waMessageId) return false;
+        const { data } = await supabase.from('whatsapp_messages')
+            .select('conversation_id, direction, type, payload').eq('wa_message_id', waMessageId).maybeSingle();
+        const fila = data as any;
+        const f = fila?.payload?.formulario;
+        if (!fila || fila.direction !== 'outbound' || fila.type !== 'interactive' || !f?.respaldo) return false;
+        const integration = await resolveIntegration(phoneNumberId);
+        if (!integration) return false;
+        const { data: conv } = await supabase.from('whatsapp_conversations')
+            .select('contact_wa_id').eq('id', fila.conversation_id).maybeSingle();
+        const contacto = (conv as any)?.contact_wa_id as string | undefined;
+        if (!contacto) return false;
+        if (!(await reservarPasoUnaVez(fila.conversation_id, PASO_FORMULARIO_RESPALDO, 24))) return false;
+        await deliver(integration, fila.conversation_id, contacto, String(f.respaldo), {
+            step: PASO_FORMULARIO_RESPALDO, repetible: true,
+            formulario_fallido: { wa_message_id: waMessageId, codigo: errorCode, servicio_id: f.servicio_id ?? null },
+        });
+        return true;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo seguir por chat tras el formulario', { waMessageId, err: e?.message });
+        return false;
+    }
 }
 
 /**
@@ -5221,6 +5430,7 @@ export async function deliver(
                 ...(b.descripcion ? { descripcion: String(b.descripcion) } : {}) })),
             ...(conBotones?.cta ? { cta: conBotones.cta } : {}),
             ...(conBotones?.imagen ? { imagen: conBotones.imagen } : {}),
+            ...(conBotones?.formulario ? { formulario: { ...conBotones.formulario, respaldo: conBotones.enTexto ?? null } } : {}),
             payload: context });
         return;
     }
@@ -5337,11 +5547,14 @@ export async function deliver(
     // Botón URL («Pagar» de un solo cobro). El enlace ya va en el texto, así
     // que si el botón no sale el mensaje se entiende igual.
     const cta = !botones && conBotones?.cta ? conBotones.cta : null;
+    // Formulario de WhatsApp (Flows, fase F-a): si no sale, va `enTexto` (el
+    // respaldo por chat), no la invitación a tocar un botón que no llegó.
+    const formulario = !botones && !cta && conBotones?.formulario ? conBotones.formulario : null;
     // El mismo mensaje sin botones: lo que sale si Meta rechaza los botones, y
     // lo que queda en el borrador del modo asistido.
     const textoSinBotones = botones && conBotones?.enTexto
         ? `${texto}\n\n${conBotones.enTexto}`
-        : texto;
+        : formulario && conBotones?.enTexto ? conBotones.enTexto : texto;
 
     // Ventana de 24 h cerrada: Meta rechaza el texto libre (131047) y el aviso no
     // llega. Pasó con acuses de adjuntos procesados tarde (Dynasty 2026-10-23,
@@ -5362,9 +5575,14 @@ export async function deliver(
                 : await sendInteractiveButtons(integration, contactWaId, texto, botones))
             : cta
                 ? await sendCtaUrl(integration, contactWaId, texto, cta.texto, cta.url)
-                : imagen
-                    ? await sendImage(integration, contactWaId, imagen, texto)
-                    : null;
+                : formulario
+                    ? await sendFlowMessage(integration, contactWaId, {
+                        flowId: formulario.flowId, cta: formulario.cta, cuerpo: texto, token: formulario.token,
+                        pantalla: formulario.pantalla, data: formulario.data, modo: formulario.modo,
+                    })
+                    : imagen
+                        ? await sendImage(integration, contactWaId, imagen, texto)
+                        : null;
         // Con la foto rechazada (URL caída, formato), los botones salen sin ella.
         if (sent && !sent.ok && botones && imagen) {
             sent = await sendInteractiveButtons(integration, contactWaId, texto, botones);
@@ -5389,7 +5607,9 @@ export async function deliver(
             p_wa_message_id: idSaliente,
             p_type: tipo,
             p_text_body: cuerpo,
-            p_payload: tipo === 'interactive' ? (cta ? { ...context, cta } : { ...context, botones, ...(imagen ? { imagen } : {}) })
+            p_payload: tipo === 'interactive' ? (cta ? { ...context, cta }
+                : formulario ? { ...context, flow_id: formulario.flowId, flow_cta: formulario.cta }
+                    : { ...context, botones, ...(imagen ? { imagen } : {}) })
                 : tipo === 'image' ? { ...context, imagen } : context,
             p_ai_generated: true,
             p_to_wa_id: contactWaId,
@@ -5409,6 +5629,13 @@ export async function deliver(
         // modo asistido en esta conversación quedan viejos ('expired'). Si no,
         // un «aprobar» después mandaría una respuesta vieja encima (2026-10-06).
         if (sent.ok) void descartarBorradoresViejos(conversationId);
+        return;
+    }
+
+    // Un formulario no se aprueba desde el buzón (sale como texto): en modo
+    // asistido no se deja borrador. La ficha que lo antecede ya lleva todo.
+    if (formulario) {
+        console.info('[whatsapp-bot] modo asistido: el formulario no deja borrador', { conversationId });
         return;
     }
 
@@ -5723,6 +5950,21 @@ export interface ConBotones {
      * rechaza, sale lo mismo sin foto.
      */
     imagen?: string | null;
+    /**
+     * Formulario de WhatsApp (Flows): el cuerpo es el texto del mensaje y
+     * `enTexto` el respaldo por chat si no sale. Solo sin `botones` ni `cta`.
+     */
+    formulario?: FormularioDeSalida;
+}
+
+/** Un formulario listo para salir por `deliver`. */
+export interface FormularioDeSalida {
+    flowId: string;
+    cta: string;
+    token: string;
+    pantalla: string;
+    data: Record<string, unknown>;
+    modo?: 'draft' | 'published';
 }
 
 /** «Ir a pagar» con el link de pago propio de la escuela (Dynasty, 2026-10-13). */

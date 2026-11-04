@@ -35,7 +35,9 @@ import {
     runBotTurn, deliver, atenderDesconocido, mensajesRecientes, SILENCIO_HUMANO_MIN,
     TEXTO_MIME_RECHAZADO, vocativosDeEscuela, revisarEscalacionesVencidas, revisarRetomas,
     reservarPasoUnaVez, enviarRespuestaStaff, abrirEnBuzon,
+    atenderRespuestaDeFormularioEnBot, seguirPorChatTrasFormularioFallido,
 } from '../services/whatsapp-bot.service';
+import { esRespuestaDeFormulario, sincronizarEstadoDeFlow } from '../services/whatsapp-flows.service';
 import { debeAtender } from '../services/whatsapp-atencion.service';
 import { encolarAdjunto } from '../services/whatsapp-queue.service';
 import { correrTurnoAgrupado, ESPERA_RAFAGA_MS } from '../services/whatsapp-turno-agrupado.service';
@@ -232,6 +234,14 @@ async function procesarEstados(req: Request, body: any): Promise<void> {
         if (error) {
             req.log?.warn({ err: error.message, waMessageId: e.waMessageId }, 'WhatsApp: no se pudo guardar el estado');
         }
+
+        // Un formulario (WhatsApp Flows) que no se entregó —131026: la app de la
+        // persona no lo abre— sigue por chat con su respaldo. Solo mira los fallidos.
+        if (e.status === 'failed') {
+            const siguio = await seguirPorChatTrasFormularioFallido(e.phoneNumberId, e.waMessageId, e.errorCode)
+                .catch(() => false);
+            if (siguio) req.log?.warn({ waMessageId: e.waMessageId, codigo: e.errorCode }, 'WhatsApp: el formulario no llegó; sigue por chat');
+        }
     }
 
     const facturables = estados.filter((e) => e.billable === true).length;
@@ -248,6 +258,9 @@ const CAMPOS_DE_CUENTA = new Set([
     'phone_number_quality_update',
     'account_update',
     'business_capability_update',
+    // Formularios (WhatsApp Flows): cambio de estado y alertas. Hay que suscribir
+    // el campo `flows` en la app de Meta para que lleguen.
+    'flows',
 ]);
 
 /**
@@ -309,10 +322,11 @@ async function procesarEventosDeCuenta(req: Request, body: any): Promise<void> {
                 ?? v?.max_daily_conversation_per_phone   // business_capability_update
                 ?? v?.current_limit
                 ?? v?.decision
+                ?? v?.new_status          // flows: FLOW_STATUS_CHANGE
                 ?? v?.event
                 ?? null;
             const estadoPrevio = v?.previous_quality_score ?? v?.previous_category
-                ?? v?.old_category ?? null;
+                ?? v?.old_category ?? v?.old_status ?? null;
 
             const { error } = await supabase.from('whatsapp_account_events').insert({
                 integration_id: integrationId,
@@ -329,8 +343,12 @@ async function procesarEventosDeCuenta(req: Request, body: any): Promise<void> {
 
             if (error) {
                 req.log?.error({ err: error.message, field }, 'WhatsApp: no se pudo guardar el evento de cuenta');
-                continue;
             }
+            // Un formulario que Meta bloquea o estrangula deja de mandarse ya (y vuelve al publicarse).
+            if (field === 'flows' && v?.event === 'FLOW_STATUS_CHANGE') {
+                await sincronizarEstadoDeFlow(v?.flow_id, v?.new_status).catch(() => false);
+            }
+            if (error) continue;
 
             // A nivel log va como warn: son cosas que alguien tiene que mirar,
             // no ruido informativo.
@@ -525,6 +543,20 @@ async function handleBotTurn(
             'Si era un comprobante, mándame la *foto* o el *PDF*.',
             { step: `${PASO_TIPO_NO_SOPORTADO}_unsupported` })
             .catch((err) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: no se pudo responder al mensaje ilegible'));
+        return;
+    }
+
+    // Formulario terminado (WhatsApp Flows, `nfm_reply`): lo atiende su handler con
+    // el token firmado, sin modelo ni ráfaga. Corre aunque el contacto sea
+    // desconocido (el formulario lo mandó el bot); lo que responde sale por
+    // `deliver`, que respeta bot apagado, conversación tomada y modo discreto.
+    if (esRespuestaDeFormulario(msg.raw)) {
+        const resultado = await atenderRespuestaDeFormularioEnBot(integration, conversationId, msg.contactWaId, msg)
+            .catch((err) => {
+                req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: el formulario falló');
+                return 'error' as const;
+            });
+        req.log?.info({ conversationId, resultado }, 'WhatsApp: formulario recibido');
         return;
     }
 

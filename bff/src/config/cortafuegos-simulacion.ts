@@ -90,6 +90,8 @@ const UNICOS: Record<string, string[][]> = {
     whatsapp_conversation_flows: [['conversation_id', 'flow']],
     whatsapp_settings: [['integration_id']],
     whatsapp_optins: [['integration_id', 'contact_wa_id']],
+    // Solo cuando una batería la vuelve virtual (qa-embudo --solo flows): idempotencia del formulario.
+    whatsapp_flow_respuestas: [['wa_message_id']],
 };
 
 export const ERROR_SIM = Object.freeze({

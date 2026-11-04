@@ -195,6 +195,25 @@ export async function serviciosDeAnuncio(schoolId: string, ahora = Date.now()): 
     }
 }
 
+/**
+ * Un ítem del catálogo por id (activo o no; quien llama decide con
+ * `servicioVigente`). Lo usa la respuesta del formulario para revalidar el
+ * servicio y el precio. null si no existe o falla. Nunca lanza.
+ */
+export async function servicioDeAnuncioPorId(schoolId: string, id: string): Promise<ItemConFicha | null> {
+    if (!schoolId || !/^[0-9a-f-]{36}$/i.test(String(id ?? ''))) return null;
+    const leer = (cols: string) => supabase.from('school_tournament_items')
+        .select(cols).eq('school_id', schoolId).eq('id', id).limit(1);
+    try {
+        let { data, error } = await leer(COLUMNAS_M2);
+        if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
+        if (error || !Array.isArray(data) || !data[0]) return null;
+        return data[0] as unknown as ItemConFicha;
+    } catch {
+        return null;
+    }
+}
+
 // ─── Inferencia (pura) ──────────────────────────────────────────────────────
 
 export type ClaveEvento = 'clinica' | 'campamento' | 'vacacional' | 'torneo';
@@ -502,6 +521,12 @@ export interface CtxAnuncio {
     avisarEscuela: (detalle: string) => Promise<void>;
     /** El embudo de la clase de prueba (false = la escuela no lo tiene). */
     iniciarEmbudo: () => Promise<boolean>;
+    /**
+     * Fase F-a (whatsapp-formulario-servicio): después de la ficha, el formulario de
+     * inscripción si la escuela lo tiene PUBLICADO, prendido y sano. true = salió (o
+     * se intentó: si no abre, el respaldo sigue por chat). Sin esto, el chat de hoy.
+     */
+    ofrecerFormulario?: (p: { item: ItemConFicha; sinCuentas: boolean; leadId: string | null }) => Promise<boolean>;
     ahora?: () => Date;
 }
 
@@ -618,6 +643,11 @@ export async function atenderDestinoDeAnuncio(
     if (!cuentas.length) {
         await ctx.avisarEscuela(detalleParaLaEscuela(referral, msg,
             `pidió «${item.name}» y la escuela no tiene cuentas de pago cargadas: escríbele con los datos de pago`));
+    }
+    // El formulario va DESPUÉS de la ficha: si no abre o lo cierran, la ficha ya
+    // tiene el valor y cómo pagar (nunca un callejón). Solo un precio (sin opciones).
+    if (ctx.ofrecerFormulario && !precio.opciones.length && precio.hoy !== null) {
+        await ctx.ofrecerFormulario({ item, sinCuentas: !cuentas.length, leadId }).catch(() => false);
     }
     return 'anuncio_servicio';
 }
