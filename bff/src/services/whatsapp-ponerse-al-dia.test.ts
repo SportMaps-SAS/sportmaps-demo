@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const estado = vi.hoisted(() => ({
     mensajes: [] as any[],
+    conversaciones: [] as any[],
     updates: [] as { tabla: string; valores: any }[],
 }));
 
@@ -17,7 +18,9 @@ vi.mock('../config/supabase', () => {
             update: (valores: any) => { estado.updates.push({ tabla, valores }); return api; },
             maybeSingle: async () => ({ data: null, error: null }),
             then: (ok: any, err: any) => Promise.resolve(
-                tabla === 'whatsapp_messages' ? { data: estado.mensajes, error: null } : { data: [], error: null },
+                tabla === 'whatsapp_messages' ? { data: estado.mensajes, error: null }
+                    : tabla === 'whatsapp_conversations' ? { data: estado.conversaciones, error: null }
+                    : { data: [], error: null },
             ).then(ok, err),
         };
         return api;
@@ -25,7 +28,7 @@ vi.mock('../config/supabase', () => {
     return { supabase: { from: (t: string) => builder(t), rpc: async () => ({ data: null, error: null }) } };
 });
 
-import { accionDeConversacion, cerrarSiEsCierre, type EntranteSinResponder } from './whatsapp-ponerse-al-dia.service';
+import { accionDeConversacion, cerrarSiEsCierre, listarPorResponder, type EntranteSinResponder } from './whatsapp-ponerse-al-dia.service';
 import { esCierreSuelto } from './whatsapp-reglas-turno';
 
 let n = 0;
@@ -151,5 +154,33 @@ describe('cerrarSiEsCierre (webhook en vivo)', () => {
     it('lo que no es cierre no consulta nada', async () => {
         expect(await cerrarSiEsCierre('conv', 'c', 'No me deja subir el pago')).toBe(false);
         expect(estado.updates).toHaveLength(0);
+    });
+});
+
+describe('listarPorResponder — lo importado del historial nunca es «sin responder»', () => {
+    beforeEach(() => { estado.mensajes = []; estado.conversaciones = []; estado.updates = []; });
+
+    it('una conversación con solo entrantes del historial (de antes del alta) no entra; uno en vivo sí', async () => {
+        const hace = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+        estado.conversaciones = [{
+            id: 'c-hist', contact_wa_id: '573001110001', contact_name: null, contact_kind: 'desconocido', parent_id: null,
+            status: 'open', last_inbound_at: hace(60), tomada_por: null, tomada_hasta: null,
+        }];
+        // «¿Tienen clase de prueba?» de hace 1 h, pero importado: Meta no abre la
+        // ventana con eso y el bot no contesta mensajes viejos.
+        estado.mensajes = [{
+            wa_message_id: 'wamid.h1', direction: 'inbound', type: 'text', text_body: '¿Tienen clase de prueba?',
+            payload: { historial: true }, ai_generated: false, created_at: hace(60), wa_timestamp: hace(60),
+        }];
+        expect(await listarPorResponder({ id: 'int-1', school_id: 's1' })).toEqual([]);
+
+        // El mismo número escribe en vivo: ese sí espera respuesta (y solo ese).
+        estado.mensajes.push({
+            wa_message_id: 'wamid.v1', direction: 'inbound', type: 'text', text_body: '¿Y el precio?',
+            payload: {}, ai_generated: false, created_at: hace(5), wa_timestamp: hace(5),
+        });
+        const lista = await listarPorResponder({ id: 'int-1', school_id: 's1' });
+        expect(lista).toHaveLength(1);
+        expect(lista[0].entrantes.map((m) => m.waMessageId)).toEqual(['wamid.v1']);
     });
 });

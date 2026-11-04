@@ -25,6 +25,8 @@ const meta = vi.hoisted(() => ({
     enviados: [] as any[],
     respuesta: null as null | ((payload: any) => { ok: boolean; waMessageId?: string; error?: string }),
     calidad: 'GREEN' as string | null,
+    /** `messaging_limit_tier` que devuelve Graph (null = no lo trae). */
+    tier: null as string | null,
 }));
 
 vi.mock('../config/supabase', () => {
@@ -126,6 +128,9 @@ const {
     ajustesCampanasDesdeFila, payloadDeBoton,
 } = svc;
 
+const cupoMod = await import('./whatsapp-campanas-cupo');
+const { reservaDeAvisos, cupoMeta, cupoDeHoy, _olvidarLimites, limiteMetaDelNumero, destinatariosDePlantillas24h } = cupoMod;
+
 const PLANTILLA_MONSTER = JSON.parse(fs.readFileSync(
     path.resolve(__dirname, '../../whatsapp-templates/escuelas/monster/monster_cierre_2026.json'), 'utf8'));
 
@@ -194,8 +199,11 @@ function sembrar(opts: { base?: 'optin' | 'contacto_previo_declarado'; contactos
 
 beforeEach(() => {
     db.t = {}; db.rpc = {}; db.llamadas = []; db.rpcLlamadas = []; db.fallan = new Set(); db.seq = 0;
-    meta.enviados = []; meta.respuesta = null; meta.calidad = 'GREEN';
-    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ quality_rating: meta.calidad }) })));
+    meta.enviados = []; meta.respuesta = null; meta.calidad = 'GREEN'; meta.tier = null;
+    _olvidarLimites();
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true, json: async () => ({ quality_rating: meta.calidad, ...(meta.tier ? { messaging_limit_tier: meta.tier } : {}) }),
+    })));
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -226,6 +234,67 @@ describe('cupo del tick', () => {
         expect(cupoDelTick({ ...base, ticksRestantes: 72 })).toBe(3);
         expect(cupoDelTick({ ...base, ticksRestantes: 72, primerDia: true })).toBe(1);
         expect(cupoDelTick({ ...base, ticksRestantes: 0 })).toBe(0);
+    });
+});
+
+describe('cupo de Meta: la campaña frena ANTES del límite (reserva para avisos e interesados)', () => {
+    it('reserva = máx(30, 20 % del límite), nunca más que el límite', () => {
+        expect(reservaDeAvisos(250)).toBe(50);
+        expect(reservaDeAvisos(1000)).toBe(200);
+        expect(reservaDeAvisos(100)).toBe(30);
+        expect(reservaDeAvisos(20)).toBe(20);
+        expect(limiteDeTier('TIER_2K')).toBe(2000);
+        expect(limiteDeTier('250')).toBe(250);
+        expect(limiteDeTier(1000 as any)).toBe(1000);
+    });
+
+    it('TIER_250: las campañas llegan hasta 200 en la ventana; con 180 usados quedan 20', () => {
+        const m = cupoMeta({ limite: 250, tier: 'TIER_250', fuente: 'graph', usados24h: 180 });
+        expect(m).toMatchObject({ reserva: 50, limiteCampanas: 200, disponibleCampanas: 20 });
+        expect(cupoMeta({ limite: 250, usados24h: 230 }).disponibleCampanas).toBe(0);
+        // Cupo de hoy «X de Y»: Y = mín(tope, límite − reserva); X = lo que queda (tope y ventana).
+        expect(cupoDeHoy(m, 200, 30)).toMatchObject({ cupoHoy: 200, disponibleHoy: 20 });
+        expect(cupoDeHoy(cupoMeta({ limite: 1000, usados24h: 0 }), 200, 150)).toMatchObject({ cupoHoy: 200, disponibleHoy: 50 });
+    });
+
+    it('usados en 24 h = personas DISTINTAS con plantilla (cobranza, recordatorios y campañas), no mensajes', async () => {
+        const ahora = MARTES_10AM.getTime();
+        db.t = {
+            whatsapp_messages: [
+                ...['573000000001', '573000000001', '+57 300 000 0002'].map((to, i) => ({
+                    integration_id: INTEG, direction: 'outbound', type: 'template', to_wa_id: to, created_at: iso(MARTES_10AM, -(i + 1) * 3600_000),
+                })),
+                { integration_id: INTEG, direction: 'outbound', type: 'template', to_wa_id: '573000000003', created_at: iso(MARTES_10AM, -25 * 3600_000) },
+                { integration_id: INTEG, direction: 'outbound', type: 'text', to_wa_id: '573000000004', created_at: iso(MARTES_10AM, -3600_000) },
+                { integration_id: 'otra', direction: 'outbound', type: 'template', to_wa_id: '573000000005', created_at: iso(MARTES_10AM, -3600_000) },
+            ],
+            // El registro en el buzón falló, pero el envío salió: también cuenta.
+            whatsapp_campana_envios: [{ integration_id: INTEG, contact_wa_id: '573000000006', enviado_at: iso(MARTES_10AM, -60_000) }],
+        };
+        expect(await destinatariosDePlantillas24h(INTEG, ahora)).toBe(3);
+    });
+
+    it('el límite: Graph (caché 1 h) → evento del webhook → 250', async () => {
+        const integ = { id: INTEG, phone_number_id: 'pn-1', access_token_encrypted: 'gcm:x' };
+        const ahora = MARTES_10AM.getTime();
+        db.t = { whatsapp_account_events: [] };
+        meta.tier = 'TIER_1K';
+        expect(await limiteMetaDelNumero(integ, ahora)).toEqual({ limite: 1000, tier: 'TIER_1K', fuente: 'graph' });
+        meta.tier = 'TIER_250';
+        expect((await limiteMetaDelNumero(integ, ahora + 30 * 60_000)).limite).toBe(1000); // caché
+        expect((await limiteMetaDelNumero(integ, ahora + 61 * 60_000)).limite).toBe(250);
+
+        _olvidarLimites();
+        meta.tier = null;
+        db.t.whatsapp_account_events = [{
+            integration_id: INTEG, field: 'phone_number_quality_update', nuevo_estado: 'TIER_1K',
+            payload: { value: { event: 'UPGRADE', current_limit: 'TIER_1K' } }, created_at: iso(MARTES_10AM, -3600_000),
+        }];
+        expect(await limiteMetaDelNumero(integ, ahora)).toEqual({ limite: 1000, tier: 'TIER_1K', fuente: 'evento' });
+
+        _olvidarLimites();
+        db.t.whatsapp_account_events = [];
+        expect(await limiteMetaDelNumero(integ, ahora)).toEqual({ limite: 250, tier: null, fuente: 'por_defecto' });
     });
 });
 
@@ -458,6 +527,41 @@ describe('runCampanas', () => {
         const r = await runCampanas(new Date('2026-11-03T23:55:00Z'));
         expect(r.pausadas).toBe(0);
         expect(r.enviados).toBe(1);
+    });
+
+    it('TIER_250 con 200 personas ya escritas por plantilla en 24 h: la campaña NO manda (reserva de 50 intacta)', async () => {
+        sembrar({ contactos: 5 });
+        db.t.whatsapp_messages = Array.from({ length: 200 }, (_, i) => ({
+            integration_id: INTEG, direction: 'outbound', type: 'template', to_wa_id: `57310${String(i).padStart(7, '0')}`,
+            created_at: iso(MARTES_10AM, -3 * 3600_000),
+        }));
+        const r = await runCampanas(new Date('2026-11-03T23:55:00Z'));
+        expect(r.saltadas.cupo_meta).toBe(1);
+        expect(meta.enviados).toHaveLength(0);
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_campana_tomar_lote')).toBe(false);
+        // No se pausa: retoma sola cuando la ventana de 24 h libere cupo.
+        expect(db.t.whatsapp_campanas[0].estado).toBe('aprobada');
+    });
+
+    it('con 190 usados: pide a lo sumo 10 y la RPC recibe límite − reserva (200), no el límite', async () => {
+        sembrar({ contactos: 30 });
+        db.t.whatsapp_messages = Array.from({ length: 190 }, (_, i) => ({
+            integration_id: INTEG, direction: 'outbound', type: 'template', to_wa_id: `57310${String(i).padStart(7, '0')}`,
+            created_at: iso(MARTES_10AM, -3 * 3600_000),
+        }));
+        const r = await runCampanas(new Date('2026-11-03T23:55:00Z'));
+        const lote = db.rpcLlamadas.find((l) => l.fn === 'wa_campana_tomar_lote')!;
+        expect(lote.args).toMatchObject({ p_max: 10, p_limite_meta: 200 });
+        expect(r.enviados).toBe(10);
+    });
+
+    it('Graph dice TIER_1K: reserva 200 y la RPC recibe 800; el freno y el cupo usan UNA llamada a Graph', async () => {
+        sembrar({ contactos: 2 });
+        meta.tier = 'TIER_1K';
+        await runCampanas(new Date('2026-11-03T23:55:00Z'));
+        expect(db.rpcLlamadas.find((l) => l.fn === 'wa_campana_tomar_lote')!.args.p_limite_meta).toBe(800);
+        expect((globalThis.fetch as any).mock.calls).toHaveLength(1);
+        expect(String((globalThis.fetch as any).mock.calls[0][0])).toContain('fields=quality_rating,messaging_limit_tier');
     });
 
     it('domingo: no corre (ni lee el lote)', async () => {

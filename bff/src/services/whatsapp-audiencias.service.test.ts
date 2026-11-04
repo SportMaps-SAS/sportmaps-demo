@@ -60,7 +60,7 @@ vi.mock('../config/supabase', () => {
     };
 });
 
-import { clasificarConversacion, clasificarEscuela, entranteConIntencion, sedeDeTextos } from './whatsapp-audiencias.service';
+import { clasificarConversacion, clasificarEscuela, entranteConIntencion, sedeDeTextos, ultimoEntrante } from './whatsapp-audiencias.service';
 
 const NORTE = '3a1c0b52-6f0e-4c35-9a52-0d0b2a3c4d01';
 const SUBA = '7b2d1c63-7f1f-4d46-8b63-1e1c3b4d5e02';
@@ -223,6 +223,32 @@ describe('clasificarEscuela', () => {
         const r = await clasificarEscuela(ESC, { aplicar: true, ahora: AHORA });
         expect(r.estado).toBe('sin_migracion');
         expect(db.upserts).toBe(0);
+    });
+
+    it('historial de Coexistence que llega DESPUÉS de una pasada: sus conversaciones nuevas se leen aunque su last_inbound_at sea viejo', async () => {
+        sembrar();
+        await clasificarEscuela(ESC, { aplicar: true, ahora: AHORA });
+        // Llega el historial: conversación creada hoy, último entrante de hace 40 días
+        // (topado o no, más viejo que la marca de agua de la pasada anterior).
+        db.t.whatsapp_conversations.push({
+            id: 'c-historial', integration_id: INTEG, school_id: ESC, contact_wa_id: '573001000009', contact_name: null,
+            contact_kind: null, tambien_familia: false, last_inbound_at: hace(40), created_at: new Date(AHORA + 60_000).toISOString(),
+        });
+        db.t.whatsapp_messages.push({
+            conversation_id: 'c-historial', integration_id: INTEG, direction: 'inbound', type: 'text', ai_generated: false,
+            text_body: 'Hola, ¿cuándo puedo llevar a mi hijo a una clase de prueba en el Norte?', wa_message_id: 'wamid.hist',
+            wa_timestamp: hace(40),
+        });
+        const r = await clasificarEscuela(ESC, { aplicar: true, ahora: AHORA + 120_000 });
+        expect(r.releidas).toBe(1);
+        expect(db.t.whatsapp_audiencia.find((f) => f.contact_wa_id === '573001000009'))
+            .toMatchObject({ intereses: ['clase_prueba'], branch_id: NORTE, excluido: null, ultimo_entrante_at: hace(40) });
+    });
+
+    it('ultimo_entrante_at: el mayor entre last_inbound_at (topado si vino del historial) y el último entrante leído', () => {
+        expect(ultimoEntrante('2026-11-03T16:00:00.000Z', Date.parse('2026-11-04T15:00:00.000Z'))).toBe('2026-11-04T15:00:00.000Z');
+        expect(ultimoEntrante('2026-11-04T15:00:00.000Z', Date.parse('2026-10-01T00:00:00.000Z'))).toBe('2026-11-04T15:00:00.000Z');
+        expect(ultimoEntrante(null, 0)).toBeNull();
     });
 
     it('quien pidió la baja queda excluido', async () => {

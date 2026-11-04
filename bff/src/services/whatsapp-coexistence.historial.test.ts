@@ -18,6 +18,10 @@ type Fila = Record<string, any>;
 const h = vi.hoisted(() => ({
     tablas: {} as Record<string, Fila[]>,
     llamadas: [] as { tabla: string; op: string; filas: number }[],
+    rpcs: [] as { fn: string; args: any }[],
+    antesDeActualizar: null as null | ((tabla: string) => void),
+    /** `wa_historial_actividad`: null = no existe (como hoy en la base). */
+    rpcActividad: null as null | ((args: any) => { data: any; error: any }),
     fallarLote: false,
     enviarConReserva: null as any,
     avisarEscalacionAlEquipo: null as any,
@@ -40,6 +44,18 @@ vi.mock('../config/supabase', () => {
             neq: (c: string, v: any) => { filtros.push((f) => valor(f, c) !== v); return api; },
             in: (c: string, vs: any[]) => { filtros.push((f) => vs.includes(valor(f, c))); return api; },
             is: (c: string, v: any) => { filtros.push((f) => (valor(f, c) ?? null) === v); return api; },
+            // `a.is.null,a.lt.2026-…` (lo que usa la actualización condicional del historial).
+            or: (expr: string) => {
+                const ramas = expr.split(',').map((r) => {
+                    const [c, op, ...resto] = r.split('.');
+                    const v = resto.join('.');
+                    return (f: Fila) => (op === 'is' ? (valor(f, c) ?? null) === null
+                        : op === 'lt' ? valor(f, c) != null && Date.parse(valor(f, c)) < Date.parse(v)
+                        : false);
+                });
+                filtros.push((f) => ramas.some((p) => p(f)));
+                return api;
+            },
             not: (c: string, _op: string, _v: any) => { filtros.push((f) => valor(f, c) != null); return api; },
             gte: (c: string, v: any) => { filtros.push((f) => valor(f, c) != null && valor(f, c) >= v); return api; },
             gt: (c: string, v: any) => { filtros.push((f) => valor(f, c) != null && valor(f, c) > v); return api; },
@@ -74,8 +90,12 @@ vi.mock('../config/supabase', () => {
                 }
                 return { data: uno ? nuevas[0] ?? null : nuevas, error: null };
             }
+            if (escritura?.op === 'update') h.antesDeActualizar?.(tabla);
             let filas = t.filter((f) => filtros.every((p) => p(f)));
-            if (escritura?.op === 'update') { for (const f of filas) Object.assign(f, escritura.datos); }
+            if (escritura?.op === 'update') {
+                h.llamadas.push({ tabla, op: 'update', filas: filas.length });
+                for (const f of filas) Object.assign(f, escritura.datos);
+            }
             if (orden) {
                 const { c, asc } = orden;
                 filas = [...filas].sort((a, b) => (valor(a, c) < valor(b, c) ? -1 : valor(a, c) > valor(b, c) ? 1 : 0) * (asc ? 1 : -1));
@@ -85,7 +105,17 @@ vi.mock('../config/supabase', () => {
         }
         return api;
     }
-    return { supabase: { from: (t: string) => builder(t), rpc: async () => ({ data: null, error: null }) } };
+    return { supabase: {
+        from: (t: string) => builder(t),
+        rpc: async (fn: string, args: any) => {
+            h.rpcs.push({ fn, args });
+            if (fn === 'wa_historial_actividad') {
+                return h.rpcActividad ? h.rpcActividad(args)
+                    : { data: null, error: { code: 'PGRST202', message: 'Could not find the function public.wa_historial_actividad' } };
+            }
+            return { data: null, error: null };
+        },
+    } };
 });
 
 vi.mock('./whatsapp.service', () => ({
@@ -105,7 +135,9 @@ vi.mock('./llm.service', () => ({ chatWithTools: vi.fn() }));
 vi.mock('./push.service', () => ({ sendToUser: vi.fn() }));
 vi.mock('../utils/emailClient', () => ({ emailClient: { send: vi.fn() } }));
 
-const { procesarHistorial, estadoDeHistorial, fechaDeHistorial } = await import('./whatsapp-coexistence.service');
+const { procesarHistorial, estadoDeHistorial, fechaDeHistorial, actividadDeHistorial, VENTANA_META_MS, _reiniciarRpcActividad } =
+    await import('./whatsapp-coexistence.service');
+const { ventanaAbierta } = await import('./whatsapp-plantillas.service');
 const { escuelaActiva, revisarPendientesSinRespuesta, _reiniciarRevisionDePendientes } = await import('./whatsapp-modo-discreto');
 const { entrantesDeTexto } = await import('./whatsapp-bot.service');
 
@@ -156,6 +188,10 @@ beforeEach(() => {
         schools: [{ id: 'school-1', name: 'Monster´s Volley Club' }],
     };
     h.llamadas = [];
+    h.rpcs = [];
+    h.rpcActividad = null;
+    h.antesDeActualizar = null;
+    _reiniciarRpcActividad();
     h.fallarLote = false;
     h.enviarConReserva.mockClear();
     h.avisarEscalacionAlEquipo.mockClear();
@@ -240,12 +276,19 @@ describe('procesarHistorial · fecha real, lote, idempotencia', () => {
         });
     });
 
-    it('las conversaciones que crea nacen cerradas y sin last_inbound_at', async () => {
+    it('las conversaciones que crea nacen cerradas, sin no leídos, y con la fecha del último entrante y del último mensaje', async () => {
         await procesarHistorial(webhook(hilosDeMonster()));
         for (const c of [ANA, BETO, CARO]) {
             expect(conv(c)).toMatchObject({ status: 'closed', integration_id: 'int-1', school_id: 'school-1' });
-            expect(conv(c).last_inbound_at).toBeUndefined();
+            expect(conv(c).unread_count ?? 0).toBe(0);
         }
+        // Ana: el último entrante es el «¿clase de prueba?» de hace 20 días (+2 min); lo último, el saludo.
+        const t20 = Number(hace(20 * DIA));
+        expect(conv(ANA).last_inbound_at).toBe(iso(String(t20 + 120)));
+        expect(conv(ANA).last_message_at).toBe(iso(String(t20 + 122)));
+        expect(conv(BETO)).toMatchObject({ last_inbound_at: iso(String(t20)), last_message_at: iso(String(t20 + 2)) });
+        // El personal (solo metadatos) también: es una fecha, no contenido.
+        expect(conv(PERSONAL).last_inbound_at).toBe(iso(String(t20)));
     });
 
     it('más de 500 mensajes: de a 500 por upsert', async () => {
@@ -266,6 +309,101 @@ describe('procesarHistorial · fecha real, lote, idempotencia', () => {
     it('mensaje sin fecha: no se guarda con la de hoy', async () => {
         await procesarHistorial(webhook([{ id: ANA, messages: [{ from: ANA, id: 'wamid.X', type: 'text', text: { body: 'hola' } }] }]));
         expect(mensajes()).toHaveLength(0);
+    });
+});
+
+describe('procesarHistorial · last_inbound_at para la audiencia, sin abrir la ventana ni pisar lo vivo', () => {
+    const updatesDeConversaciones = () => h.llamadas.filter((l) => l.tabla === 'whatsapp_conversations' && l.op === 'update');
+
+    it('lo que la familia escribió 2 h antes del alta NO abre la ventana: se topa 24 h atrás', async () => {
+        const t = hace(2 * 3600_000);
+        const antes = Date.now();
+        await procesarHistorial(webhook([{ id: CARO, messages: [texto('wamid.C1', CARO, t, '¿Cuánto vale la clase de prueba?')] }]));
+        const c = conv(CARO);
+        expect(Date.parse(c.last_inbound_at)).toBeLessThanOrEqual(Date.now() - VENTANA_META_MS);
+        expect(Date.parse(c.last_inbound_at)).toBeGreaterThanOrEqual(antes - VENTANA_META_MS);
+        expect(ventanaAbierta(c.last_inbound_at)).toBe(false);
+        // last_message_at sí es la hora real (no abre nada; ordena el buzón).
+        expect(c.last_message_at).toBe(iso(t));
+        expect(c.status).toBe('closed');
+    });
+
+    it('GREATEST: una conversación viva conserva su fecha, su estado y sus no leídos (ni un UPDATE)', async () => {
+        const vivo = new Date(AHORA - 3600_000).toISOString();
+        h.tablas.whatsapp_conversations.push({
+            id: 'conv-ana', integration_id: 'int-1', school_id: 'school-1', contact_wa_id: ANA, status: 'open',
+            unread_count: 2, last_inbound_at: vivo, last_message_at: vivo,
+        });
+        await procesarHistorial(webhook([{ id: ANA, messages: [
+            texto('wamid.A7', ANA, hace(30 * DIA), 'Hola, ¿precios?'),
+            texto('wamid.A8', ESCUELA, String(Number(hace(30 * DIA)) + 60), 'Te cuento'),
+        ] }]));
+        expect(conv(ANA)).toMatchObject({ status: 'open', unread_count: 2, last_inbound_at: vivo, last_message_at: vivo });
+        expect(updatesDeConversaciones()).toHaveLength(0);
+    });
+
+    it('si un mensaje en vivo entra entre la lectura y la escritura, el UPDATE condicional no lo pisa', async () => {
+        const vivo = new Date(AHORA - 60_000).toISOString();
+        // Leída con NULL (conversación nueva del historial); justo antes de
+        // escribir, entra un mensaje en vivo (wa_ingest_inbound_message).
+        h.antesDeActualizar = (tabla) => {
+            if (tabla !== 'whatsapp_conversations') return;
+            const b = h.tablas.whatsapp_conversations.find((c) => c.contact_wa_id === BETO);
+            if (b && !b.last_inbound_at) Object.assign(b, { status: 'open', last_inbound_at: vivo, last_message_at: vivo });
+        };
+        await procesarHistorial(webhook([{ id: BETO, messages: [texto('wamid.B9', BETO, hace(5 * DIA), 'hola')] }]));
+        expect(conv(BETO)).toMatchObject({ status: 'open', last_inbound_at: vivo, last_message_at: vivo });
+    });
+
+    it('idempotente: Meta reenvía el trozo y no se vuelve a escribir la conversación', async () => {
+        await procesarHistorial(webhook(hilosDeMonster()));
+        const n = updatesDeConversaciones().length;
+        expect(n).toBeGreaterThan(0);
+        await procesarHistorial(webhook(hilosDeMonster()));
+        expect(updatesDeConversaciones()).toHaveLength(n);
+    });
+
+    it('con la RPC en lote: UNA llamada por trozo y ningún UPDATE por conversación; sin ella no se reintenta', async () => {
+        // Sin la RPC (hoy): se intenta una vez y el segundo trozo ya no la llama.
+        await procesarHistorial(webhook([{ id: ANA, messages: [texto('wamid.R1', ANA, hace(9 * DIA), 'hola')] }]));
+        await procesarHistorial(webhook([{ id: BETO, messages: [texto('wamid.R2', BETO, hace(9 * DIA), 'hola')] }]));
+        expect(h.rpcs.filter((r) => r.fn === 'wa_historial_actividad')).toHaveLength(1);
+        expect(conv(BETO).last_inbound_at).toBe(iso(hace(9 * DIA)));
+
+        // Con la RPC: lote.
+        _reiniciarRpcActividad();
+        h.rpcs = []; h.llamadas = [];
+        h.rpcActividad = ({ p_integration_id, p_filas }: any) => {
+            const max = (a: string | null, b: string | null) => (!a ? b : !b ? a : (Date.parse(a) > Date.parse(b) ? a : b));
+            for (const f of p_filas) {
+                const c = h.tablas.whatsapp_conversations.find((x) => x.id === f.id && x.integration_id === p_integration_id);
+                if (!c) continue;
+                c.last_inbound_at = max(c.last_inbound_at ?? null, f.last_inbound_at);
+                c.last_message_at = max(c.last_message_at ?? null, f.last_message_at);
+            }
+            return { data: p_filas.length, error: null };
+        };
+        await procesarHistorial(webhook(hilosDeMonster()));
+        const llamadas = h.rpcs.filter((r) => r.fn === 'wa_historial_actividad');
+        expect(llamadas).toHaveLength(1);
+        expect(llamadas[0].args.p_integration_id).toBe('int-1');
+        expect(updatesDeConversaciones()).toHaveLength(0);
+        expect(conv(CARO).last_inbound_at).toBe(iso(String(Number(hace(20 * DIA)) + 60)));
+    });
+
+    it('actividadDeHistorial (pura): máximo por conversación, entrante topado, solo salientes = sin last_inbound_at', () => {
+        const ahora = Date.parse('2026-11-04T16:00:00Z');
+        const f = (conversation_id: string, direction: 'inbound' | 'outbound', ts: string) =>
+            ({ conversation_id, direction, wa_timestamp: ts } as any);
+        const a = actividadDeHistorial([
+            f('c1', 'inbound', '2026-10-01T10:00:00.000Z'), f('c1', 'outbound', '2026-10-02T10:00:00.000Z'),
+            f('c1', 'inbound', '2026-09-01T10:00:00.000Z'),
+            f('c2', 'inbound', '2026-11-04T15:00:00.000Z'),  // 1 h antes: se topa
+            f('c3', 'outbound', '2026-10-20T10:00:00.000Z'), // solo salientes
+        ], ahora);
+        expect(a.get('c1')).toEqual({ lastInboundAt: '2026-10-01T10:00:00.000Z', lastMessageAt: '2026-10-02T10:00:00.000Z' });
+        expect(a.get('c2')).toEqual({ lastInboundAt: '2026-11-03T16:00:00.000Z', lastMessageAt: '2026-11-04T15:00:00.000Z' });
+        expect(a.get('c3')).toEqual({ lastInboundAt: null, lastMessageAt: '2026-10-20T10:00:00.000Z' });
     });
 });
 

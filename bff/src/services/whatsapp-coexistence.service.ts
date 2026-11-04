@@ -389,10 +389,28 @@ export async function procesarEchos(body: any, log?: Logger): Promise<void> {
 // escuelas. Por eso `created_at = wa_timestamp`. Además:
 //  - el payload lleva `historial: true` (y el `history_context` crudo de Meta),
 //    para distinguirlo sin adivinar;
-//  - las conversaciones que crea nacen 'closed' y no se les tocan
-//    last_message_at / last_inbound_at: no entran al buzón abierto, al resumen
-//    diario ni a «sin responder»;
+//  - las conversaciones que crea nacen 'closed', con `unread_count` 0, y nada de
+//    lo importado cambia `status` ni `unread_count`: no entran al buzón abierto,
+//    al resumen diario ni a «sin responder» (todos excluyen 'closed');
 //  - no pasa por la cola ni por el turno del bot: nada se contesta.
+//
+// `last_inbound_at` / `last_message_at` SÍ se llenan (2026-11-04, audiencia de
+// campañas de Monster en 0: la audiencia y su lectura incremental van por
+// `last_inbound_at`, y 2774 de 2778 conversaciones lo tenían NULL), con dos
+// reglas (`actividadDeHistorial`):
+//  - GREATEST: nunca baja un valor más nuevo que ya exista (lo vivo manda);
+//  - `last_inbound_at` topado en (momento de importar − 24 h): Meta no abre la
+//    ventana de 24 h de la API con lo importado (solo un mensaje NUEVO después
+//    del alta la abre). Sin el tope, lo que la familia escribió en el celular
+//    una hora antes del alta se leería como «ventana abierta» en
+//    `ventanaAbierta`, `estadoDeVentana`, `wa_window_is_open` y el buzón, y el
+//    texto libre rebotaría con 131047. Con el tope, ningún lector la ve abierta.
+
+/**
+ * Meta no abre la ventana de 24 h con el historial importado: el
+ * `last_inbound_at` que viene de él se topa en (momento de importar − esto).
+ */
+export const VENTANA_META_MS = 24 * 3600_000;
 
 /** Los tipos que admite el CHECK `whatsapp_messages_type_check` (verificado en la base el 2026-10-30). */
 const TIPOS_GUARDABLES = new Set([
@@ -525,15 +543,136 @@ export function marcarSaludosDeLaApp(filas: FilaDeHistorial[]): number {
     return marcadas;
 }
 
+/** Lo que el historial deja en la conversación. ISO; null = el trozo no trae nada para esa columna. */
+export interface ActividadDeHistorial { lastInboundAt: string | null; lastMessageAt: string | null }
+
+/**
+ * Por conversación: el último entrante (topado en `ahora − VENTANA_META_MS`,
+ * ver arriba) y el último mensaje de cualquier dirección del trozo. Pura.
+ */
+export function actividadDeHistorial(filas: FilaDeHistorial[], ahora: number = Date.now()): Map<string, ActividadDeHistorial> {
+    const tope = ahora - VENTANA_META_MS;
+    const max = new Map<string, { entrante: number; mensaje: number }>();
+    for (const f of filas) {
+        const t = Date.parse(f.wa_timestamp);
+        if (!Number.isFinite(t)) continue;
+        const a = max.get(f.conversation_id) ?? { entrante: 0, mensaje: 0 };
+        if (f.direction === 'inbound') a.entrante = Math.max(a.entrante, t);
+        a.mensaje = Math.max(a.mensaje, t);
+        max.set(f.conversation_id, a);
+    }
+    const salida = new Map<string, ActividadDeHistorial>();
+    for (const [id, a] of max) {
+        salida.set(id, {
+            lastInboundAt: a.entrante ? new Date(Math.min(a.entrante, tope)).toISOString() : null,
+            lastMessageAt: a.mensaje ? new Date(a.mensaje).toISOString() : null,
+        });
+    }
+    return salida;
+}
+
+/** Valores actuales de la conversación (los lee `conversacionesDeContactos`). */
+interface FechasDeConversacion { lastInboundAt: string | null; lastMessageAt: string | null }
+
+const masNuevo = (propuesto: string | null, actual: string | null | undefined): boolean =>
+    !!propuesto && (!actual || Date.parse(propuesto) > Date.parse(actual));
+
+/**
+ * RPC en lote de `marcarActividadDeHistorial` (propuesta, sin migración todavía:
+ * `wa_historial_actividad(p_integration_id uuid, p_filas jsonb)` → un UPDATE …
+ * FROM jsonb_to_recordset con GREATEST). Mientras no exista, se cae a la vía
+ * por conversación y no se vuelve a intentar en este proceso.
+ */
+const RPC_ACTIVIDAD = 'wa_historial_actividad';
+let rpcActividadDisponible = true;
+
+/** Solo para pruebas. */
+export function _reiniciarRpcActividad(): void { rpcActividadDisponible = true; }
+
+/**
+ * Deja `last_inbound_at` / `last_message_at` con lo del trozo sin bajar nunca
+ * un valor más nuevo (lo vivo manda). No toca `status`, `unread_count` ni
+ * `updated_at`. Devuelve cuántas conversaciones movió. Nunca lanza.
+ *
+ * En lote con la RPC; sin ella, UNA actualización condicional por
+ * conversación que cambia (solo en la importación del historial, una vez por
+ * escuela): la condición va en el UPDATE (`is null` / `lt`), así un mensaje en
+ * vivo que entre en el medio no se pisa con uno viejo.
+ */
+async function marcarActividadDeHistorial(
+    integrationId: string,
+    actividad: Map<string, ActividadDeHistorial>,
+    actuales: Map<string, FechasDeConversacion>,
+    log?: Logger,
+): Promise<number> {
+    const cambios = [...actividad].filter(([id, a]) => {
+        const c = actuales.get(id);
+        return masNuevo(a.lastInboundAt, c?.lastInboundAt) || masNuevo(a.lastMessageAt, c?.lastMessageAt);
+    });
+    if (!cambios.length) return 0;
+
+    if (rpcActividadDisponible) {
+        const { data, error } = await supabase.rpc(RPC_ACTIVIDAD, {
+            p_integration_id: integrationId,
+            p_filas: cambios.map(([id, a]) => ({ id, last_inbound_at: a.lastInboundAt, last_message_at: a.lastMessageAt })),
+        });
+        if (!error) return Number(data ?? cambios.length);
+        rpcActividadDisponible = false;
+        log?.info({ err: error.message }, 'WhatsApp: sin la RPC de actividad del historial; se actualiza por conversación');
+    }
+
+    let movidas = 0;
+    for (const [id, a] of cambios) {
+        const c = actuales.get(id);
+        const quiereEntrante = masNuevo(a.lastInboundAt, c?.lastInboundAt);
+        const quiereMensaje = masNuevo(a.lastMessageAt, c?.lastMessageAt);
+        try {
+            // Lo común (conversación del historial, las dos en NULL): una sola escritura,
+            // condicionada a que SIGAN en NULL.
+            if (quiereEntrante && quiereMensaje && !c?.lastInboundAt && !c?.lastMessageAt) {
+                const { data } = await supabase.from('whatsapp_conversations')
+                    .update({ last_inbound_at: a.lastInboundAt, last_message_at: a.lastMessageAt })
+                    .eq('id', id).eq('integration_id', integrationId)
+                    .is('last_inbound_at', null).is('last_message_at', null)
+                    .select('id');
+                if (Array.isArray(data) && data.length) { movidas++; continue; }
+            }
+            let movida = false;
+            if (quiereEntrante) {
+                const { data } = await supabase.from('whatsapp_conversations')
+                    .update({ last_inbound_at: a.lastInboundAt })
+                    .eq('id', id).eq('integration_id', integrationId)
+                    .or(`last_inbound_at.is.null,last_inbound_at.lt.${a.lastInboundAt}`)
+                    .select('id');
+                movida = Array.isArray(data) && data.length > 0;
+            }
+            if (quiereMensaje) {
+                const { data } = await supabase.from('whatsapp_conversations')
+                    .update({ last_message_at: a.lastMessageAt })
+                    .eq('id', id).eq('integration_id', integrationId)
+                    .or(`last_message_at.is.null,last_message_at.lt.${a.lastMessageAt}`)
+                    .select('id');
+                movida = movida || (Array.isArray(data) && data.length > 0);
+            }
+            if (movida) movidas++;
+        } catch (err: any) {
+            log?.warn({ err: err?.message || String(err), conversationId: id }, 'WhatsApp: no se pudo fechar la conversación del historial');
+        }
+    }
+    return movidas;
+}
+
 /**
  * Las conversaciones de varios contactos de una vez, creando las que falten.
  * Una o dos consultas por trozo de webhook en vez de dos por hilo (Disk IO de
  * la base compartida). `ignoreDuplicates`: si un mensaje en vivo la creó en el
- * medio, no se le pisa el estado.
+ * medio, no se le pisa el estado. `fechas` (si se pasa) recibe last_inbound_at /
+ * last_message_at actuales, para no escribir lo que no cambia.
  */
 async function conversacionesDeContactos(
     integration: WhatsAppIntegration,
     contactos: string[],
+    fechas?: Map<string, FechasDeConversacion>,
 ): Promise<Map<string, { id: string; personal: boolean }>> {
     const salida = new Map<string, { id: string; personal: boolean }>();
     const leer = async (lista: string[]) => {
@@ -543,11 +682,14 @@ async function conversacionesDeContactos(
                 .from('whatsapp_conversations')
                 .select(cols)
                 .eq('integration_id', integration.id)
-                .in('contact_wa_id', trozo), 'id, contact_wa_id');
+                .in('contact_wa_id', trozo), 'id, contact_wa_id, last_inbound_at, last_message_at');
             if (error) console.warn('[wa-coexistence] no se pudieron leer las conversaciones del historial', { err: error?.message });
             for (const c of (Array.isArray(data) ? data : []) as any[]) {
                 salida.set(String(c.contact_wa_id), {
                     id: c.id, personal: esContactoSinContenido(c.contact_kind, c.tambien_familia),
+                });
+                fechas?.set(String(c.id), {
+                    lastInboundAt: c.last_inbound_at ?? null, lastMessageAt: c.last_message_at ?? null,
                 });
             }
         }
@@ -697,7 +839,8 @@ export async function procesarHistorial(body: any, log?: Logger): Promise<void> 
             const contactos = [...new Set<string>(bloques.flatMap((b: any) =>
                 (Array.isArray(b?.threads) ? b.threads : []).map((h: any) => String(h?.id ?? '')))
                 .filter(Boolean))];
-            const convs = contactos.length ? await conversacionesDeContactos(integration, contactos) : new Map();
+            const fechas = new Map<string, FechasDeConversacion>();
+            const convs = contactos.length ? await conversacionesDeContactos(integration, contactos, fechas) : new Map();
 
             const filas: FilaDeHistorial[] = [];
             const vistos = new Set<string>();
@@ -719,6 +862,12 @@ export async function procesarHistorial(body: any, log?: Logger): Promise<void> 
             }
             const automaticos = marcarSaludosDeLaApp(filas);
             const guardados = await guardarHistorial(filas, log);
+            // Fechas de la conversación (audiencia de campañas), con GREATEST y el
+            // tope de la ventana: ver «Historial» arriba. Van después de los
+            // mensajes: si esto falla, los mensajes ya quedaron.
+            const fechadas = filas.length
+                ? await marcarActividadDeHistorial(integration.id, actividadDeHistorial(filas), fechas, log)
+                : 0;
 
             // ── Avance. `progress: 100` es la señal de que terminó.
             for (const bloque of bloques) {
@@ -739,7 +888,7 @@ export async function procesarHistorial(body: any, log?: Logger): Promise<void> 
                 }
             }
 
-            log?.info({ integrationId: integration.id, mensajes: guardados, descartados, automaticos },
+            log?.info({ integrationId: integration.id, mensajes: guardados, descartados, automaticos, fechadas },
                       'WhatsApp: historial procesado');
         }
     }

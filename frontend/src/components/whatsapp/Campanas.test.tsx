@@ -11,7 +11,7 @@ vi.mock('@/lib/api/bffClient', () => ({ bffClient: bff }));
 const toastEstable = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => toastEstable }));
 
-import { Campanas, enviadosDe, motivoDePausa, type ResumenCampanas } from './Campanas';
+import { Campanas, enviadosDe, motivoDePausa, textoCupo, textoLimiteMeta, type CupoCampanas, type ResumenCampanas } from './Campanas';
 
 const avance = (x: Partial<Record<string, number>> = {}) => ({
     total: 0, pendiente: 0, enviando: 0, enviado: 0, incierto: 0, fallido: 0, omitido: 0,
@@ -28,6 +28,12 @@ const encendidas = (campanas: any[], extra: Partial<ResumenCampanas> = {}): Resu
     campanas,
     ...extra,
 });
+
+/** TIER_250: reserva 50, campañas hasta 200; ya salieron 50 plantillas en 24 h. */
+const CUPO: CupoCampanas = {
+    limite_meta: 250, tier: 'TIER_250', fuente: 'graph', reserva: 50, usados_24h: 50,
+    tope_diario: 200, enviados_hoy: 30, cupo_hoy: 200, disponible_hoy: 150,
+};
 
 const borrador = {
     id: 'c1', nombre: 'Cierre 2026', plantilla: 'monster_cierre_2026', estado: 'borrador', filtro: {},
@@ -47,6 +53,12 @@ describe('puras', () => {
     it('el motivo de pausa en palabras de la escuela', () => {
         expect(motivoDePausa('calidad_del_numero')).toBe('Meta bajó la calidad de tu número');
         expect(motivoDePausa('raro')).toBe('revisa la campaña');
+    });
+    it('el cupo de hoy y el límite de Meta, en palabras de la escuela', () => {
+        expect(textoCupo(CUPO)).toBe('Cupo de hoy: 150 de 200 · reserva 50 para interesados y avisos');
+        expect(textoLimiteMeta(CUPO)).toBe('Límite de Meta: 250 personas distintas cada 24 h · en las últimas 24 h: 50');
+        expect(textoLimiteMeta({ ...CUPO, fuente: 'por_defecto', usados_24h: null }))
+            .toBe('Límite de Meta: 250 personas distintas cada 24 h (Meta no lo informó: se asume el más bajo)');
     });
 });
 
@@ -110,6 +122,21 @@ describe('Campanas', () => {
         expect(screen.getAllByText(/Meta marcó tu número/).length).toBeGreaterThan(0);
         fireEvent.click(screen.getByRole('button', { name: /Reanudar/ }));
         await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas/c1/reanudar', {}));
+    });
+
+    it('cupo de hoy: «X de Y · reserva Z» y el límite de Meta; sin dato del BFF no se muestra', async () => {
+        bff.get.mockResolvedValue(encendidas([borrador], { cupo: CUPO }));
+        const { unmount } = render(<Campanas schoolId="s1" />);
+        expect(await screen.findByText('Cupo de hoy: 150 de 200 · reserva 50 para interesados y avisos')).toBeTruthy();
+        expect(screen.getByText(/Límite de Meta: 250 personas distintas cada 24 h/)).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Aprobar y enviar' }));
+        expect(screen.getByText(/siempre dejando 50 para los avisos a los interesados/)).toBeTruthy();
+        unmount();
+
+        bff.get.mockResolvedValue(encendidas([borrador], { cupo: null }));
+        render(<Campanas schoolId="s1" />);
+        expect(await screen.findByText('Lista: 120 personas')).toBeTruthy();
+        expect(screen.queryByTestId('cupo-campanas')).toBeNull();
     });
 
     it('crear: nombre, mensaje aprobado e intereses', async () => {

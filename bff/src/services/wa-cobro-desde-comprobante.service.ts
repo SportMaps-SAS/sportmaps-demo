@@ -393,7 +393,7 @@ export function opcionesDelItem(item: Pick<ItemDeServicio, 'opciones'>): OpcionD
 }
 
 /** Los tramos de precio por fecha, ordenados (jsonb sin esquema garantizado). Pura. */
-function tramosPorFecha(raw: unknown): { desde: string; precio: number }[] {
+export function tramosPorFecha(raw: unknown): { desde: string; precio: number }[] {
     if (!Array.isArray(raw)) return [];
     return (raw as any[])
         .filter((t) => t && typeof t.desde === 'string' && /^\d{4}-\d{2}-\d{2}/.test(t.desde) && (num(t.precio) ?? 0) > 0)

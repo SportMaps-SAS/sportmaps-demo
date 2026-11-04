@@ -29,6 +29,7 @@
 import { supabase } from '../config/supabase';
 import { intencionDeProspecto, interesesDeProspecto } from './whatsapp-atencion.service';
 import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
+import { EVENTO_DE_SERVICIO } from './whatsapp-reglas-turno';
 import { enmascararNumero } from './avisos-correo.service';
 import {
     leerAjustesCampanas, type InteresAudiencia, type PalabrasDeSede,
@@ -45,8 +46,8 @@ const EXCLUSIONES_FIRMES = new Set<MotivoExclusion>(['baja', 'no_interesa']);
 const plano = (s: string) => s.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')
     .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
-/** Lo que el bot no reconocía: clínicas, campamentos y vacacionales. */
-const EVENTO = /\b(clinicas?|campamentos?|vacacional(es)?|vacaciones recreativas)\b/;
+/** Lo que el bot no reconocía: clínicas, campamentos y vacacionales (la misma regla del destino por anuncio). */
+const EVENTO = EVENTO_DE_SERVICIO;
 /** «Ya pagué la clínica» es de una familia, no de un interesado. */
 const YA_PAGO = /\b(ya pague|pague|transferi|consigne|comprobante|recibo)\b/;
 /** Variantes de la clase de prueba que `interesesDeProspecto` no cubre. */
@@ -167,6 +168,7 @@ interface ConvFila {
     contact_kind: string | null;
     tambien_familia?: boolean | null;
     last_inbound_at: string | null;
+    created_at?: string | null;
 }
 
 interface MsgFila {
@@ -208,10 +210,10 @@ async function leerConversaciones(integrationId: string, desde: string): Promise
         .select(cols).eq('integration_id', integrationId).gte('last_inbound_at', desde)
         .order('id', { ascending: true }).range(a, b));
     try {
-        return await con('id, contact_wa_id, contact_name, contact_kind, tambien_familia, last_inbound_at');
+        return await con('id, contact_wa_id, contact_name, contact_kind, tambien_familia, last_inbound_at, created_at');
     } catch {
         // `tambien_familia` llegó con otra migración: sin ella la marca sigue valiendo.
-        return con('id, contact_wa_id, contact_name, contact_kind, last_inbound_at');
+        return con('id, contact_wa_id, contact_name, contact_kind, last_inbound_at, created_at');
     }
 }
 
@@ -235,6 +237,12 @@ async function leerMensajes(integrationId: string, convIds: string[], desde: str
 }
 
 const momento = (m: MsgFila) => new Date(m.wa_timestamp || m.created_at || 0).getTime();
+
+/** El más nuevo entre `last_inbound_at` y el último entrante leído; null si ninguno. Pura. */
+export function ultimoEntrante(lastInboundAt: string | null | undefined, ultimoLeidoMs: number): string | null {
+    const t = Math.max(lastInboundAt ? Date.parse(lastInboundAt) || 0 : 0, ultimoLeidoMs || 0);
+    return t > 0 ? new Date(t).toISOString() : null;
+}
 
 /**
  * Clasifica las conversaciones de la escuela y (con `aplicar`) guarda la
@@ -286,6 +294,10 @@ export async function clasificarEscuela(
             const p = previaPorWa.get(c.contact_wa_id);
             const visto = p?.clasificado_at ?? (marca || null);
             if (!visto) return true;
+            // Creada después de la última pasada (p. ej. por el historial de
+            // Coexistence, que llega con `last_inbound_at` de hace meses): la
+            // marca de agua no la cubre, nunca se leyó.
+            if (!p && c.created_at && new Date(c.created_at) > new Date(visto)) return true;
             return !!c.last_inbound_at && new Date(c.last_inbound_at) > new Date(visto);
         });
         r.releidas = aReleer.length;
@@ -361,8 +373,10 @@ export async function clasificarEscuela(
             fuente: 'reglas',
             evidencia_wa_message_id: entrantes[cl.evidencia]?.wa_message_id ?? null,
             primer_entrante_at: entrantes[0] ? new Date(momento(entrantes[0])).toISOString() : null,
-            ultimo_entrante_at: conv.last_inbound_at
-                ?? (entrantes.length ? new Date(momento(entrantes[entrantes.length - 1])).toISOString() : null),
+            // El mayor de los dos: lo que viene del historial de Coexistence llega
+            // a `last_inbound_at` topado 24 h atrás (no abre la ventana de Meta).
+            ultimo_entrante_at: ultimoEntrante(conv.last_inbound_at,
+                entrantes.length ? momento(entrantes[entrantes.length - 1]) : 0),
             version_reglas: VERSION_REGLAS,
             clasificado_at: clasificadoAt,
         }));

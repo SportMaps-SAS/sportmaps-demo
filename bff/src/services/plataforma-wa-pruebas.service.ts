@@ -235,13 +235,34 @@ async function ajustesParaSimular(integ: WhatsAppIntegration): Promise<Fila> {
 export interface ResultadoTurnoSimulado { salidas: SalidaSimulada[]; bloqueadas: string[]; nota: string | null }
 
 /**
+ * El mensaje de un turno simulado. `raw` = el mensaje de Meta tal cual (lo que el
+ * webhook guarda en `whatsapp_messages.payload`); `referral` = atajo para el clic
+ * en un anuncio (`raw.referral`: source_id, headline, body, ctwa_clid…).
+ */
+export type MensajeSimulado = Pick<ParsedInboundMessage, 'waMessageId' | 'textBody' | 'botonId'>
+    & Partial<Pick<ParsedInboundMessage, 'raw'>>
+    & { referral?: Record<string, unknown> | null };
+
+/** El payload con que queda el entrante en la memoria (igual que el webhook: el mensaje crudo). Pura. */
+export function payloadDeEntranteSimulado(msg: MensajeSimulado): Record<string, unknown> {
+    return {
+        ...(msg.raw && typeof msg.raw === 'object' ? msg.raw : {}),
+        ...(msg.referral ? { referral: msg.referral } : {}),
+        ...(msg.botonId ? { boton_id: msg.botonId } : {}),
+    };
+}
+
+/**
  * Corre UN turno del bot en simulación. Exportada para las pruebas (con
- * `runBotTurn` y compañía simulados por vi.mock).
+ * `runBotTurn` y compañía simulados por vi.mock). `opciones.rpc`: respuestas
+ * fijas de RPC además de las de la sesión (p. ej. `wa_es_afiliado` para ver el
+ * precio de afiliado).
  */
 export async function turnoSimulado(
     sesion: SesionPrueba,
-    msg: Pick<ParsedInboundMessage, 'waMessageId' | 'textBody' | 'botonId'>,
+    msg: MensajeSimulado,
     ahora = Date.now(),
+    opciones: { rpc?: Record<string, (args: any) => unknown> } = {},
 ): Promise<ResultadoTurnoSimulado> {
     const schoolId = sesion.school_id!;
     const integ = await integracionParaSimular(schoolId);
@@ -274,7 +295,7 @@ export async function turnoSimulado(
     const entranteIso = new Date(Math.max(ahora, ultimoEnMemoria + 1)).toISOString();
     tablas.whatsapp_messages = [...(tablas.whatsapp_messages ?? []), {
         id: randomUUID(), conversation_id: conversationId, integration_id: integ.id, direction: 'inbound',
-        type: msg.botonId ? 'interactive' : 'text', text_body: texto, payload: msg.botonId ? { boton_id: msg.botonId } : {},
+        type: msg.botonId ? 'interactive' : 'text', text_body: texto, payload: payloadDeEntranteSimulado(msg),
         ai_generated: false, wa_message_id: msg.waMessageId, from_wa_id: contacto, to_wa_id: null,
         wa_timestamp: entranteIso, created_at: entranteIso, status: null,
     }];
@@ -297,6 +318,7 @@ export async function turnoSimulado(
             wa_invitacion_pendiente_por_telefono: () => null,
             wa_can_send_template: () => false,
             wa_is_blocked: () => false,
+            ...(opciones.rpc ?? {}),
         },
     };
 

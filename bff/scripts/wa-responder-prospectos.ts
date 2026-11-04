@@ -103,7 +103,11 @@ async function main(): Promise<void> {
             .gte('created_at', desde)
             .order('created_at', { ascending: true })
             .limit(500);
-        const lista = (msgs ?? []) as any[];
+        // Sin lo importado del historial de Coexistence (`payload.historial`): es
+        // de antes del alta, Meta no abre la ventana con eso y no se le contesta
+        // ni se registra lead por un mensaje viejo (el lead dispararía el
+        // seguimiento de 20 h).
+        const lista = ((msgs ?? []) as any[]).filter((m) => m.payload?.historial !== true);
         const entrantes = lista.filter((m) => m.direction === 'inbound');
         const textos = entrantes.map((m) => (m.text_body || '').trim()).filter(Boolean);
         if (!textos.some((t) => intencionDeProspecto(t))) continue;
