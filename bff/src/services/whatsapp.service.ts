@@ -563,6 +563,8 @@ export interface ParsedStatus {
     /** El bloque `pricing` crudo: su forma ya cambio una vez y volvera a cambiar. */
     pricingRaw: any | null;
     errorDetail: string | null;
+    /** Código de Meta del primer error (131026 = no se pudo entregar; el formulario sigue por chat). */
+    errorCode: number | null;
 }
 
 export function parseStatuses(body: any): ParsedStatus[] {
@@ -595,6 +597,7 @@ export function parseStatuses(body: any): ParsedStatus[] {
                     errorDetail: errores.length
                         ? String(errores[0]?.title ?? errores[0]?.message ?? errores[0]?.code ?? '').slice(0, 300)
                         : null,
+                    errorCode: errores.length && Number.isFinite(Number(errores[0]?.code)) ? Number(errores[0].code) : null,
                 });
             }
         }
@@ -820,8 +823,11 @@ export function parseInboundMessages(body: any): ParsedInboundMessage[] {
                     textBody = m?.button?.text ?? null;
                     botonId = m?.button?.payload ?? null;
                 } else if (type === 'interactive') {
+                    // Formulario terminado (WhatsApp Flows, `nfm_reply`): no trae título; el
+                    // buzón muestra esto y el contenido va en `raw.interactive.nfm_reply`.
                     textBody = m?.interactive?.button_reply?.title
                         || m?.interactive?.list_reply?.title
+                        || (m?.interactive?.type === 'nfm_reply' ? 'Formulario enviado' : null)
                         || null;
                     botonId = m?.interactive?.button_reply?.id
                         || m?.interactive?.list_reply?.id

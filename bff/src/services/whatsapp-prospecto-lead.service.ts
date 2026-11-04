@@ -105,7 +105,12 @@ export interface ParamsLeadWa {
         genero?: 'f' | 'm' | null;
         respuestas?: Record<string, string> | null;
         /** Quién completó el registro. Por defecto la puerta única ('puerta_v2'). */
-        via?: 'puerta_v2' | 'embudo';
+        via?: 'puerta_v2' | 'embudo' | 'formulario';
+        /**
+         * Formulario de WhatsApp (Flows): lo que llenó (talla, afiliado, forma de pago,
+         * monto, id de la respuesta). Va a `source_detail.formulario`; no pisa `respuestas`.
+         */
+        formulario?: Record<string, unknown> | null;
     };
     /**
      * Servicio del catálogo por el que preguntó (anuncio de la clínica, «info del
@@ -180,6 +185,7 @@ export function camposDeLeadCompleto(
             ...(contacto ? { contacto } : {}),
             ...(c.edad != null ? { edad: c.edad } : {}),
             ...(c.quiere ? { quiere: c.quiere } : {}),
+            ...(c.formulario ? { formulario: { ...c.formulario, at: ahora } } : {}),
         },
     };
 }
