@@ -229,11 +229,15 @@ export default function JoinSchoolByCodePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <p className="text-sm font-semibold text-center">¿Quién se inscribe?</p>
             <Button asChild className="w-full">
-              <Link to={`/login?redirectTo=${encodeURIComponent(back)}`}>Ya tengo cuenta: entrar</Link>
+              <Link to="/register?role=parent">Es un menor de edad (soy su acudiente)</Link>
+            </Button>
+            <Button asChild className="w-full">
+              <Link to="/register?role=athlete">Soy el atleta, mayor de 18</Link>
             </Button>
             <Button asChild variant="outline" className="w-full">
-              <Link to="/register">Crear mi cuenta</Link>
+              <Link to={`/login?redirectTo=${encodeURIComponent(back)}`}>Ya tengo cuenta: entrar</Link>
             </Button>
           </CardContent>
         </Card>
