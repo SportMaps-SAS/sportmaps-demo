@@ -791,6 +791,40 @@ router.put(
             }
           : {};
 
+      // ── PASO 2.0: documento de identidad del menor (RC/TI/CC/CE/PP) ───────
+      // Lo corrige la administración (antes solo se podía fijar al crear la ficha).
+      // Un adulto con cuenta NO pasa por aquí: su documento es de su perfil global.
+      const docUpdate: { doc_type?: string; doc_number?: string } = {};
+      if (profile && athlete_type !== 'adult') {
+        const rawType = typeof profile.doc_type === 'string' ? profile.doc_type.trim().toUpperCase() : '';
+        const rawNumber = typeof profile.doc_number === 'string' ? profile.doc_number.trim() : '';
+        if (rawType && !['RC', 'TI', 'CC', 'CE', 'PP'].includes(rawType)) {
+          return res.status(400).json({ error: 'Tipo de documento inválido (RC, TI, CC, CE o PP).' });
+        }
+        if (rawType) docUpdate.doc_type = rawType;
+        if (rawNumber) {
+          if (!/^[A-Za-z0-9-]{4,20}$/.test(rawNumber)) {
+            return res.status(400).json({ error: 'El número de documento debe tener entre 4 y 20 letras o dígitos.' });
+          }
+          docUpdate.doc_number = rawNumber;
+          // Mismo documento en OTRO deportista de la escuela = casi seguro un duplicado.
+          if (!req.body.allow_duplicate) {
+            const [kids, unreg] = await Promise.all([
+              supabase.from('children').select('id, full_name').eq('school_id', schoolId).eq('doc_number', rawNumber).neq('id', id).limit(1),
+              supabase.from('unregistered_athletes').select('id, full_name').eq('school_id', schoolId).eq('doc_number', rawNumber).neq('id', id).limit(1),
+            ]);
+            const dup = (kids.data?.[0] ?? unreg.data?.[0]) as { id: string; full_name: string } | undefined;
+            if (dup) {
+              return res.status(409).json({
+                error: `Ya existe otro deportista con el documento ${rawNumber} en esta escuela: "${dup.full_name}". Si es un error de digitación corrígelo; si son personas distintas confirma para guardar igual.`,
+                code: 'DOC_DUPLICADO',
+                duplicate: dup,
+              });
+            }
+          }
+        }
+      }
+
       // ── PASO 2: Actualizar tabla base ─────────────────────────────────────
       if (profile && Object.keys(profile).length > 0) {
         const profileUpdate = {
@@ -809,6 +843,7 @@ router.put(
             dorsal:            profile.dorsal             ?? undefined,
             parent_email_temp: profile.parent_email       ?? undefined,
             parent_phone_temp: profile.parent_phone       ?? undefined,
+            ...docUpdate,
           };
           // Limpiar keys undefined para no sobreescribir con null
           Object.keys(childUpdate).forEach(k => childUpdate[k] === undefined && delete childUpdate[k]);
@@ -856,6 +891,7 @@ router.put(
           const unregUpdate: any = {
             ...profileUpdate,
             dorsal: profile.dorsal ?? undefined,
+            ...docUpdate,
             ...(esMenor
               ? { guardian_email: profile.parent_email ?? undefined, guardian_phone: profile.parent_phone ?? undefined }
               : { email: profile.parent_email ?? undefined, phone: profile.parent_phone ?? undefined }),
