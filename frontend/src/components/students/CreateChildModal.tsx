@@ -517,6 +517,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
                 <Select value={docType} onValueChange={setDocType}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="RC">RC — Registro civil</SelectItem>
                     <SelectItem value="TI">TI</SelectItem>
                     <SelectItem value="CC">CC</SelectItem>
                     <SelectItem value="CE">CE</SelectItem>

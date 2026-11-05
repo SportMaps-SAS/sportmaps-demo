@@ -257,7 +257,7 @@ describe('Ficha incompleta', () => {
     const tipos = within(a).getByRole('group', { name: 'Tipo de documento' });
     const chips = within(tipos).getAllByRole('button');
     // Solo los que acepta create-one para un menor (RC y PA daban 400).
-    expect(chips.map((c) => c.textContent)).toEqual(['TI', 'CC', 'CE', 'PP']);
+    expect(chips.map((c) => c.textContent)).toEqual(['TI', 'RC', 'CC', 'CE', 'PP']);
     expect(chips.filter((c) => c.getAttribute('aria-pressed') === 'true').map((c) => c.textContent)).toEqual(['TI']);
 
     completarSofia();

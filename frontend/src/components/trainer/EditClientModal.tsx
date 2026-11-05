@@ -126,7 +126,7 @@ export function EditClientModal({
 
   const docTypeOptions =
     clientType === 'child'
-      ? ['TI', 'CC', 'CE', 'PP']
+      ? ['RC', 'TI', 'CC', 'CE', 'PP']
       : ['CC', 'CE', 'PP'];
 
   return (

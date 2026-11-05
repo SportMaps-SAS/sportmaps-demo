@@ -115,7 +115,7 @@ const feeWaiversOf = (d: { waive_registration_fee?: boolean; waive_insurance_fee
 
 const ChildSchema = EnrollmentBase.extend({
   type:          z.literal('child'),
-  doc_type:      z.enum(['TI', 'CC', 'CE', 'PP']).default('TI'),
+  doc_type:      z.enum(['RC', 'TI', 'CC', 'CE', 'PP']).default('TI'),
   doc_number:    z.string().trim().min(1).nullable().optional(),   // documento opcional
   full_name:     z.string().min(2).max(150).trim(),
   date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),

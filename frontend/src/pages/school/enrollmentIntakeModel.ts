@@ -57,10 +57,10 @@ export type FormState = Record<CampoFicha, string>;
 
 /**
  * Los mismos que acepta POST /students/create-one para un menor
- * (`z.enum(['TI','CC','CE','PP'])`) y que ofrece el alta manual. RC no está:
- * mandarlo da 400 sin decir qué campo falla. Sumarlo es decisión de producto.
+ * (`z.enum(['RC','TI','CC','CE','PP'])`) y que ofrece el alta manual. RC se
+ * ofrece y se respeta si la hoja lo trae, pero NO se pone por defecto por edad.
  */
-export const TIPOS_DOC = ['TI', 'CC', 'CE', 'PP'] as const;
+export const TIPOS_DOC = ['TI', 'RC', 'CC', 'CE', 'PP'] as const;
 export const GRUPOS_SANGUINEOS = ['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'] as const;
 
 /** Etiqueta corta para «Falta: …» en el pie de la ficha. */

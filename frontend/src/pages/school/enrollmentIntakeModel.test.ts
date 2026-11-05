@@ -145,13 +145,13 @@ describe('tipoDocPorDefecto', () => {
     expect(tipoDocPorDefecto(ficha({ extracted: { docType: '   ', dateOfBirth: '2014-03-15' } }), HOY)).toBe('TI');
   });
 
-  it('un menor de 7 años NO queda en RC: create-one no acepta RC y daba 400', () => {
+  it('un menor de 7 años sin tipo leído arranca en TI (RC solo si la hoja lo trae o se elige)', () => {
     expect(tipoDocPorDefecto(ficha({ extracted: { docType: null, dateOfBirth: '2022-01-10' } }), HOY)).toBe('TI');
     expect(tipoDocPorDefecto(ficha({ extracted: { docType: null, ageOnForm: 6 } }), HOY)).toBe('TI');
   });
 
-  it('RC leído de la hoja tampoco se manda: cae al default por edad', () => {
-    expect(tipoDocPorDefecto(ficha({ extracted: { docType: 'RC', dateOfBirth: '2022-01-10' } }), HOY)).toBe('TI');
+  it('RC leído de la hoja se respeta (create-one ya lo acepta)', () => {
+    expect(tipoDocPorDefecto(ficha({ extracted: { docType: 'RC', dateOfBirth: '2022-01-10' } }), HOY)).toBe('RC');
   });
 
   it('pasaporte (PA, PASAPORTE) se manda como PP, y C.C. como CC', () => {
@@ -160,7 +160,7 @@ describe('tipoDocPorDefecto', () => {
     expect(tipoDocPorDefecto(ficha({ extracted: { docType: 'C.C.' } }), HOY)).toBe('CC');
   });
 
-  it('todo tipo por defecto está entre los que acepta el BFF (TI/CC/CE/PP)', () => {
+  it('todo tipo por defecto está entre los que acepta el BFF (RC/TI/CC/CE/PP)', () => {
     for (const docType of [null, 'RC', 'NUIP', 'x', 'PA', 'ti']) {
       expect(TIPOS_DOC).toContain(tipoDocPorDefecto(ficha({ extracted: { docType } }), HOY));
     }

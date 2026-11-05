@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AlertCircle, Loader2, Pencil, UserPlus } from 'lucide-react';
-import { PhoneInput, LATAM_COUNTRIES } from '@/components/ui/phone-input';
+import { PhoneInput, countryForPhone } from '@/components/ui/phone-input';
 import { SportMultiCombobox } from '@/components/common/SportMultiCombobox';
 import { TagInput } from '@/components/common/TagInput';
 import {
@@ -37,7 +37,7 @@ const TAUGHT_LEVELS = [
  */
 function nationalDigits(value?: string | null): string {
   if (!value) return '';
-  const country = LATAM_COUNTRIES.find((c) => value.startsWith(c.value));
+  const country = countryForPhone(value);
   const rest = country ? value.slice(country.value.length) : value;
   return rest.replace(/\D/g, '');
 }
