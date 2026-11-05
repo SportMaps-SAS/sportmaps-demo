@@ -126,6 +126,14 @@ interface BillingSettings {
   auto_glosa_enabled: boolean;
   /** Un solo toggle: correo al generarse el cobro del mes + correo al pasar los días de gracia sin pagar. */
   charge_notifications_enabled: boolean;
+  // Avisos de cobranza independientes (migraciones 20261105115230 y 20261105115807). Opcionales: si la
+  // migración no corrió en este ambiente, no existen y no se guardan.
+  charge_created_notice_enabled?: boolean;
+  collection_pre_due_enabled?: boolean;
+  overdue_notices_enabled?: boolean;
+  monthly_statement_enabled?: boolean;
+  whatsapp_collection_reminders_enabled?: boolean;
+  email_collection_reminders_enabled?: boolean;
   // Catálogos vendibles (20260908152538). SOLO LECTURA acá: el toggle es
   // control exclusivo del panel interno de SportMaps (AdminSubscriptionsPage),
   // esta página nunca lo escribe — un trigger en DB lo revertiría igual.
@@ -574,6 +582,7 @@ export default function PaymentsAutomationPage() {
   // Escalones de hermanos (F2): si la columna no existe aún en este ambiente,
   // mandarla tumbaría el upsert completo.
   const siblingTiersColumnReady = useRef(false);
+  const avisosColumnsReady = useRef(false);
   const [billingSaving, setBillingSaving] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
 
@@ -681,6 +690,7 @@ export default function PaymentsAutomationPage() {
     // Y con el cobro por clases restantes (mig 20261005214250).
     remainingClassesColumnReady.current = 'remaining_classes_billing_enabled' in data;
     siblingTiersColumnReady.current = 'sibling_discount_tiers' in data;
+    avisosColumnsReady.current = 'overdue_notices_enabled' in data && 'collection_pre_due_enabled' in data;
     // `onlyActive: false` porque el admin también edita las llaves apagadas. Si la
     // escuela nunca guardó la lista (deploy recién hecho), se arma desde las
     // columnas viejas para que no vea el formulario en blanco teniendo datos.
@@ -774,6 +784,16 @@ export default function PaymentsAutomationPage() {
         auto_approve_max_amount: billing.auto_approve_max_amount,
         auto_glosa_enabled: billing.auto_glosa_enabled,
         charge_notifications_enabled: billing.charge_notifications_enabled,
+        ...(avisosColumnsReady.current
+          ? {
+              charge_created_notice_enabled: billing.charge_created_notice_enabled !== false,
+              collection_pre_due_enabled: billing.collection_pre_due_enabled !== false,
+              overdue_notices_enabled: billing.overdue_notices_enabled !== false,
+              monthly_statement_enabled: billing.monthly_statement_enabled !== false,
+              whatsapp_collection_reminders_enabled: billing.whatsapp_collection_reminders_enabled === true,
+              email_collection_reminders_enabled: billing.email_collection_reminders_enabled === true,
+            }
+          : {}),
       };
 
       const { error } = await supabase.from('school_settings').upsert(payload as any, { onConflict: 'school_id' });
@@ -2899,14 +2919,50 @@ export default function PaymentsAutomationPage() {
                   <Separator />
                   <div className="flex items-center justify-between">
                     <div className="pr-4">
-                      <Label className="font-medium">Avisar cobros nuevos y vencidos por correo</Label>
+                      <Label className="font-medium">Avisos de cobranza</Label>
                       <p className="text-xs text-muted-foreground">
-                        Envía un correo cuando se genera la mensualidad de este mes, y otro si
-                        pasan los días de gracia sin pagar. Independiente del recordatorio in-app de arriba.
+                        Interruptor general. Apagado, la escuela no manda ningún aviso de cobro. Prendido, cada aviso de abajo se maneja por separado.
                       </p>
                     </div>
                     <Switch checked={billing.charge_notifications_enabled} onCheckedChange={v => updateBilling('charge_notifications_enabled', v)} />
                   </div>
+                  {billing.charge_notifications_enabled && avisosColumnsReady.current && (
+                    <div className="space-y-3 p-3 rounded-lg border bg-muted/30" data-testid="avisos-de-cobranza">
+                      {([
+                        ['charge_created_notice_enabled', 'Cobro generado', 'Un aviso cuando se crea la mensualidad o un cobro nuevo.', true],
+                        ['collection_pre_due_enabled', 'Antes de vencer', 'Recordatorios 3 días antes, el día anterior y el día del vencimiento (WhatsApp o correo, según los canales de abajo).', true],
+                        ['overdue_notices_enabled', 'Mora', 'Aviso de cobro vencido y recordatorios a los 3, 10 y 20 días. Apagado: ningún mensaje de moroso.', true],
+                        ['monthly_statement_enabled', 'Estado de cuenta mensual', 'Un resumen mensual de lo que debe cada familia.', true],
+                      ] as const).map(([campo, titulo, ayuda, porDefecto]) => (
+                        <div key={campo} className="flex items-center justify-between gap-3">
+                          <div className="pr-2">
+                            <Label className="text-sm font-medium">{titulo}</Label>
+                            <p className="text-[11px] text-muted-foreground leading-snug">{ayuda}</p>
+                          </div>
+                          <Switch
+                            checked={(billing[campo] ?? porDefecto) !== false}
+                            onCheckedChange={v => updateBilling(campo, v)}
+                          />
+                        </div>
+                      ))}
+                      <Separator />
+                      <p className="text-xs font-medium">Canales de los recordatorios (antes de vencer y mora)</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label className="text-sm">Por WhatsApp (solo a quien aceptó recibirlos)</Label>
+                        <Switch
+                          checked={billing.whatsapp_collection_reminders_enabled === true}
+                          onCheckedChange={v => updateBilling('whatsapp_collection_reminders_enabled', v)}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <Label className="text-sm">Por correo</Label>
+                        <Switch
+                          checked={billing.email_collection_reminders_enabled === true}
+                          onCheckedChange={v => updateBilling('email_collection_reminders_enabled', v)}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
               <Card>

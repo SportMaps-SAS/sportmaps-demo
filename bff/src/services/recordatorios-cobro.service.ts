@@ -205,6 +205,11 @@ export interface EntradaPlan {
     contactadosHoy: Set<string>;
     /** La escuela tiene la cadencia por correo: la familia sin WhatsApp con opt-in la recibe por correo. */
     canalCorreo?: boolean;
+    /**
+     * Qué familias de avisos tiene prendidas la escuela (cada una con su propio interruptor):
+     * `previo` = antes de vencer y el día; `mora` = +3, +10 y +20 días. Por defecto, ambas.
+     */
+    tipos?: { previo: boolean; mora: boolean };
     /** Día del mes hasta el que se paga (calendario fijo): el correo lo recuerda. */
     diaCorte?: number | null;
     /** Aviso de política de cobranza de la escuela, destacado en el correo. */
@@ -234,6 +239,7 @@ export function planificar(e: EntradaPlan): Plan {
             const delta = diasDesdeVencimiento(r.vence, e.hoy);
             const esc = escalonDelDia(delta);
             if (!esc) { descartes.sin_escalon_hoy++; continue; }
+            if (esc.mora ? e.tipos?.mora === false : e.tipos?.previo === false) { descartes.sin_escalon_hoy++; continue; }
             if (e.enviados.has(`${r.paymentId}|${esc.concepto}`)) { descartes.ya_enviado++; continue; }
             const p = e.pagos.get(r.paymentId);
             if (esc.concepto === 'recordatorio_previo' && p?.charge_notice_sent_at && p.charge_notice_sent_at >= limitePrevio) {
@@ -411,14 +417,21 @@ export async function telefonosConOptin(integrationId: string): Promise<Set<stri
     return new Set(((data as any[]) ?? []).map((r) => String(r.contact_wa_id)));
 }
 
-export interface CanalesEscuela { whatsapp: boolean; correo: boolean }
+export interface CanalesEscuela { whatsapp: boolean; correo: boolean; previo?: boolean; mora?: boolean }
 
 /** Escuelas con la cadencia prendida en algún canal, y por cuál. */
 export async function escuelasConRecordatorios(): Promise<Map<string, CanalesEscuela>> {
     const out = new Map<string, CanalesEscuela>();
-    const { data, error } = await supabase.from('school_settings')
-        .select('school_id, whatsapp_collection_reminders_enabled, email_collection_reminders_enabled')
+    // `collection_pre_due_enabled` y `overdue_notices_enabled` (migración 20261105…): si aún no existen,
+    // se reintenta sin ellas y ambas familias de avisos quedan prendidas, como antes.
+    let { data, error } = await supabase.from('school_settings')
+        .select('school_id, whatsapp_collection_reminders_enabled, email_collection_reminders_enabled, collection_pre_due_enabled, overdue_notices_enabled')
         .eq('charge_notifications_enabled', true);
+    if (error) {
+        ({ data, error } = await supabase.from('school_settings')
+            .select('school_id, whatsapp_collection_reminders_enabled, email_collection_reminders_enabled')
+            .eq('charge_notifications_enabled', true));
+    }
     if (error) {
         // Sin la columna del correo (migración 20261014112226 sin aplicar): solo WhatsApp, como antes.
         // Sin ninguna de las dos: apagado en los tres BFF.
@@ -431,7 +444,12 @@ export async function escuelasConRecordatorios(): Promise<Map<string, CanalesEsc
         return out;
     }
     for (const r of (data as any[]) ?? []) {
-        const c = { whatsapp: r.whatsapp_collection_reminders_enabled === true, correo: r.email_collection_reminders_enabled === true };
+        const c = {
+            whatsapp: r.whatsapp_collection_reminders_enabled === true,
+            correo: r.email_collection_reminders_enabled === true,
+            previo: r.collection_pre_due_enabled !== false,
+            mora: r.overdue_notices_enabled !== false,
+        };
         if (c.whatsapp || c.correo) out.set(r.school_id, c);
     }
     return out;
@@ -549,6 +567,7 @@ export async function planDeEscuela(
         enviados, optin,
         contactadosHoy: new Set([...estadoHoy, ...recordatorioHoy]),
         canalCorreo: canales.correo,
+        tipos: { previo: canales.previo !== false, mora: canales.mora !== false },
         diaCorte,
         avisoPolitica,
     });

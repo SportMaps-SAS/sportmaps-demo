@@ -218,6 +218,50 @@ export function creaFiltroEstadoDeCuenta(ahora: Date) {
     };
 }
 
+/**
+ * Registro en email_sends de los dos correos de este job — mismo patrón que
+ * las invitaciones (`invitations.routes.ts`) y `avisos-correo.service.ts`:
+ * antes de esto, `emailClient.send(...)` se llamaba y su resultado se tiraba,
+ * así que `charge_notice_sent_at`/`overdue_notice_sent_at` quedaban marcados
+ * aunque el correo nunca saliera (o no hubiera ni correo que intentar). Con
+ * esto, "¿de verdad le llegó?" se responde con un SELECT a email_sends
+ * filtrando por `batch_id = payment.id`, igual que hoy se hace por
+ * `invitation_id`. No cambia la idempotencia (sigue en claimNotice): esto
+ * solo deja rastro de lo que pasó con el intento ya reclamado.
+ */
+async function logEmailSend(p: {
+    schoolId: string;
+    paymentId: string;
+    tipo: 'cobro_generado' | 'pago_vencido';
+    to: string | null;
+    resultado?: { success?: boolean; data?: any; error?: any };
+}): Promise<void> {
+    try {
+        const exito = !!p.to && p.resultado?.success !== false;
+        const messageId = p.resultado?.data?.id ?? p.resultado?.data?.data?.id ?? null;
+        await supabase.from('email_sends').insert({
+            school_id: p.schoolId,
+            to_email: p.to || '(sin correo de contacto)',
+            email_type: p.tipo,
+            provider: 'resend',
+            provider_message_id: messageId,
+            status: exito ? 'sent' : 'failed',
+            error: exito ? null : (p.to
+                ? recortarError(p.resultado?.error)
+                : 'sin correo de contacto resuelto para este pago'),
+            batch_id: p.paymentId,
+        });
+    } catch (e: unknown) {
+        // El log nunca debe tumbar el envío real.
+        console.warn('[payment-lifecycle] no se pudo registrar email_sends', { paymentId: p.paymentId, e });
+    }
+}
+
+function recortarError(err: unknown): string {
+    const s = typeof err === 'string' ? err : JSON.stringify(err ?? 'error desconocido');
+    return s.length > 1000 ? `${s.slice(0, 997)}…` : s;
+}
+
 type NoticeColumn = 'charge_notice_sent_at' | 'overdue_notice_sent_at';
 
 /**
@@ -299,16 +343,18 @@ async function enabledSchoolIds(tipo: 'generado' | 'vencido' = 'generado'): Prom
         .select('school_id')
         .eq('charge_notifications_enabled', true);
     const ids = (data || []).map(r => r.school_id);
-    if (tipo !== 'vencido' || ids.length === 0) return ids;
-    // Escuelas que no quieren ningún mensaje de moroso (overdue_notices_enabled=false).
+    if (ids.length === 0) return ids;
+    // Cada aviso tiene su propio interruptor (la escuela decide su cobranza):
+    //   generado → charge_created_notice_enabled · vencido → overdue_notices_enabled.
     // Si la columna aún no existe (migración sin aplicar) no se excluye a nadie.
-    const { data: sinMora, error } = await supabase
+    const columna = tipo === 'vencido' ? 'overdue_notices_enabled' : 'charge_created_notice_enabled';
+    const { data: apagadas, error } = await supabase
         .from('school_settings')
         .select('school_id')
-        .eq('overdue_notices_enabled', false)
+        .eq(columna, false)
         .in('school_id', ids);
     if (error) return ids;
-    const fuera = new Set((sinMora || []).map(r => r.school_id));
+    const fuera = new Set((apagadas || []).map(r => r.school_id));
     return ids.filter(id => !fuera.has(id));
 }
 
@@ -431,11 +477,15 @@ export async function sendChargeCreatedEmails(ahora: Date = new Date()): Promise
                         paymentLink: `${FRONTEND_URL}/my-payments`,
                         schoolId: p.school_id,
                     });
-                    await emailClient.send({ to: contact.contactEmail, subject: tpl.subject, html: tpl.html });
-                    sent++;
+                    const r = await emailClient.send({ to: contact.contactEmail, subject: tpl.subject, html: tpl.html });
+                    await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'cobro_generado', to: contact.contactEmail, resultado: r });
+                    if (r?.success !== false) sent++;
+                } else {
+                    await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'cobro_generado', to: null });
                 }
             } catch (e: unknown) {
                 console.warn('[payment-lifecycle] correo de cobro generado falló', { paymentId: p.id, e });
+                await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'cobro_generado', to: contact?.contactEmail ?? null, resultado: { success: false, error: e } });
             }
         }
     } catch (err: any) {
@@ -510,11 +560,15 @@ export async function sendOverdueNoticeEmails(ahora: Date = new Date()): Promise
                         schoolId: p.school_id,
                         lateFee: moraParaCorreo(p),
                     });
-                    await emailClient.send({ to: contact.contactEmail, subject: tpl.subject, html: tpl.html });
-                    sent++;
+                    const r = await emailClient.send({ to: contact.contactEmail, subject: tpl.subject, html: tpl.html });
+                    await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'pago_vencido', to: contact.contactEmail, resultado: r });
+                    if (r?.success !== false) sent++;
+                } else {
+                    await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'pago_vencido', to: null });
                 }
             } catch (e: unknown) {
                 console.warn('[payment-lifecycle] correo de vencido falló', { paymentId: p.id, e });
+                await logEmailSend({ schoolId: p.school_id, paymentId: p.id, tipo: 'pago_vencido', to: contact?.contactEmail ?? null, resultado: { success: false, error: e } });
             }
         }
     } catch (err: any) {
