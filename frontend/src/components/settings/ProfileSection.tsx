@@ -57,7 +57,7 @@ export function ProfileSection({ data, saving, onSave }: ProfileSectionProps) {
     sports_interests: data?.profile?.sports_interests || [] as string[] | null,
   });
 
-  type DocRow = { id: string; full_name: string; doc_type: string | null; doc_number: string | null };
+  type DocRow = { id: string; full_name: string; doc_type: string | null; doc_number: string | null; own?: boolean };
   const [docRows, setDocRows] = useState<DocRow[]>([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const showDocs = profile?.role === 'athlete' || profile?.role === 'parent';
@@ -75,8 +75,18 @@ export function ProfileSection({ data, saving, onSave }: ProfileSectionProps) {
         .select('id, full_name, doc_type, doc_number')
         .eq('parent_id', profile.id)
         .order('full_name', { ascending: true });
+      // El deportista ve SU documento (profiles). Antes «Mi Documento» mostraba los
+      // hijos de la cuenta: una mamá que también entrena veía la TI de su hijo.
+      let own: DocRow[] = [];
+      if (profile.role === 'athlete') {
+        const { data: me } = await (supabase as any)
+          .from('profiles').select('full_name, document_type, document_number').eq('id', profile.id).maybeSingle();
+        if (me?.document_number) {
+          own = [{ id: `own-${profile.id}`, full_name: me.full_name || '', doc_type: me.document_type ?? null, doc_number: me.document_number, own: true }];
+        }
+      }
       if (!cancelled) {
-        setDocRows((rows as DocRow[]) || []);
+        setDocRows([...own, ...((rows as DocRow[]) || [])]);
         setLoadingDocs(false);
       }
     })();
@@ -285,7 +295,7 @@ export function ProfileSection({ data, saving, onSave }: ProfileSectionProps) {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <IdCard className="h-5 w-5 text-primary" />
-              {profile?.role === 'athlete' ? 'Mi Documento' : 'Documentos de mis hijos'}
+              {profile?.role === 'athlete' ? 'Mis documentos' : 'Documentos de mis hijos'}
             </CardTitle>
             <CardDescription>
               Información solo de lectura. Para cambios contacta a la escuela.
