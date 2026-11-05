@@ -19,16 +19,17 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { ArrowLeft, CheckCircle2, KeyRound, Loader2, MapPin, User, Users } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, KeyRound, Loader2, MapPin, Search, User, Users } from 'lucide-react';
 import { todayColombia } from '@/lib/dateUtils';
-import { schoolJoinApi, type JoinCodePreview } from '@/lib/api/schoolJoin';
+import { schoolJoinApi, type FichaCandidata, type JoinCodePreview, type ReclamarFichaResult } from '@/lib/api/schoolJoin';
+import { DocumentosHijo } from '@/components/parent/v2/hijos/DocumentosHijo';
 import {
   adultChildWarning, clearPendingJoinCode, formatJoinCode, isJoinCodeShape, joinErrorMessage,
   normalizeJoinCode, readPendingJoinCode, savePendingJoinCode, validateJoinRequestForm,
   type ForWhom, type JoinRequestErrors,
 } from '@/lib/schoolJoinCode';
 
-type Step = 'code' | 'confirm' | 'form' | 'done';
+type Step = 'code' | 'confirm' | 'find' | 'claimed' | 'form' | 'done';
 
 function Shell({ children }: { children: React.ReactNode }) {
   return (
@@ -59,6 +60,15 @@ export default function JoinSchoolByCodePage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [sentName, setSentName] = useState('');
+
+  // Ficha precargada por la escuela (documento o correo de la cuenta).
+  const [doc, setDoc] = useState('');
+  const [candidates, setCandidates] = useState<FichaCandidata[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [findError, setFindError] = useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimed, setClaimed] = useState<ReclamarFichaResult | null>(null);
 
   const today = todayColombia();
 
@@ -119,6 +129,46 @@ export default function JoinSchoolByCodePage() {
     }
   }
 
+  /** Busca la ficha cargada por la escuela. Sin documento busca solo por el correo confirmado de la cuenta. */
+  async function findFicha(withDoc: string | null) {
+    setFindError(null);
+    setSearching(true);
+    try {
+      const rows = await schoolJoinApi.buscarFicha(normalizeJoinCode(code), withDoc?.trim() || null);
+      setCandidates(rows ?? []);
+      setSearched(true);
+    } catch (e) {
+      setFindError(joinErrorMessage(e));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function goFind() {
+    setCandidates([]);
+    setSearched(false);
+    setFindError(null);
+    setStep('find');
+    void findFicha(null); // primero por el correo de la cuenta
+  }
+
+  async function claim(c: FichaCandidata) {
+    setFindError(null);
+    setClaimingId(c.ficha_id);
+    try {
+      const res = await schoolJoinApi.reclamarFicha({
+        code: normalizeJoinCode(code), fichaId: c.ficha_id, source: c.source, doc: doc.trim() || null,
+      });
+      setClaimed(res);
+      qc.invalidateQueries({ queryKey: ['my-school-join-status'] });
+      setStep('claimed');
+    } catch (e) {
+      setFindError(joinErrorMessage(e));
+    } finally {
+      setClaimingId(null);
+    }
+  }
+
   async function send() {
     setSubmitError(null);
     const errs = validateJoinRequestForm({ forWhom, name, birthDate, category }, today);
@@ -174,7 +224,7 @@ export default function JoinSchoolByCodePage() {
             <CardTitle>Únete a tu escuela</CardTitle>
             <CardDescription>
               {urlCode
-                ? <>Tienes el código <strong className="font-mono">{formatJoinCode(urlCode)}</strong>. Primero entra o crea tu cuenta; después lo usamos.</>
+                ? <>Tienes el código <strong className="font-mono">{formatJoinCode(urlCode)}</strong>. Entra o crea tu cuenta con el <strong>mismo correo que le diste a tu escuela</strong>: así encontramos tus datos ya cargados y solo terminas de completarlos.</>
                 : 'Primero entra o crea tu cuenta. Después ingresas el código que te dio tu escuela.'}
             </CardDescription>
           </CardHeader>
@@ -251,10 +301,100 @@ export default function JoinSchoolByCodePage() {
             {!!school.pending_requests && (
               <Alert><AlertDescription>Ya tienes {school.pending_requests === 1 ? 'una solicitud' : `${school.pending_requests} solicitudes`} en revisión con esta escuela.</AlertDescription></Alert>
             )}
-            <Button className="w-full" onClick={() => setStep('form')}>Sí, es mi escuela</Button>
+            <Button className="w-full" onClick={goFind}>Sí, es mi escuela</Button>
             <Button variant="outline" className="w-full" onClick={() => { setSchool(null); setStep('code'); }}>
               No, cambiar el código
             </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 'find' && school && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Search className="h-5 w-5 text-primary" /> Busca tu ficha</CardTitle>
+            <CardDescription>
+              Si {school.school_name} ya cargó al deportista, lo encontramos y te ahorramos volver a escribir los datos.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); void findFicha(doc); }}>
+              <Label htmlFor="join-doc">Documento del deportista</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="join-doc"
+                  value={doc}
+                  onChange={(e) => setDoc(e.target.value)}
+                  inputMode="numeric"
+                  autoComplete="off"
+                  placeholder="Número de documento"
+                  className="text-[16px] sm:text-sm"
+                />
+                <Button type="submit" disabled={searching || doc.replace(/\D/g, '').length < 5}>
+                  {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Buscar'}
+                </Button>
+              </div>
+            </form>
+
+            {searching && !searched && (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Buscando con el correo de tu cuenta…
+              </p>
+            )}
+
+            {findError && <Alert variant="destructive"><AlertDescription>{findError}</AlertDescription></Alert>}
+
+            {candidates.map((c) => (
+              <div key={c.ficha_id} className="rounded-xl border p-3 space-y-2">
+                <div>
+                  <p className="font-semibold">{c.nombre}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {c.tipo === 'menor' ? 'Menor de edad' : 'Mayor de edad'}{c.team_name ? ` · ${c.team_name}` : ''}
+                  </p>
+                </div>
+                {c.puede_reclamar ? (
+                  <Button className="w-full" disabled={!!claimingId} onClick={() => void claim(c)}>
+                    {claimingId === c.ficha_id && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {c.tipo === 'menor' ? 'Es mi hijo(a)' : 'Soy yo'}
+                  </Button>
+                ) : (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Es un deportista mayor de edad: solo puede reclamarla quien tenga el mismo correo que la escuela
+                    registró. Si es tu ficha, envía la solicitud y {school.school_name} la aprueba.
+                  </p>
+                )}
+              </div>
+            ))}
+
+            {searched && candidates.length === 0 && !searching && !findError && (
+              <p className="text-sm text-muted-foreground">
+                No encontramos una ficha con esos datos. Puedes enviar tus datos y {school.school_name} te registra.
+              </p>
+            )}
+
+            <Button variant={candidates.length ? 'outline' : 'default'} className="w-full" onClick={() => setStep('form')}>
+              {candidates.length ? 'No es ninguna: enviar mis datos' : 'Enviar mis datos a la escuela'}
+            </Button>
+            <Button type="button" variant="ghost" className="w-full" onClick={() => setStep('confirm')}>Atrás</Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {step === 'claimed' && school && claimed && (
+        <Card>
+          <CardHeader className="text-center">
+            <CheckCircle2 className="mx-auto h-12 w-12 text-emerald-600" />
+            <CardTitle className="mt-2">¡Listo, {claimed.athlete_name.split(' ')[0]}!</CardTitle>
+            <CardDescription>
+              Ya quedaste unido(a) a {claimed.school_name} con los datos que la escuela tenía.
+              {claimed.kind === 'child' ? ' Sube ahora los soportes (todos son opcionales; puedes hacerlo después).' : ''}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {claimed.kind === 'child' && claimed.child_id && (
+              <DocumentosHijo childId={claimed.child_id} idDocumentUrl={null} />
+            )}
+            <Button className="w-full" onClick={() => navigate('/dashboard')}>Continuar</Button>
           </CardContent>
         </Card>
       )}
@@ -323,7 +463,7 @@ export default function JoinSchoolByCodePage() {
               <Button type="submit" className="w-full" disabled={sending}>
                 {sending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />} Enviar solicitud
               </Button>
-              <Button type="button" variant="ghost" className="w-full" onClick={() => setStep('confirm')} disabled={sending}>
+              <Button type="button" variant="ghost" className="w-full" onClick={() => setStep('find')} disabled={sending}>
                 Atrás
               </Button>
             </form>

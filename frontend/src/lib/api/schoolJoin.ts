@@ -36,6 +36,26 @@ export interface SubmitJoinResult {
   school_name?: string;
 }
 
+/** Candidato de ficha precargada (migración 20261105124322). Sin datos de contacto. */
+export interface FichaCandidata {
+  ficha_id: string;
+  source: 'unregistered_athlete' | 'children';
+  tipo: 'menor' | 'adulto';
+  nombre: string;
+  team_name: string | null;
+  email_match: boolean;
+  puede_reclamar: boolean;
+}
+
+export interface ReclamarFichaResult {
+  ok: boolean;
+  school_id: string;
+  school_name: string;
+  kind: 'child' | 'self';
+  child_id: string | null;
+  athlete_name: string;
+}
+
 export interface MyJoinStatus {
   has_school: boolean;
   requests: Array<{
@@ -81,6 +101,16 @@ export const schoolJoinApi = {
       p_name: p.name,
       p_birth_date: p.birthDate,
       p_category: p.category,
+    }),
+
+  /** Busca la ficha que la escuela ya cargó: por documento y/o por el correo confirmado de la cuenta. */
+  buscarFicha: (code: string, doc: string | null) =>
+    call<FichaCandidata[]>('buscar_ficha_por_codigo', { p_code: code, p_doc: doc }),
+
+  /** Adopta la ficha. Menor: documento o correo del acudiente. Adulto: solo correo igual al de la ficha. */
+  reclamarFicha: (p: { code: string; fichaId: string; source: FichaCandidata['source']; doc: string | null }) =>
+    call<ReclamarFichaResult>('reclamar_ficha_por_codigo', {
+      p_code: p.code, p_ficha_id: p.fichaId, p_source: p.source, p_doc: p.doc,
     }),
 
   cancel: (requestId: string) => call<unknown>('cancel_school_join_request', { p_request_id: requestId }),
