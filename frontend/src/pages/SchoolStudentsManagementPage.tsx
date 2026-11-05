@@ -114,6 +114,9 @@ const studentSchema = z.object({
   blood_type:       z.string().optional(),
   eps_name:         z.string().optional(),
   dorsal:           z.string().max(10).optional(),
+  // Documento del menor (RC/TI/CC/CE/PP): la administración puede corregirlo.
+  doc_type:         z.string().optional(),
+  doc_number:       z.string().max(20).optional(),
   // ID del torniquete (solo escuelas con registrationZkPinEnabled): dígitos, vacío = no tocar.
   zk_pin:           z.string().regex(/^\d{0,8}$/, 'Solo números (hasta 8 dígitos)').optional(),
 });
@@ -849,8 +852,9 @@ export default function SchoolStudentsManagementPage() {
       if (!editingStudent || !schoolId) return [] as string[];
 
       const { bffClient } = await import('@/lib/api/bffClient');
-      const saved = await bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
+      const putStudent = (allowDuplicate: boolean) => bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
         athlete_type: editingAthleteType,
+        ...(allowDuplicate ? { allow_duplicate: true } : {}),
         // ID del torniquete: solo si cambió; vacío = no tocar (quitarlo se hace en Control de acceso).
         ...(registrationZkPinEnabled && data.zk_pin && Number(data.zk_pin) !== currentZkPin
           ? { zk_pin: Number(data.zk_pin) }
@@ -863,6 +867,8 @@ export default function SchoolStudentsManagementPage() {
           blood_type:    data.blood_type         || null,
           eps_name:      data.eps_name           || null,
           dorsal:        data.dorsal             || null,
+          doc_type:      data.doc_type           || null,
+          doc_number:    data.doc_number         || null,
           parent_email:  data.parent_email       || null,
           parent_phone:  data.parent_phone       || null,
         },
@@ -886,6 +892,20 @@ export default function SchoolStudentsManagementPage() {
           ...(data.plan_change_charge ? { plan_change_charge: data.plan_change_charge } : {}),
         },
       });
+      let saved: { warnings?: string[] };
+      try {
+        saved = await putStudent(false);
+      } catch (e: any) {
+        // Mismo documento en otro deportista: se avisa y la administración decide.
+        if (e?.status === 409 && e?.body?.code === 'DOC_DUPLICADO'
+          && window.confirm(`${e.message}
+
+¿Guardar de todos modos?`)) {
+          saved = await putStudent(true);
+        } else {
+          throw e;
+        }
+      }
 
       // Inscripción / seguro marcados en la ficha: el atleta ya quedó guardado; si el
       // cobro falla se avisa aparte (guardar de nuevo no duplica: el BFF no repite).
@@ -999,9 +1019,16 @@ export default function SchoolStudentsManagementPage() {
     setEditingAthleteType(athleteType);
     setFeesMarked(NO_FEES_MARKED);
     let extraFields = { tshirt_size: '', blood_type: '', eps_name: '' };
+    let docFields = { doc_type: '', doc_number: '' };
     if (athleteType === 'child') {
-      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name').eq('id', student.id).maybeSingle();
-      if (data) extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
+      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name, doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) {
+        extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
+        docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
+      }
+    } else if (athleteType === 'unregistered') {
+      const { data } = await (supabase as any).from('unregistered_athletes').select('doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
     }
     // ID del torniquete: lo lee solo la administración (RLS); un coach lo ve vacío.
     let zkPinNow: number | null = null;
@@ -1037,6 +1064,8 @@ export default function SchoolStudentsManagementPage() {
       blood_type:       extraFields.blood_type,
       eps_name:         extraFields.eps_name,
       dorsal:           (student as any).dorsal || '',
+      doc_type:         docFields.doc_type,
+      doc_number:       docFields.doc_number,
       zk_pin:           zkPinNow != null ? String(zkPinNow) : '',
     });
     setDialogOpen(true);
@@ -2032,6 +2061,31 @@ export default function SchoolStudentsManagementPage() {
                   </Popover>
                 </div>
               </div>
+              {editingStudent && editingAthleteType !== 'adult' && (
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label>Tipo de documento</Label>
+                    <Select
+                      value={form.watch('doc_type') || '__none__'}
+                      onValueChange={(val) => form.setValue('doc_type', val === '__none__' ? '' : val, { shouldDirty: true })}
+                    >
+                      <SelectTrigger id="doc_type"><SelectValue placeholder="Seleccionar" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Sin especificar</SelectItem>
+                        <SelectItem value="RC">RC — Registro civil</SelectItem>
+                        <SelectItem value="TI">TI — Tarjeta de identidad</SelectItem>
+                        <SelectItem value="CC">CC — Cédula de ciudadanía</SelectItem>
+                        <SelectItem value="CE">CE — Cédula de extranjería</SelectItem>
+                        <SelectItem value="PP">Pasaporte</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="doc_number">Número de documento</Label>
+                    <Input id="doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('doc_number')} />
+                  </div>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="medical_info">Información médica</Label>
                 <Textarea id="medical_info" {...form.register('medical_info')} rows={2} />
