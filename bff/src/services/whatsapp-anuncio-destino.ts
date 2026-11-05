@@ -252,6 +252,101 @@ export function eventosNombrados(textos: (string | null | undefined)[]): ClaveEv
     return EVENTOS.filter((e) => e.re.test(t)).map((e) => e.clave);
 }
 
+// ─── Fechas y preguntas de detalle sobre un evento (Monster 2026-11-05) ─────
+
+const MES_NUM: Record<string, number> = {
+    ene: 1, enero: 1, feb: 2, febrero: 2, mar: 3, marzo: 3, abr: 4, abril: 4, may: 5, mayo: 5, jun: 6, junio: 6,
+    jul: 7, julio: 7, ago: 8, agosto: 8, sep: 9, sept: 9, set: 9, septiembre: 9, oct: 10, octubre: 10,
+    nov: 11, noviembre: 11, dic: 12, diciembre: 12,
+};
+const FECHA_TEXTO = new RegExp(
+    '\\b(\\d{1,2})(?: (?:y|al|a|e) (\\d{1,2}))? (?:de )?(' + Object.keys(MES_NUM).sort((a, b) => b.length - a.length).join('|') + ')\\b', 'g');
+
+/** «21 de nov», «el 21 y 22 de noviembre» → [{mes: 11, dia: 21}, {mes: 11, dia: 22}]. Pura. */
+export function fechasDelTexto(texto: string | null | undefined): { mes: number; dia: number }[] {
+    const t = normalizarFrase(texto);
+    const fechas: { mes: number; dia: number }[] = [];
+    for (const m of t.matchAll(FECHA_TEXTO)) {
+        const mes = MES_NUM[m[3]];
+        for (const d of [m[1], m[2]]) {
+            const dia = Number(d);
+            if (d && dia >= 1 && dia <= 31) fechas.push({ mes, dia });
+        }
+    }
+    return fechas;
+}
+
+/** ¿Alguna de esas fechas cae dentro de los días del servicio (inicio–fin, hora de Bogotá)? Pura. */
+export function servicioCubreFecha(it: Pick<ItemDeServicio, 'starts_at' | 'ends_at'>, fechas: { mes: number; dia: number }[]): boolean {
+    if (!it.starts_at || !fechas.length) return false;
+    const mmdd = (iso: string) => {
+        const [, m, d] = hoyBogota(new Date(iso).getTime()).split('-').map(Number);
+        return m * 100 + d;
+    };
+    const ini = mmdd(it.starts_at);
+    const fin = it.ends_at ? mmdd(it.ends_at) : ini;
+    return fechas.some((f) => {
+        const v = f.mes * 100 + f.dia;
+        return v >= Math.min(ini, fin) && v <= Math.max(ini, fin);
+    });
+}
+
+/**
+ * ¿Alguna de esas fechas es el día en que EMPIEZA o TERMINA el servicio? Sirve para elegir entre
+ * un curso largo que solo «contiene» la fecha (el vacacional del 17 de nov al 10 de dic) y un
+ * evento de esos días (la clínica del 21 y 22). Pura.
+ */
+export function servicioEmpiezaOTerminaEn(it: Pick<ItemDeServicio, 'starts_at' | 'ends_at'>, fechas: { mes: number; dia: number }[]): boolean {
+    if (!it.starts_at || !fechas.length) return false;
+    const mmdd = (iso: string) => {
+        const [, m, d] = hoyBogota(new Date(iso).getTime()).split('-').map(Number);
+        return m * 100 + d;
+    };
+    const bordes = [mmdd(it.starts_at), it.ends_at ? mmdd(it.ends_at) : mmdd(it.starts_at)];
+    return fechas.some((f) => bordes.includes(f.mes * 100 + f.dia));
+}
+
+const DETALLE_DE_EVENTO = /\b(edad(es)?|anos|requisitos?|nivel(es)?|principiantes?|experiencia|que incluye|incluye|horarios?|a que hora|hora|donde|lugar|sede|direccion|fechas?|cuando|dias?|duracion|que (llevar|debo llevar|hay que llevar|traer)|aplica|aplican|dirigid[oa]|pueden (ir|participar|asistir)|puede (ir|participar|asistir)|cupos?)\b/;
+
+/**
+ * ¿Pregunta un DETALLE de un evento (edad, requisitos, nivel, fecha, lugar, horario)?
+ * Sin avisar que ya pagó ni mandar el comprobante. Hace falta que además nombre el
+ * evento (quien llama lo verifica con eventosNombrados). Pura.
+ */
+export function preguntaDetalleDeEvento(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    if (!t) return false;
+    if (/\b(ya (pague|pagamos|transferi|consigne|cancele)|pague|transferi|consigne|comprobante|soporte|recibo)\b/.test(t)) return false;
+    return DETALLE_DE_EVENTO.test(t);
+}
+
+/** ¿Es una consulta sobre un servicio: lo pide, lo quiere o pregunta un detalle? Pura. */
+const consultaDeServicio = (texto: string | null | undefined) => pideOQuiereServicio(texto) || preguntaDetalleDeEvento(texto);
+
+const SOBRE_EDAD_NIVEL = /\b(edad(es)?|anos|requisitos?|nivel(es)?|principiantes?|experiencia|aplica|aplican|dirigid[oa]|pueden|puede)\b/;
+// Solo frases que hablan de edad / a quién va dirigido: «nivel» o «experiencia» sueltos están en todo texto de venta.
+const FRASE_EDAD_NIVEL = /\b(anos|edad|edades|en adelante|principiantes?|requisitos?|dirigid[oa])\b/;
+const SOBRE_CUANDO_DONDE = /\b(fechas?|cuando|dias?|horarios?|a que hora|hora|donde|lugar|sede|direccion|duracion)\b/;
+const FRASE_CUANDO_DONDE = /\b(\d{1,2}(:\d{2})?\s?(am|pm|a m|p m|h)|horarios?|hora|sede|lugar|direccion|coliseo|cancha|polideportivo|noviembre|diciembre|enero|sabado|domingo|viernes|de \d{1,2} a \d{1,2})\b/;
+
+/**
+ * El pedazo de la descripción de la escuela que contesta la pregunta (edad / nivel o
+ * cuándo / dónde), o null si no hay. Sin inventar: solo frases que escribió la
+ * escuela. Pura.
+ */
+export function fragmentoQueResponde(descripcionCompleta: string | null | undefined, pregunta: string | null | undefined): string | null {
+    const desc = String(descripcionCompleta ?? '').trim();
+    if (!desc) return null;
+    const t = normalizarFrase(pregunta);
+    const frase = SOBRE_EDAD_NIVEL.test(t) ? FRASE_EDAD_NIVEL : SOBRE_CUANDO_DONDE.test(t) ? FRASE_CUANDO_DONDE : null;
+    if (!frase) return null;
+    const frases = desc.split(/\n+|(?<=[.!?])\s+/).map((x) => x.trim()).filter((x) => x.length > 3);
+    const elegidas = frases.filter((x) => frase.test(normalizarFrase(x))).slice(0, 3);
+    if (!elegidas.length) return null;
+    const texto = elegidas.join('\n');
+    return texto.length > 600 ? texto.slice(0, 600).replace(/\s+\S*$/, '') + '…' : texto;
+}
+
 export type Inferencia =
     | { tipo: 'uno'; item: ItemConFicha }
     | { tipo: 'varios'; items: ItemConFicha[] }
@@ -270,6 +365,20 @@ export function inferirServicio(textos: (string | null | undefined)[], items: It
     const t = normalizarFrase(textos.filter(Boolean).join(' \n '));
     const eventos = EVENTOS.filter((e) => e.re.test(t));
     if (!eventos.length) return { tipo: 'sin_evento' };
+    // «El campamento del 21 de nov»: la escuela llama clínica a lo que la familia llama campamento
+    // (Monster 2026-11-05). Con una fecha que cae en un servicio activo, ese servicio manda; solo
+    // cuando el evento nombrado es campamento/vacacional (clínica y torneo se reconocen por nombre).
+    if (eventos.every((e) => e.clave === 'campamento' || e.clave === 'vacacional')) {
+        const fechas = fechasDelTexto(t);
+        const porFecha = fechas.length ? items.filter((it) => servicioCubreFecha(it, fechas)) : [];
+        if (porFecha.length === 1) return { tipo: 'uno', item: porFecha[0] };
+        if (porFecha.length > 1) {
+            // Un curso largo que solo contiene la fecha no compite con el evento que empieza ese día.
+            const exactos = porFecha.filter((it) => servicioEmpiezaOTerminaEn(it, fechas));
+            if (exactos.length === 1) return { tipo: 'uno', item: exactos[0] };
+            return { tipo: 'varios', items: (exactos.length ? exactos : porFecha).slice(0, 5) };
+        }
+    }
     const palabras = new Set(t.split(' '));
     const candidatos = items.map((it) => {
         const nombre = new Set(normalizarFrase(it.name).split(' '));
@@ -314,7 +423,7 @@ export function necesitaCatalogo(p: {
         if (p.mapeo?.destino === 'servicio') return true;
         return eventosNombrados([p.referral.headline, p.referral.body, p.texto]).length > 0;
     }
-    return pideOQuiereServicio(p.texto) && eventosNombrados([p.texto]).length > 0;
+    return consultaDeServicio(p.texto) && eventosNombrados([p.texto]).length > 0;
 }
 
 /**
@@ -362,7 +471,7 @@ export function decidirDestino(p: {
         return { destino: 'clase_prueba', origen: 'anuncio' };
     }
 
-    if (!pideOQuiereServicio(msg)) return null;
+    if (!consultaDeServicio(msg)) return null;
     const inf = inferirServicio([msg], items);
     if (inf.tipo === 'uno') return { destino: 'servicio', item: inf.item, origen: 'texto' };
     if (inf.tipo === 'varios') return { destino: 'varios', items: inf.items, origen: 'texto' };
@@ -584,7 +693,7 @@ export async function atenderDestinoDeAnuncio(
     const referral = referralDeLaRafaga(recientes);
     if ((fase === 'anuncio' && !referral) || (fase === 'texto' && referral)) return null;
     const eleccion = referral ? null : eleccionPendiente(recientes);
-    if (!referral && !eleccion && !(pideOQuiereServicio(msg) && eventosNombrados([msg]).length)) return null;
+    if (!referral && !eleccion && !(consultaDeServicio(msg) && eventosNombrados([msg]).length)) return null;
 
     const mapeo = referral?.sourceId ? await ctx.mapeo(referral.sourceId) : null;
     const items = necesitaCatalogo({ referral, mapeo, texto: msg, eleccion }) ? await ctx.servicios() : [];
@@ -620,7 +729,15 @@ export async function atenderDestinoDeAnuncio(
     }
 
     // La misma ficha no se repite en 24 h: lo que pregunte después lo atiende el seguimiento.
-    if (decision.destino === 'servicio' && fichaReciente(recientes, decision.item.id)) return null;
+    // Si pregunta un detalle (edad, nivel, fecha, lugar) se le contesta con el pedazo del texto
+    // de la escuela que lo dice; si no lo hay, lo atiende el seguimiento.
+    if (decision.destino === 'servicio' && fichaReciente(recientes, decision.item.id)) {
+        const pedazo = preguntaDetalleDeEvento(msg) ? fragmentoQueResponde(decision.item.description, msg) : null;
+        if (!pedazo) return null;
+        await ctx.enviar('Sobre *' + decision.item.name + '*:\n' + pedazo,
+            { ...base, servicio_id: decision.item.id, respuesta_de_detalle: true });
+        return 'anuncio_servicio';
+    }
     const afiliado = await afiliadoSiHaceFalta(ctx, decision.destino === 'servicio' ? [decision.item] : decision.items);
 
     if (decision.destino === 'varios') {

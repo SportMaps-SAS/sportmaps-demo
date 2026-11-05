@@ -188,7 +188,7 @@ const NO_ES_NOMBRE_TRAS_SALUDO = new Set([
 const APELATIVO_PERSONAL = /\b(querida|querido|amiga|amigo|linda|lindo|hermosa|hermoso|mija|mijo|reina|cielo|corazon|mami|mamita|cari|amor|amorcito|mor|bb|mi vida|gorda|gordo|flaca|flaco|parce|parcero|parcera)\b/;
 
 /** «Hola Fulana» / «Buenas tardes Fulana»: nombre propio (con mayúscula) tras el saludo. */
-const SALUDO_Y_NOMBRE = /^\s*(?:[Hh]ola|[Hh]oli|[Hh]ey|[Bb]uen[oa]s?(?:\s+(?:[Dd][ií]as?|[Tt]ardes|[Nn]oches))?|[Ss]aludos)[\s,.!¡:;…-]*(?:[Bb]uen[oa]s?\s+(?:[Dd][ií]as?|[Tt]ardes|[Nn]oches)[\s,.!¡:;…-]*)?([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ]{2,})/;
+const SALUDO_Y_NOMBRE = /^\s*(?:[Hh]ola|[Hh]oli|[Hh]ey|[Hh]ello|[Hh]i|[Bb]uen[oa]s?(?:\s+(?:[Dd][ií]as?|[Tt]ardes|[Nn]oches))?|[Ss]aludos)[\s,.!¡:;…-]*(?:[Bb]uen[oa]s?\s+(?:[Dd][ií]as?|[Tt]ardes|[Nn]oches)[\s,.!¡:;…-]*)?([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ]{2,})/;
 
 /**
  * ¿Le escribe a la dueña (o al equipo) por su nombre, sin pedir nada de la

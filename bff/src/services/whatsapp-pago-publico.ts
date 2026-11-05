@@ -155,3 +155,83 @@ export function textoComoPagar(p: {
     if (texto.length > MAX_CARACTERES_MENSAJE) texto = texto.slice(0, MAX_CARACTERES_MENSAJE - 1).trimEnd() + '…';
     return texto;
 }
+
+// ─── Disputa de un pago (Monster 2026-11-05) ─────────────────────────────────
+//
+// «…me fijé y llegó un correo de un portal de pagos donde dice que yo debo la
+// mensualidad» y «yo envié el mes pasado el comprobante»: no preguntan CÓMO pagar,
+// reclaman por un pago. Contestarles con los datos de Nequi es mandarlos a pagar
+// dos veces. Va a la escuela, sin datos de pago.
+
+const SIN_ACENTOS_VERBO = '(envie|mande|pague|consigne|transferi|adjunte|subi|hice|realice)';
+const DISPUTA: RegExp[] = [
+    // «ya envié / yo mandé / ya pagué … el comprobante / el pago / la mensualidad»
+    new RegExp(String.raw`\b(ya|yo) (yo )?(te |le |les )?${SIN_ACENTOS_VERBO}\b(\s+\w+){0,6}\s+(comprobante|soporte|recibo|pago|mensualidad|transferencia|consignacion)\b`),
+    new RegExp(String.raw`\b${SIN_ACENTOS_VERBO}\b(\s+\w+){0,6}\s+(el |la )?(comprobante|soporte|recibo)\b(\s+\w+){0,4}\s+(mes pasado|semana pasada|ayer|anteayer|hace \w+ (dias|semanas|meses))\b`),
+    new RegExp(String.raw`\b(mes pasado|semana pasada|ayer|anteayer|hace \w+ (dias|semanas|meses))\b(\s+\w+){0,6}\s+${SIN_ACENTOS_VERBO}\b(\s+\w+){0,4}\s+(comprobante|soporte|recibo|pago)\b`),
+    // «me llegó un correo / mensaje … que debo»
+    /\b(me )?(llego|llegaron|recibi|me enviaron|me mandaron)\b(\s+\w+){0,8}\s+(correo|email|mensaje|cobro|aviso|notificacion|recordatorio|portal)\b(\s+\w+){0,14}\s+(debo|deuda|adeudo|en mora|pendiente|vencid\w+|atrasad\w+)\b/,
+    // «dice que (yo) debo»
+    /\bdice que (yo )?(debo|adeudo|estoy (en mora|atrasad\w+|debiendo)|tengo (una )?(deuda|pendiente))\b/,
+    // «no entiendo por qué me cobran»
+    /\b(no entiendo|no se) (por que|porque|por que razon) me (cobran|cobraron|llega|llegan|siguen cobrando|aparece)\b/,
+    /\bpor que me (siguen )?(cobran|cobraron)\b/,
+    /\bme (cobran|cobraron|siguen cobrando) (de nuevo|otra vez|doble|dos veces|algo que ya|lo que ya)\b/,
+];
+
+/** ¿Reclama por un pago que dice haber hecho o por una deuda que no reconoce? Pura. */
+export function esDisputaDePago(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    if (!t) return false;
+    return DISPUTA.some((re) => re.test(t));
+}
+
+/** El acuse a quien disputa un pago: sin datos de pago, la escuela revisa. Pura. */
+export function textoDisputaDePago(): string {
+    return 'Gracias por avisar. Le paso tu caso a la escuela para que revise tu pago y te responde por aquí 🙌';
+}
+
+// ─── Seguimiento corto tras los datos de pago ───────────────────────────────
+
+const SEGUIMIENTO_TITULAR: RegExp[] = [
+    /\b(a )?nombre de quien\b/,
+    /\b(quien|cual) es (el )?titular\b/,
+    /\btitular\b/,
+];
+const SEGUIMIENTO_NUMERO: RegExp[] = [
+    /^(y )?(es )?(a )?(este|ese|esta|esa|ese mismo|este mismo)( (numero|nequi|daviplata|cuenta|llave|el numero|el nequi))?$/,
+    /^(y )?(a )?(este|ese|esta|esa) (es )?(el )?(numero|nequi|daviplata|cuenta|llave)$/,
+    /^(es|seria) (este|ese) (el )?(numero|nequi|daviplata|cuenta|llave)$/,
+    /^(ese|este) es( el)?( numero| nequi)?$/,
+    /^(y )?(a|en) (cual|que) (numero|nequi|cuenta)$/,
+];
+
+/**
+ * Seguimiento corto («este número?», «a ese?», «y a nombre de quién?») que, dicho
+ * justo después de los datos de pago, se contesta CONFIRMANDO el dato ya dado.
+ * 'titular' si pregunta a nombre de quién; 'numero' si confirma el número. Pura.
+ */
+export function seguimientoDeDatosDePago(texto: string | null | undefined): 'numero' | 'titular' | null {
+    const t = normalizarFrase(texto);
+    if (!t || t.split(' ').length > 7) return null;
+    if (SEGUIMIENTO_TITULAR.some((re) => re.test(t))) return 'titular';
+    // Sin el signo de pregunta («este numero») también vale si es exactamente eso.
+    return SEGUIMIENTO_NUMERO.some((re) => re.test(t)) ? 'numero' : null;
+}
+
+/** La confirmación en pocas líneas, con lo que YA se le dio (mismas cuentas). Pura. */
+export function textoConfirmaDatosDePago(
+    cuentas: { tipo: string; titular: string | null; numero: string }[],
+    pregunta: 'numero' | 'titular',
+): string | null {
+    const c = cuentas.slice(0, MAX_CUENTAS);
+    if (!c.length) return null;
+    const linea = (x: { tipo: string; titular: string | null; numero: string }) =>
+        `*${x.tipo}*: ${x.numero}${x.titular ? ` (a nombre de ${x.titular})` : ''}`;
+    if (c.length === 1) {
+        return pregunta === 'titular' && !c[0].titular
+            ? 'Es el que te mandé arriba 🙌 El titular te lo confirma la escuela por aquí.'
+            : `Sí, ese mismo 🙌 ${linea(c[0])}. Cuando pagues, mándame la foto del comprobante.`;
+    }
+    return `Son los que te mandé arriba 🙌\n${c.map((x) => `• ${linea(x)}`).join('\n')}`;
+}
