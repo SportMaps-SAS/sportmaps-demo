@@ -10,7 +10,7 @@
  *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
  *
- * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows|pagos (varias con coma; sin --solo
+ * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones (varias con coma; sin --solo
  * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
  * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
  * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
@@ -64,6 +64,9 @@
  *     (`nfm_reply`) completa/abono × afiliado o no, sin consentimiento, token
  *     inválido o vencido, servicio desactivado, precio cambiado y duplicada; y
  *     borrador/apagado/bloqueado/sin salud → solo la ficha.
+ *   · Conversaciones (casos reales de producción, Monster 2026-11-05): mensajes personales a
+ *     alguien de la escuela («Hola Pipe») sin aviso de registro, disputas de pago sin datos
+ *     de pago, «este numero?» tras los datos de pago, y «el campamento del 21 de nov… edades».
  *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
  *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
  *     sin reglas de cancha sin resolver, títulos dentro del límite de WhatsApp,
@@ -113,8 +116,8 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
-type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows' | 'pagos';
-const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows', 'pagos'];
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows' | 'pagos' | 'conversaciones';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows', 'pagos', 'conversaciones'];
 const ESCUELA = arg('escuela');
 const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
 const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
@@ -2005,6 +2008,110 @@ async function correrPagos(e: Escuela): Promise<Resultado[]> {
     return [...rs, ...extra];
 }
 
+// ─── Conversaciones reales de producción (Monster 2026-11-05) ───────────────
+
+const PASO_DEBE_REGISTRARSE = 'debe_registrarse';
+const ENLACE_DE_REGISTRO = /Créala aquí|cuenta creada|\/register/i;
+const DATOS_DE_PAGO = /\b(nequi|daviplata|bre-?b|llave)\b|\d{7,}/i;
+
+/**
+ * Cuatro fallos del bot encendido en Monster, con los textos de las familias:
+ *  1. «Hello Pipe!! …» / «Hola Pipe, como vas ??» (número registrado sin cuenta): charla con
+ *     alguien de la escuela → ni `debe_registrarse` ni ninguna otra respuesta; queda en el buzón.
+ *  2. Disputa de pago («me llegó un correo donde dice que debo», «yo envié el comprobante») →
+ *     un acuse corto, SIN datos de pago, a la escuela; una sola vez.
+ *  3. «me indicas a donde consigno» → datos de pago; «este numero?» → se confirma el dato, sin
+ *     el enlace de registro.
+ *  4. «el campamento del 21 de nov… hasta qué edades aplica» (es la clínica) → la ficha o el
+ *     pedazo del texto de la escuela, no la bienvenida que pide la sede.
+ * Cada uno corre como número sin ficha (desconocido) y como familia registrada sin cuenta.
+ */
+async function correrConversaciones(e: Escuela): Promise<Resultado[]> {
+    const items = await serviciosDeAnuncio(e.id);
+    const clinica = items.find((it) => /\bclinicas?\b/.test(normalizar(it.name))) ?? null;
+    const PREGUNTA_EDAD = 'por favor me confirmas el campamentos del 21 de nov. hasta que edades aplica';
+    type Caso = { titulo: string; sinCuenta?: boolean; correr: (c: Conversacion, r: Resultado) => Promise<void> };
+
+    const personal = (titulo: string, texto: string): Caso => ({
+        titulo, sinCuenta: true,
+        correr: async (c, r) => {
+            await c.decir(texto, null, { silencioOk: true });
+            debe(r, !c.hablo(), `le contestó algo a un mensaje personal para alguien de la escuela: «${c.ultimoTexto().slice(0, 80)}»`);
+            debe(r, !huboPaso(c, PASO_DEBE_REGISTRARSE) && !ENLACE_DE_REGISTRO.test(c.textos()), 'le mandó el aviso/enlace de registro');
+        },
+    });
+
+    const disputa = (titulo: string, sinCuenta: boolean): Caso => ({
+        titulo, sinCuenta,
+        correr: async (c, r) => {
+            await c.decir('Una pregunta, es que iba a hacer el pago de la mensualidad y lo del torneo, pero me fijé y llegó un correo de un portal de pagos donde dice que yo debo la mensualidad');
+            debe(r, huboPaso(c, 'disputa_de_pago'), 'no lo pasó a la escuela (no hubo el acuse de disputa)');
+            debe(r, !DATOS_DE_PAGO.test(c.textos()) && !huboPaso(c, 'medios_de_pago_publicos'), 'a una disputa de pago le dio datos de pago');
+            debe(r, /escuela/i.test(c.ultimoTexto()), 'el acuse no dice que lo revisa la escuela');
+            await c.decir('Estaba revisando y yo envié el mes pasado el comprobante', null, { silencioOk: true });
+            debe(r, !DATOS_DE_PAGO.test(c.textos()), 'al «yo envié el comprobante» le dio datos de pago');
+            debe(r, c.salidas().filter((s) => s.step === 'disputa_de_pago').length === 1, 'repitió el acuse de la disputa');
+        },
+    });
+
+    const seguimiento = (titulo: string, sinCuenta: boolean): Caso => ({
+        titulo, sinCuenta,
+        correr: async (c, r) => {
+            await c.decir('me indicas a donde consigno por favor');
+            debe(r, huboPaso(c, 'medios_de_pago_publicos'), 'no le dio los datos de pago');
+            const dato = c.ultimoTexto().match(/•[^\n:]*:\s*(\S+)/)?.[1] ?? null;
+            await c.decir('este numero?');
+            debe(r, !huboPaso(c, PASO_DEBE_REGISTRARSE) && !ENLACE_DE_REGISTRO.test(c.textos()), 'a «este numero?» le mandó el enlace de registro');
+            debe(r, huboPaso(c, 'medios_de_pago_confirma'), 'no confirmó el dato ya dado');
+            if (dato) debe(r, c.ultimoTexto().includes(dato), `la confirmación no repite el dato (${dato})`);
+            await c.decir('y a nombre de quién?', null, { silencioOk: true });
+            debe(r, !huboPaso(c, PASO_DEBE_REGISTRARSE) && !ENLACE_DE_REGISTRO.test(c.textos()), 'a «y a nombre de quién?» le mandó el enlace de registro');
+        },
+    });
+
+    const evento = (titulo: string, sinCuenta: boolean, antes: string | null): Caso => ({
+        titulo, sinCuenta,
+        correr: async (c, r) => {
+            if (!clinica) { noAplica(r, 'no hay una clínica activa en el catálogo'); return; }
+            const desde = new Date(String(clinica.starts_at ?? '')).getTime();
+            if (!(desde > Date.now())) { noAplica(r, 'la clínica activa ya empezó'); return; }
+            if (antes) await c.decir(antes);
+            await c.decir(PREGUNTA_EDAD);
+            const t = c.ultimoTexto();
+            debe(r, c.salidas().some((s) => (s.payload as any)?.[MARCA_DESTINO] === 'servicio'), 'no contestó con la ficha del servicio (o el pedazo de su texto)');
+            debe(r, !c.salidas().some((s) => (s.step === 'desconocido_tema_escolar' || s.step === PASO_DEBE_REGISTRARSE) && !(s.payload as any)?.[MARCA_DESTINO]),
+                'contestó con la bienvenida/registro en vez de la pregunta');
+            const edad = /(\d{1,2})\s*a[ñn]os/i.exec(String(clinica.description ?? ''))?.[0];
+            if (edad) debe(r, t.includes(edad), `la respuesta no trae la edad que dice la escuela («${edad}»)`);
+        },
+    });
+
+    const casos: Caso[] = [
+        personal('«Hello Pipe!! Cómo vas? … compartir la aplicación con los acudientes» → silencio, sin enlace de registro',
+            'Hello Pipe!! Cómo vas? Disculpame ayer no recuerdo si podemos compartir la aplicación con los acudientes o no'),
+        personal('«Hola Pipe, como vas ??» → silencio, sin enlace de registro', 'Hola Pipe, como vas ??'),
+        personal('«Hola profe Iván, cómo está» → silencio, sin enlace de registro', 'Hola profe Iván, cómo está'),
+        disputa('DISPUTA de pago (número registrado sin cuenta) → a la escuela, sin datos de pago', true),
+        disputa('DISPUTA de pago (número sin ficha) → a la escuela, sin datos de pago', false),
+        seguimiento('SEGUIMIENTO «este numero?» (registrado sin cuenta) → confirma el dato, sin enlace de registro', true),
+        seguimiento('SEGUIMIENTO «este numero?» (número sin ficha) → confirma el dato', false),
+        evento('EVENTO «campamento del 21 de nov… edades» (número sin ficha) → la ficha de la clínica', false, null),
+        evento('EVENTO «campamento del 21 de nov… edades» tras «info de la clínica» → el pedazo que responde', false, 'Info de la clínica'),
+    ];
+    const rs = await enParalelo(casos, async (caso) => {
+        const c = new Conversacion(caso.titulo, e.id, nuevoN());
+        if (caso.sinCuenta) { c.sesion.rol = 'papa'; c.sesion.parent_id = null; }
+        const r = nuevoResultado(caso.titulo, c, 'conversaciones');
+        r.desenlace = 'respuesta';
+        await protegido(r, () => caso.correr(c, r));
+        cerrar(r, e, null);
+        progreso(r);
+        return r;
+    });
+    process.stdout.write('\n');
+    return rs;
+}
+
 // ─── Formularios de WhatsApp (Flows, fase F-a) ──────────────────────────────
 
 /**
@@ -2376,7 +2483,7 @@ function imprimirFallas(rs: Resultado[]): void {
 
 (async () => {
     if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
-        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows|pagos[,…]] [--variante <nombre>[,…]] '
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones[,…]] [--variante <nombre>[,…]] '
             + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
         log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
@@ -2400,6 +2507,7 @@ function imprimirFallas(rs: Resultado[]): void {
         if (b === 'anuncios') rs = await correrAnuncios(escuela);
         if (b === 'flows') rs = await correrFlows(escuela);
         if (b === 'pagos') rs = await correrPagos(escuela);
+        if (b === 'conversaciones') rs = await correrConversaciones(escuela);
         if (b === 'variantes') {
             const v = await correrVariantes(escuela);
             rs = v.resultados;

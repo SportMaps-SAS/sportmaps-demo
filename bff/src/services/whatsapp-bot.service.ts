@@ -121,7 +121,10 @@ import { pidePrecio, preciosParaProspecto, responderClasesDePlan, preguntaPorCla
 import { leerEstadoDeSupabase, leerDia as leerDiaCortesia } from './whatsapp-clase-cortesia.service';
 import { redactarRespuestaDeProspecto, PASO_PROSPECTO_IA } from './whatsapp-prospecto-ia.service';
 import { atenderLlegada, yaReservoClase } from './prospecto-ciclo-clase.service';
-import { preguntaComoPagar, textoComoPagar, textoHorarioPresencial } from './whatsapp-pago-publico';
+import {
+    preguntaComoPagar, textoComoPagar, textoHorarioPresencial, esDisputaDePago, textoDisputaDePago,
+    seguimientoDeDatosDePago, textoConfirmaDatosDePago,
+} from './whatsapp-pago-publico';
 import { pideAyudaDeApp, textoAyudaApp } from './whatsapp-ayuda-app.service';
 import {
     reclamaValor, cobrosAbiertos, textoReclamoDeValor, motivoReclamoDeValor,
@@ -1922,9 +1925,28 @@ async function identificarPorTelefono(
             return true;
         }
 
+        // Reclamo por un pago («ya envié el comprobante», «me llegó un correo donde dice
+        // que debo»): a la escuela, sin datos de pago (Monster 2026-11-05).
+        if (!botonId && await atenderDisputaDePago(integration, conversationId, contactWaId, text)) {
+            return true;
+        }
+
         // «¿Cómo pago?» / «¿hay atención presencial?»: público, sin cuenta.
         if (!botonId && await responderComoPagarPublico(integration, conversationId, contactWaId, text)) {
             return true;
+        }
+
+        // Mensaje PERSONAL para alguien de la escuela («Hola Pipe, cómo vas», «Hello Pipe,
+        // ¿podemos compartir la app con los acudientes?»): no es una familia sin cuenta,
+        // es un conocido. Ni «Créala aquí» ni respuesta del bot: queda en el buzón (Monster
+        // 2026-11-05). Lo que pide algo de pagos/horarios/precios ya salió arriba o sigue su camino.
+        if (!botonId && text) {
+            const equipoPersonal = await vocativosDeEscuela(integration.school_id);
+            if (!incidenciaUrgente(text) && llamaAPersonaSinPedir(text, equipoPersonal, hablaDeLaEscuela)) {
+                console.info('[whatsapp-bot] sin cuenta: le escribe a alguien de la escuela por su nombre; el bot se calla', { conversationId });
+                await marcarAbiertaSinAviso(conversationId);
+                return true;
+            }
         }
 
         // Modo discreto: sin «Créala aquí» como respuesta a cualquier mensaje (una
@@ -3139,6 +3161,8 @@ async function correoNoEncontrado(
 
 /** step de la respuesta pública de «cómo / dónde / cuándo pagar». */
 export const PASO_MEDIOS_DE_PAGO_PUBLICOS = 'medios_de_pago_publicos';
+/** step de la confirmación («sí, ese número») al seguimiento corto de los datos de pago. */
+export const PASO_MEDIOS_DE_PAGO_CONFIRMA = 'medios_de_pago_confirma';
 /** Freno de esa respuesta: el mismo contacto la recibe una vez cada estas horas. */
 const FRENO_MEDIOS_PUBLICOS_H = 6;
 
@@ -3165,6 +3189,43 @@ async function horarioPresencialDeEscuela(schoolId: string): Promise<string | nu
     }
 }
 
+/** step del acuse a quien reclama por un pago. */
+export const PASO_DISPUTA_DE_PAGO = 'disputa_de_pago';
+
+/**
+ * Reclamo de pago de alguien que NO está identificado («ya envié el comprobante»,
+ * «me llegó un correo donde dice que debo la mensualidad»; Monster 2026-11-05: el bot
+ * le contestó con los datos de Nequi). NO se dan datos de pago: un acuse corto UNA vez
+ * cada 24 h, y la conversación va al buzón con aviso a la administración. Con el
+ * comprobante en la cola o un interesado del embudo (que ya tiene su acuse) no entra.
+ * true = atendió (o ya había atendido y solo deja el buzón). Nunca lanza.
+ */
+async function atenderDisputaDePago(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    texto: string, rafaga: string | null = null,
+): Promise<boolean> {
+    try {
+        if (!esDisputaDePago(texto) && !esDisputaDePago(rafaga)) return false;
+        if (humanoReciente(await mensajesRecientes(conversationId), SILENCIO_HUMANO_MIN)) return false;
+        if (await comprobanteEnColaDe(integration, contactWaId)) return false;
+        if (await pasoPorElEmbudo(conversationId)) return false;
+        if (await pasoReciente(conversationId, PASO_DISPUTA_DE_PAGO, 24)) {
+            await marcarAbiertaSinAviso(conversationId);
+            return true;
+        }
+        await deliver(integration, conversationId, contactWaId, textoDisputaDePago(),
+            { step: PASO_DISPUTA_DE_PAGO });
+        await abrirEnBuzon(integration, conversationId, contactWaId, {
+            motivo: 'puerta_otro',
+            detalle: `Reclama por un pago (el bot NO le dio datos de pago): «${texto.slice(0, 300)}».`,
+        });
+        return true;
+    } catch (err: any) {
+        console.error('[whatsapp-bot] disputa de pago falló', err?.message || err);
+        return false;
+    }
+}
+
 /**
  * «¿Cómo / dónde / cuándo pago?», «¿hay atención presencial mañana?» — para
  * cualquiera, sin pedir el correo: son datos públicos de la escuela (las
@@ -3183,6 +3244,24 @@ export async function responderComoPagarPublico(
     texto: string,
     rafaga: string | null = null,
 ): Promise<'medios_de_pago' | 'medios_de_pago_escalado' | 'frenado' | null> {
+    // «este número?» / «y a nombre de quién?» justo después de los datos de pago: se
+    // CONFIRMA el dato ya dado; no reinicia la identificación (Monster 2026-11-05).
+    const seguimiento = seguimientoDeDatosDePago(texto);
+    if (seguimiento) {
+        const recientesSeg = await mensajesRecientes(conversationId);
+        const ultimoSaliente = recientesSeg.find((f) => f.direction === 'outbound');
+        const hace = Date.now() - new Date(ultimoSaliente?.wa_timestamp || ultimoSaliente?.created_at || 0).getTime();
+        if ((ultimoSaliente?.payload?.step === PASO_MEDIOS_DE_PAGO_PUBLICOS || ultimoSaliente?.payload?.step === PASO_MEDIOS_DE_PAGO_CONFIRMA) && hace < 30 * 60_000
+            && !humanoReciente(recientesSeg, SILENCIO_HUMANO_MIN)) {
+            const medios = await mediosDePago(integration.school_id).catch(() => null);
+            const cuerpo = textoConfirmaDatosDePago(medios?.cuentas ?? [], seguimiento);
+            if (cuerpo) {
+                await deliver(integration, conversationId, contactWaId, cuerpo,
+                    { step: PASO_MEDIOS_DE_PAGO_CONFIRMA, seguimiento });
+                return 'medios_de_pago';
+            }
+        }
+    }
     // La ráfaga (lo que escribió desde la última respuesta) ayuda a leer
     // «en qué horario…» + «…se puede ir a cancelar» partido en dos.
     const pregunta = preguntaComoPagar([rafaga, texto].filter(Boolean).join('\n'));
@@ -3258,7 +3337,7 @@ export type ResultadoDesconocido =
     | 'prospecto_seguimiento' | 'escuela_atendiendo'
     | 'prospecto_horarios' | 'prospecto_precios' | 'prospecto_info' | 'prospecto_persona' | 'prospecto_ia'
     | 'venta_consulta' | 'medios_de_pago' | 'medios_de_pago_escalado'
-    | 'externo' | 'horarios_de_hoy'
+    | 'externo' | 'horarios_de_hoy' | 'disputa_de_pago'
     | 'pregunta_de_comprobante'
     | 'llegada_clase'
     | 'consentimiento_sin_cuenta'
@@ -3389,6 +3468,13 @@ async function atenderDesconocidoEnEscuela(
             responderDeCobro(integration, conversationId, contactWaId),
             pasarCobroALaEscuela(integration, conversationId, contactWaId)).catch(() => false);
         if (resuelta) return 'pregunta_de_comprobante';
+    }
+
+    // 0a'. Reclamo por un pago («ya envié el comprobante», «me llegó un correo donde dice
+    //      que debo»): a la escuela, sin datos de pago. Antes de los flujos de venta y de
+    //      «cómo pagar», que lo leían como una pregunta de pago (Monster 2026-11-05).
+    if (!botonId && origen === 'texto' && await atenderDisputaDePago(integration, conversationId, contactWaId, text, rafaga)) {
+        return 'disputa_de_pago';
     }
 
     // 0a'''. Vino de un ANUNCIO (clic a WhatsApp, Monster 2026-11-04): el destino del
