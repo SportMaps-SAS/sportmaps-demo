@@ -47,7 +47,8 @@ vi.mock('./useAthleteV2Data', () => ({
   formularioAutoeval: (p: { sessionId: string }) => `/post-entreno/${p.sessionId}`,
 }));
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ signOut: vi.fn(), user: { id: 'yo' }, profile: null }) }));
+const authState = vi.hoisted(() => ({ roleContexts: [] as unknown[] }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ signOut: vi.fn(), user: { id: 'yo' }, profile: null, roleContexts: authState.roleContexts }) }));
 vi.mock('@/hooks/useSchoolContext', () => ({ useSchoolContext: () => ({ schoolId: null, schoolName: 'Club Campestre Demo' }) }));
 vi.mock('@/hooks/useMySchoolStore', () => ({ useMySchoolStore: () => ({ showStore: false, showMyPurchases: false }) }));
 vi.mock('@/components/billing/MiFacturaElectronicaCard', () => ({ MiFacturaElectronicaCard: () => null }));
@@ -156,6 +157,18 @@ describe('el menor nunca ve pagar', () => {
       expect(screen.getByText(l)).toBeInTheDocument();
     }
     expect(screen.queryByText(/Explorar/)).toBeNull();
+  });
+
+  it('«Cambiar de rol» solo aparece si la persona es deportista Y acudiente (dos roles)', () => {
+    s.deportista = MAYOR();
+    authState.roleContexts = [];
+    const { unmount } = pintar(<AthleteMorePage />);
+    expect(screen.queryByText('Cambiar de rol')).toBeNull();
+    unmount();
+    authState.roleContexts = [{ key: 'athlete:a' }, { key: 'parent:a' }];
+    pintar(<AthleteMorePage />);
+    expect(screen.getByText('Cambiar de rol')).toBeInTheDocument();
+    authState.roleContexts = [];
   });
 });
 
