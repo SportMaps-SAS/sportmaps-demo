@@ -293,12 +293,23 @@ export function contactoDePago(
     };
 }
 
-async function enabledSchoolIds(): Promise<string[]> {
+async function enabledSchoolIds(tipo: 'generado' | 'vencido' = 'generado'): Promise<string[]> {
     const { data } = await supabase
         .from('school_settings')
         .select('school_id')
         .eq('charge_notifications_enabled', true);
-    return (data || []).map(r => r.school_id);
+    const ids = (data || []).map(r => r.school_id);
+    if (tipo !== 'vencido' || ids.length === 0) return ids;
+    // Escuelas que no quieren ningún mensaje de moroso (overdue_notices_enabled=false).
+    // Si la columna aún no existe (migración sin aplicar) no se excluye a nadie.
+    const { data: sinMora, error } = await supabase
+        .from('school_settings')
+        .select('school_id')
+        .eq('overdue_notices_enabled', false)
+        .in('school_id', ids);
+    if (error) return ids;
+    const fuera = new Set((sinMora || []).map(r => r.school_id));
+    return ids.filter(id => !fuera.has(id));
 }
 
 async function filterOutDuplicates(payments: PaymentRow[]): Promise<PaymentRow[]> {
@@ -445,7 +456,7 @@ export async function sendOverdueNoticeEmails(ahora: Date = new Date()): Promise
     let whatsapp = 0;
     const motivos: Record<string, number> = {};
     try {
-        const schoolIds = await enabledSchoolIds();
+        const schoolIds = await enabledSchoolIds('vencido');
         if (schoolIds.length === 0) return { sent: 0, whatsapp: 0 };
 
         const { data: candidates, error } = await supabase
