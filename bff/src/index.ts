@@ -263,6 +263,12 @@ app.use(cors({
             extraOrigins.has(origin);
 
         if (exactAllowed) return callback(null, true);
+            // App nativa (Capacitor): el WebView sirve los assets desde https://localhost (Android)
+            // o capacitor://localhost (iOS). Sin esto TODA llamada al BFF desde la app instalada
+            // falla con «Failed to fetch» (la glosa, cobros…). Auth por Bearer JWT, sin cookies.
+            origin === 'https://localhost' ||
+            origin === 'capacitor://localhost' ||
+            origin === 'ionic://localhost' ||
 
         // Subdominios de sportmaps.co (dev.sportmaps.co, staging.sportmaps.co, etc.).
         // Se valida URL parseada para evitar bypasses tipo "evil.sportmaps.co.attacker.io".
