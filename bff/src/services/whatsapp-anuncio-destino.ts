@@ -466,7 +466,11 @@ export function textoFichaDeServicio(item: ItemConFicha, precio: PrecioDeServici
         const cuerpo = completo.length > TEXTO_COMPLETO_MAX
             ? `${completo.slice(0, TEXTO_COMPLETO_MAX).replace(/\s+\S*$/, '')}…`
             : completo;
-        return [cuerpo, pago].join('\n\n');
+        // El precio de afiliado no está en el texto público: solo lo ve quien es de una
+        // familia del club (el bot lo sabe por el número).
+        const lineaAfiliado = precio.deAfiliado && precio.hoy !== null
+            ? `Como afiliado del club, tu valor es *${cop(precio.hoy)}*.` : null;
+        return [cuerpo, lineaAfiliado, pago].filter(Boolean).join('\n\n');
     }
     return [
         [`*${item.name}*`, descripcion(item.description)].filter(Boolean).join('\n'),

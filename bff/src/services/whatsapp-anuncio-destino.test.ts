@@ -262,6 +262,15 @@ ${'Texto de la escuela. '.repeat(50)}
         expect(t).toContain('transfiere por Nequi al número 3194505150');
     });
 
+    it('texto completo: el afiliado ve además su valor; quien no es afiliado, no', () => {
+        const largo = `🏐 ¡CLÍNICA!\n${'Texto de la escuela. '.repeat(50)}`;
+        const item = { ...CLINICA, description: largo };
+        const af = textoFichaDeServicio(item, precioDelServicio(item, { afiliado: true, hoy: '2026-11-04' }), CUENTAS);
+        const no = textoFichaDeServicio(item, precioDelServicio(item, { afiliado: false, hoy: '2026-11-04' }), CUENTAS);
+        expect(af).toContain('Como afiliado del club, tu valor es *$250.000*.');
+        expect(no).not.toContain('afiliado');
+    });
+
     it('afiliado y sin cuentas cargadas', () => {
         const t = textoFichaDeServicio(CLINICA, precioDelServicio(CLINICA, { afiliado: true, hoy: '2026-11-04' }), []);
         expect(t).toContain('Tu valor como afiliado: *$250.000*');
