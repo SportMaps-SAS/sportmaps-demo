@@ -162,3 +162,5 @@ export function textoAfiliadoSinReconocer(p: { general: number | null }): string
             'Para agilizarlo, escríbeme el *nombre del deportista* o el *correo* con el que se inscribió 🙌',
     ].join('\n\n');
 }
+
+// (cambio mínimo dentro de bff/ para comprobar el autodeploy de Render tras reconectar el repo)
