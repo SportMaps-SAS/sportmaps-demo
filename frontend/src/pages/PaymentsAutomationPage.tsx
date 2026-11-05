@@ -106,6 +106,7 @@ interface BillingSettings {
   early_payment_discount_enabled: boolean;
   early_payment_discount_days: number;
   early_payment_discount_percentage: number;
+  early_payment_discount_mode: 'days_from_creation' | 'day_of_month';
   /**
    * Descuento por hermanos (mig. 20260916101241). Automático: open_month lo
    * calcula solo desde el 2do hijo activo (mismo parent_id, misma escuela),
@@ -168,6 +169,7 @@ const DEFAULT_BILLING: Omit<BillingSettings, 'school_id'> = {
   early_payment_discount_enabled: false,
   early_payment_discount_days: 5,
   early_payment_discount_percentage: 0,
+  early_payment_discount_mode: 'days_from_creation',
   sibling_discount_enabled: false,
   sibling_discount_percentage: 0,
   auto_approve_enabled: false,
@@ -758,6 +760,7 @@ export default function PaymentsAutomationPage() {
         early_payment_discount_enabled: billing.early_payment_discount_enabled,
         early_payment_discount_days: billing.early_payment_discount_days,
         early_payment_discount_percentage: billing.early_payment_discount_percentage,
+        early_payment_discount_mode: billing.early_payment_discount_mode,
         sibling_discount_enabled: billing.sibling_discount_enabled,
         // Los escalones mandan: el % plano queda igual al del 2.º hijo (el
         // trigger de la base hace lo mismo; se manda igual por si no está).
@@ -773,7 +776,7 @@ export default function PaymentsAutomationPage() {
         charge_notifications_enabled: billing.charge_notifications_enabled,
       };
 
-      const { error } = await supabase.from('school_settings').upsert(payload, { onConflict: 'school_id' });
+      const { error } = await supabase.from('school_settings').upsert(payload as any, { onConflict: 'school_id' });
       if (error) throw error;
       toast({ title: '✅ Configuración de pagos guardada' });
     } catch (err: any) {
@@ -2641,14 +2644,30 @@ export default function PaymentsAutomationPage() {
                   {billing.early_payment_discount_enabled && (
                     <div className="space-y-3 p-3 rounded-lg border bg-muted/30">
                       <div className="space-y-2">
-                        <Label htmlFor="epd_days">Días de vigencia</Label>
+                        <Label htmlFor="epd_mode">Hasta cuándo vale</Label>
+                        <select
+                          id="epd_mode"
+                          className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                          value={billing.early_payment_discount_mode ?? 'days_from_creation'}
+                          onChange={e => updateBilling('early_payment_discount_mode', e.target.value as 'days_from_creation' | 'day_of_month')}
+                        >
+                          <option value="days_from_creation">Unos días desde que se genera el cobro</option>
+                          <option value="day_of_month">Hasta un día fijo del mes</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="epd_days">{billing.early_payment_discount_mode === 'day_of_month' ? 'Día del mes' : 'Días de vigencia'}</Label>
                         <div className="flex items-center gap-2">
                           <NumberStepper
-                            min={1} max={30} className="w-28 h-9"
+                            min={1} max={billing.early_payment_discount_mode === 'day_of_month' ? 28 : 30} className="w-28 h-9"
                             value={billing.early_payment_discount_days}
                             onChange={v => updateBilling('early_payment_discount_days', v === "" ? 5 : v)}
                           />
-                          <span className="text-sm text-muted-foreground">días desde que se genera el cobro</span>
+                          <span className="text-sm text-muted-foreground">
+                            {billing.early_payment_discount_mode === 'day_of_month'
+                              ? 'el descuento vale hasta ese día del mes en que se genera el cobro'
+                              : 'días desde que se genera el cobro'}
+                          </span>
                         </div>
                       </div>
                       <div className="space-y-2">
