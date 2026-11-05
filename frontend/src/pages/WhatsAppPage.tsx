@@ -268,10 +268,12 @@ export default function WhatsAppPage() {
                             <MessageSquare className="h-5 w-5" /> No se pudo cargar el canal
                         </CardTitle>
                         <CardDescription>
-                            {errorDeCarga ?? 'No llegó respuesta del servidor.'}
+                            {!errorDeCarga || /failed to fetch|networkerror|load failed/i.test(errorDeCarga)
+                                ? 'No pudimos conectar con el servidor. Revisa tu internet e inténtalo de nuevo.'
+                                : errorDeCarga}
                         </CardDescription>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="flex flex-col sm:flex-row gap-2">
                         <Button variant="outline" onClick={() => void cargar()}>
                             <RefreshCw className="h-4 w-4 mr-2" /> Reintentar
                         </Button>

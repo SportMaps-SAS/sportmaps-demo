@@ -21,6 +21,8 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { getUserFriendlyError } from '@/lib/error-translator';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { useOcultarFabSoporte } from '@/lib/supportFab';
 import { FileUpload } from '@/components/common/FileUpload';
 import { StatFilterBar } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
@@ -522,6 +524,8 @@ const CHARGE_PRIORITY: Record<string, number> = {
 export default function PaymentsAutomationPage() {
   const { profile, user } = useAuth();
   const { toast } = useToast();
+  // En celular la burbuja de Mapi tapaba «Aprobar» / «Comprobante» de cada cobro.
+  useOcultarFabSoporte(useIsMobile());
   const { schoolId, schoolName, activeBranchId, currentUserRole, branches, totalBranches } = useSchoolContext();
   // Multisede: con más de una sede se muestra la columna Sede y lo que no
   // tiene sede solo aparece en «Todas» (mismo criterio que la consulta de cobros).
