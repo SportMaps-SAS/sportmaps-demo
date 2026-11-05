@@ -424,7 +424,7 @@ export async function escuelasConRecordatorios(): Promise<Map<string, CanalesEsc
     const out = new Map<string, CanalesEscuela>();
     // `collection_pre_due_enabled` y `overdue_notices_enabled` (migración 20261105…): si aún no existen,
     // se reintenta sin ellas y ambas familias de avisos quedan prendidas, como antes.
-    let { data, error } = await supabase.from('school_settings')
+    let { data, error }: { data: any[] | null; error: any } = await supabase.from('school_settings')
         .select('school_id, whatsapp_collection_reminders_enabled, email_collection_reminders_enabled, collection_pre_due_enabled, overdue_notices_enabled')
         .eq('charge_notifications_enabled', true);
     if (error) {

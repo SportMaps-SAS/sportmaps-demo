@@ -46,6 +46,14 @@ import {
     normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia, esPreguntaDeOtroTema,
 } from './whatsapp-clase-cortesia.service';
 import { BOTON_PUERTA, leerNombreDeDeportista, leerOpcionDePuerta } from './whatsapp-puerta-desconocido';
+import { quierePagarMensualidad } from './whatsapp-pagar-mensualidad';
+
+/**
+ * Otra conversación a mitad del embudo: una pregunta de otro tema o «quiero pagar una
+ * mensualidad» (Monster 2026-11-05: en la pregunta del nombre se leía como nombre, «¡Mucho
+ * gusto, Quiero!»). La contesta el bot general y el paso queda donde iba.
+ */
+const esOtroTema = (texto: string): boolean => esPreguntaDeOtroTema(texto) || quierePagarMensualidad(texto);
 import {
     embudoActivo, cobraClaseEnElBot,
     type AjustesClasePrueba, type AjustesWhatsAppEscuela, type BotonSede, type PreguntaProspecto,
@@ -755,7 +763,7 @@ async function pasoSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: Esta
     if (branchId) return elegirSede(ctx, aj, branchId, estado.datos);
     // Una pregunta (también sin «?»: «cuanto vale la mensualidad») o una frase larga es
     // otra conversación: la contesta el bot general.
-    if (texto.includes('?') || texto.split(/\s+/).length > 7 || esPreguntaDeOtroTema(texto)) return false;
+    if (texto.includes('?') || texto.split(/\s+/).length > 7 || esOtroTema(texto)) return false;
     const intentos = (estado.datos.intentos ?? 0) + 1;
     if (intentos >= MAX_INTENTOS) return aPersona(ctx, estado.datos, 'no_entendio', 'No eligió sede.');
     const m = mensajeDeBienvenida(null, botones, [], '');
@@ -845,7 +853,7 @@ async function pasoPregunta(
     // «cuanto vale la mensualidad» en la pregunta del nombre se leía como nombre («¡Mucho
     // gusto, Cuanto!»). Una pregunta de otro tema sin «?» de la que no salió más que un
     // «nombre» es otra conversación: la contesta el bot y el paso queda donde iba.
-    if (!boton && esPreguntaDeOtroTema(texto) && Object.keys(leidas.respuestas).every((k) => k === 'nombre')) return false;
+    if (!boton && esOtroTema(texto) && Object.keys(leidas.respuestas).every((k) => k === 'nombre')) return false;
     const d = aplicar(estado.datos, leidas, preguntas);
     if (!(p.clave in leidas.respuestas)) {
         // Un mensaje que es otra conversación («¿cuánto vale?») no gasta un intento: lo contesta el bot.
@@ -1022,7 +1030,7 @@ async function pasoFranja(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: string, b
     if (!slotId) {
         // Otra conversación («cuanto vale la mensualidad», sin «?»): la contesta el bot sin
         // gastar un intento, como en la sede y en las preguntas.
-        if (texto.includes('?') || texto.split(/\s+/).length > 7 || esPreguntaDeOtroTema(texto)) return false;
+        if (texto.includes('?') || texto.split(/\s+/).length > 7 || esOtroTema(texto)) return false;
         const intentos = (d.intentos ?? 0) + 1;
         if (intentos >= MAX_INTENTOS) return aPersona(ctx, d, 'no_entendio', 'No eligió horario.');
         return ofrecerFranjas(ctx, { ...d, intentos }, 'Elige uno de los horarios de la lista 👇');

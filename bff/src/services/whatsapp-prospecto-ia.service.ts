@@ -169,6 +169,7 @@ export function promptDeProspecto(p: {
         '- Responde EXACTAMENTE lo que preguntó, en 1 a 4 frases cortas, máximo 600 caracteres. Listas solo si las pidió.',
         '- Usa SOLO la información de las etiquetas. Lo que no esté (cupo, descuento, fecha, requisito, edad de una categoría): «eso te lo confirma la escuela por aquí». No lo deduzcas.',
         '- Precios: solo los de <precios> o la ficha, con el nombre del plan tal cual.',
+        '- Afiliados: quien te escribe NO está reconocido como familia del club (este chat es de interesados). Si pregunta «¿y si soy afiliado?» o «soy del club, ¿cuánto sería?», no le des la cifra de afiliado ni un descuento como suyos: dile que, si ya es del club, la escuela verifica su número o a su deportista y le confirma por aquí el valor que le corresponde; el valor que le das es el general.',
         '- Grupos: el nombre tal cual, sin traducirlo a edades. Si un grupo dice «sin cupos», di «por ahora no recibe deportistas nuevos», no «está lleno».',
         '- Horarios: solo los de <grupos>, sin redondear ni completar con otro grupo.',
         '- Si pregunta por un deporte que no aparece en <grupos>, dile con amabilidad cuál es el deporte de la escuela.',
