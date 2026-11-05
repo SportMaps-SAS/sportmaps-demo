@@ -412,7 +412,9 @@ export default function JoinSchoolByCodePage() {
             {claimed.kind === 'child' && claimed.child_id && (
               <DocumentosHijo childId={claimed.child_id} idDocumentUrl={null} />
             )}
-            <Button className="w-full" onClick={() => navigate('/dashboard')}>Continuar</Button>
+            {/* Recarga completa (no navigate): los roles de la persona se calculan al cargar la app,
+                y recién se le vinculó un hijo o una matrícula. Así el selector de rol aparece ya. */}
+            <Button className="w-full" onClick={() => window.location.assign('/dashboard')}>Continuar</Button>
           </CardContent>
         </Card>
       )}
