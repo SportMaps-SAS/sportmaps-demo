@@ -17,10 +17,10 @@ import { ACUDIENTE_V2, ENTRENADOR_V2, DEPORTISTA_V2 } from '@/lib/feature-flags'
 const enlace = (texto: string) => screen.getByText(texto).closest('a')!;
 
 describe('MobileBottomNav · Chat', () => {
-    it('escuela: Chat → buzón de WhatsApp, y se marca activo estando en /whatsapp', () => {
+    it('escuela: Chat → Comunicaciones, y se marca activo estando en /whatsapp', () => {
         auth.role = 'school';
         render(<MemoryRouter initialEntries={['/whatsapp?tab=bandeja']}><MobileBottomNav /></MemoryRouter>);
-        expect(enlace('Chat')).toHaveAttribute('href', '/whatsapp?tab=conversaciones');
+        expect(enlace('Chat')).toHaveAttribute('href', '/messages');
         expect(enlace('Chat').className).toContain('text-primary');
     });
 
@@ -70,7 +70,7 @@ describe.skipIf(!DEPORTISTA_V2)('MobileBottomNav · deportista V2', () => {
         auth.role = 'school';
         auth.rolEscuela = 'coach';
         render(<MemoryRouter initialEntries={['/dashboard']}><MobileBottomNav /></MemoryRouter>);
-        expect(enlace('Chat')).toHaveAttribute('href', '/whatsapp?tab=conversaciones');
+        expect(enlace('Chat')).toHaveAttribute('href', '/messages');
         expect(screen.queryByText('Sesiones')).toBeNull();
         auth.rolEscuela = null;
     });

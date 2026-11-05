@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
@@ -35,6 +37,7 @@ export default function MessagesPage() {
   const { user, profile } = useAuth();
   const { currentUserRole, schoolId, schoolName } = useSchoolContext();
   const acudienteV2 = esAcudienteV2(currentUserRole ?? profile?.role);
+  const esEscuela = ['school', 'school_admin'].includes(currentUserRole ?? profile?.role ?? '');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
 
@@ -143,6 +146,25 @@ export default function MessagesPage() {
           Comunícate con tu equipo y entrenadores
         </p>
       </div>
+
+      {/* Acceso al WhatsApp de la escuela. /whatsapp ya resuelve los dos casos:
+          con el canal conectado abre las conversaciones; sin conectar muestra
+          el alta para activarlo. Sin consultas extra desde aquí. */}
+      {esEscuela && (
+        <Card>
+          <CardContent className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 py-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <MessageSquare className="h-5 w-5 text-primary shrink-0" />
+              <p className="text-sm text-muted-foreground">
+                Las familias te escriben por WhatsApp. Ábrelo o actívalo desde aquí.
+              </p>
+            </div>
+            <Button asChild className="shrink-0">
+              <Link to="/whatsapp?tab=conversaciones">WhatsApp</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Empty State */}
       {!isLoading && !hasMessages && (

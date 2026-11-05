@@ -55,11 +55,9 @@ const getNavigationItemsForRole = (role: string, showStore = false): NavItem[] =
         { href: '/dashboard', label: 'Inicio', icon: Home },
         { href: '/students', label: 'Alumnos', icon: Users },
         { href: '/payments-automation', label: 'Pagos', icon: CreditCard },
-        // «Chat» de la escuela = el buzón de WhatsApp, que es donde le escriben
-        // las familias. Antes abría /messages (mensajería interna, 0 mensajes en
-        // 90 días: inventario de Comunicaciones 2026-10-12 §5.3). Los demás
-        // roles siguen en /messages hasta que se decida qué pasa con ese módulo.
-        { href: '/whatsapp?tab=conversaciones', label: 'Chat', icon: MessageSquare },
+        // «Chat» de la escuela = Comunicaciones (/messages). El acceso al WhatsApp
+        // de la escuela (o a activarlo) vive dentro de esa pantalla, no en la barra.
+        { href: '/messages', label: 'Chat', icon: MessageSquare, also: ['/whatsapp'] },
         { href: '/settings', label: 'Config', icon: Settings },
       ];
     case 'coach':
