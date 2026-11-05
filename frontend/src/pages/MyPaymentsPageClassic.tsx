@@ -20,7 +20,7 @@ import { formatCurrency } from '@/lib/utils';
 import { normalizeReceiptUrl } from '@/lib/normalizeReceiptUrl';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { calcEarlyPaymentDiscount } from '@/lib/earlyPaymentDiscount';
+import { calcEarlyPaymentDiscount, modoProntoPago } from '@/lib/earlyPaymentDiscount';
 import { MiFacturaElectronicaCard } from '@/components/billing/MiFacturaElectronicaCard';
 import { DebitoAutomaticoCard, DebitoSugerenciaBanner } from '@/components/autopay/DebitoAutomaticoCard';
 import { useMiDebito } from '@/components/autopay/useMiDebito';
@@ -269,7 +269,7 @@ export default function MyPaymentsPage() {
       // ── PASO 3: Enriquecer con school_type ───────────────────────────────
       const transactionSchoolIds = [...new Set((payments || []).map((p: any) => p.school_id).filter(Boolean))];
       let schoolTypeMap: Record<string, string> = {};
-      let discountConfigMap: Record<string, { enabled: boolean; days: number; percentage: number }> = {};
+      let discountConfigMap: Record<string, { enabled: boolean; days: number; percentage: number; mode?: 'days_from_creation' | 'day_of_month' }> = {};
 
       if (transactionSchoolIds.length > 0) {
         const { data: schoolsData } = await supabase
@@ -280,12 +280,13 @@ export default function MyPaymentsPage() {
 
         const { data: settingsRows } = await supabase
           .from('school_settings')
-          .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+          .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
           .in('school_id', transactionSchoolIds);
         discountConfigMap = Object.fromEntries((settingsRows || []).map((s: any) => [s.school_id, {
           enabled: !!s.early_payment_discount_enabled,
           days: s.early_payment_discount_days || 5,
           percentage: s.early_payment_discount_percentage || 0,
+          mode: modoProntoPago(s.early_payment_discount_mode),
         }]));
       }
 

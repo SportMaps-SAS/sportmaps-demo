@@ -25,6 +25,12 @@
       "has": [{ "type": "host", "value": "stg\\.sportmaps\\.co" }],
       "destination": "https://app.sportmaps.co/my-payments",
       "permanent": false
+    },
+    {
+      "source": "/:path((?!sw\\.js$).*)",
+      "has": [{ "type": "host", "value": "stg\\.sportmaps\\.co" }],
+      "destination": "https://app.sportmaps.co/:path",
+      "permanent": false
     }
   ],
   "rewrites": [

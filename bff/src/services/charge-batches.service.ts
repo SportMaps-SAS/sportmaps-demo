@@ -561,7 +561,7 @@ export async function cobrosAbiertos(schoolId: string, atleta: AtletaInput) {
                 .then(({ data: d, error: e }) => (e ? [] : (d ?? []) as Record<string, any>[]))
             : Promise.resolve([] as Record<string, any>[]),
         supabase.from('school_settings')
-            .select('early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+            .select('early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
             .eq('school_id', schoolId).maybeSingle()
             .then(({ data: d }) => (d ?? null) as Record<string, any> | null),
     ]);
@@ -600,7 +600,10 @@ export async function cobrosAbiertos(schoolId: string, atleta: AtletaInput) {
         if (s?.early_payment_discount_enabled && Number(s.early_payment_discount_percentage) > 0 && !(pronto > 0)) {
             const dias = Number(s.early_payment_discount_days ?? 0);
             const creado = String(p.created_at ?? '').slice(0, 10);
-            if (creado && addDaysToDateString(creado, dias) >= hoy) {
+            const limite = (s as any).early_payment_discount_mode === 'day_of_month'
+                ? `${creado.slice(0, 8)}${String(Math.min(Math.max(dias, 1), 28)).padStart(2, '0')}`
+                : addDaysToDateString(creado, dias);
+            if (creado && limite >= hoy) {
                 sugerencia = { basis: 'porcentaje', value: Number(s.early_payment_discount_percentage), reason_code: 'pronto_pago' };
             }
         }

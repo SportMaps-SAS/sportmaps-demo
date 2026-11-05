@@ -1030,7 +1030,7 @@ export function errorEnDatosDeCampana(d: DatosNuevaCampana, ahora = Date.now()):
     }
     const sedes = d.filtro?.branch_ids ?? [];
     if (!Array.isArray(sedes) || sedes.some((s) => !UUID.test(String(s)))) return 'Hay una sede inválida.';
-    if (d.respuestaSi != null && String(d.respuestaSi).length > 1024) return 'La respuesta al «Sí» va hasta 1024 caracteres.';
+    if (d.respuestaSi != null && String(d.respuestaSi).length > 4000) return 'La respuesta al «Sí» va hasta 4000 caracteres.';
     if (d.venceAt) {
         const t = new Date(d.venceAt).getTime();
         if (Number.isNaN(t) || t <= ahora) return 'La fecha de vencimiento tiene que ser futura.';

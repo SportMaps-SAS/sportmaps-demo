@@ -67,6 +67,12 @@ import {
     FLUJO_PUERTA, atenderTurnoPuerta, iniciarPuerta, esBotonPuerta, PASO_PUERTA_MENU, BOTON_PUERTA,
     type CtxPuerta,
 } from './whatsapp-puerta-desconocido';
+import {
+    PASO_PAGO_ACLARACION, HORAS_FRENO_ACLARACION, BOTONES_PAGO_MENSUALIDAD, ENTEXTO_PAGO_MENSUALIDAD,
+    esBotonPagoMensualidad, quierePagarMensualidad, leerRespuestaAclaracion, textoAclaracionDePago,
+    textoInscribirmeTrasPago, preguntaPorAfiliacionHipotetica, textoAfiliadoSinReconocer,
+    PASO_PROSPECTO_AFILIADO, precioGeneralMostrado,
+} from './whatsapp-pagar-mensualidad';
 import { resolverRespuestaDeCobro } from './whatsapp-respuesta-de-cobro.service';
 import {
     bienvenidaHabilitada, esSaludoDeBienvenida, textoDeBienvenida, PASO_BIENVENIDA_DESCONOCIDO, BIENVENIDA_VENTANA_HORAS,
@@ -2741,6 +2747,81 @@ async function darBienvenidaDeEmbudo(
     }
 }
 
+/**
+ * «Quiero PAGAR una mensualidad» de alguien que el teléfono NO reconoce como familia
+ * (Monster 2026-11-05: un interesado del embudo recibía solo «Ya le pasé tu mensaje a
+ * la escuela»). Solo escuelas con embudo; la familia reconocida nunca llega acá (su
+ * flujo de pagos no cambia).
+ *
+ *  - 'preguntar': el texto dice que quiere pagar una mensualidad → UNA pregunta con dos
+ *    botones, una sola vez por conversación (30 días). Conserva el estado del embudo en
+ *    el payload (no reinicia nada ni repite la bienvenida).
+ *  - 'responder': contestó la pregunta. [Soy del club y pago] → la puerta de «Ya soy del
+ *    club» (nombre del deportista o correo/OTP; si no aparece, la escuela lo ubica).
+ *    [Quiero inscribirme] → el embudo (clase de prueba; la mensualidad después).
+ *
+ * null = no era para acá (sigue lo de siempre). Nunca lanza.
+ */
+async function aclararPagoDeMensualidad(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, modo: 'responder' | 'preguntar',
+): Promise<ResultadoDesconocido | null> {
+    try {
+        const schoolId = integration.school_id;
+        if (modo === 'responder') {
+            if (botonId && !esBotonPagoMensualidad(botonId)) return null;
+            const eleccion = leerRespuestaAclaracion(text, botonId);
+            if (!eleccion) return null;
+            if (!botonId) {
+                // Escrita: solo si la pregunta es lo último que salió de la conversación.
+                const ultimo = (await mensajesRecientes(conversationId)).find((f) => f.direction === 'outbound');
+                if (String(ultimo?.payload?.step ?? '') !== PASO_PAGO_ACLARACION) return null;
+            }
+            if (!embudoActivo(await ajustesDeLaEscuela(schoolId))) return null;
+            if (eleccion === 'club') {
+                await atenderPuertaEnBot(integration, conversationId, contactWaId, 'Ya soy del club', BOTON_PUERTA.CLUB);
+                return 'pago_mensualidad_club';
+            }
+            const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+            const via = estado ? 'embudo' : await pasoPorElEmbudo(conversationId);
+            // Sin haber pasado por el embudo: arranca (clase de prueba). Si ya pasó, no se reinicia.
+            if (!estado && via !== 'embudo') {
+                const saludo = await saludoDePresentacion(conversationId, await nombreDeEscuela(schoolId));
+                if (await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+                    { saludo, step: PASO_DESCONOCIDO_ESCOLAR })) {
+                    return 'pago_mensualidad_inscribirme';
+                }
+            }
+            const ajustes = await ajustesDeLaEscuela(schoolId);
+            const [valores, clase] = await Promise.all([
+                preciosParaProspecto(schoolId, ajustes.responderPrecios).catch(() => null),
+                textosClase(schoolId),
+            ]);
+            await deliver(integration, conversationId, contactWaId,
+                textoInscribirmeTrasPago({ valores, nombreClase: clase.nombre }),
+                { step: 'pago_mensualidad_inscribirme', ...payloadDeEstado(estado) });
+            await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+            return 'pago_mensualidad_inscribirme';
+        }
+
+        // 'preguntar'
+        if (botonId || !quierePagarMensualidad(text)) return null;
+        if (!embudoActivo(await ajustesDeLaEscuela(schoolId))) return null;
+        const recientes = await mensajesRecientes(conversationId);
+        if (humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return null;
+        if (await hayOtpVigente(integration.id, contactWaId)) return null;
+        if (!(await reservarPasoUnaVez(conversationId, PASO_PAGO_ACLARACION, HORAS_FRENO_ACLARACION))) return null;
+        const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+        await deliver(integration, conversationId, contactWaId, textoAclaracionDePago(),
+            { step: PASO_PAGO_ACLARACION, ...payloadDeEstado(estado) },
+            { botones: BOTONES_PAGO_MENSUALIDAD, enTexto: ENTEXTO_PAGO_MENSUALIDAD });
+        return 'pago_mensualidad_aclaracion';
+    } catch (err: any) {
+        console.error('[whatsapp-bot] aclaración de pago de mensualidad falló', err?.message || err);
+        return null;
+    }
+}
+
 /** step del acuse al interesado del embudo cuya pregunta no contestó nadie más. */
 export const PASO_EMBUDO_ACUSE = 'embudo_pregunta_a_la_escuela';
 
@@ -3184,6 +3265,7 @@ export type ResultadoDesconocido =
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
     | 'embudo' | 'embudo_acuse'
+    | 'pago_mensualidad_aclaracion' | 'pago_mensualidad_club' | 'pago_mensualidad_inscribirme' | 'prospecto_afiliado'
     | ResultadoAnuncio
     | 'frenado' | 'silencio';
 
@@ -3313,6 +3395,12 @@ async function atenderDesconocidoEnEscuela(
     //        anuncio manda (la ficha de la clínica, una persona o el embudo de la clase
     //        de prueba). Va antes del embudo abierto: tocar el anuncio de la clínica es
     //        una elección explícita, no la respuesta a «¿nombre del deportista?».
+    // 0a''''. Contesta la aclaración de «quiero pagar una mensualidad» ([Soy del club y
+    //         pago] / [Quiero inscribirme], tocados o escritos): la elección es explícita y
+    //         va antes de los demás flujos. Ver whatsapp-pagar-mensualidad.ts.
+    const alPago = await aclararPagoDeMensualidad(integration, conversationId, contactWaId, text, botonId, 'responder');
+    if (alPago) return alPago;
+
     const cacheAnuncio: { recientes?: FilaReciente[] } = {};
     const porAnuncio = await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'anuncio', cacheAnuncio);
     if (porAnuncio) return porAnuncio;
@@ -3381,6 +3469,12 @@ async function atenderDesconocidoEnEscuela(
     //       los flujos abiertos, que contestan primero lo suyo.
     const porServicio = await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'texto', cacheAnuncio);
     if (porServicio) return porServicio;
+
+    // 0'''a. «Quiero PAGAR una mensualidad» de alguien que no es una familia reconocida
+    //        (interesado del embudo o desconocido): UNA pregunta con dos botones, una vez
+    //        por conversación, en vez del acuse genérico. Después de los flujos abiertos.
+    const preguntaPago = await aclararPagoDeMensualidad(integration, conversationId, contactWaId, text, botonId, 'preguntar');
+    if (preguntaPago) return preguntaPago;
 
     // 1a. Un código SOLO cuenta si hay un OTP vigente para este contacto. Seis
     //     dígitos seguidos también son un monto («son 170000») o un pedazo de
@@ -3900,6 +3994,19 @@ async function responderSeguimientoDeProspecto(
         if (await pasoReciente(conversationId, 'escalated', 24)) return 'frenado';
         await escalate(integration, conversationId, contactWaId, PASO_PROSPECTO_PERSONA, { texto: nuevo });
         return 'prospecto_persona';
+    }
+
+    // 1b. «¿Y si soy afiliado?» de quien el teléfono NO reconoce como familia (Monster
+    //     2026-11-05: el modelo le dio el valor de afiliado como si fuera suyo). Una
+    //     hipótesis no lo vuelve familia: respuesta condicional con el valor general y sin
+    //     la cifra de afiliado; la escuela lo verifica. Una vez cada 24 h; si se repite, lo
+    //     contesta el modelo (cuyo prompt trae la misma regla).
+    if (preguntaPorAfiliacionHipotetica(nuevo) && !(await pasoReciente(conversationId, PASO_PROSPECTO_AFILIADO, 24))) {
+        await deliver(integration, conversationId, contactWaId,
+            textoAfiliadoSinReconocer({ general: precioGeneralMostrado(await mensajesRecientes(conversationId)) }),
+            { step: PASO_PROSPECTO_AFILIADO });
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+        return 'prospecto_afiliado';
     }
 
     const intereses = interesesDeProspecto(nuevo);

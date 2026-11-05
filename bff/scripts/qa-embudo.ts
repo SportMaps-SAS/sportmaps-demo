@@ -10,7 +10,7 @@
  *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
  *
- * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows (varias con coma; sin --solo
+ * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows|pagos (varias con coma; sin --solo
  * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
  * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
  * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
@@ -94,6 +94,7 @@ import {
 import { rangosDeEscuela, elegirGrupoEmbudo, type RangoGrupo } from '../src/services/grupos-por-edad.service';
 import { BOTON_EMBUDO, PASO_EMBUDO, ANTICIPACION_MIN_EMBUDO, sinEmojis } from '../src/services/whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from '../src/services/whatsapp-puerta-desconocido';
+import { BOTON_PAGO_MENSUALIDAD, PASO_PAGO_ACLARACION } from '../src/services/whatsapp-pagar-mensualidad';
 import { normalizar } from '../src/services/whatsapp-clase-cortesia.service';
 import { diaDeLaSemana } from '../src/services/semana-equipo.service';
 import { limpiarCacheTextosClase, formatoPesos } from '../src/services/textos-clase-prueba';
@@ -112,8 +113,8 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
-type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows';
-const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows'];
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows' | 'pagos';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows', 'pagos'];
 const ESCUELA = arg('escuela');
 const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
 const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
@@ -1692,12 +1693,15 @@ function revisarFicha(c: Conversacion, e: Escuela, r: Resultado, it: ItemConFich
     const p = (s.payload ?? {}) as Record<string, any>;
     debe(r, p[MARCA_DESTINO] === 'servicio' && p.servicio_id === it.id,
         `no fue a la ficha de «${it.name}» (destino: ${p[MARCA_DESTINO] ?? '—'}, step: ${s.step ?? '—'})`);
-    debe(r, s.texto.includes(`*${it.name}*`), 'la ficha no trae el nombre del servicio');
+    // Si la descripción es el texto completo del anuncio de la escuela (≥ 700 caracteres), la ficha lo manda
+    // tal cual: trae su propio título, fechas y precios (sin el nombre en negrita ni la línea del abono).
+    const textoCompleto = String(it.description ?? '').trim().length >= 700;
+    if (!textoCompleto) debe(r, s.texto.includes(`*${it.name}*`), 'la ficha no trae el nombre del servicio');
     const hoy = precioDeHoyEsperado(it, !!o.afiliado);
     if (hoy) debe(r, s.texto.includes(formatoPesos(hoy)), `la ficha no dice el precio de hoy (${formatoPesos(hoy)})`);
     if (o.afiliado && Number(it.precio_afiliado) > 0) debe(r, /afiliado/i.test(s.texto), 'no le dijo que es su valor de afiliado');
     const pct = Number(it.abono_minimo_pct);
-    if (hoy && it.allow_installments === true && pct >= 1 && pct < 100) {
+    if (!textoCompleto && hoy && it.allow_installments === true && pct >= 1 && pct < 100) {
         debe(r, s.texto.includes(formatoPesos(Math.ceil((hoy * pct) / 100))), `no dice el abono mínimo (${pct} %)`);
     }
     debe(r, /comprobante|datos de pago/i.test(s.texto), 'no le dice cómo pagar ni que la escuela le manda los datos de pago');
@@ -1873,6 +1877,132 @@ async function correrAnuncios(e: Escuela): Promise<Resultado[]> {
     rs.push(...await conTablasVirtuales(['whatsapp_anuncio_destino'], () => enParalelo(conMapeo, (caso) => correrCasoAnuncio(caso, e))));
     process.stdout.write('\n');
     return rs;
+}
+
+// ─── «Pagar una mensualidad» de quien el teléfono no reconoce (whatsapp-pagar-mensualidad) ──
+
+const TIENE_ACLARACION = (c: Conversacion) => c.opciones().some((o) => o.id === BOTON_PAGO_MENSUALIDAD.CLUB)
+    && c.opciones().some((o) => o.id === BOTON_PAGO_MENSUALIDAD.INSCRIBIRME);
+const ACUSE_GENERICO = /le pas[eé] tu mensaje a la escuela/i;
+
+/**
+ * Estados: (A) familia reconocida, (B) interesado del embudo, (C) desconocido. «Quiero
+ * pagar una mensualidad» de B y C recibe UNA pregunta con dos botones, una sola vez; la
+ * familia (A) sigue su flujo de pagos sin preguntas; preguntar «cuánto es» no abre la
+ * aclaración; y «¿y si soy afiliado?» no le da la cifra de afiliado como suya.
+ */
+async function correrPagos(e: Escuela): Promise<Resultado[]> {
+    const perfil = perfilesConGrupo(e, 1, { genero: 'f' })[0] ?? null;
+    const items = await serviciosDeAnuncio(e.id);
+    const clinica = items.find((it) => /\bclinicas?\b/.test(normalizar(it.name))) ?? null;
+    const cifraAfiliado = clinica && Number(clinica.precio_afiliado) > 0 ? formatoPesos(Number(clinica.precio_afiliado)) : null;
+    const extra: Resultado[] = [];
+    const casos: { titulo: string; correr: (c: Conversacion, r: Resultado) => Promise<void>; familia?: boolean }[] = [
+        {
+            titulo: 'CAPTURA 05-nov: embudo → clínica → pagos → «Y si soy afiliado?» → «Para pagar una mensualidad»',
+            correr: async (c, r) => {
+                if (!perfil) { noAplica(r, 'ningún perfil tiene grupo con franjas'); return; }
+                await c.decir('Hola, quiero información para una clase de prueba');
+                await seguir(c, e, perfil, r);
+                debe(r, r.desenlace === 'pago', `no llegó al pago del embudo (terminó en «${r.desenlace}»)`);
+                // Cambiar de tema a mitad: no reinicia nada ni repite la bienvenida.
+                await c.decir('Info de la clínica');
+                noReinicia(c, e, r);
+                await c.decir('¿A qué número te consigno?');
+                noReinicia(c, e, r);
+                await c.decir('Y si soy afiliado?');
+                noReinicia(c, e, r);
+                if (cifraAfiliado) debe(r, !c.ultimoTexto().includes(cifraAfiliado), `le dio la cifra de afiliado (${cifraAfiliado}) a quien no está reconocido como familia`);
+                debe(r, !TIENE_ACLARACION(c), 'la hipótesis «¿y si soy afiliado?» abrió la aclaración de pago');
+                await c.decir('Para pagar una mensualidad');
+                debe(r, TIENE_ACLARACION(c), 'a «Para pagar una mensualidad» no le preguntó [Soy del club y pago] / [Quiero inscribirme]');
+                debe(r, !ACUSE_GENERICO.test(c.ultimoTexto()), 'a «Para pagar una mensualidad» le contestó solo el acuse genérico');
+                noReinicia(c, e, r);
+                debe(r, c.opciones().length === 2, `la aclaración trae ${c.opciones().length} botones y no 2`);
+                const club = c.bifurcar('captura · [Soy del club y pago]');
+                const insc = c.bifurcar('captura · [Quiero inscribirme]');
+                // Una sola vez por conversación: no la repite.
+                await c.decir('Quiero pagar la mensualidad');
+                debe(r, !TIENE_ACLARACION(c), 'repitió la aclaración (una sola vez por conversación)');
+                // Botón 1 → la puerta del club: pide el nombre del deportista o el correo.
+                const rc = nuevoResultado(club.titulo, club, 'pagos'); rc.desenlace = 'respuesta';
+                await club.tocar((o) => o.id === BOTON_PAGO_MENSUALIDAD.CLUB);
+                debe(rc, /nombre[^\n]*deportista/i.test(club.ultimoTexto()) && /correo/i.test(club.ultimoTexto()), 'el botón del club no pidió el nombre del deportista o el correo');
+                await club.decir('Sofía Gómez Uribe');
+                debe(rc, /alguien te responde|la escuela/i.test(club.ultimoTexto()), 'tras el nombre no dijo que la escuela le responde');
+                // Botón 2 → el embudo: clase de prueba primero, la mensualidad después; sin reiniciar.
+                const ri = nuevoResultado(insc.titulo, insc, 'pagos'); ri.desenlace = 'respuesta';
+                await insc.tocar((o) => o.id === BOTON_PAGO_MENSUALIDAD.INSCRIBIRME);
+                debe(ri, /clase/i.test(insc.ultimoTexto()) && /mensualidad/i.test(insc.ultimoTexto()), 'el botón de inscribirme no explicó la clase primero y la mensualidad después');
+                noReinicia(insc, e, ri);
+                extra.push(cerrar(rc, e, null), cerrar(ri, e, null));
+            },
+        },
+        {
+            titulo: 'interesado: clínica → «Quiero pagar la mensualidad» → la aclaración (y con el título del botón escrito)',
+            correr: async (c, r) => {
+                await c.decir('Hola, quiero información para una clase de prueba');
+                if (e.sedes.length > 1) await c.tocar((o) => o.id.startsWith(BOTON_EMBUDO.SEDE));
+                await c.decir('Info de la clínica');
+                await c.decir('Quiero pagar la mensualidad');
+                debe(r, TIENE_ACLARACION(c), 'no preguntó si es del club o quiere inscribirse');
+                debe(r, !/gratis/i.test(c.ultimoTexto()), 'dice «gratis»');
+                await c.decir('Soy del club y pago');
+                debe(r, /nombre[^\n]*deportista/i.test(c.ultimoTexto()), 'el título escrito del botón del club no pidió el nombre del deportista');
+            },
+        },
+        {
+            titulo: 'desconocido sin contexto: «voy a pagar la mensualidad» → la aclaración → [Quiero inscribirme] arranca el embudo',
+            correr: async (c, r) => {
+                await c.decir('Voy a pagar la mensualidad');
+                debe(r, TIENE_ACLARACION(c), 'a un desconocido que dice «voy a pagar la mensualidad» no le preguntó');
+                await c.tocar((o) => o.id === BOTON_PAGO_MENSUALIDAD.INSCRIBIRME);
+                debe(r, c.opciones().some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE)) || /clase/i.test(c.ultimoTexto()), 'no siguió el embudo de la clase de prueba');
+                // «Cancelar la mensualidad» (en Colombia = pagar) también.
+                const c2 = new Conversacion('cancelar', e.id, nuevoN());
+                await c2.decir('Quiero cancelar la mensualidad');
+                debe(r, TIENE_ACLARACION(c2), '«quiero cancelar la mensualidad» no abrió la aclaración');
+            },
+        },
+        {
+            titulo: 'interesado pregunta «¿cuánto es la mensualidad?» → el valor, sin la aclaración de pago',
+            correr: async (c, r) => {
+                if (!perfil) { noAplica(r, 'ningún perfil tiene grupo con franjas'); return; }
+                await c.decir('Hola, quiero información para entrenar voleibol');
+                await seguir(c, e, perfil, r);
+                await c.decir('¿Cuánto es la mensualidad?');
+                debe(r, !TIENE_ACLARACION(c), 'a «¿cuánto es la mensualidad?» le abrió la aclaración de pago');
+                if (c.hablo()) debe(r, /\$\s?\d{1,3}([.,]\d{3})+/.test(c.ultimoTexto()), 'no le dio el valor de la mensualidad');
+                noReinicia(c, e, r);
+                debe(r, !diceClaseGratis(c.ultimoTexto(), false), 'dice «gratis»');
+            },
+        },
+        {
+            titulo: 'FAMILIA reconocida: «Para pagar una mensualidad» → su flujo de pagos, sin preguntar nada',
+            familia: true,
+            correr: async (c, r) => {
+                await c.decir('Para pagar una mensualidad');
+                debe(r, !TIENE_ACLARACION(c), 'a la familia reconocida le preguntó si es del club');
+                debe(r, !c.salidas().some((s) => s.step === PASO_PAGO_ACLARACION), 'a la familia reconocida le mandó la aclaración');
+            },
+        },
+    ];
+    const rs = await enParalelo(casos, async (caso) => {
+        const c = new Conversacion(caso.titulo, e.id, nuevoN());
+        if (caso.familia) {
+            // El número ya está ligado a un deportista inscrito: la identificación de la sesión (un id inexistente).
+            c.sesion.rol = 'papa';
+            c.sesion.parent_id = randomUUID();
+        }
+        const r = nuevoResultado(caso.titulo, c, 'pagos');
+        r.desenlace = 'respuesta';
+        await protegido(r, () => caso.correr(c, r));
+        cerrar(r, e, null);
+        progreso(r);
+        return r;
+    });
+    process.stdout.write('\n');
+    return [...rs, ...extra];
 }
 
 // ─── Formularios de WhatsApp (Flows, fase F-a) ──────────────────────────────
@@ -2246,7 +2376,7 @@ function imprimirFallas(rs: Resultado[]): void {
 
 (async () => {
     if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
-        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows[,…]] [--variante <nombre>[,…]] '
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows|pagos[,…]] [--variante <nombre>[,…]] '
             + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
         log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
@@ -2269,6 +2399,7 @@ function imprimirFallas(rs: Resultado[]): void {
         if (b === 'despues') rs = await correrDespues(escuela);
         if (b === 'anuncios') rs = await correrAnuncios(escuela);
         if (b === 'flows') rs = await correrFlows(escuela);
+        if (b === 'pagos') rs = await correrPagos(escuela);
         if (b === 'variantes') {
             const v = await correrVariantes(escuela);
             rs = v.resultados;

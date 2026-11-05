@@ -118,6 +118,19 @@ describe('planificar', () => {
         expect(c.familyKey).toBe('wa:573001112233');
     });
 
+    it('cada familia de avisos tiene su interruptor: sin «antes de vencer» no sale el previo; sin «mora» no sale la mora', () => {
+        const f = () => familia('caro@x.co', '573001112233', [
+            { id: 'p1', atleta: 'Samuel R', vence: '2026-10-10' },
+        ]);
+        const previo = [pago('p1', '2026-10-10')];
+        const mora = [pago('p1', '2026-09-29', { status: 'overdue' })];
+        const moraFam = () => familia('caro@x.co', '573001112233', [{ id: 'p1', atleta: 'Samuel R', vence: '2026-09-29' }]);
+        expect(planificar(entrada([f()], previo)).contactos).toHaveLength(1);
+        expect(planificar({ ...entrada([f()], previo), tipos: { previo: false, mora: true } }).contactos).toHaveLength(0);
+        expect(planificar({ ...entrada([moraFam()], mora), tipos: { previo: true, mora: false } }).contactos).toHaveLength(0);
+        expect(planificar({ ...entrada([moraFam()], mora), tipos: { previo: false, mora: true } }).contactos).toHaveLength(1);
+    });
+
     it('escalones distintos: sale solo el más severo (1 contacto/día)', () => {
         const f = familia('caro@x.co', '573001112233', [
             { id: 'p1', atleta: 'Samuel', vence: '2026-10-10' },  // -1

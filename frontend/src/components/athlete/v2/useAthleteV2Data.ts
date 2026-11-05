@@ -19,7 +19,7 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { calcEarlyPaymentDiscount } from '@/lib/earlyPaymentDiscount';
+import { calcEarlyPaymentDiscount, modoProntoPago } from '@/lib/earlyPaymentDiscount';
 import { plazoAutoeval } from '@/lib/postEntrenoAutoeval';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
 import { getMyOpenTournaments, type OpenTournament } from '@/lib/api/tournaments';
@@ -166,14 +166,14 @@ export async function cargarCobros(userId: string): Promise<CobrosDeportista> {
   // Pronto pago: misma regla que Pagos del acudiente (solo mensualidad, sin cobro
   // anterior sin pagar). Si la configuración no carga, no se descuenta nada.
   const escuelas = [...new Set(filas.map((p) => p.school_id).filter(Boolean))] as string[];
-  const cfg = new Map<string, { enabled: boolean; days: number; percentage: number }>();
+  const cfg = new Map<string, { enabled: boolean; days: number; percentage: number; mode?: 'days_from_creation' | 'day_of_month' }>();
   if (escuelas.length > 0) {
     const { data: ss } = await db
       .from('school_settings')
-      .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+      .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
       .in('school_id', escuelas);
-    for (const s of (ss ?? []) as { school_id: string; early_payment_discount_enabled: boolean | null; early_payment_discount_days: number | null; early_payment_discount_percentage: number | null }[]) {
-      cfg.set(s.school_id, { enabled: !!s.early_payment_discount_enabled, days: s.early_payment_discount_days || 5, percentage: s.early_payment_discount_percentage || 0 });
+    for (const s of (ss ?? []) as { school_id: string; early_payment_discount_enabled: boolean | null; early_payment_discount_days: number | null; early_payment_discount_percentage: number | null; early_payment_discount_mode?: string | null }[]) {
+      cfg.set(s.school_id, { enabled: !!s.early_payment_discount_enabled, days: s.early_payment_discount_days || 5, percentage: s.early_payment_discount_percentage || 0, mode: modoProntoPago(s.early_payment_discount_mode) });
     }
   }
   const sinPagar = filas.filter((p) => ['pending', 'overdue', 'partial'].includes(p.status));

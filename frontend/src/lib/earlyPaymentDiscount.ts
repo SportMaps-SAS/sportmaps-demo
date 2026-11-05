@@ -4,6 +4,17 @@ export interface EarlyPaymentDiscountConfig {
   enabled: boolean;
   days: number;
   percentage: number; // 0-100
+  /**
+   * 'days_from_creation' (default): `days` días desde que se creó el cobro.
+   * 'day_of_month': `days` es el día del mes (1-28) del mes en que se creó el cobro.
+   * Debe coincidir con fn_payments_pronto_pago_servidor (20261105111401).
+   */
+  mode?: 'days_from_creation' | 'day_of_month';
+}
+
+/** Lee el modo desde una fila de school_settings (cualquier valor raro = días). */
+export function modoProntoPago(v: unknown): 'days_from_creation' | 'day_of_month' {
+  return v === 'day_of_month' ? 'day_of_month' : 'days_from_creation';
 }
 
 export interface EarlyPaymentDiscountResult {
@@ -68,7 +79,11 @@ export function calcEarlyPaymentDiscount(
   }); // "YYYY-MM-DD, HH:mm:ss"
   const createdDateStr = createdBogota.split(',')[0];
   const limit = new Date(createdDateStr + 'T12:00:00');
-  limit.setDate(limit.getDate() + params.config.days);
+  if (params.config.mode === 'day_of_month') {
+    limit.setDate(Math.min(Math.max(params.config.days, 1), 28));
+  } else {
+    limit.setDate(limit.getDate() + params.config.days);
+  }
   const validUntil = limit.toISOString().split('T')[0];
 
   const today = todayColombia();

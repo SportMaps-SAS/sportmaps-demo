@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 864,
-  "head": "20261104131451",
+  "count": 868,
+  "head": "20261105115807",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -867,6 +867,10 @@
     {"v":"20261103202210","file":"20261103202210_informe_corregir_publicado.sql","sha256":"4cf117398ab222740562d46b06f1ff7ba853ab45b30e3f9a1d3d7ab2982b36b1","added":"2026-11-04","by":"Brayan Steven Lopez"},
     {"v":"20261103202610","file":"20261103202610_campanas_aprobar_admin_plataforma.sql","sha256":"1cbb830587cd535b3d2fa491246db740ccaa5cddefa0d49bef70617d1e480013","added":"2026-11-04","by":"Brayan Steven Lopez"},
     {"v":"20261104115612","file":"20261104115612_whatsapp_anuncios_atribucion.sql","sha256":"c91c26e40b4a41f28388b9a2e0dde7cc25b292414eb761f7b1a33592061e08bf","added":"2026-11-04","by":"Brayan Steven Lopez"},
-    {"v":"20261104131451","file":"20261104131451_whatsapp_formularios_flows.sql","sha256":"85443b3634be781bc18c0ee419e19650ed563f9e392c539196351f059cce5581","added":"2026-11-04","by":"Brayan Steven Lopez"}
+    {"v":"20261104131451","file":"20261104131451_whatsapp_formularios_flows.sql","sha256":"85443b3634be781bc18c0ee419e19650ed563f9e392c539196351f059cce5581","added":"2026-11-04","by":"Brayan Steven Lopez"},
+    {"v":"20261105111401","file":"20261105111401_pronto_pago_hasta_dia_del_mes.sql","sha256":"d6d7a3619b57e8efe77d4183147554a5563d43e625b78993fa0c3ffb9520ec66","added":"2026-11-05","by":"Brayan Steven Lopez"},
+    {"v":"20261105113317","file":"20261105113317_campana_respuesta_si_hasta_4000.sql","sha256":"a04d1534516d4d0b3bac81f8df04ff28acb71f4b8b0055068829a82ee9949acc","added":"2026-11-05","by":"Brayan Steven Lopez"},
+    {"v":"20261105115230","file":"20261105115230_avisos_de_mora_por_escuela.sql","sha256":"bc6127baa7b07d3c9bae4505073f5455eac91c69039c87db4ff583973b515b41","added":"2026-11-05","by":"Brayan Steven Lopez"},
+    {"v":"20261105115807","file":"20261105115807_avisos_de_cobro_independientes.sql","sha256":"c5f7f6dd0a8d394b070eeba2dc5a5ebf97f6684a8826400825f6ad4c5fd81610","added":"2026-11-05","by":"Brayan Steven Lopez"}
   ]
 }
