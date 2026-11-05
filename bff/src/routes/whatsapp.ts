@@ -533,6 +533,12 @@ async function handleBotTurn(
     // X-05). A quien el asistente atiende se le pide escribirlo, UNA vez al día,
     // y la conversación queda abierta en el buzón para que alguien la mire.
     if (msg.type === 'unsupported') {
+        // Un mensaje borrado para todos (`revoke`) o editado (`edit`) llega como tipo
+        // aparte y NO es un mensaje que no pudimos abrir: pedirle que lo reescriba
+        // confunde (Dynasty 11-05 09:48, Monster 10:59: el acudiente escribió «ya les
+        // transfiero» y recibió «No pude abrir tu último mensaje»).
+        const tipoOriginal = String((msg.raw as any)?.type || '');
+        if (tipoOriginal === 'revoke' || tipoOriginal === 'edit') return;
         const d = await debeAtender(integration, conversationId, msg.contactWaId).catch(() => null);
         if (!d?.atender || optedOut) return;
         await abrirEnBuzon(integration, conversationId, msg.contactWaId)
