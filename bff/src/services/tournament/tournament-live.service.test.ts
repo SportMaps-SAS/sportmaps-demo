@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// validateImageUrl compara contra el host de SUPABASE_URL; el CI lo fija en mock.supabase.co.
+// Estas pruebas usan x.supabase.co, así que lo fijamos aquí (cada archivo corre aislado).
+process.env.SUPABASE_URL = 'https://x.supabase.co';
 
 vi.mock('../../config/supabase', async () => {
   const kit = await import('./fakeDb.testkit');

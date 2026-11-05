@@ -4,6 +4,9 @@
  * Base simulada en memoria (fakeDb.testkit).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+// validateImageUrl compara contra el host de SUPABASE_URL; el CI lo fija en mock.supabase.co.
+// Estas pruebas usan x.supabase.co, así que lo fijamos aquí (cada archivo corre aislado).
+process.env.SUPABASE_URL = 'https://x.supabase.co';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import express from 'express';
