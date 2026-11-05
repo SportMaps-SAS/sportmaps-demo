@@ -69,6 +69,7 @@ export default function JoinSchoolByCodePage() {
   const [findError, setFindError] = useState<string | null>(null);
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const [claimed, setClaimed] = useState<ReclamarFichaResult | null>(null);
+  const [showDoc, setShowDoc] = useState(false);
 
   const today = todayColombia();
 
@@ -148,6 +149,7 @@ export default function JoinSchoolByCodePage() {
     setCandidates([]);
     setSearched(false);
     setFindError(null);
+    setShowDoc(false);
     setStep('find');
     void findFicha(null); // primero por el correo de la cuenta
   }
@@ -322,6 +324,53 @@ export default function JoinSchoolByCodePage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {searching && !searched && (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Buscando con el correo de tu cuenta…
+              </p>
+            )}
+
+            {findError && <Alert variant="destructive"><AlertDescription>{findError}</AlertDescription></Alert>}
+
+            {candidates.length > 0 && (
+              <p className="text-sm font-medium">Encontramos esto con tu correo. ¿Es correcto?</p>
+            )}
+
+            {candidates.map((c) => (
+              <div key={c.ficha_id} className="rounded-xl border p-3 space-y-2">
+                <div>
+                  <p className="font-semibold">{c.nombre}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {c.tipo === 'menor' ? 'Menor de edad' : 'Mayor de edad'}{c.team_name ? ` · ${c.team_name}` : ''}
+                  </p>
+                </div>
+                {c.puede_reclamar ? (
+                  <Button className="w-full" disabled={!!claimingId} onClick={() => void claim(c)}>
+                    {claimingId === c.ficha_id && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                    {c.tipo === 'menor' ? 'Sí, es mi hijo(a)' : 'Sí, soy yo'}
+                  </Button>
+                ) : (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Es un deportista mayor de edad: solo puede reclamarla quien tenga el mismo correo que la escuela
+                    registró. Si es tu ficha, envía la solicitud y {school.school_name} la aprueba.
+                  </p>
+                )}
+              </div>
+            ))}
+
+            {searched && candidates.length === 0 && !searching && !findError && !showDoc && (
+              <p className="text-sm text-muted-foreground">
+                Con ese correo no encontramos una ficha. Si tienes el documento del deportista, búscala abajo; si no, envía tus datos y la escuela te registra.
+              </p>
+            )}
+
+            {candidates.length > 0 && !showDoc && (
+              <Button type="button" variant="ghost" className="w-full" onClick={() => setShowDoc(true)}>
+                No es: buscar por documento
+              </Button>
+            )}
+
+            {(showDoc || !!findError || (searched && candidates.length === 0 && !searching)) && (
             <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); void findFicha(doc); }}>
               <Label htmlFor="join-doc">Documento del deportista</Label>
               <div className="flex gap-2">
@@ -339,45 +388,10 @@ export default function JoinSchoolByCodePage() {
                 </Button>
               </div>
             </form>
-
-            {searching && !searched && (
-              <p className="text-sm text-muted-foreground flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" /> Buscando con el correo de tu cuenta…
-              </p>
-            )}
-
-            {findError && <Alert variant="destructive"><AlertDescription>{findError}</AlertDescription></Alert>}
-
-            {candidates.map((c) => (
-              <div key={c.ficha_id} className="rounded-xl border p-3 space-y-2">
-                <div>
-                  <p className="font-semibold">{c.nombre}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {c.tipo === 'menor' ? 'Menor de edad' : 'Mayor de edad'}{c.team_name ? ` · ${c.team_name}` : ''}
-                  </p>
-                </div>
-                {c.puede_reclamar ? (
-                  <Button className="w-full" disabled={!!claimingId} onClick={() => void claim(c)}>
-                    {claimingId === c.ficha_id && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    {c.tipo === 'menor' ? 'Es mi hijo(a)' : 'Soy yo'}
-                  </Button>
-                ) : (
-                  <p className="text-xs text-amber-700 dark:text-amber-400">
-                    Es un deportista mayor de edad: solo puede reclamarla quien tenga el mismo correo que la escuela
-                    registró. Si es tu ficha, envía la solicitud y {school.school_name} la aprueba.
-                  </p>
-                )}
-              </div>
-            ))}
-
-            {searched && candidates.length === 0 && !searching && !findError && (
-              <p className="text-sm text-muted-foreground">
-                No encontramos una ficha con esos datos. Puedes enviar tus datos y {school.school_name} te registra.
-              </p>
             )}
 
             <Button variant={candidates.length ? 'outline' : 'default'} className="w-full" onClick={() => setStep('form')}>
-              {candidates.length ? 'No es ninguna: enviar mis datos' : 'Enviar mis datos a la escuela'}
+              {candidates.length ? 'No es ninguna: enviar mis datos' : 'No la encuentro: enviar mis datos a la escuela'}
             </Button>
             <Button type="button" variant="ghost" className="w-full" onClick={() => setStep('confirm')}>Atrás</Button>
           </CardContent>

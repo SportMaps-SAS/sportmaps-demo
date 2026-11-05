@@ -34,13 +34,13 @@ function pintar(props: Partial<Parameters<typeof EstadoCuentaAcudienteView>[0]> 
 
 describe('EstadoCuentaAcudienteView', () => {
   it('frase con el saldo de la RPC y un botón a pagar ese cobro', () => {
-    pintar({ cobros: [c({ id: 'oct' }), c({ id: 'jul', status: 'paid', amount_paid: 200_000, period_month: 7, payment_date: '2026-07-06' })] });
+    pintar({ cobros: [c({ id: 'oct' }), c({ id: 'jul', status: 'paid', amount_paid: 200_000, period_month: 7, due_date: '2026-07-10', payment_date: '2026-07-06' })] });
     expect(screen.getByRole('heading', { level: 1 }).textContent).toMatch(/^Sofía debe \$\s?765\.000$/);
     expect(screen.getByRole('link', { name: 'Pagar' }).getAttribute('href')).toBe('/my-payments?pay=oct');
   });
 
   it('cada mes se abre para ver sus cobros, con el estado en palabras', () => {
-    pintar({ cobros: [c({ id: 'oct' }), c({ id: 'jul', status: 'paid', amount_paid: 200_000, period_month: 7, payment_date: '2026-07-06', concept: 'Mensualidad Julio' })] });
+    pintar({ cobros: [c({ id: 'oct' }), c({ id: 'jul', status: 'paid', amount_paid: 200_000, period_month: 7, due_date: '2026-07-10', payment_date: '2026-07-06', concept: 'Mensualidad Julio' })] });
     const julio = screen.getByRole('button', { name: /Julio de 2026/ });
     expect(julio.getAttribute('aria-expanded')).toBe('false');
     expect(screen.getByRole('button', { name: /Octubre de 2026/ }).getAttribute('aria-expanded')).toBe('true');
