@@ -250,6 +250,18 @@ describe('la ficha', () => {
         expect(t).not.toMatch(/gratis|undefined|null|NaN/i);
     });
 
+    it('si la descripción es el texto completo del anuncio, se manda tal cual y solo se agrega cómo pagar', () => {
+        const largo = `🏐 ¡CLÍNICA!
+${'Texto de la escuela. '.repeat(50)}
+💰 Inversión: *$300.000*`;
+        const item = { ...CLINICA, description: largo };
+        const t = textoFichaDeServicio(item, precioDelServicio(item, { afiliado: false, hoy: '2026-11-04' }), CUENTAS);
+        expect(t.startsWith(largo)).toBe(true);
+        expect(t).not.toContain('Valor hoy');
+        expect(t).not.toContain('*Clínica de armadores y atacantes*');
+        expect(t).toContain('transfiere por Nequi al número 3194505150');
+    });
+
     it('afiliado y sin cuentas cargadas', () => {
         const t = textoFichaDeServicio(CLINICA, precioDelServicio(CLINICA, { afiliado: true, hoy: '2026-11-04' }), []);
         expect(t).toContain('Tu valor como afiliado: *$250.000*');

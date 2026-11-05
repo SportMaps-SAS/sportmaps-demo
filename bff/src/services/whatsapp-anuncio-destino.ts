@@ -416,6 +416,9 @@ export function diaLegible(ymd: string, menos = 0): string {
 // ─── Textos (puros) ─────────────────────────────────────────────────────────
 
 const MAX_DESCRIPCION = 900;
+/** Descripción que es el texto completo del anuncio de la escuela: se manda tal cual. */
+const TEXTO_COMPLETO_MIN = 700;
+const TEXTO_COMPLETO_MAX = 3400; // WhatsApp admite 4096; deja sitio al bloque de pago
 
 function descripcion(t: string | null | undefined): string | null {
     const s = String(t ?? '').trim();
@@ -454,6 +457,17 @@ export function textoFichaDeServicio(item: ItemConFicha, precio: PrecioDeServici
         ? `Para pagar o separar tu cupo, transfiere ${como}${como.endsWith('\n') ? '\n' : ' '}` +
             'y envíame aquí mismo la foto o el PDF del comprobante 📸'
         : 'La escuela te escribe por aquí con los datos de pago para separar tu cupo.';
+    // Si la escuela pegó en la descripción el TEXTO COMPLETO de su anuncio (≥ 700
+    // caracteres: Monster, clínica 11-05) se manda tal cual, sin título ni líneas
+    // de valor repetidas, y solo se le agrega cómo pagar. Su texto ya trae fecha,
+    // precio y qué incluye; la versión recortada fue lo que la escuela rechazó.
+    const completo = String(item.description ?? '').trim();
+    if (completo.length >= TEXTO_COMPLETO_MIN) {
+        const cuerpo = completo.length > TEXTO_COMPLETO_MAX
+            ? `${completo.slice(0, TEXTO_COMPLETO_MAX).replace(/\s+\S*$/, '')}…`
+            : completo;
+        return [cuerpo, pago].join('\n\n');
+    }
     return [
         [`*${item.name}*`, descripcion(item.description)].filter(Boolean).join('\n'),
         [cuando ? `Cuándo: ${cuando}` : null, ...lineasDeValor(precio)].filter(Boolean).join('\n'),
