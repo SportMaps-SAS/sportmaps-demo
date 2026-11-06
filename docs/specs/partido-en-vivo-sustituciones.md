@@ -395,6 +395,25 @@ Botón **Copiar para WhatsApp** que arma texto plano con `*negritas*` de WhatsAp
 marcador; cronología resumida; tabla de minutos por jugador («Nombre · 52′ · 87 %»); y una línea final editable.
 Sin enviar nada: copia al portapapeles (el envío por WhatsApp Business no entra en v1).
 
+### 9.3.1 Informe real de Carmel (ejemplo enviado por el usuario, 2026-11-05) → plantilla definitiva
+El formato que Julián manda hoy por WhatsApp, y que el **PDF** (y el texto copiable) debe reproducir **en ese orden y estilo**:
+
+1. **Informe del partido** (título) · **Fecha** · **Hora** · **Partido** («Carmel Club vs Rival») · **Lugar** · **Resultado** («3-3»).
+2. **Alineación** (titulares): «Nombre Apellido **dorsal**», una por línea. → **el dorsal es obligatorio en el modelo** (hoy el ejemplo lo lleva en cada jugador).
+3. **Sustituciones** (banca): mismo formato nombre + dorsal.
+4. **Cambios realizados (1.er tiempo / 2.º tiempo / 3.er tiempo):** «X ingresa al 11' (sale Y)». Agrupados **por tiempo**, con minuto dentro del tiempo.
+5. **Anotaciones (goles a favor):** jugador + minuto, **con segundos cuando se registran** (7'47"), o solo minuto.
+6. **Goles en contra:** **solo el minuto y el tiempo**, sin autor («6'31"», «25" primer tiempo», «6' segundo tiempo»). → el gol en contra **no pide jugador**; el rival no tiene alineación.
+7. **Amonestaciones:** amarillas/rojas con jugador, o «Ninguna» (si no hay, se imprime ese texto).
+8. **Informe General:** texto libre del entrenador (valoración del rival, dominio, lo colectivo, ánimo). **No se genera**: es el campo `development`/`summary` que el entrenador redacta; el sistema solo deja el encabezado y, en la fase de IA (D-V11 después), un borrador editable. Duración total («casi 65 minutos») sí se calcula y se ofrece como dato.
+
+Implicaciones para el spec:
+- **Orden y secciones fijas** (PDF y WhatsApp usan la misma plantilla); en PDF con el logo/colores de la escuela.
+- **Cronómetro con segundos:** el evento guarda `game_second`; el informe muestra `mm'ss"` solo si no es redondo.
+- **Cambios por tiempo, no por cronología plana:** la cronología de §9.1 se reemplaza por secciones «Cambios (1.er tiempo)…», «Anotaciones», «Goles en contra», «Amonestaciones». Reingresos se listan igual que cualquier cambio (ver respuesta 2).
+- **Dorsal** en `match_lineup_players` (revisar si ya existe `jersey_number`) y en el flujo de convocar.
+- El ejemplo trae **inconsistencias humanas** (dos «Alan», un nombre repetido, un cambio sin minuto): justamente lo que el registro en vivo corrige, porque el minuto sale del reloj y el nombre de la lista.
+
 ### 9.4 Enlace con la evaluación existente
 - Al abrir el paso **Evaluar**, los **minutos** ya vienen cargados desde `match_lineup_players.minutes_played`
   y aparecen junto al nombre; al evaluador le sirve para ponderar («jugó 12′, no se le exige igual»).
@@ -528,6 +547,16 @@ el JWT del usuario). Verificar el deploy de Render solo si se toca el BFF.
 4. ¿Cómo es el informe de WhatsApp de hoy? Pedirle **un ejemplo real** (3 informes) para ajustar la plantilla de §9.3.
 5. ¿Los partidos tienen siempre árbitro oficial o hay partidos de práctica (esos no deberían contar para el historial)?
 6. ¿A quién se manda el informe: al grupo de padres, a la administración, a otro cuerpo técnico?
+
+### 16.1 Respuestas del usuario (2026-11-05, a nombre de Carmel)
+
+1. Liga vs amistoso: **sí hay un formato adicional** → el formato (tiempos/duración) se escoge por partido (D-V1).
+2. Reingresos: **sí suelen permitirse** → el modelo de tramos (`match_player_stints`) debe admitir entrar/salir/volver a entrar sin tope; no asumir cambios definitivos.
+3. Quien maneja el celular: **un entrenador asistente** (NO Julián) → director = quien inicia (D-V13), el flujo de cancha se diseña para el asistente.
+4. Informe: **mismo estilo que el ejemplo de WhatsApp que el usuario envió, pero en PDF** → entregable F5 = PDF con la plantilla de §9.3 (además de «Copiar para WhatsApp»). Ejemplo real: pendiente de que el usuario lo reenvíe al repo/chat.
+5. Árbitro: **no siempre, pero debería** → el partido lleva un dato de árbitro opcional y un tipo (oficial / práctica) que decide si cuenta en el historial.
+6. Destino del informe: **administración por ahora, a los padres también** → el PDF se genera para la administración; el envío a padres entra con D-V12 (publicación manual, solo minutos de su hijo).
+7. Alcance: **solo Carmel** por ahora (flag `live_match_enabled`), abierto después a otras escuelas.
 
 ## 17. Estado
 

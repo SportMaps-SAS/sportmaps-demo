@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { CoachEvaluation } from './api';
 import { periodLabel, scoreWord } from './periods';
+import { formatCount } from './scoring';
 
 function scoreTone(score: number | null): string {
   if (score === null) return 'bg-muted';
@@ -56,7 +57,10 @@ export function EvaluationHistory({
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpenId(isOpen ? null : e.id)} aria-expanded={isOpen}>
                   <p className="text-sm font-medium">{periodLabel(e.period_type, e.period_start)}</p>
                   <p className="text-xs text-muted-foreground">
-                    {e.overall_score?.toFixed(1) ?? '—'} · {scoreWord(e.overall_score)}
+                    {e.overall_score == null ? 'Sin ítems con nota' : <>{e.overall_score.toFixed(1)} · {scoreWord(e.overall_score)}</>}
+                    {e.coach_evaluation_scores.some((s) => s.not_applicable) && (
+                      <> · {formatCount(e.coach_evaluation_scores.filter((s) => !s.not_applicable).length, e.coach_evaluation_scores.length)}</>
+                    )}
                   </p>
                 </button>
                 {onEdit && (
@@ -83,7 +87,9 @@ export function EvaluationHistory({
                       <li key={s.criterion_id}>
                         <div className="flex justify-between gap-2">
                           <span>{s.criterion_name}</span>
-                          <span className="shrink-0 font-semibold">{s.score} · {scoreWord(s.score)}</span>
+                          {s.not_applicable
+                            ? <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">No aplica</span>
+                            : <span className="shrink-0 font-semibold">{s.score} · {scoreWord(s.score)}</span>}
                         </div>
                         {s.comment && <p className="text-xs text-muted-foreground break-words">{s.comment}</p>}
                       </li>

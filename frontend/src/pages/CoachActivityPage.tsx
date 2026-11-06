@@ -7,7 +7,7 @@
  * (GET /api/v1/school/coach-activity), no de N consultas desde el cliente.
  */
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { addDays, format, startOfWeek } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -31,6 +31,9 @@ export default function CoachActivityPage() {
   const thisWeek = useMemo(currentMonday, []);
   const [week, setWeek] = useState(thisWeek);
   const [openStaffId, setOpenStaffId] = useState<string | null>(null);
+  // ?calificar=1 (atajo del menú): invita a elegir un entrenador y abre su ficha en «Calificación».
+  const [searchParams] = useSearchParams();
+  const calificar = searchParams.get('calificar') === '1';
   // Calificación: la ficha (Sheet) se cierra mientras está abierta y vuelve al
   // terminar -- dos diálogos de Radix abiertos a la vez se cierran solos.
   const [evalTarget, setEvalTarget] = useState<EvaluationTarget | null>(null);
@@ -69,6 +72,11 @@ export default function CoachActivityPage() {
             Qué hizo cada entrenador en la semana: sesiones planificadas, listas tomadas y evaluaciones.
             Abre a un entrenador para calificarlo.
           </p>
+          {calificar && (
+            <p className="w-full rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium">
+              Elige un entrenador para calificarlo.
+            </p>
+          )}
           <Button variant="outline" size="sm" onClick={() => setCriteriaOpen(true)} disabled={!schoolId}>
             <ListChecks className="mr-1.5 h-4 w-4" /> Ítems de calificación
           </Button>
@@ -136,7 +144,7 @@ export default function CoachActivityPage() {
         </>
       )}
 
-      <CoachDetailSheet coach={openCoach} onClose={() => setOpenStaffId(null)} onEvaluate={startEvaluation} />
+      <CoachDetailSheet coach={openCoach} defaultTab={calificar ? 'calificacion' : 'sesiones'} onClose={() => setOpenStaffId(null)} onEvaluate={startEvaluation} />
       {schoolId && <CoachEvaluationDialog schoolId={schoolId} target={evalTarget} onClose={endEvaluation} />}
       {schoolId && <CriteriaManagerDialog schoolId={schoolId} open={criteriaOpen} onOpenChange={setCriteriaOpen} />}
     </div>

@@ -238,6 +238,10 @@ Encender Carmel: `UPDATE school_settings SET … WHERE school_id = '374a6716-…
 
 ## 10. Decisiones para el usuario
 
+> **Cerradas por el usuario el 2026-11-05:** **D1** = la autoevaluación por categoría y sesión la hace **el
+> entrenador** (opción A). **D2** = «No aplica» va **en ambas** rúbricas (entrenadores y mesociclo; opción C).
+> El resto (D3–D10) sigue como recomendación hasta que el usuario diga otra cosa. Sigue siendo solo Carmel.
+
 ### D1. ¿Qué significa «por categoría y por sesión»?
 - **A. Del coach** (autoevaluación y evaluación con alcance de categoría y de sesión). *Es la lectura de este spec.*
 - **B. De los deportistas**: ya existe casi todo (evaluación por sesión en `performance_entries`, informe grupal por equipo, `team_reports`); faltaría una vista y no una evaluación nueva.

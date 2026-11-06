@@ -40,8 +40,10 @@ function adherenceTone(pct: number | null): string {
   return 'text-red-700 dark:text-red-400';
 }
 
-export function CoachDetailSheet({ coach, onClose, onEvaluate }: {
+export function CoachDetailSheet({ coach, onClose, onEvaluate, defaultTab = 'sesiones' }: {
   coach: CoachActivity | null;
+  /** Pestaña con la que abre la ficha. */
+  defaultTab?: string;
   onClose: () => void;
   /** Abre la calificación (la monta la página: dos diálogos de Radix abiertos a la vez se cierran solos). */
   onEvaluate: (coach: CoachActivity, evaluation?: CoachEvaluation | null) => void;
@@ -107,7 +109,7 @@ export function CoachDetailSheet({ coach, onClose, onEvaluate }: {
 
               <CoachWeeksChart weekly={coach.weekly} name={coach.full_name} />
 
-              <Tabs defaultValue="sesiones" className="w-full">
+              <Tabs defaultValue={defaultTab} className="w-full">
                 <TabsList className="grid w-full grid-cols-5 h-auto">
                   <TabsTrigger value="sesiones" className="text-xs px-1 py-1.5">Sesiones</TabsTrigger>
                   <TabsTrigger value="asistencia" className="text-xs px-1 py-1.5">Asistencia</TabsTrigger>

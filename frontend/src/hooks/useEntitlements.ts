@@ -139,6 +139,8 @@ interface EntitlementsResponse {
      * tope y no lo usa.
      */
     coach_attendance_retro_days?: number | null;
+    /** «No aplica» en las rúbricas (`school_settings.rubric_allow_na`). Default false. */
+    rubric_allow_na?: boolean;
 }
 
 // ============================================================
@@ -260,6 +262,10 @@ export interface Entitlements {
     /** Días hacia atrás que un entrenador puede pasar lista o reabrir una
      *  sesión (`coach_attendance_retro_days`). Default 7; Carmel Club 90. */
     coachAttendanceRetroDays: number;
+
+    /** Se puede marcar «No aplica» en las rúbricas (evaluación de entrenadores
+     *  y mesociclo); no cuenta en el promedio (`rubric_allow_na`). Default false. */
+    rubricAllowNa: boolean;
 }
 
 export interface EntitlementsHelpers {
@@ -340,6 +346,7 @@ const EMPTY_ENTITLEMENTS: Entitlements = {
     accessRosterEnabled: false,
     allowSecondaryTeamEnrollment: false,
     coachAttendanceRetroDays: 7,
+    rubricAllowNa: false,
 };
 
 // ============================================================
@@ -466,6 +473,7 @@ export function useEntitlements(): Entitlements & EntitlementsHelpers & {
                 Number.isInteger(data.coach_attendance_retro_days) && (data.coach_attendance_retro_days as number) >= 0
                     ? (data.coach_attendance_retro_days as number)
                     : 7,
+            rubricAllowNa: data.rubric_allow_na === true,
         };
     }, [query.data]);
 

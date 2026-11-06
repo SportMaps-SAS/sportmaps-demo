@@ -175,6 +175,8 @@ const GESTION_DEPORTIVA_ESCUELA: NavItem[] = [
   // Primero: la pregunta del dueño es "¿mis entrenadores están trabajando?"
   // (spec rediseno-seguimiento-deportivo F4). Solo lectura.
   { title: 'Seguimiento deportivo', href: '/seguimiento-deportivo', icon: ClipboardCheck },
+  // Atajo: abre Seguimiento deportivo en modo calificar (sin ruta nueva).
+  { title: 'Calificar entrenadores', href: '/seguimiento-deportivo?calificar=1', icon: Award },
   {
     title: 'Equipos y Planes',
     icon: Users,

@@ -177,6 +177,7 @@ router.get(
         mesoEvaluations.push(...await fetchAllRows<MesoEvalRow>(() => supabase
           .from('training_mesocycle_evaluations')
           .select('created_by, created_at, mesocycle_id')
+          .not('score', 'is', null)  // «No aplica» no cuenta como evaluación hecha
           .eq('school_id', schoolId)
           .in('created_by', ids)
           .gte('created_at', fromIso)
@@ -330,6 +331,7 @@ router.get(
         mesoEvaluations.push(...await fetchAllRows<MesoEvalRow>(() => supabase
           .from('training_mesocycle_evaluations')
           .select('created_by, created_at, mesocycle_id')
+          .not('score', 'is', null)  // «No aplica» no cuenta como evaluación hecha
           .eq('school_id', schoolId)
           .eq('created_by', auth)
           .gte('created_at', fromIso)

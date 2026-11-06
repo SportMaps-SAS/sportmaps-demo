@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 899,
-  "head": "20261105231617",
+  "count": 900,
+  "head": "20261105234141",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -874,7 +874,6 @@
     {"v":"20261105115230","file":"20261105115230_avisos_de_mora_por_escuela.sql","sha256":"bc6127baa7b07d3c9bae4505073f5455eac91c69039c87db4ff583973b515b41","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105115807","file":"20261105115807_avisos_de_cobro_independientes.sql","sha256":"c5f7f6dd0a8d394b070eeba2dc5a5ebf97f6684a8826400825f6ad4c5fd81610","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105124322","file":"20261105124322_unirse_codigo_ficha_precargada.sql","sha256":"e7aca557785d1092bd73d70d5853e5ac87b4b54fdb6bf93c0f2946aff75dbc23","added":"2026-11-05","by":"Brayan Steven Lopez"},
-    {"v":"20261105212701","file":"20261105212701_solicitud_unirse_con_documento.sql","sha256":"dfd49d66d90588869c0f97dab418d3db4bf2fa6e55eef8067f400bba59afd844","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105162243","file":"20261105162243_seguridad_reservas_cierre.sql","sha256":"33a2408b17d13888b4dbbe86f4be32c96a2e2de32c3ff7f6c1fa195b59bfd1ea","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105162331","file":"20261105162331_reservas_f1_columnas.sql","sha256":"a8f822061b75b941a7ed409bc192321d7baa7962952f59aaed7700ee94702aa7","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105162500","file":"20261105162500_reservas_f1_tarifas_politicas.sql","sha256":"b4616d874ab1153bc54ff254e445a1f06964917b4492bad135b109f567660086","added":"2026-11-05","by":"Brayan Steven Lopez"},
@@ -891,6 +890,7 @@
     {"v":"20261105212046","file":"20261105212046_schools_manage_owner_with_check.sql","sha256":"6826b5067bee34af1b46a92c15c3a6cfc3c8bcf3ade02c1f08afce4c31d93987","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105212125","file":"20261105212125_reservas_staff_privilegiado_y_canales_ia.sql","sha256":"7fb3e8c08a3f0861cc00c96975d5e1ec14772473d8cdadfea31031b7074b8130","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105212222","file":"20261105212222_comprobante_valor_confirmado_dynasty.sql","sha256":"1e95054070598f17c60b6bb0ad4e4c2b84f626dec8cd501f8ee4274a7e22c695","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105212701","file":"20261105212701_solicitud_unirse_con_documento.sql","sha256":"dfd49d66d90588869c0f97dab418d3db4bf2fa6e55eef8067f400bba59afd844","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213545","file":"20261105213545_rubrica_na_entrenadores.sql","sha256":"d5ac0de7cd665aa64285473ff47e5f9adddc7e973df8852012704e9ab25bf4f6","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213600","file":"20261105213600_rubrica_na_mesociclo.sql","sha256":"6b559574aadd39ec29e9eda93786d44051a1f2c4ed6d67248bf620b845b2c04c","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213601","file":"20261105213601_anon_sin_escritura_en_tablas_de_planes.sql","sha256":"dbf3d3d0dcf4fdbcf5c0c9606c81d1f91c8107c12949d1cad6bc1b6c3d3dc09b","added":"2026-11-06","by":"Brayan Steven Lopez"},
@@ -902,6 +902,7 @@
     {"v":"20261105231554","file":"20261105231554_partido_vivo_flag_agenda_y_dorsal.sql","sha256":"3982660f20ec53a389b0dddd1f60e4200abbb49c8f973921eafab5232ee886ad","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231602","file":"20261105231602_partido_vivo_tablas_y_rls.sql","sha256":"416f0f058a0aba97f442dc16e243cf8b857e6c99ce66315266b0e1e225834d4d","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231608","file":"20261105231608_partido_vivo_rpcs.sql","sha256":"e5a212cbbb686503473473fe532a959ffb7caaa25f594a0f79eb4b7b46014e9c","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231617","file":"20261105231617_partido_vivo_bloqueo_roster_y_minutos_al_publicar.sql","sha256":"8de9ac3cbf0a781ed00f4f4d1365d577b7fc235615c6bd9656de8388c676a20b","added":"2026-11-06","by":"Brayan Steven Lopez"}
+    {"v":"20261105231617","file":"20261105231617_partido_vivo_bloqueo_roster_y_minutos_al_publicar.sql","sha256":"8de9ac3cbf0a781ed00f4f4d1365d577b7fc235615c6bd9656de8388c676a20b","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105234141","file":"20261105234141_partido_vivo_gate_visible_set_director_y_report.sql","sha256":"6a5f0aaed1947d84971ddb3db07081d655fc2c793ad3e60ffb8785b205ebf1d5","added":"2026-11-06","by":"Brayan Steven Lopez"}
   ]
 }

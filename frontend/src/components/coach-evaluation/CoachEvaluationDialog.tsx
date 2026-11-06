@@ -15,11 +15,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { useEntitlements } from '@/hooks/useEntitlements';
 import { todayColombia } from '@/lib/dateUtils';
 import {
   autoMetricText, getCoachPeriodSummary, listCriteria, listEvaluations, saveEvaluation,
   type CoachEvaluation,
 } from './api';
+import { buildScoresPayload, canPublish, formatCount, naMajority, summarizeScores } from './scoring';
 import {
   PERIOD_TYPES, SCORE_LABELS, lastClosedPeriod, periodEnd, periodLabel, periodStartOf, shiftPeriod,
   type PeriodType,
@@ -39,10 +41,11 @@ interface Props {
   onClose: () => void;
 }
 
-type ScoreState = Record<string, { score?: number; comment: string }>;
+type ScoreState = Record<string, { score?: number; na?: boolean; comment: string }>;
 
 export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
   const { toast } = useToast();
+  const { rubricAllowNa } = useEntitlements();
   const qc = useQueryClient();
   const today = todayColombia();
   const [periodType, setPeriodType] = useState<PeriodType>('mensual');
@@ -94,7 +97,7 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     const next: ScoreState = {};
-    for (const s of existing?.coach_evaluation_scores ?? []) next[s.criterion_id] = { score: s.score, comment: s.comment ?? '' };
+    for (const s of existing?.coach_evaluation_scores ?? []) next[s.criterion_id] = { score: s.score ?? undefined, na: s.not_applicable, comment: s.comment ?? '' };
     setScores(next);
     setTexts({
       strengths: existing?.strengths ?? '',
@@ -105,18 +108,22 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
   }, [open, existing]);
 
   // Ítems activos + los inactivos que ya tienen nota en esta evaluación.
-  const criteria = (criteriaQ.data ?? []).filter((c) => c.active || scores[c.id]?.score);
-  const scored = criteria.filter((c) => scores[c.id]?.score);
-  const average = scored.length > 0
-    ? scored.reduce((n, c) => n + (scores[c.id]!.score as number), 0) / scored.length
-    : null;
+  const criteria = (criteriaQ.data ?? []).filter((c) => c.active || scores[c.id]?.score || scores[c.id]?.na);
+  // Con la opción apagada un N/A ya guardado cuenta como sin responder (la RPC lo rechazaría).
+  const effective = (id: string) => {
+    const st = scores[id];
+    return st && st.na && !rubricAllowNa ? { ...st, na: false } : st;
+  };
+  const sum = summarizeScores(criteria.map((c) => effective(c.id)));
+  const average = sum.average;
+  const staleNa = !rubricAllowNa && criteria.some((c) => scores[c.id]?.na);
 
   const save = useMutation({
     mutationFn: (publish: boolean) => saveEvaluation({
       staffId,
       periodType,
       periodStart,
-      scores: scored.map((c) => ({ criterion_id: c.id, score: scores[c.id]!.score as number, comment: scores[c.id]!.comment || null })),
+      scores: buildScoresPayload(criteria.map((c) => ({ id: c.id, state: effective(c.id) })), { allowNa: rubricAllowNa }),
       ...texts,
       // Lo que el admin tiene delante queda congelado con la nota.
       snapshot: summaryQ.data ?? existing?.activity_snapshot ?? null,
@@ -124,10 +131,17 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
     }),
     onSuccess: (_id, publish) => {
       qc.invalidateQueries({ queryKey: ['coach-evaluations'] });
-      toast({
-        title: publish ? 'Evaluación publicada' : 'Borrador guardado',
-        description: publish ? `${target?.fullName} ya puede verla.` : 'Solo la administración la ve.',
-      });
+      const yaPublicada = existing?.status === 'publicada';
+      toast(publish
+        ? {
+            title: yaPublicada ? 'Evaluación actualizada' : 'Evaluación publicada',
+            description: yaPublicada
+              ? `Se actualizó la evaluación de ${target?.fullName}.`
+              : target?.hasAccount
+                ? `${target?.fullName} la verá en «Mis evaluaciones» y le llegó un aviso.`
+                : `${target?.fullName} todavía no entra a SportMaps: la verá cuando ingrese.`,
+          }
+        : { title: 'Borrador guardado', description: 'Solo la administración la ve.' });
       onClose();
     },
     onError: (err: unknown) => toast({
@@ -242,7 +256,7 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
                             type="button"
                             role="radio"
                             aria-checked={active}
-                            onClick={() => setScores((p) => ({ ...p, [c.id]: { ...st, score: active ? undefined : n } }))}
+                            onClick={() => setScores((p) => ({ ...p, [c.id]: { ...st, na: false, score: active ? undefined : n } }))}
                             className={`rounded-lg border px-1 py-1.5 text-center transition-colors ${active
                               ? 'border-primary bg-primary text-primary-foreground'
                               : 'hover:bg-accent'}`}
@@ -253,6 +267,19 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
                         );
                       })}
                     </div>
+                    {rubricAllowNa && (
+                      <button
+                        type="button"
+                        role="radio"
+                        aria-checked={!!st.na}
+                        onClick={() => setScores((p) => ({ ...p, [c.id]: { ...st, score: undefined, na: !st.na } }))}
+                        className={`w-full rounded-lg border px-2 py-1.5 text-center text-xs transition-colors ${st.na
+                          ? 'border-muted-foreground/50 bg-muted font-semibold text-foreground'
+                          : 'text-muted-foreground hover:bg-accent'}`}
+                      >
+                        No aplica
+                      </button>
+                    )}
                     <Input
                       placeholder="Comentario (opcional)"
                       value={st.comment}
@@ -262,6 +289,17 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
                 );
               })}
             </ol>
+          )}
+
+          {staleNa && (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              Esta evaluación tenía «No aplica» y la opción está apagada; elige una nota para esos ítems.
+            </p>
+          )}
+          {rubricAllowNa && naMajority(sum) && (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              Marcaste {sum.na} de {sum.total} como «No aplica»; ¿seguro?
+            </p>
           )}
 
           {/* Textos generales */}
@@ -288,13 +326,16 @@ export function CoachEvaluationDialog({ schoolId, target, onClose }: Props) {
         <DialogFooter className="px-6 py-4 border-t shrink-0 bg-background flex-col-reverse sm:flex-row sm:items-center gap-2">
           <p className="text-sm text-muted-foreground sm:mr-auto">
             {average === null
-              ? 'Califica al menos un ítem.'
-              : <>Promedio: <span className="font-bold text-foreground">{average.toFixed(1)}</span> · {SCORE_LABELS[Math.round(average)]}</>}
+              ? (sum.na > 0 && sum.applicable === 0
+                ? 'Todo en «No aplica»: puedes guardarlo como borrador, no publicarlo.'
+                : 'Califica al menos un ítem.')
+              : <>Promedio: <span className="font-bold text-foreground">{average.toFixed(1)}</span> · {SCORE_LABELS[Math.round(average)]}
+                {sum.na > 0 && <> · {formatCount(sum.applicable, sum.total)} · {sum.na} no aplica</>}</>}
           </p>
-          <Button type="button" variant="outline" onClick={() => save.mutate(false)} disabled={save.isPending || scored.length === 0}>
+          <Button type="button" variant="outline" onClick={() => save.mutate(false)} disabled={save.isPending || sum.answered === 0}>
             Guardar borrador
           </Button>
-          <Button type="button" onClick={() => save.mutate(true)} disabled={save.isPending || scored.length === 0}>
+          <Button type="button" onClick={() => save.mutate(true)} disabled={save.isPending || !canPublish(sum)}>
             {save.isPending ? 'Guardando…' : existing?.status === 'publicada' ? 'Actualizar publicada' : 'Publicar'}
           </Button>
         </DialogFooter>
