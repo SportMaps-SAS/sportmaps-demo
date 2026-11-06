@@ -37,6 +37,9 @@ import facilitiesRouter from './routes/facilities';
 import trialClassesRouter from './routes/trial-classes';
 import trialClassesSelfRouter from './routes/trial-classes-self.routes';
 import reservationsAdminRouter from './routes/reservations-admin.routes';
+import reservationsCheckoutRouter from './routes/reservations-checkout.routes';
+import reservationsRouter from './routes/reservations.routes';
+import publicReservationsRouter from './routes/public-reservations.routes';
 import paymentsRouter from './routes/payments.routes';
 import glosasRouter from './routes/glosas.routes';
 import adminPaymentsRouter from './routes/admin-payments.routes';
@@ -260,15 +263,15 @@ app.use(cors({
             origin === allowedProductionDomain ||
             origin === 'https://sportmaps.co' ||
             origin === 'https://app.sportmaps.co' ||
-            extraOrigins.has(origin);
-
-        if (exactAllowed) return callback(null, true);
             // App nativa (Capacitor): el WebView sirve los assets desde https://localhost (Android)
             // o capacitor://localhost (iOS). Sin esto TODA llamada al BFF desde la app instalada
             // falla con «Failed to fetch» (la glosa, cobros…). Auth por Bearer JWT, sin cookies.
             origin === 'https://localhost' ||
             origin === 'capacitor://localhost' ||
             origin === 'ionic://localhost' ||
+            extraOrigins.has(origin);
+
+        if (exactAllowed) return callback(null, true);
 
         // Subdominios de sportmaps.co (dev.sportmaps.co, staging.sportmaps.co, etc.).
         // Se valida URL parseada para evitar bypasses tipo "evil.sportmaps.co.attacker.io".
@@ -420,6 +423,10 @@ app.use('/api/v1/facilities', generalLimiter, facilitiesRouter);
 app.use('/api/v1/trial-classes', generalLimiter, trialClassesRouter);
 app.use('/api/v1/trial-classes-self', generalLimiter, trialClassesSelfRouter);
 app.use('/api/v1/reservations-admin', generalLimiter, reservationsAdminRouter);
+// Cobro de reservas de canchas (F2): checkout con la pasarela de la escuela + comprobante de transferencia.
+app.use('/api/v1/reservations', generalLimiter, reservationsCheckoutRouter);
+app.use('/api/v1/reservations', generalLimiter, reservationsRouter);
+app.use('/api/v1/public/reservations', publicReservationsRouter);
 // Glosas: montado ANTES de /api/v1/payments para que la ruta más específica gane.
 app.use('/api/v1/payments/glosas', paymentLimiter, glosasRouter);
 app.use('/api/v1/payments/reconciliation', paymentLimiter, reconciliationRouter);

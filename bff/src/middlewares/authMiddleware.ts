@@ -36,6 +36,7 @@ declare global {
             role: 'owner' | 'admin' | 'super_admin' | 'auditor' | 'reporter'
             | 'school_admin' | 'school' | 'coach' | 'parent' | 'athlete' | 'staff' | 'organizer'
             | 'store_owner' | 'external_vendor' | 'wellness_professional' | 'personal_trainer'
+            | 'facility_manager'
             // Contabilidad v2 F0: contador de la escuela (solo lectura financiera).
             // No entra a /reports en F0 (decisión U2): no está en ningún requireRole.
             | 'accountant';

@@ -452,6 +452,70 @@ export async function createMpPayment(
     }
 }
 
+// ─── Checkout Pro: preferencia con monto exacto y vencimiento ──────────────
+
+export interface CreateMpPreferenceParams {
+    accessToken: string;                    // access_token DE LA ESCUELA (nunca el de SportMaps)
+    title: string;
+    amount: number;                         // COP entero
+    externalReference: string;
+    notificationUrl: string;
+    /** Hasta cuándo se puede pagar (ISO). Se manda como expiration_date_to. */
+    expiresAt: string;
+    backUrl?: string | null;
+    payerEmail?: string | null;
+    /** X-Idempotency-Key: el mismo checkout reintentado devuelve la MISMA preferencia. */
+    idempotencyKey: string;
+}
+
+export async function createMpPreference(
+    params: CreateMpPreferenceParams,
+): Promise<{ ok: true; id: string; initPoint: string; sandboxInitPoint: string | null } | { ok: false; error: string; status?: number }> {
+    const body: Record<string, unknown> = {
+        items: [{
+            id: params.externalReference,
+            title: params.title.slice(0, 256),
+            category_id: mpCategoryFromReference(params.externalReference),
+            quantity: 1,
+            currency_id: 'COP',
+            unit_price: Number(params.amount),
+        }],
+        external_reference: params.externalReference,
+        notification_url: params.notificationUrl,
+        statement_descriptor: 'SPORTMAPS',
+        binary_mode: true,
+        expires: true,
+        expiration_date_from: new Date().toISOString(),
+        expiration_date_to: params.expiresAt,
+    };
+    if (params.payerEmail) body.payer = { email: params.payerEmail };
+    if (params.backUrl) {
+        body.back_urls = { success: params.backUrl, pending: params.backUrl, failure: params.backUrl };
+        body.auto_return = 'approved';
+    }
+
+    try {
+        const res = await fetch(`${MP_API_BASE}/checkout/preferences`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${params.accessToken}`,
+                'X-Idempotency-Key': params.idempotencyKey,
+            },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const errBody = await res.text();
+            return { ok: false, error: `mp_create_preference_failed: ${errBody.slice(0, 500)}`, status: res.status };
+        }
+        const json: any = await res.json();
+        if (!json?.id || !json?.init_point) return { ok: false, error: 'mp_create_preference_invalid_response' };
+        return { ok: true, id: String(json.id), initPoint: String(json.init_point), sandboxInitPoint: json.sandbox_init_point ?? null };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || 'createMpPreference_error' };
+    }
+}
+
 // ─── Charge with saved card (autopay para suscripciones) ───────────────────
 
 export interface ChargeMpSavedCardParams {

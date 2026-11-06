@@ -37,7 +37,23 @@ import { useRolActivo } from '@/hooks/useRolActivo';
 import { resolveOnboardingGateStatus } from '@/lib/onboardingGate';
 import { JoinSchoolCodeBanner } from '@/components/school-join/JoinSchoolCodeBanner';
 
+/**
+ * Dueño de espacios (facility_manager, escuela school_type 'venue'): su Inicio
+ * es /venue/dashboard. Va en un envoltorio y no como return temprano dentro del
+ * componente de abajo: ese corre una veintena de hooks de escuela (stats,
+ * onboarding, acciones rápidas) que no le corresponden y que, con un rol
+ * ausente de sus tablas, no están pensados para este perfil.
+ */
 export default function DashboardPage() {
+  const { profile } = useAuth();
+  // UserProfile.role (AuthContext) aún no lista facility_manager: se compara como string.
+  if ((profile?.role as string | undefined) === 'facility_manager') {
+    return <Navigate to="/venue/dashboard" replace />;
+  }
+  return <SchoolRoleDashboardPage />;
+}
+
+function SchoolRoleDashboardPage() {
   const { profile, user, realRole } = useAuth();
   const { toast } = useToast();
   const { activeBranchId, activeBranchName, totalBranches } = useSchoolContext();

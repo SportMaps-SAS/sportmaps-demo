@@ -32,13 +32,20 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/supabase';
-import { requireAuth, requireRole } from '../middlewares/authMiddleware';
+import { requireAuth, requireRole, auditLog } from '../middlewares/authMiddleware';
+import { FACILITY_ADMIN_ROLES, isFacilityStaffRole } from '../utils/facilityRoles';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { emailClient } from '../utils/emailClient';
 
 const router = Router();
 
-const requireOwnerOrAdmin = requireRole('school', 'school_admin');
+const requireOwnerOrAdmin = requireRole(...FACILITY_ADMIN_ROLES);
+
+// Estados desde los que el staff puede cancelar / mover una reserva (contrato F1 §4 y §5).
+// completed / no_show / expired / cancelled son históricos: no se tocan.
+const CANCELLABLE_STATUSES = ['hold', 'pending', 'pending_payment', 'confirmed', 'pending_reconciliation'];
+const RESCHEDULABLE_STATUSES = ['hold', 'pending', 'pending_payment', 'confirmed'];
+const isUuid = (v: unknown) => z.string().uuid().safeParse(v).success;
 
 const CancelSchema = z.object({
     reason: z.string().optional(),
@@ -72,12 +79,13 @@ router.patch('/facility/:id/cancel', requireAuth, requireOwnerOrAdmin, async (re
     try {
         const { schoolId } = req;
         const { id } = req.params;
+        if (!isUuid(id)) return res.status(400).json({ error: 'Id de reserva inválido.' });
         const parsed = CancelSchema.safeParse(req.body);
         if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
 
         const { data: resv, error: fetchErr } = await supabase
             .from('facility_reservations')
-            .select('id, reservation_date, start_time, facility:facilities(id, name, school_id), requester:profiles!facility_reservations_user_id_fkey(full_name, email)')
+            .select('id, status, amount_paid, reservation_date, start_time, facility:facilities(id, name, school_id, min_cancellation_hours), requester:profiles!facility_reservations_user_id_fkey(full_name, email)')
             .eq('id', id)
             .maybeSingle();
         if (fetchErr) throw fetchErr;
@@ -85,10 +93,34 @@ router.patch('/facility/:id/cancel', requireAuth, requireOwnerOrAdmin, async (re
             return res.status(404).json({ error: 'Reserva no encontrada.' });
         }
 
+        // Guard de estado (QA T1): antes se podía «cancelar» una reserva completada / no_show / expirada
+        // (reescribía el historial) y re-enviar el correo de una ya cancelada.
+        if (resv.status === 'cancelled') return res.json({ success: true, already_cancelled: true, email_sent: false });
+        if (!CANCELLABLE_STATUSES.includes(String(resv.status))) {
+            return res.status(409).json({ error: 'Esta reserva ya no se puede cancelar.', reason: 'invalid_status', status: resv.status });
+        }
+
+        // Ventana mínima de cancelación: solo aplica a quien NO es staff (el staff
+        // puede cancelar siempre). Hoy la ruta ya exige rol de staff, pero el
+        // chequeo queda por si se abre a otros actores.
+        if (!isFacilityStaffRole(req.role)) {
+            const minH = Number((resv.facility as any)?.min_cancellation_hours ?? 0);
+            const startMs = new Date(`${resv.reservation_date}T${String(resv.start_time).slice(0, 8)}-05:00`).getTime();
+            if (minH > 0 && Number.isFinite(startMs) && startMs - Date.now() < minH * 3600 * 1000) {
+                return res.status(409).json({
+                    error: `Ya no puedes cancelar: faltan menos de ${minH} horas para la reserva. Comunícate con la escuela.`,
+                    reason: 'cancellation_window_closed',
+                    min_cancellation_hours: minH,
+                });
+            }
+        }
+
         const { error: updErr } = await supabase
             .from('facility_reservations')
-            .update({ status: 'cancelled', cancellation_reason: parsed.data.reason ?? null, cancelled_at: new Date().toISOString() })
-            .eq('id', id);
+            // El staff cancela con devolución del 100 % (contrato F1 §4): si ya había plata, queda marcada para devolver a mano.
+            .update({ status: 'cancelled', cancelled_by: req.user.id, cancellation_reason: parsed.data.reason ?? null, cancelled_at: new Date().toISOString(), refund_status: Number((resv as any).amount_paid) > 0 ? 'manual' : 'none' })
+            .eq('id', id)
+            .in('status', CANCELLABLE_STATUSES);
         if (updErr) throw updErr;
 
         let emailSent = false;
@@ -117,11 +149,94 @@ router.patch('/facility/:id/cancel', requireAuth, requireOwnerOrAdmin, async (re
     }
 });
 
+const FACILITY_RESV_SELECT = '*, facility:facilities(id, school_id)';
+
+// PATCH /api/v1/reservations-admin/facility/:id/approve   (pending -> confirmed)
+router.patch('/facility/:id/approve', requireAuth, requireOwnerOrAdmin, async (req: Request, res: Response) => {
+    try {
+        const { schoolId } = req;
+        const { id } = req.params;
+        if (!z.string().uuid().safeParse(id).success) return res.status(400).json({ error: 'Id de reserva inválido.' });
+
+        const { data: resv, error: fetchErr } = await supabase
+            .from('facility_reservations').select(FACILITY_RESV_SELECT).eq('id', id).maybeSingle();
+        if (fetchErr) throw fetchErr;
+        if (!resv || (resv.facility as any)?.school_id !== schoolId) {
+            return res.status(404).json({ error: 'Reserva no encontrada.' });
+        }
+        if (resv.status !== 'pending') {
+            return res.status(409).json({ error: 'Solo se pueden aprobar reservas pendientes.', reason: 'invalid_status', status: resv.status });
+        }
+
+        const now = new Date().toISOString();
+        const { data: updated, error: updErr } = await supabase
+            .from('facility_reservations')
+            .update({ status: 'confirmed', approved_by: req.user.id, approved_at: now, updated_at: now })
+            .eq('id', id)
+            .eq('status', 'pending')
+            .select()
+            .maybeSingle();
+        if (updErr) {
+            if (updErr.message?.includes('facility_slot_conflict')) {
+                return res.status(409).json({ error: 'Ese horario ya está ocupado por otra reserva.', reason: 'capacity_full' });
+            }
+            throw updErr;
+        }
+        if (!updated) {
+            return res.status(409).json({ error: 'La reserva cambió de estado mientras la aprobabas. Recarga e intenta de nuevo.', reason: 'invalid_status' });
+        }
+
+        await auditLog(req, 'facility_reservation_approve', 'facility_reservations', String(id), { status: 'pending' }, { status: 'confirmed' });
+        res.json({ success: true, reservation: updated });
+    } catch (err: any) {
+        req.log?.error({ err }, 'reservations-admin facility approve unhandled error');
+        res.status(500).json({ error: 'Error interno del servidor.' });
+    }
+});
+
+// PATCH /api/v1/reservations-admin/facility/:id/complete   (confirmed -> completed)
+router.patch('/facility/:id/complete', requireAuth, requireOwnerOrAdmin, async (req: Request, res: Response) => {
+    try {
+        const { schoolId } = req;
+        const { id } = req.params;
+        if (!z.string().uuid().safeParse(id).success) return res.status(400).json({ error: 'Id de reserva inválido.' });
+
+        const { data: resv, error: fetchErr } = await supabase
+            .from('facility_reservations').select(FACILITY_RESV_SELECT).eq('id', id).maybeSingle();
+        if (fetchErr) throw fetchErr;
+        if (!resv || (resv.facility as any)?.school_id !== schoolId) {
+            return res.status(404).json({ error: 'Reserva no encontrada.' });
+        }
+        if (resv.status !== 'confirmed') {
+            return res.status(409).json({ error: 'Solo se pueden completar reservas confirmadas.', reason: 'invalid_status', status: resv.status });
+        }
+
+        const { data: updated, error: updErr } = await supabase
+            .from('facility_reservations')
+            .update({ status: 'completed', updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .eq('status', 'confirmed')
+            .select()
+            .maybeSingle();
+        if (updErr) throw updErr;
+        if (!updated) {
+            return res.status(409).json({ error: 'La reserva cambió de estado mientras la completabas. Recarga e intenta de nuevo.', reason: 'invalid_status' });
+        }
+
+        await auditLog(req, 'facility_reservation_complete', 'facility_reservations', String(id), { status: 'confirmed' }, { status: 'completed' });
+        res.json({ success: true, reservation: updated });
+    } catch (err: any) {
+        req.log?.error({ err }, 'reservations-admin facility complete unhandled error');
+        res.status(500).json({ error: 'Error interno del servidor.' });
+    }
+});
+
 // PATCH /api/v1/reservations-admin/facility/:id/reschedule
 router.patch('/facility/:id/reschedule', requireAuth, requireOwnerOrAdmin, async (req: Request, res: Response) => {
     try {
         const { schoolId } = req;
         const { id } = req.params;
+        if (!isUuid(id)) return res.status(400).json({ error: 'Id de reserva inválido.' });
         const parsed = RescheduleFacilitySchema.safeParse(req.body);
         if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
         const r = parsed.data;
@@ -136,7 +251,9 @@ router.patch('/facility/:id/reschedule', requireAuth, requireOwnerOrAdmin, async
             return res.status(404).json({ error: 'Reserva no encontrada.' });
         }
 
-        const { error: updErr } = await supabase
+        // Solo reservas vivas: mover una completed / cancelled / expired / no_show reescribe el historial
+        // (y una cancelled movida «resucitaría» fecha y hora sin ocupar la franja).
+        const { data: moved, error: updErr } = await supabase
             .from('facility_reservations')
             .update({
                 reservation_date: r.reservation_date,
@@ -144,13 +261,18 @@ router.patch('/facility/:id/reschedule', requireAuth, requireOwnerOrAdmin, async
                 end_time: r.end_time,
                 updated_at: new Date().toISOString(),
             })
-            .eq('id', id);
+            .eq('id', id)
+            .in('status', RESCHEDULABLE_STATUSES)
+            .select('id');
 
         if (updErr) {
             if (updErr.message?.includes('facility_slot_conflict')) {
                 return res.status(409).json({ error: 'Ese horario ya está ocupado por otra reserva.', reason: 'capacity_full' });
             }
             throw updErr;
+        }
+        if (!moved || moved.length === 0) {
+            return res.status(409).json({ error: 'Esta reserva ya no se puede reprogramar.', reason: 'invalid_status' });
         }
 
         let emailSent = false;
@@ -392,10 +514,11 @@ router.delete('/facility/:id', requireAuth, requireOwnerOrAdmin, async (req: Req
     try {
         const { schoolId } = req;
         const { id } = req.params;
+        if (!isUuid(id)) return res.status(400).json({ error: 'Id de reserva inválido.' });
 
         const { data: resv, error: fetchErr } = await supabase
             .from('facility_reservations')
-            .select('id, facility:facilities(school_id)')
+            .select('*, facility:facilities(school_id)')
             .eq('id', id)
             .maybeSingle();
         if (fetchErr) throw fetchErr;
@@ -405,6 +528,12 @@ router.delete('/facility/:id', requireAuth, requireOwnerOrAdmin, async (req: Req
 
         const { error: delErr } = await supabase.from('facility_reservations').delete().eq('id', id);
         if (delErr) throw delErr;
+
+        // Rastro del borrado físico: quién, cuándo (created_at del log) y qué fila
+        // se perdió (snapshot completo en old_value de security_audit_log).
+        const { facility: _fac, ...snapshot } = resv as any;
+        await auditLog(req, 'facility_reservation_delete', 'facility_reservations', String(id), snapshot, null);
+        req.log?.warn({ reservationId: id, schoolId, actor: req.user.id, role: req.role, status: snapshot.status }, 'reservations-admin: reserva eliminada físicamente');
 
         res.json({ success: true });
     } catch (err: any) {

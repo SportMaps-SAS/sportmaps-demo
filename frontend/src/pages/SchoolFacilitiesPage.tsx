@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
@@ -9,6 +9,7 @@ import {
   GraduationCap, Settings, UserX, PartyPopper, Mail, CalendarClock, MessageCircle, Copy,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useSchoolFacilities } from '@/hooks/useSchoolData';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
@@ -17,6 +18,7 @@ import type { FacilityReservation } from '@/hooks/useFacilityReservations';
 import { useTrialClasses, type TrialClassBooking, type TrialClassStatus, type BookingChangeNotice } from '@/hooks/useTrialClasses';
 import { FacilityFormDialog } from '@/components/school/FacilityFormDialog';
 import { OwnerReservationModal } from '@/components/school/OwnerReservationModal';
+import { FacilityRatesPanel } from '@/components/reservas/FacilityRatesPanel';
 import { FacilityAvailabilityModal } from '@/components/school/FacilityAvailabilityModal';
 import { TrialClassBookingModal } from '@/components/school/TrialClassBookingModal';
 import { TrialClassSettingsModal } from '@/components/school/TrialClassSettingsModal';
@@ -48,6 +50,11 @@ const STATUS_LABELS: Record<string, string> = {
   confirmed: 'Confirmada',
   cancelled: 'Cancelada',
   completed: 'Completada',
+  hold: 'Apartada',
+  pending_payment: 'Pendiente de pago',
+  pending_reconciliation: 'Por conciliar',
+  expired: 'Vencida',
+  no_show: 'No asistió',
 };
 
 const STATUS_COLORS: Record<string, string> = {
@@ -55,6 +62,11 @@ const STATUS_COLORS: Record<string, string> = {
   confirmed: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border-emerald-500/20',
   cancelled: 'bg-rose-500/10 text-rose-600 dark:text-rose-500 border-rose-500/20',
   completed: 'bg-blue-500/10 text-blue-600 dark:text-blue-500 border-blue-500/20',
+  hold: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-500 border-yellow-500/20',
+  pending_payment: 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-500 border-yellow-500/20',
+  pending_reconciliation: 'bg-orange-500/10 text-orange-600 dark:text-orange-500 border-orange-500/20',
+  expired: 'bg-muted text-muted-foreground border-border/40',
+  no_show: 'bg-rose-500/10 text-rose-600 dark:text-rose-500 border-rose-500/20',
 };
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
@@ -292,13 +304,12 @@ export default function SchoolFacilitiesPage() {
     refetch: refetchReservations,
     stats,
     createReservation,
-    isCreating: isCreatingRes,
-    updateReservation,
-    isUpdating,
     deleteReservation,
     approveReservation,
+    completeReservation,
     cancelReservation,
-    getBookedSlots,
+    hasMore: hasMoreReservations,
+    loadMore: loadMoreReservations,
     rescheduleReservation,
   } = useFacilityReservations();
 
@@ -330,9 +341,35 @@ export default function SchoolFacilitiesPage() {
 
   // Reservation CRUD state
   const [reservationModalOpen, setReservationModalOpen] = useState(false);
-  const [editingReservation, setEditingReservation] = useState<FacilityReservation | null>(null);
   const [viewingReservation, setViewingReservation] = useState<FacilityReservation | null>(null);
   const [deleteReservationId, setDeleteReservationId] = useState<string | null>(null);
+  // Cancelar pide el motivo (opcional) antes de avisar a la persona.
+  const [cancelingReservationId, setCancelingReservationId] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [isCancellingReservation, setIsCancellingReservation] = useState(false);
+  const cancelingReservation = reservations.find((r) => r.id === cancelingReservationId) ?? null;
+  const cancelingFacility = cancelingReservation
+    ? facilities.find((f) => f.id === cancelingReservation.facility_id) ?? null
+    : null;
+
+  const requestCancelReservation = (id: string) => {
+    setCancelReason('');
+    setCancelingReservationId(id);
+  };
+
+  const confirmCancelReservation = async () => {
+    if (!cancelingReservationId) return;
+    setIsCancellingReservation(true);
+    try {
+      // El servidor valida la política de cancelación; si responde 409 el hook muestra el motivo.
+      await cancelReservation(cancelingReservationId, cancelReason.trim() || undefined);
+      setCancelingReservationId(null);
+    } catch {
+      // el toast de error ya lo muestra el hook; el diálogo queda abierto para reintentar o cerrar
+    } finally {
+      setIsCancellingReservation(false);
+    }
+  };
   const [reschedulingFacilityReservation, setReschedulingFacilityReservation] = useState<FacilityReservation | null>(null);
   const [reschedulingCourtesyBooking, setReschedulingCourtesyBooking] = useState<FacilityReservation | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
@@ -342,9 +379,6 @@ export default function SchoolFacilitiesPage() {
   const filteredReservations = statusFilter 
     ? (reservations ?? []).filter(r => r.status === statusFilter)
     : (reservations ?? []);
-
-  // Stable callback for getBookedSlots
-  const stableGetBookedSlots = useCallback(getBookedSlots, []);
 
   const { toast } = useToast();
   const [schoolSlug, setSchoolSlug] = useState<string | null>(null);
@@ -405,12 +439,6 @@ export default function SchoolFacilitiesPage() {
   };
 
   const handleOpenNew = () => {
-    setEditingReservation(null);
-    setReservationModalOpen(true);
-  };
-
-  const handleOpenEdit = (r: FacilityReservation) => {
-    setEditingReservation(r);
     setReservationModalOpen(true);
   };
 
@@ -426,26 +454,16 @@ export default function SchoolFacilitiesPage() {
     }
   };
 
-  const handleReservationSubmit = async (
-    payload: any
-  ) => {
-    if ('id' in payload) {
-      await updateReservation(payload);
-    } else {
-      await createReservation(payload);
-    }
-  };
-
-  const handleFacilityReservationRescheduleSubmit = async (payload: any) => {
-    if (!('id' in payload)) return;
+  // Reprogramar una fila sin starts_at (anterior a F1): rutas viejas de reservations-admin.
+  // Las filas con starts_at las reprograma el propio modal por POST /reservations/:id/reschedule.
+  const handleLegacyReschedule = async (p: { id: string; reservation_date: string; start_time: string; end_time: string }) => {
     await rescheduleReservation({
-      id: payload.id,
+      id: p.id,
       isSessionBooking: false,
-      reservation_date: payload.payload.reservation_date,
-      start_time: payload.payload.start_time,
-      end_time: payload.payload.end_time,
+      reservation_date: p.reservation_date,
+      start_time: p.start_time,
+      end_time: p.end_time,
     });
-    setReschedulingFacilityReservation(null);
   };
 
   if (facilitiesLoading) return <LoadingSpinner text="Cargando instalaciones..." />;
@@ -497,6 +515,9 @@ export default function SchoolFacilitiesPage() {
                   {trialStats.agendada}
                 </Badge>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="rates" className="px-6 py-2.5 font-bold data-[state=active]:shadow-md">
+              Tarifas y política
             </TabsTrigger>
           </TabsList>
         </div>
@@ -623,7 +644,7 @@ export default function SchoolFacilitiesPage() {
               {reservationsLoading ? (
                 <div className="p-12 text-center space-y-4">
                   <Loader2 className="h-10 w-10 text-primary animate-spin mx-auto" />
-                  <p className="text-muted-foreground font-medium animate-pulse">Sincronizando con Supabase…</p>
+                  <p className="text-muted-foreground font-medium animate-pulse">Actualizando…</p>
                 </div>
               ) : filteredReservations.length === 0 ? (
                 <div className="p-20 text-center space-y-6">
@@ -706,17 +727,8 @@ export default function SchoolFacilitiesPage() {
                                   <Eye className="h-4 w-4 mr-3 text-primary" /> Ver detalle
                                 </DropdownMenuItem>
 
-                                {/* Edit — solo alquiler manual, pending/confirmed. Para clases de
-                                    cortesía "Editar" no cambia nada de verdad (solo el estado se
-                                    persiste) — Reprogramar es la acción correcta para ellas. */}
-                                {!res.isSessionBooking && (res.status === 'pending' || res.status === 'confirmed') && (
-                                  <DropdownMenuItem className="py-2.5 font-bold cursor-pointer" onClick={() => handleOpenEdit(res)}>
-                                    <Pencil className="h-4 w-4 mr-3 text-primary" /> Editar
-                                  </DropdownMenuItem>
-                                )}
-
                                 {/* Reschedule — cambia fecha/hora y avisa por correo */}
-                                {(res.status === 'pending' || res.status === 'confirmed') && (
+                                {(res.status === 'pending' || res.status === 'confirmed' || res.status === 'hold' || res.status === 'pending_payment') && (
                                   <DropdownMenuItem className="py-2.5 font-bold cursor-pointer" onClick={() => handleOpenReschedule(res)}>
                                     <CalendarClock className="h-4 w-4 mr-3 text-primary" /> Reprogramar
                                   </DropdownMenuItem>
@@ -734,11 +746,21 @@ export default function SchoolFacilitiesPage() {
                                   </DropdownMenuItem>
                                 )}
 
+                                {/* Complete — la reserva ya se usó (confirmed -> completed) */}
+                                {res.status === 'confirmed' && (
+                                  <DropdownMenuItem
+                                    className="py-2.5 font-bold cursor-pointer text-blue-600 focus:text-blue-700 focus:bg-blue-500/10"
+                                    onClick={() => completeReservation(res.id)}
+                                  >
+                                    <CheckCircle2 className="h-4 w-4 mr-3" /> Marcar como completada
+                                  </DropdownMenuItem>
+                                )}
+
                                 {/* Cancel — avisa por correo */}
-                                {(res.status === 'pending' || res.status === 'confirmed') && (
+                                {(res.status === 'pending' || res.status === 'confirmed' || res.status === 'hold' || res.status === 'pending_payment') && (
                                   <DropdownMenuItem
                                     className="py-2.5 font-bold cursor-pointer text-amber-600 focus:text-amber-700 focus:bg-amber-500/10"
-                                    onClick={() => cancelReservation(res.id)}
+                                    onClick={() => requestCancelReservation(res.id)}
                                   >
                                     <Ban className="h-4 w-4 mr-3" /> Cancelar
                                   </DropdownMenuItem>
@@ -761,6 +783,16 @@ export default function SchoolFacilitiesPage() {
                 </div>
               )}
             </div>
+            {hasMoreReservations && (
+              <div className="flex flex-col items-center gap-2 border-t border-border/40 p-4 text-center">
+                <p className="text-xs text-muted-foreground">
+                  Mostrando las reservas más recientes; los totales cuentan solo lo cargado.
+                </p>
+                <Button variant="outline" size="sm" className="font-bold" onClick={loadMoreReservations} disabled={reservationsFetching}>
+                  Ver más
+                </Button>
+              </div>
+            )}
             <TableRefreshBar
               onRefresh={refetchReservations}
               loading={reservationsFetching}
@@ -770,6 +802,11 @@ export default function SchoolFacilitiesPage() {
         </TabsContent>
 
         {/* ═══════════════ CLASES DE PRUEBA ═══════════════ */}
+        {/* ═══════════════ TARIFAS Y POLÍTICA DE CANCELACIÓN ═══════════════ */}
+        <TabsContent value="rates" className="space-y-8 animate-in slide-in-from-right-4 duration-300">
+          <FacilityRatesPanel facilities={facilities} />
+        </TabsContent>
+
         <TabsContent value="trial-classes" className="space-y-8 animate-in slide-in-from-right-4 duration-300">
           <div className="flex justify-between items-center">
             <div>
@@ -876,33 +913,28 @@ export default function SchoolFacilitiesPage() {
           reservation={viewingReservation}
           onClose={() => setViewingReservation(null)}
           onApprove={approveReservation}
-          onCancel={cancelReservation}
+          onCancel={requestCancelReservation}
         />
       )}
 
-      {/* ── Create / Edit reservation ── */}
+      {/* ── Nueva reserva (BFF: disponibilidad + POST /reservations) ── */}
       <OwnerReservationModal
         open={reservationModalOpen}
-        onOpenChange={(v) => {
-          setReservationModalOpen(v);
-          if (!v) setEditingReservation(null);
-        }}
+        onOpenChange={setReservationModalOpen}
         facilities={facilities}
-        editReservation={editingReservation}
-        onSubmit={handleReservationSubmit}
-        isLoading={isCreatingRes || isUpdating}
-        getBookedSlots={stableGetBookedSlots}
+        onBlock={createReservation}
+        onChanged={() => void refetchReservations()}
       />
 
-      {/* ── Reprogramar reserva de instalación (alquiler manual) — avisa por correo ── */}
+      {/* ── Reprogramar reserva de instalación (POST /reservations/:id/reschedule) ── */}
       <OwnerReservationModal
         open={!!reschedulingFacilityReservation}
         onOpenChange={(v) => { if (!v) setReschedulingFacilityReservation(null); }}
         facilities={facilities}
         editReservation={reschedulingFacilityReservation}
-        onSubmit={handleFacilityReservationRescheduleSubmit}
-        isLoading={isUpdating}
-        getBookedSlots={stableGetBookedSlots}
+        onBlock={createReservation}
+        onLegacyReschedule={handleLegacyReschedule}
+        onChanged={() => void refetchReservations()}
       />
 
       {/* ── Reprogramar clase de cortesía — avisa por correo ── */}
@@ -922,6 +954,40 @@ export default function SchoolFacilitiesPage() {
         isLoading={isCreating || facilitiesUpdating}
         facility={editingFacility}
       />
+
+      {/* ── Cancelar reserva: motivo opcional + política ── */}
+      <AlertDialog open={!!cancelingReservationId} onOpenChange={(v) => { if (!v && !isCancellingReservation) setCancelingReservationId(null); }}>
+        <AlertDialogContent className="bg-card text-card-foreground border-border/40">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-xl font-black">¿Cancelar reserva?</AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground/80 font-medium">
+              Se le avisará a la persona por correo. Puedes contarle el motivo (opcional).
+              {cancelingFacility && (cancelingFacility.min_cancellation_hours ?? 0) > 0 && (
+                <span className="mt-2 block text-foreground/80">
+                  Política de esta instalación: se cancela con al menos {cancelingFacility.min_cancellation_hours} h de anticipación.
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Textarea
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            placeholder="Motivo de la cancelación (opcional)"
+            maxLength={500}
+            rows={3}
+          />
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel className="font-bold border-border/60" disabled={isCancellingReservation}>No, conservar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); void confirmCancelReservation(); }}
+              disabled={isCancellingReservation}
+              className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-black"
+            >
+              {isCancellingReservation ? 'Cancelando…' : 'Sí, cancelar reserva'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ── Delete reservation confirm ── */}
       <AlertDialog open={!!deleteReservationId} onOpenChange={() => setDeleteReservationId(null)}>

@@ -14,6 +14,10 @@ describe('roleForNavigation', () => {
   it('personal_trainer del perfil gana a la membresía', () => {
     expect(roleForNavigation('personal_trainer', 'coach')).toBe('personal_trainer');
   });
+  it('facility_manager del perfil gana a la membresía owner de su escuela-venue', () => {
+    expect(roleForNavigation('facility_manager', 'owner')).toBe('facility_manager');
+    expect(roleForNavigation('facility_manager', null)).toBe('facility_manager');
+  });
   it('los demás roles de membresía se respetan', () => {
     expect(roleForNavigation('athlete', 'owner')).toBe('owner');
     expect(roleForNavigation('athlete', 'coach')).toBe('coach');

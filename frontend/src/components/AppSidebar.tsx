@@ -30,7 +30,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
-import { getNavigationByRole, getVendorNavGroup } from '@/config/navigation';
+import { getNavigationByRole, getVendorNavGroup, type NavRole } from '@/config/navigation';
 import { UserRole } from '@/types/dashboard';
 import { useVendorProfile } from '@/hooks/useVendorProfile';
 import { useSchoolStore } from '@/hooks/useSchoolStore';
@@ -74,7 +74,7 @@ export function AppSidebar() {
   // 'school_admin'; solo el rol del PERFIL (admin/super_admin) abre el menú de
   // plataforma (ROADMAP UX-8).
   const effectiveRole: string | undefined = roleForNavigation(profile?.role, currentUserRole);
-  let navigationRole: UserRole = 'athlete';
+  let navigationRole: NavRole = 'athlete';
 
   if (effectiveRole) {
     switch (effectiveRole) {
@@ -106,6 +106,9 @@ export function AppSidebar() {
         break;
       case 'personal_trainer':
         navigationRole = 'personal_trainer';
+        break;
+      case 'facility_manager':
+        navigationRole = 'facility_manager';
         break;
       // external_vendor es el rol nuevo que reemplaza al legacy store_owner.
       // Usan exactamente la misma navegacion de vendor.
@@ -274,6 +277,7 @@ export function AppSidebar() {
       school: 'Escuela', staff: 'Staff', wellness_professional: 'Bienestar',
       store_owner: 'Tienda', viewer: 'Visitante',
       personal_trainer: 'Entrenador Personal',
+      facility_manager: 'Dueño de espacios',
     };
     return roleLabels[roleToShow as string] || roleToShow;
   };

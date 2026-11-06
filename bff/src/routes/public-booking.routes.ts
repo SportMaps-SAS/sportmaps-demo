@@ -38,6 +38,8 @@ function generateCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function todayStr(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
@@ -684,16 +686,30 @@ router.get('/slots', async (req: Request, res: Response) => {
       if ('error' in resolved) return res.status(resolved.status!).json({ error: resolved.error });
       schoolId = resolved.verif.school_id;
     } else if (schoolIdParam) {
-      schoolId = schoolIdParam;
+      // Flujo público /agendar/:slug (sin token): la escuela tiene que existir
+      // y la instalación pertenecerle. Misma respuesta 404 para "escuela
+      // inexistente", "instalación de otra escuela" o "no reservable", así no
+      // se puede enumerar qué escuelas/instalaciones existen.
+      if (!UUID_RE.test(schoolIdParam) || !UUID_RE.test(facility_id)) {
+        return res.status(404).json({ error: 'Instalación no encontrada.' });
+      }
+      const { data: schoolRow } = await supabase
+        .from('schools').select('id').eq('id', schoolIdParam).maybeSingle();
+      if (!schoolRow) return res.status(404).json({ error: 'Instalación no encontrada.' });
+      schoolId = schoolRow.id;
     } else {
       return res.status(400).json({ error: 'token o school_id son requeridos.' });
     }
 
+    // Solo instalaciones que reciben reservas y están disponibles (mismo
+    // criterio que GET /schools/:slug).
     const { data: facility } = await supabase
       .from('facilities')
       .select('id, name, school_id, min_booking_advance_hours')
       .eq('id', facility_id)
       .eq('school_id', schoolId)
+      .eq('booking_enabled', true)
+      .eq('status', 'available')
       .maybeSingle();
     if (!facility) return res.status(404).json({ error: 'Instalación no encontrada.' });
 

@@ -18,9 +18,18 @@ import type { ModuleKey } from '@/config/module-catalog';
 // Tipos del payload del BFF
 // ============================================================
 
+/**
+ * Los 10 valores reales de `schools.school_type` (la columna no tiene CHECK; el
+ * plan de reservas §7 los normaliza a 4 más adelante). Si la base suma uno,
+ * se agrega aquí: nadie más en el frontend lee `schoolType` de este hook.
+ */
+export type SchoolType =
+    | 'academy' | 'club' | 'federation' | 'institute' | 'personal_trainer'
+    | 'association' | 'hybrid' | 'gimnasio' | 'escuela' | 'venue';
+
 interface EntitlementsResponse {
     school_id: string;
-    school_type: 'academy' | 'venue' | 'hybrid';
+    school_type: SchoolType;
     plan_code: TierCode;
     tier: 'free' | 'pro' | 'enterprise';
     subscription_status: SubscriptionStatus;
@@ -138,7 +147,7 @@ interface EntitlementsResponse {
 
 export interface Entitlements {
     schoolId: string | null;
-    schoolType: 'academy' | 'venue' | 'hybrid';
+    schoolType: SchoolType;
     plan: {
         code: TierCode;
         tier: 'free' | 'pro' | 'enterprise';
