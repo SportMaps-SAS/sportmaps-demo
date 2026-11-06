@@ -36,6 +36,10 @@ export interface ApproveOptions {
   schoolName?: string | null;
   /** Monto de ESTE abono. Sin él (o si cubre el saldo) se aprueba completo. */
   abonoAmount?: number;
+  /** Escuelas con receipt_amount_editable: el valor que la escuela confirmó como pagado. */
+  confirmedAmount?: number;
+  /** Razón cuando el valor confirmado difiere del que leyó el comprobante. */
+  confirmedReason?: string;
 }
 
 export type ApproveResult =
@@ -73,6 +77,12 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
     requires_review: false,
     unblocked_at: nowIso,
     unblocked_by: opts.userId,
+    ...(opts.confirmedAmount !== undefined ? {
+      receipt_amount_confirmed: opts.confirmedAmount,
+      receipt_amount_change_reason: opts.confirmedReason ?? null,
+      receipt_amount_confirmed_by: opts.userId,
+      receipt_amount_confirmed_at: nowIso,
+    } : {}),
   } as never).eq('id', payment.id).in('status', OPEN_STATUSES).select('id, payment_category');
 
   if (error) return { ok: false, reason: 'error', message: error.message };

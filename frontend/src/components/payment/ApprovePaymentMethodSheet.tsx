@@ -47,6 +47,11 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   const [allowInstallments, setAllowInstallments] = useState<boolean | null>(null);
   // Sin abonos y con monto que no cuadra: aprobar el total exige confirmarlo.
   const [confirmFull, setConfirmFull] = useState(false);
+  // Solo escuelas con school_settings.receipt_amount_editable (Dynasty): la escuela
+  // puede corregir el valor realmente pagado respecto al que leyó el OCR.
+  const [editable, setEditable] = useState(false);
+  const [valorPagado, setValorPagado] = useState('');
+  const [razon, setRazon] = useState('');
 
   const expected = Number(payment?.amount) || 0;
   const existingPaid = Number(payment?.amount_paid) || 0;   // abonos previos
@@ -66,13 +71,18 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
     supabase.from('school_settings').select('allow_installments').eq('school_id', schoolId).maybeSingle()
       .then(({ data }) => { if (!cancelled) setAllowInstallments(!!(data as { allow_installments?: boolean } | null)?.allow_installments); },
             () => { if (!cancelled) setAllowInstallments(false); });
+    // Consulta aparte: si la columna aún no existe, no debe tumbar allow_installments.
+    setEditable(false);
+    supabase.from('school_settings').select('receipt_amount_editable').eq('school_id', schoolId).maybeSingle()
+      .then(({ data }) => { if (!cancelled) setEditable(!!(data as { receipt_amount_editable?: boolean } | null)?.receipt_amount_editable); },
+            () => { if (!cancelled) setEditable(false); });
     return () => { cancelled = true; };
   }, [open, schoolId]);
 
   const canAbono = allowInstallments === true;
   const ocrShort = ocrAmount != null && ocrAmount > 0 && ocrAmount < remaining;
   // Sin abonos, el aviso fuerte aplica a montos que no cuadran o no se leyeron.
-  const needsFullConfirm = !canAbono && (hasDiscrepancy || hasReceiptNoOcr);
+  const needsFullConfirm = !canAbono && !editable && (hasDiscrepancy || hasReceiptNoOcr);
 
   // Al abrir: si el comprobante cubre menos que el saldo y la escuela recibe
   // abonos, sugerir modo abono con el valor del comprobante. Si no, completo.
@@ -82,6 +92,8 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
       setMode(suggestAbono ? 'abono' : 'full');
       setAbonoAmount(suggestAbono ? String(ocrAmount) : String(remaining));
       setConfirmFull(false);
+      setValorPagado(String(ocrAmount != null && ocrAmount > 0 ? ocrAmount : remaining));
+      setRazon('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, payment?.id, canAbono]);
@@ -90,6 +102,14 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   const newTotalPaid = existingPaid + abonoNum;            // acumulado tras este abono
   const isAbono = mode === 'abono' && newTotalPaid < expected;  // aún queda saldo
   const saldoPendiente = Math.max(expected - newTotalPaid, 0);
+
+  // Valor corregido por la escuela (solo con el interruptor). Si es menor al saldo
+  // queda como abono por ese valor; si cubre el saldo, se aprueba completo.
+  const valorNum = Number(valorPagado) || 0;
+  const valorBase = ocrAmount != null && ocrAmount > 0 ? ocrAmount : remaining;
+  const valorCambiado = editable && valorNum !== valorBase;
+  const valorInvalido = editable && (valorNum <= 0 || (valorCambiado && razon.trim().length < 3));
+  const editAbono = editable && valorNum > 0 && valorNum < remaining;
 
   const handleViewReceipt = async () => {
     if (!payment?.receipt_url) return;
@@ -113,7 +133,11 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   const handleApprove = async () => {
     if (!payment || !schoolId || !user) return;
 
-    if (mode === 'abono' && !canAbono) return;
+    if (editable && valorInvalido) {
+      toast({ title: 'Revisa el valor', description: valorNum <= 0 ? 'El valor pagado debe ser mayor a 0.' : 'Si cambias el valor del comprobante, escribe la razón.', variant: 'destructive' });
+      return;
+    }
+    if (!editable && mode === 'abono' && !canAbono) return;
     if (mode === 'full' && needsFullConfirm && !confirmFull) return;
     if (mode === 'abono' && (abonoNum <= 0 || abonoNum > remaining)) {
       toast({ title: 'Monto inválido', description: `El abono debe ser mayor a 0 y no superar el saldo ${formatCurrency(remaining)}.`, variant: 'destructive' });
@@ -128,7 +152,9 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
         userId: user.id,
         schoolId,
         schoolName,
-        abonoAmount: mode === 'abono' ? abonoNum : undefined,
+        abonoAmount: editable ? (editAbono ? valorNum : undefined) : (mode === 'abono' ? abonoNum : undefined),
+        confirmedAmount: editable ? valorNum : undefined,
+        confirmedReason: editable && valorCambiado ? razon.trim() : undefined,
       });
       if ('reason' in r) {
         toast({
@@ -271,8 +297,34 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
             </label>
           )}
 
+          {/* Dynasty: corregir el valor realmente pagado respecto al comprobante */}
+          {editable && (
+            <div className="space-y-2 p-3 rounded-xl border border-blue-200 bg-blue-50/50">
+              <Label htmlFor="valor-pagado" className="text-xs font-semibold uppercase tracking-wide text-slate-600">Valor realmente pagado</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-semibold">$</span>
+                <Input id="valor-pagado" type="number" min="0" value={valorPagado}
+                  onChange={(e) => setValorPagado(e.target.value)} className="pl-7 text-lg font-bold" />
+              </div>
+              {valorCambiado && (
+                <>
+                  <p className="text-xs text-amber-700">
+                    Distinto al comprobante ({formatCurrency(valorBase)}). Escribe la razón (por ejemplo: «pagó en dos transferencias»).
+                  </p>
+                  <Input placeholder="Razón del cambio" value={razon} onChange={(e) => setRazon(e.target.value)} />
+                </>
+              )}
+              {editAbono && (
+                <p className="text-xs text-blue-700">Es menor al saldo: queda como abono, saldo {formatCurrency(remaining - valorNum)}.</p>
+              )}
+              {valorNum > remaining && (
+                <p className="text-xs text-slate-600">Es mayor al cobro ({formatCurrency(remaining)}): se aprueba completo y el valor queda anotado.</p>
+              )}
+            </div>
+          )}
+
           {/* Selector Completo / Abono (solo si la escuela recibe abonos) */}
-          {canAbono && (
+          {canAbono && !editable && (
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -292,7 +344,7 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
           )}
 
           {/* Input de abono */}
-          {canAbono && mode === 'abono' && (
+          {canAbono && !editable && mode === 'abono' && (
             <div className="space-y-2">
               <Label htmlFor="abono" className="text-xs font-semibold uppercase tracking-wide text-slate-600">Monto abonado</Label>
               <div className="relative">
@@ -316,12 +368,14 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
 
           <Button
             className={`w-full h-12 text-base font-bold ${isAbono ? 'bg-blue-600 hover:bg-blue-700' : 'bg-emerald-600 hover:bg-emerald-700'}`}
-            disabled={loading || allowInstallments === null || (mode === 'full' && needsFullConfirm && !confirmFull)}
+            disabled={loading || allowInstallments === null || valorInvalido || (mode === 'full' && needsFullConfirm && !confirmFull)}
             onClick={handleApprove}
           >
             {loading ? <Loader2 className="h-5 w-5 animate-spin mr-2" /> : <CheckCircle2 className="h-5 w-5 mr-2" />}
             {loading
               ? 'Procesando...'
+              : editable
+                ? (editAbono ? `Registrar abono ${formatCurrency(valorNum)}` : `Aprobar con valor ${formatCurrency(valorNum)}`)
               : isAbono
                 ? `Registrar abono ${formatCurrency(abonoNum)}`
                 : `${existingPaid > 0 ? 'Completar saldo' : 'Aprobar'} ${formatCurrency(existingPaid > 0 ? remaining : expected)}`}
