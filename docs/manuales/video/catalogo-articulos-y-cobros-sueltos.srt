@@ -1,0 +1,43 @@
+1
+00:00:00,028 --> 00:00:08,309
+Además de la mensualidad, la escuela puede venderles a las familias artículos deportivos, y cobros sueltos como torneos, clases extra o viajes.
+
+2
+00:00:08,776 --> 00:00:16,600
+Se configuran en Pagos, pestaña Config. SportMaps activa cada catálogo, y desde ahí el contenido lo manejas tú.
+
+3
+00:00:17,062 --> 00:00:23,614
+En el catálogo de artículos, agrega cada uno con su nombre, su precio y, si aplica, las tallas.
+
+4
+00:00:28,140 --> 00:00:36,324
+En Cobros sueltos registras torneos, clases extra, vacacionales o viajes, con su precio y, si quieres, cupos y fechas.
+
+5
+00:00:43,976 --> 00:00:49,664
+Ahora, del lado de la familia. En Mis Pagos toca Nuevo Pago, y elige al hijo.
+
+6
+00:00:58,199 --> 00:01:03,119
+En Tipo de pago aparecen Artículos deportivos y Torneos, junto a la mensualidad.
+
+7
+00:01:07,558 --> 00:01:13,102
+Elige el artículo, la talla y la cantidad. El subtotal se calcula solo.
+
+8
+00:01:16,569 --> 00:01:21,945
+Y paga como siempre: en línea, o por transferencia, subiendo el comprobante.
+
+9
+00:01:27,698 --> 00:01:32,858
+La compra le llega a la escuela, a Cobros por Aprobar, como un cobro aparte de la mensualidad.
+
+10
+00:01:38,496 --> 00:01:46,560
+Al tocar Aprobar ves el detalle exacto de lo que se compró. Revisa el comprobante, confirma que el pago está completo, y aprueba.
+
+11
+00:01:49,402 --> 00:01:55,354
+Cada compra es un cobro aparte: no se mezcla con la mensualidad, y la familia puede comprar las veces que quiera.
