@@ -321,14 +321,27 @@ export interface ErrorView {
   pending: boolean;
 }
 
-export function mapApiError(input: { status?: number; code?: string; message?: string }, fallback = 'No pudimos completar la acción. Intenta de nuevo.'): ErrorView {
+export function mapApiError(input: { status?: number; code?: string; message?: string; retryAfterSeconds?: number }, fallback = 'No pudimos completar la acción. Intenta de nuevo.'): ErrorView {
   const status = input.status ?? 0;
   const code = (input.code ?? '').toUpperCase();
   if (code && ERROR_TEXT[code]) return { code, message: ERROR_TEXT[code], pending: false };
   if (status === 501 || (status === 404 && !code)) {
     return { code: code || 'NOT_AVAILABLE', message: 'Esta función estará disponible pronto.', pending: true };
   }
-  if (status === 429) return { code: 'RATE_LIMITED', message: ERROR_TEXT.RATE_LIMITED, pending: false };
+  if (status === 429 || code === 'RATE_LIMITED') {
+    const ra = input.retryAfterSeconds;
+    const wait = ra && ra > 0
+      ? ra < 60 ? `${Math.ceil(ra)} segundos` : `${Math.ceil(ra / 60)} ${Math.ceil(ra / 60) === 1 ? 'minuto' : 'minutos'}`
+      : null;
+    return {
+      code: 'RATE_LIMITED',
+      message: wait ? `Demasiados intentos. Espera ${wait} e intenta de nuevo.` : ERROR_TEXT.RATE_LIMITED,
+      pending: false,
+    };
+  }
+  // 401/403 sin código conocido: texto fijo, nunca el detalle técnico del servidor.
+  if (status === 401) return { code: code || 'UNAUTHORIZED', message: 'Tu sesión expiró. Vuelve a iniciar sesión.', pending: false };
+  if (status === 403) return { code: code || 'FORBIDDEN', message: ERROR_TEXT.FORBIDDEN, pending: false };
   if (status === 0) return { code: 'NETWORK', message: 'Sin conexión. Revisa tu internet e intenta de nuevo.', pending: false };
   return { code: code || 'ERROR', message: input.message || fallback, pending: false };
 }
@@ -390,8 +403,21 @@ function icsDate(iso: string): string {
   return new Date(iso).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 }
 
-function icsEscape(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n');
+/** Texto libre (RFC 5545 §3.3.11): escapa \ ; , y convierte CR/LF/CRLF en \n; sin caracteres de control. */
+export function icsEscape(s: string): string {
+  return String(s ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u0085\u2028\u2029]/g, ' ')
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\r\n|\r|\n/g, '\\n');
+}
+
+/** Campo de UNA línea (UID…): sin CR/LF, controles ni separadores, para no crear propiedades nuevas. */
+export function icsToken(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return String(s ?? '').replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029;:,"\\\s]/g, '');
 }
 
 export function buildIcs(e: {
@@ -409,7 +435,7 @@ export function buildIcs(e: {
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     'BEGIN:VEVENT',
-    `UID:${e.uid}@sportmaps.co`,
+    `UID:${icsToken(e.uid) || 'reserva'}@sportmaps.co`,
     `DTSTAMP:${icsDate(now.toISOString())}`,
     `DTSTART:${icsDate(e.startsAt)}`,
     `DTEND:${icsDate(e.endsAt)}`,

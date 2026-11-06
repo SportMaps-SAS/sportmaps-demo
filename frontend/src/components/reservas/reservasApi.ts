@@ -5,6 +5,7 @@
  * El servidor calcula el precio y decide el estado: el cliente NUNCA manda `price`.
  */
 import { bffClient } from '@/lib/api/bffClient';
+import { safeRedirectUrl } from '@/lib/safeRedirect';
 
 // ─── Tipos del contrato ───────────────────────────────────────────────────────
 
@@ -155,6 +156,8 @@ export interface BookingErrorInfo {
   message: string;
   alternatives: BookingAlternative[];
   status?: number;
+  /** Segundos de espera que pidió el servidor (Retry-After) en un 429. */
+  retryAfterSeconds?: number;
 }
 
 export const MINOR_MESSAGE = 'Los menores no pueden reservar; pídele a tu acudiente.';
@@ -199,6 +202,28 @@ const ERROR_MESSAGES: Record<string, string> = {
 
 const GENERIC_ERROR = 'No se pudo completar la operación. Inténtalo de nuevo.';
 
+/** Mensaje de espera para un 429; respeta Retry-After si el servidor lo mandó. */
+export function rateLimitMessage(retryAfterSeconds?: number): string {
+  if (retryAfterSeconds && retryAfterSeconds > 0) {
+    const t = retryAfterSeconds < 60
+      ? `${Math.ceil(retryAfterSeconds)} segundos`
+      : `${Math.ceil(retryAfterSeconds / 60)} ${Math.ceil(retryAfterSeconds / 60) === 1 ? 'minuto' : 'minutos'}`;
+    return `Hiciste muchos intentos seguidos. Espera ${t} e inténtalo de nuevo.`;
+  }
+  return 'Hiciste muchos intentos seguidos. Espera un momento e inténtalo de nuevo.';
+}
+
+/** Texto amable por estado HTTP para errores de seguridad, sin detalles técnicos del servidor. */
+function statusMessage(status: number | undefined, retryAfterSeconds?: number): string | null {
+  switch (status) {
+    case 401: return 'Tu sesión expiró. Vuelve a iniciar sesión para continuar.';
+    case 403: return 'No tienes permiso para hacer esto.';
+    case 404: return 'No encontramos lo que buscas. Puede que ya no exista.';
+    case 429: return rateLimitMessage(retryAfterSeconds);
+    default: return null;
+  }
+}
+
 /**
  * Normaliza el error del BFF ({error:<CODIGO>, message, alternatives?}).
  * bffClient pone `body.error` como `message` del Error, así que el código sale de
@@ -212,10 +237,17 @@ export function parseBookingError(err: any): BookingErrorInfo {
   const rawCode = [body?.code, body?.error, err?.message].find(esCodigo);
   const code = rawCode ?? null;
   const alternatives: BookingAlternative[] = Array.isArray(body?.alternatives) ? body.alternatives : [];
+  const ra = Number(err?.retryAfterSeconds);
+  const retryAfterSeconds = Number.isFinite(ra) && ra > 0 ? ra : undefined;
 
   let message: string;
   if (code && ERROR_MESSAGES[code]) {
     message = ERROR_MESSAGES[code];
+  } else if (code === 'RATE_LIMITED' || err?.status === 429) {
+    message = rateLimitMessage(retryAfterSeconds);
+  } else if (!code && statusMessage(err?.status)) {
+    // 401/403/404 sin código conocido: texto fijo, nunca el detalle del servidor.
+    message = statusMessage(err?.status)!;
   } else if (typeof body?.message === 'string' && body.message.trim()) {
     message = body.message;
   } else if (typeof body?.error === 'string' && body.error.trim() && !esCodigo(body.error)) {
@@ -227,7 +259,7 @@ export function parseBookingError(err: any): BookingErrorInfo {
   } else {
     message = GENERIC_ERROR;
   }
-  return { code, message, alternatives, status: err?.status };
+  return { code, message, alternatives, status: err?.status, retryAfterSeconds };
 }
 
 // ─── Llave de idempotencia ────────────────────────────────────────────────────
@@ -425,7 +457,7 @@ export function startCheckout(id: string): Promise<CheckoutResult> {
 
 export function checkoutUrlOf(r: CheckoutResult | null | undefined): string | null {
   const u = r?.checkout_url ?? r?.url ?? r?.payment_url;
-  return typeof u === 'string' && /^https?:\/\//i.test(u) ? u : null;
+  return safeRedirectUrl(u);
 }
 
 /** Mensaje amable si el checkout todavía no responde (ruta en construcción o pasarela caída). */
@@ -438,6 +470,76 @@ export function checkoutErrorMessage(err: any): string {
   return info.message === GENERIC_ERROR
     ? 'No pudimos iniciar el pago. Inténtalo de nuevo en unos minutos.'
     : info.message;
+}
+
+// ─── Bloqueos de instalación (BFF: /api/v1/reservations-admin/blackouts) ─────
+
+export type BlackoutKind = 'maintenance' | 'weather' | 'closed' | 'other';
+
+export const BLACKOUT_KIND_LABEL: Record<BlackoutKind, string> = {
+  maintenance: 'Mantenimiento',
+  weather: 'Clima',
+  closed: 'Cerrado',
+  other: 'Otro',
+};
+
+export interface Blackout {
+  id: string;
+  facility_id: string;
+  starts_at: string;
+  ends_at: string;
+  kind: BlackoutKind | string;
+  reason?: string | null;
+}
+
+export interface CreateBlackoutBody {
+  facility_id: string;
+  starts_at: string;
+  ends_at: string;
+  kind: BlackoutKind;
+  reason?: string;
+}
+
+const BLACKOUT_BASE = '/api/v1/reservations-admin/blackouts';
+
+/** Arma el cuerpo del bloqueo: motivo recortado a 200 y sin saltos de línea. */
+export function buildBlackoutBody(p: {
+  facility_id: string; starts_at: string; ends_at: string; kind?: BlackoutKind; reason?: string;
+}): CreateBlackoutBody {
+  const reason = (p.reason ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+  return {
+    facility_id: p.facility_id,
+    starts_at: p.starts_at,
+    ends_at: p.ends_at,
+    kind: p.kind ?? 'other',
+    ...(reason ? { reason } : {}),
+  };
+}
+
+/** Mensaje amable para un error de bloqueos (409 = choca con una reserva vigente). */
+export function blackoutErrorMessage(err: unknown): string {
+  const info = parseBookingError(err);
+  if (info.status === 409 && (info.message === GENERIC_ERROR || !ERROR_MESSAGES[info.code ?? ''])) {
+    return 'Ya hay una reserva vigente en ese horario. Cancélala o reprográmala antes de bloquear la cancha.';
+  }
+  return info.message;
+}
+
+export function createBlackout(body: CreateBlackoutBody): Promise<Blackout> {
+  return bffClient
+    .post<Blackout | { blackout: Blackout }>(BLACKOUT_BASE, body)
+    .then((r) => ((r as { blackout?: Blackout }).blackout ?? (r as Blackout)));
+}
+
+export function listBlackouts(p: { facility_id: string; from: string; to: string }): Promise<Blackout[]> {
+  const q = new URLSearchParams({ facility_id: p.facility_id, from: p.from, to: p.to });
+  return bffClient
+    .get<Blackout[] | { blackouts?: Blackout[]; data?: Blackout[] }>(`${BLACKOUT_BASE}?${q.toString()}`)
+    .then((r) => (Array.isArray(r) ? r : r?.blackouts ?? r?.data ?? []));
+}
+
+export function deleteBlackout(id: string): Promise<unknown> {
+  return bffClient.delete<unknown>(`${BLACKOUT_BASE}/${encodeURIComponent(id)}`);
 }
 
 /** ¿Una fila de facility_reservations se maneja por las rutas nuevas? (tiene starts_at y no es clase de cortesía). */

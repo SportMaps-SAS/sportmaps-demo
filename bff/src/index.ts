@@ -38,6 +38,8 @@ import trialClassesRouter from './routes/trial-classes';
 import trialClassesSelfRouter from './routes/trial-classes-self.routes';
 import reservationsAdminRouter from './routes/reservations-admin.routes';
 import reservationsCheckoutRouter from './routes/reservations-checkout.routes';
+import reservationsBatchRouter from './routes/reservations-batch.routes';
+import { reservationsJsonBody, RESERVATIONS_BATCH_BODY_LIMIT_BYTES } from './middlewares/reservationsInput';
 import reservationsRouter from './routes/reservations.routes';
 import publicReservationsRouter from './routes/public-reservations.routes';
 import paymentsRouter from './routes/payments.routes';
@@ -296,6 +298,11 @@ app.use(cors({
 // ANTES de express.json() — protocolo texto plano del F22
 app.use('/', admsRouter);
 
+// Reservas de canchas: cuerpo JSON acotado (20 KB; el lote 200 KB), Content-Type JSON obligatorio, 413/415/400 claros.
+// ANTES del parser global de 5 MB (body-parser salta si el cuerpo ya se parseó).
+app.use('/api/v1/reservations/batch', reservationsJsonBody(RESERVATIONS_BATCH_BODY_LIMIT_BYTES));
+app.use(['/api/v1/reservations', '/api/v1/reservations-admin', '/api/v1/public/reservations'], reservationsJsonBody());
+
 app.use(express.json({
     limit: '5mb',
     verify: (req, _res, buf) => {
@@ -424,6 +431,7 @@ app.use('/api/v1/trial-classes', generalLimiter, trialClassesRouter);
 app.use('/api/v1/trial-classes-self', generalLimiter, trialClassesSelfRouter);
 app.use('/api/v1/reservations-admin', generalLimiter, reservationsAdminRouter);
 // Cobro de reservas de canchas (F2): checkout con la pasarela de la escuela + comprobante de transferencia.
+app.use('/api/v1/reservations/batch', generalLimiter, reservationsBatchRouter);
 app.use('/api/v1/reservations', generalLimiter, reservationsCheckoutRouter);
 app.use('/api/v1/reservations', generalLimiter, reservationsRouter);
 app.use('/api/v1/public/reservations', publicReservationsRouter);

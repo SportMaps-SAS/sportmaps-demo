@@ -42,9 +42,8 @@ global.fetch = async function (input, init) {
     if (mp) {
         const method = (init && init.method) || 'GET';
         const calls = (process.env.WOMPI_MOCK_FILE || '') + '.calls.jsonl';
-        try { fs.appendFileSync(calls, JSON.stringify({ host: u.hostname, path: u.pathname, method, body: init && init.body ? String(init.body) : null }) + '
-'); } catch { /* */ }
-        const mm = u.pathname.match(/^/v1/payments/([^/]+)$/);
+        try { fs.appendFileSync(calls, JSON.stringify({ host: u.hostname, path: u.pathname, method, body: init && init.body ? String(init.body) : null }) + '\n'); } catch { /* */ }
+        const mm = u.pathname.match(/^\/v1\/payments\/([^\/]+)$/);
         if (mm && method === 'GET') {
             let db = {};
             try { db = JSON.parse(fs.readFileSync(process.env.WOMPI_MOCK_FILE, 'utf8')); } catch { /* */ }

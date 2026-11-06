@@ -19,6 +19,12 @@ import { requireIdempotencyKey } from '../middlewares/requireIdempotencyKey';
 import { requireEntitlement } from '../middlewares/requireEntitlement';
 import { isFacilityStaffRole } from '../utils/facilityRoles';
 import { isRpcFailure, translateRpcError, UUID_RE } from '../utils/reservations.shared';
+import { zodBadRequest } from '../middlewares/reservationsInput';
+import { writeAudit, ctxFromReq } from '../utils/auditWrite';
+import {
+    LIMITS, uuid, isoZoned, dateYmd, freeText, personName, phoneField, emailField,
+    rangeRefine, rangeMsg, durationRefine, durationMsg, reasonField,
+} from '../utils/reservations.schemas';
 
 const router = Router();
 
@@ -29,8 +35,7 @@ function requireSession(req: Request, res: Response, next: NextFunction) {
 
 router.use(optionalAuth, requireSession);
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const iso = z.iso.datetime({ offset: true });
+const iso = isoZoned;
 
 /** ¿El usuario es staff de esa escuela (miembro con rol de administración o admin de plataforma)? */
 export async function isStaffOfSchool(userId: string, schoolId: string): Promise<boolean> {
@@ -41,6 +46,20 @@ export async function isStaffOfSchool(userId: string, schoolId: string): Promise
         .from('school_members').select('role').eq('profile_id', userId).eq('school_id', schoolId).eq('status', 'active').limit(1);
     const role = (m as any[] | null)?.[0]?.role;
     return isFacilityStaffRole(role);
+}
+
+/**
+ * Cancelar/reprogramar HECHO POR OTRA PERSONA (staff): queda en security_audit_log. Un cambio del
+ * propio dueño de la reserva no se audita aquí (el rastro lo deja la propia fila). Nunca lanza.
+ */
+async function auditStaffChange(req: Request, action: string, id: string, data: any, error: any, extra: Record<string, unknown>) {
+    try {
+        if (error || isRpcFailure(data)) return;
+        const r = data?.reservation;
+        if (!r || !r.user_id || r.user_id === req.user.id) return;
+        await writeAudit({ ...ctxFromReq(req), schoolId: r.school_id ?? null }, action, 'facility_reservations', id,
+            { status: r.status ?? null }, { ...extra, new_status: r.status ?? null });
+    } catch { /* writeAudit ya reporta; esto es solo el cinturón */ }
 }
 
 function sendRpc(res: Response, req: Request, fn: string, data: any, error: any, okStatus = 200) {
@@ -56,13 +75,13 @@ function sendRpc(res: Response, req: Request, fn: string, data: any, error: any,
 }
 
 // ── GET /availability ────────────────────────────────────────────────────────
-const AvailabilitySchema = z.object({
-    school_id: z.string().regex(UUID_RE, 'school_id inválido'),
-    from: z.string().regex(DATE_RE, 'from inválido (YYYY-MM-DD)'),
-    to: z.string().regex(DATE_RE, 'to inválido (YYYY-MM-DD)'),
-    sport: z.string().max(60).optional(),
-    facility_id: z.string().regex(UUID_RE, 'facility_id inválido').optional(),
-    duration_min: z.coerce.number().int().min(5).max(480).optional(),
+const AvailabilitySchema = z.strictObject({
+    school_id: uuid('school_id'),
+    from: dateYmd,
+    to: dateYmd,
+    sport: freeText(LIMITS.sport).optional(),
+    facility_id: uuid('facility_id').optional(),
+    duration_min: z.coerce.number().int().min(LIMITS.durationMinMin).max(LIMITS.durationMinMax).optional(),
     audience: z.enum(['public', 'member']).optional(),
 });
 
@@ -76,7 +95,7 @@ function schoolFromQuery(req: Request, _res: Response, next: NextFunction) {
 router.get('/availability', schoolFromQuery, requireEntitlement('reservations'), async (req: Request, res: Response) => {
     try {
         const parsed = AvailabilitySchema.safeParse(req.query);
-        if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const q = parsed.data;
         const args: Record<string, unknown> = {
             p_school_id: q.school_id, p_from: q.from, p_to: q.to, p_actor_profile_id: req.user.id,
@@ -94,30 +113,34 @@ router.get('/availability', schoolFromQuery, requireEntitlement('reservations'),
 });
 
 // ── POST / — reservar ────────────────────────────────────────────────────────
-const ReserveSchema = z.object({
-    facility_id: z.string().regex(UUID_RE, 'facility_id inválido'),
+/** 'ai' / 'import' los fija SOLO el BFF desde el camino de lotes; el cliente que los mande recibe 403. */
+const ReserveSchema = z.strictObject({
+    facility_id: uuid('facility_id'),
     starts_at: iso,
     ends_at: iso,
     payment_method: z.enum(['online', 'transfer', 'cash', 'none']).default('online'),
-    booker_profile_id: z.string().regex(UUID_RE).optional(),
-    guest: z.object({
-        phone: z.string().min(7).max(20),
-        full_name: z.string().min(2).max(120),
-        email: z.string().email().max(160).optional(),
+    booker_profile_id: uuid('booker_profile_id').optional(),
+    guest: z.strictObject({
+        phone: phoneField,
+        full_name: personName,
+        email: emailField.optional(),
     }).optional(),
     rate_audience: z.enum(['public', 'member']).optional(),
-    participants: z.number().int().min(1).max(200).optional(),
-    notes: z.string().max(1000).optional(),
-    external_org_name: z.string().max(200).optional(),
-    amount_paid: z.number().min(0).max(1_000_000_000).optional(),
-    channel: z.enum(['app', 'admin']).optional(),
-}).refine((b) => new Date(b.ends_at) > new Date(b.starts_at), { message: 'ends_at debe ser posterior a starts_at', path: ['ends_at'] });
+    participants: z.number().int().min(1).max(LIMITS.participantsMax).optional(),
+    notes: freeText(LIMITS.notes, { keepNewlines: true }).optional(),
+    external_org_name: freeText(LIMITS.externalOrg).optional(),
+    amount_paid: z.number().min(0).max(LIMITS.amountMax).optional(),
+    channel: z.enum(['app', 'admin', 'ai', 'import']).optional(),
+}).refine(rangeRefine, rangeMsg).refine(durationRefine, durationMsg);
 
 router.post('/', requireIdempotencyKey, async (req: Request, res: Response) => {
     try {
         const parsed = ReserveSchema.safeParse(req.body);
-        if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const b = parsed.data;
+        if (b.channel === 'ai' || b.channel === 'import') {
+            return res.status(403).json({ error: 'Ese canal de reserva no está permitido para ti.', code: 'CHANNEL_NOT_ALLOWED', reason: 'channel_not_allowed' });
+        }
 
         // 'admin' solo si el actor es staff de la escuela de la cancha; si no, 'app'.
         let channel: 'app' | 'admin' = 'app';
@@ -203,17 +226,18 @@ router.get('/:id', async (req: Request, res: Response) => {
 });
 
 // ── POST /:id/cancel ─────────────────────────────────────────────────────────
-const CancelSchema = z.object({ reason: z.string().max(500).optional() });
+const CancelSchema = z.strictObject({ reason: reasonField.optional() });
 
 router.post('/:id/cancel', async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id);
         if (!UUID_RE.test(id)) return res.status(404).json({ error: 'Reserva no encontrada.' });
         const parsed = CancelSchema.safeParse(req.body ?? {});
-        if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const args: Record<string, unknown> = { p_reservation_id: id, p_actor_profile_id: req.user.id };
         if (parsed.data.reason) args.p_reason = parsed.data.reason;
         const { data, error } = await supabase.rpc('cancelar_reserva', args);
+        await auditStaffChange(req, 'facility_reservation_cancel_staff', id, data, error, { reason: parsed.data.reason ?? null });
         return sendRpc(res, req, 'cancelar_reserva', data, error);
     } catch (err: any) {
         req.log?.error({ err }, 'reservations cancel error');
@@ -222,18 +246,18 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
 });
 
 // ── POST /:id/reschedule ─────────────────────────────────────────────────────
-const RescheduleSchema = z.object({
+const RescheduleSchema = z.strictObject({
     starts_at: iso,
     ends_at: iso,
-    facility_id: z.string().regex(UUID_RE).optional(),
-}).refine((b) => new Date(b.ends_at) > new Date(b.starts_at), { message: 'ends_at debe ser posterior a starts_at', path: ['ends_at'] });
+    facility_id: uuid('facility_id').optional(),
+}).refine(rangeRefine, rangeMsg).refine(durationRefine, durationMsg);
 
 router.post('/:id/reschedule', async (req: Request, res: Response) => {
     try {
         const id = String(req.params.id);
         if (!UUID_RE.test(id)) return res.status(404).json({ error: 'Reserva no encontrada.' });
         const parsed = RescheduleSchema.safeParse(req.body);
-        if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const args: Record<string, unknown> = {
             p_reservation_id: id,
             p_new_starts_at: parsed.data.starts_at,
@@ -242,6 +266,7 @@ router.post('/:id/reschedule', async (req: Request, res: Response) => {
         };
         if (parsed.data.facility_id) args.p_new_facility_id = parsed.data.facility_id;
         const { data, error } = await supabase.rpc('reprogramar_reserva', args);
+        await auditStaffChange(req, 'facility_reservation_reschedule_staff', id, data, error, { starts_at: parsed.data.starts_at, ends_at: parsed.data.ends_at, facility_id: parsed.data.facility_id ?? null });
         return sendRpc(res, req, 'reprogramar_reserva', data, error);
     } catch (err: any) {
         req.log?.error({ err }, 'reservations reschedule error');

@@ -24,6 +24,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { supabase } from '../config/supabase';
 import { emailClient } from '../utils/emailClient';
+import { escapeHtmlText } from '../utils/sanitize';
 import { requireIdempotencyKey } from '../middlewares/requireIdempotencyKey';
 import {
     GuestRow, GUEST_TOKEN_TTL_MS, STATUS_LINK_TTL_MS, UUID_RE,
@@ -31,6 +32,11 @@ import {
 } from '../utils/reservations.shared';
 
 import { setReservationGuestAuth } from './reservations-checkout.routes';
+import { zodBadRequest } from '../middlewares/reservationsInput';
+import {
+    LIMITS, uuid, isoZoned, dateYmd, freeText, personName, phoneField,
+    rangeRefine, rangeMsg, durationRefine, durationMsg, reasonField,
+} from '../utils/reservations.schemas';
 
 const router = Router();
 
@@ -47,8 +53,8 @@ setReservationGuestAuth(async (req, reservationId) => {
 const WINDOW_MS = 10 * 60 * 1000;
 const DEBUG_OTP_ENABLED = process.env.PUBLIC_BOOKING_DEBUG_OTP === 'true';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const iso = z.iso.datetime({ offset: true });
+const iso = isoZoned;
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/i;
 
 const limiter = (name: string, max: number, message: string) => rateLimit({
     windowMs: WINDOW_MS, max, standardHeaders: true, legacyHeaders: false,
@@ -80,7 +86,8 @@ const GUEST_COLS = 'id, phone, email, full_name, verified_phone_at, verified_ema
 // Solo campos publicables. Nunca rental_rate / min_deposit crudos: el precio sale de /availability.
 router.get('/schools/:slug', readLimiter, async (req: Request, res: Response) => {
     try {
-        const { slug } = req.params;
+        const slug = String(req.params.slug ?? '');
+        if (!SLUG_RE.test(slug)) return fail(res, 404, 'Escuela no encontrada.');
         const { data: school } = await supabase.from('schools').select('id, name, slug').eq('slug', slug).maybeSingle();
         if (!school) return fail(res, 404, 'Escuela no encontrada.');
 
@@ -108,19 +115,19 @@ router.get('/schools/:slug', readLimiter, async (req: Request, res: Response) =>
 });
 
 // ── GET /availability — como invitado (p_actor_profile_id NULL => audiencia external) ──
-const AvailabilitySchema = z.object({
-    school_id: z.string().regex(UUID_RE, 'school_id inválido'),
-    from: z.string().regex(DATE_RE, 'from inválido (YYYY-MM-DD)'),
-    to: z.string().regex(DATE_RE, 'to inválido (YYYY-MM-DD)'),
-    sport: z.string().max(60).optional(),
-    facility_id: z.string().regex(UUID_RE, 'facility_id inválido').optional(),
-    duration_min: z.coerce.number().int().min(5).max(480).optional(),
+const AvailabilitySchema = z.strictObject({
+    school_id: uuid('school_id'),
+    from: dateYmd,
+    to: dateYmd,
+    sport: freeText(LIMITS.sport).optional(),
+    facility_id: uuid('facility_id').optional(),
+    duration_min: z.coerce.number().int().min(LIMITS.durationMinMin).max(LIMITS.durationMinMax).optional(),
 });
 
 router.get('/availability', readLimiter, async (req: Request, res: Response) => {
     try {
         const parsed = AvailabilitySchema.safeParse(req.query);
-        if (!parsed.success) return fail(res, 400, 'Datos inválidos', { details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const q = parsed.data;
         // Sin p_actor_profile_id ni p_audience: el público nunca elige tarifa.
         const args: Record<string, unknown> = { p_school_id: q.school_id, p_from: q.from, p_to: q.to };
@@ -141,10 +148,10 @@ router.get('/availability', readLimiter, async (req: Request, res: Response) => 
 });
 
 // ── POST /guests/start — crea/reusa guest_bookers y envía OTP al correo ──────
-const StartSchema = z.object({
-    phone: z.string().min(7).max(25),
-    email: z.string().max(160),
-    full_name: z.string().trim().min(2).max(120),
+const StartSchema = z.strictObject({
+    phone: phoneField,
+    email: z.string().max(LIMITS.email),
+    full_name: personName,
 });
 
 router.post('/guests/start', startLimiter, async (req: Request, res: Response) => {
@@ -182,7 +189,7 @@ router.post('/guests/start', startLimiter, async (req: Request, res: Response) =
         await emailClient.send({
             to: email,
             subject: 'Tu código para reservar tu cancha en SportMaps',
-            html: `<p>Tu código de verificación es:</p><h2 style="letter-spacing:3px">${code}</h2><p>Vence en pocos minutos.</p>`,
+            html: `<p>Tu código de verificación es:</p><h2 style="letter-spacing:3px">${escapeHtmlText(code)}</h2><p>Vence en pocos minutos.</p>`,
             text: `Tu código de verificación es ${code} (vence en pocos minutos).`,
         });
 
@@ -200,7 +207,7 @@ router.post('/guests/start', startLimiter, async (req: Request, res: Response) =
 });
 
 // ── POST /guests/verify — valida el OTP y entrega token de invitado de corta vida ──
-const VerifySchema = z.object({ phone: z.string().min(7).max(25), email: z.string().max(160), code: z.string().max(10) });
+const VerifySchema = z.strictObject({ phone: z.string().max(40), email: z.string().max(LIMITS.email), code: z.string().max(10) });
 
 router.post('/guests/verify', verifyLimiter, async (req: Request, res: Response) => {
     try {
@@ -260,15 +267,15 @@ async function requireGuest(req: Request, res: Response, next: NextFunction) {
 }
 
 // ── POST / — reservar como invitado ──────────────────────────────────────────
-const ReserveSchema = z.object({
-    facility_id: z.string().regex(UUID_RE, 'facility_id inválido'),
+const ReserveSchema = z.strictObject({
+    facility_id: uuid('facility_id'),
     starts_at: iso,
     ends_at: iso,
     payment_method: z.enum(['online', 'transfer', 'cash']).default('online'),
-    participants: z.number().int().min(1).max(200).optional(),
-    notes: z.string().max(1000).optional(),
-    external_org_name: z.string().max(200).optional(),
-}).refine((b) => new Date(b.ends_at) > new Date(b.starts_at), { message: 'ends_at debe ser posterior a starts_at', path: ['ends_at'] });
+    participants: z.number().int().min(1).max(LIMITS.participantsMax).optional(),
+    notes: freeText(LIMITS.notes, { keepNewlines: true }).optional(),
+    external_org_name: freeText(LIMITS.externalOrg).optional(),
+}).refine(rangeRefine, rangeMsg).refine(durationRefine, durationMsg);
 
 const PUBLIC_DROP = ['user_id', 'school_id', 'payment_id', 'cancelled_by', 'idempotency_key', 'price_snapshot', 'guest_booker_id', 'recurrence_id'];
 function guestShape(r: any) {
@@ -287,7 +294,7 @@ router.post('/', writeLimiter, requireIdempotencyKey, requireGuest, async (req: 
     try {
         const guest = (req as any).guest as GuestRow;
         const parsed = ReserveSchema.safeParse(req.body);
-        if (!parsed.success) return fail(res, 400, 'Datos inválidos', { details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const b = parsed.data;
 
         const v = verifyGuestChannel(guest);
@@ -353,14 +360,14 @@ router.get('/r/:token', readLimiter, async (req: Request, res: Response) => {
     }
 });
 
-const CancelSchema = z.object({ reason: z.string().max(500).optional() });
+const CancelSchema = z.strictObject({ reason: reasonField.optional() });
 
 router.post('/r/:token/cancel', writeLimiter, async (req: Request, res: Response) => {
     try {
         const l = linkOr401(req, res);
         if (!l) return;
         const parsed = CancelSchema.safeParse(req.body ?? {});
-        if (!parsed.success) return fail(res, 400, 'Datos inválidos', { details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const args: Record<string, unknown> = { p_reservation_id: l.rid, p_guest_booker_id: l.gid };
         if (parsed.data.reason) args.p_reason = parsed.data.reason;
         const { data, error } = await supabase.rpc('cancelar_reserva', args);
@@ -377,15 +384,15 @@ router.post('/r/:token/cancel', writeLimiter, async (req: Request, res: Response
     }
 });
 
-const RescheduleSchema = z.object({ starts_at: iso, ends_at: iso })
-    .refine((b) => new Date(b.ends_at) > new Date(b.starts_at), { message: 'ends_at debe ser posterior a starts_at', path: ['ends_at'] });
+const RescheduleSchema = z.strictObject({ starts_at: iso, ends_at: iso })
+    .refine(rangeRefine, rangeMsg).refine(durationRefine, durationMsg);
 
 router.post('/r/:token/reschedule', writeLimiter, async (req: Request, res: Response) => {
     try {
         const l = linkOr401(req, res);
         if (!l) return;
         const parsed = RescheduleSchema.safeParse(req.body);
-        if (!parsed.success) return fail(res, 400, 'Datos inválidos', { details: parsed.error.issues });
+        if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         // facility_id no se acepta: cambiar de cancha es solo del staff.
         const { data, error } = await supabase.rpc('reprogramar_reserva', {
             p_reservation_id: l.rid, p_new_starts_at: parsed.data.starts_at, p_new_ends_at: parsed.data.ends_at, p_guest_booker_id: l.gid,

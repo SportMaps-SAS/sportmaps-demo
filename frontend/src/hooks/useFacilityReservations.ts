@@ -50,16 +50,6 @@ export interface FacilityReservation {
   guest_booker_id?: string | null;
 }
 
-export interface CreateReservationPayload {
-  facility_id: string;
-  reservation_date: string;
-  start_time: string;
-  end_time: string;
-  price: number;
-  notes?: string;
-  status?: ResvStatus;
-}
-
 export interface ReservationChangeNotice {
   success: boolean;
   email_sent?: boolean;
@@ -287,64 +277,23 @@ export function useFacilityReservations() {
   const reservationsRef = useRef(reservations);
   reservationsRef.current = reservations;
 
-  // ── CREATE ────────────────────────────────────────────────────────────────
-
-  const { mutateAsync: createReservation, isPending: isCreating } = useMutation({
-    mutationFn: async (payload: CreateReservationPayload) => {
-      if (!user) throw new Error('No autenticado');
-
-      const { data, error } = await supabase
-        .from('facility_reservations')
-        .insert({
-          ...payload,
-          user_id: user.id,
-          status: payload.status ?? 'confirmed',
-        })
-        .select()
-        .single();
-
-      if (error) throw new Error(friendlyReservationError(error));
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-bookings'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-roster'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-session'] });
-      toast({ title: '✅ Reserva creada', description: 'La reserva fue registrada exitosamente.' });
-    },
-    onError: (error: any) => {
-      toast({ title: 'Error al crear', description: error.message, variant: 'destructive' });
-    },
-  });
-
   // ── UPDATE ────────────────────────────────────────────────────────────────
 
   const { mutateAsync: updateReservation, isPending: isUpdating } = useMutation({
     mutationFn: async ({ id, payload, isSessionBooking }: { id: string; payload: UpdateReservationPayload; isSessionBooking?: boolean }) => {
-      if (isSessionBooking) {
-        const { data, error } = await supabase
-          .from('session_bookings')
-          .update({
-            status: payload.status,
-            updated_at: new Date().toISOString()
-          } as any)
-          .eq('id', id)
-          .select()
-          .single();
-        if (error) throw error;
-        return data;
-      }
-
+      // Solo clases de cortesía (session_bookings). Las reservas de instalación NUNCA se
+      // escriben desde el navegador: van por el BFF (reservations / reservations-admin).
+      if (!isSessionBooking) throw new Error('Las reservas de instalación se actualizan por el servidor.');
       const { data, error } = await supabase
-        .from('facility_reservations')
-        .update({ ...payload, updated_at: new Date().toISOString() })
+        .from('session_bookings')
+        .update({
+          status: payload.status,
+          updated_at: new Date().toISOString()
+        } as any)
         .eq('id', id)
         .select()
         .single();
-
-      if (error) throw new Error(friendlyReservationError(error));
+      if (error) throw error;
       return data;
     },
     onSuccess: () => {
@@ -554,8 +503,6 @@ export function useFacilityReservations() {
     loadMore: () => setLimit((l) => l + PAGE_SIZE),
     stats,
     // mutations
-    createReservation,
-    isCreating,
     updateReservation,
     isUpdating,
     deleteReservation,

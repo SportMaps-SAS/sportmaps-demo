@@ -268,7 +268,11 @@ describe('enlace /r/:token', () => {
         const tok = t.shared.signToken({ typ: 'r', gid: GID, rid: UUID2, exp: Date.now() + 60_000 });
         rpc.mockResolvedValue({ data: { ok: true, reservation: { id: UUID2, price_snapshot: {} } }, error: null });
         const c = await t.call(`/r/${tok}/cancel`, { method: 'POST', body: { reason: 'no puedo' } });
-        const rs = await t.call(`/r/${tok}/reschedule`, { method: 'POST', body: { starts_at: '2026-11-07T22:00:00Z', ends_at: '2026-11-07T23:00:00Z', facility_id: UUID1 } });
+        // facility_id NO se acepta (schema estricto): cambiar de cancha es solo del staff -> 400 y no llama la RPC.
+        const rsBad = await t.call(`/r/${tok}/reschedule`, { method: 'POST', body: { starts_at: '2026-11-07T22:00:00Z', ends_at: '2026-11-07T23:00:00Z', facility_id: UUID1 } });
+        expect(rsBad.status).toBe(400);
+        expect(rpc).not.toHaveBeenCalledWith('reprogramar_reserva', expect.anything());
+        const rs = await t.call(`/r/${tok}/reschedule`, { method: 'POST', body: { starts_at: '2026-11-07T22:00:00Z', ends_at: '2026-11-07T23:00:00Z' } });
         t.close();
         expect(c.status).toBe(200);
         expect(rs.status).toBe(200);

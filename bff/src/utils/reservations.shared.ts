@@ -150,21 +150,42 @@ export function checkOtp(guestId: string, email: string, code: string, now = Dat
 // ── Contador anti-abuso en memoria (por correo / teléfono / invitado) ────────
 // Igual que otpStartLimiter de public-booking: vive en el proceso del BFF.
 
+// RIESGO MULTI-INSTANCIA: este contador vive en la memoria de UN proceso. Con N instancias del BFF el
+// tope real es N veces mayor y se reinicia en cada deploy. Para un tope compartido (Redis/Upstash/tabla)
+// se registra un HitStore con setHitStore(); la interfaz es síncrona a propósito (los callers de hoy no
+// esperan promesas): un store remoto debe implementarse con caché local + sincronía en segundo plano, o
+// volver async los 4 callers de public-reservations. Los limitadores por IP (express-rate-limit) tienen
+// el mismo límite: ver docs/specs/reservas-agentes-ia-contrato-seguro.md §Riesgos.
+export interface HitStore {
+    allow(key: string, max: number, windowMs: number, now: number): boolean;
+    reset?(): void;
+}
+
 const hits = new Map<string, number[]>();
+
+const memoryStore: HitStore = {
+    allow(key, max, windowMs, now) {
+        const arr = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
+        if (arr.length >= max) { hits.set(key, arr); return false; }
+        arr.push(now);
+        hits.set(key, arr);
+        if (hits.size > 5000) {
+            for (const [k, v] of hits) if (v.every((t) => now - t >= windowMs)) hits.delete(k);
+        }
+        return true;
+    },
+    reset() { hits.clear(); },
+};
+let store: HitStore = memoryStore;
+/** Sustituye el almacén de contadores (p. ej. uno compartido). `null` vuelve al de memoria. */
+export function setHitStore(s: HitStore | null): void { store = s ?? memoryStore; }
 
 /** true si todavía cabe (y lo cuenta); false si ya superó `max` en `windowMs`. */
 export function allowHit(key: string, max: number, windowMs: number, now = Date.now()): boolean {
-    const arr = (hits.get(key) ?? []).filter((t) => now - t < windowMs);
-    if (arr.length >= max) { hits.set(key, arr); return false; }
-    arr.push(now);
-    hits.set(key, arr);
-    if (hits.size > 5000) {
-        for (const [k, v] of hits) if (v.every((t) => now - t >= windowMs)) hits.delete(k);
-    }
-    return true;
+    return store.allow(key, max, windowMs, now);
 }
 
-export function resetHits(): void { hits.clear(); }
+export function resetHits(): void { hits.clear(); store.reset?.(); }
 
 // ── Verificación de canal del invitado (aislada detrás de una interfaz) ──────
 

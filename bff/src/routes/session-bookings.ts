@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { requireAuth, requireRole } from '../middlewares/authMiddleware';
+import { requireAuth, requireRole, auditLog } from '../middlewares/authMiddleware';
 import { supabase } from '../config/supabase';
 import { z } from 'zod';
 import {
@@ -2520,6 +2520,8 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       req.log?.error({ err: notifErr }, 'book-secondary: fallo notificando (no bloquea la reserva)');
     }
 
+    await auditLog(req, 'facility_reservation_book_secondary', 'facility_reservations', String((b as any)?.id), null,
+      { facility_id, reservation_date, enrollment_id, school_id: enrollmentSchoolId, hours_plan: isHoursPlan }, { metadata: { school_id: enrollmentSchoolId } });
     res.status(201).json({ reservation: b });
   } catch (err: any) {
     req.log?.error({ err }, 'session-bookings unhandled error');
@@ -2625,6 +2627,7 @@ router.delete('/athlete/secondary/:id/cancel', requireAuth, async (req: Request,
       });
     }
 
+    await auditLog(req, 'facility_reservation_cancel_secondary', 'facility_reservations', String(id), { status: r.status }, { status: 'cancelled', enrollment_id: r.enrollment_id });
     res.json({ success: true });
   } catch (err: any) {
     req.log?.error({ err }, 'session-bookings unhandled error');

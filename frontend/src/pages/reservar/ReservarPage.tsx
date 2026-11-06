@@ -13,6 +13,7 @@ import {
 import SlotPicker, { useAvailability } from '@/components/reservar/SlotPicker';
 import { Alternatives, ErrorBanner, PolicyBox, PriceBox } from '@/components/reservar/ReservaParts';
 import { apiRequest, publicUrl, RESERVATIONS_BASE, ReservaApiError } from '@/components/reservar/reservasApi';
+import { safeRedirectUrl } from '@/lib/safeRedirect';
 import {
   formatCountdown, formatCOP, formatDayLong, formatDuration, formatRange, bogotaDateKey, idempotencyKeyFor,
   isValidEmail, msUntil, newIdemStore, normalizeCoPhone, normalizePolicy, summarySignature,
@@ -265,7 +266,9 @@ export default function ReservarPage() {
         body: {},
       });
       setCheckoutFailed(false);
-      window.location.assign(r.checkout_url);
+      const dest = safeRedirectUrl(r.checkout_url);
+      if (!dest) throw new Error('checkout_url inválida');
+      window.location.assign(dest);
     } catch (e) {
       setCheckoutFailed(true);
       setError(

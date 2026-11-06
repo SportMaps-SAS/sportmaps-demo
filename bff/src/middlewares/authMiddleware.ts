@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../config/supabase';
+import { writeAudit, ctxFromReq, type AuditOptions } from '../utils/auditWrite';
 import { getCachedUser, getCachedMembership, type CachedUser } from '../utils/authCache';
 import { esAdminDePlataforma } from './requirePlatformAdmin';
 
@@ -351,27 +352,10 @@ export const auditLog = async (
     targetId: string,
     oldValue?: Record<string, unknown> | null,
     newValue?: Record<string, unknown> | null,
+    opts?: AuditOptions,
 ) => {
-    try {
-        await supabase.from('security_audit_log').insert({
-            user_id: req.user?.id || null,
-            action,
-            target_table: targetTable,
-            target_id: targetId,
-            old_value: oldValue || null,
-            new_value: newValue || null,
-            ip_address: req.ip || req.headers['x-forwarded-for'] || null,
-            user_agent: req.headers['user-agent'] || null,
-            metadata: {
-                school_id: req.schoolId || null,
-                role: req.role || null,
-                request_id: req.id || null,
-            },
-        });
-    } catch (err) {
-        // Audit failure must never break the request
-        req.log?.warn({ err, action, targetTable, targetId }, 'Audit log write failed');
-    }
+    // Nunca lanza y nunca falla en silencio: ver utils/auditWrite.ts (AUDIT_WRITE_FAILED).
+    await writeAudit(ctxFromReq(req), action, targetTable, targetId, oldValue, newValue, opts);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

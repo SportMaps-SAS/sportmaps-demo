@@ -23,6 +23,8 @@
 
 import type { Logger } from 'pino';
 import { supabase } from '../config/supabase';
+import { writeAudit } from '../utils/auditWrite';
+import { sanitizeFreeText } from '../utils/sanitize';
 
 export type ReservationProvider = 'wompi' | 'mercadopago';
 
@@ -164,7 +166,7 @@ export async function notificarReservaConfirmada(reservation: Record<string, any
             category: 'payment',
             type: 'booking_confirmed',
             title: 'Reserva de cancha confirmada',
-            message: `Tu reserva${r.facility_name ? ` de ${r.facility_name}` : ''}${dateLabel ? ` quedó confirmada para el ${dateLabel}` : ' quedó confirmada'}${hora}.`,
+            message: `Tu reserva${r.facility_name ? ` de ${sanitizeFreeText(r.facility_name, { max: 120 })}` : ''}${dateLabel ? ` quedó confirmada para el ${dateLabel}` : ' quedó confirmada'}${hora}.`,
             link: '/facilities',
             data: { reservation_id: r.id },
         });
@@ -319,6 +321,8 @@ export async function applyReservationPayment(input: ApplyReservationPaymentInpu
     }
 
     if (result.reconciliation) {
+        await writeAudit({ schoolId, log }, 'reservation_reconciliation', 'facility_reservations', String(reserva.id),
+            { status: reserva.status, amount_paid: reserva.amount_paid }, { amount: Math.round(amountCop), provider, provider_event_id: providerEventId });
         await alertarAdminsDeReserva({
             schoolId, reservationId: reserva.id, tipo: 'reservation_reconciliation',
             titulo: 'Pago de reserva sin cancha: hay que devolver o dejar saldo a favor',
@@ -329,6 +333,8 @@ export async function applyReservationPayment(input: ApplyReservationPaymentInpu
     }
 
     if (result.confirmed) {
+        await writeAudit({ schoolId, log }, 'reservation_payment_confirmed', 'facility_reservations', String(reserva.id),
+            { status: reserva.status, amount_paid: reserva.amount_paid }, { amount: Math.round(amountCop), provider, provider_event_id: providerEventId });
         await notificarReservaConfirmada({ ...(result.reservation ?? {}), id: reserva.id, user_id: reserva.user_id, school_id: schoolId }, log);
         return { status: 200, body: { status: 'ok', kind: 'reservation', confirmed: true } };
     }

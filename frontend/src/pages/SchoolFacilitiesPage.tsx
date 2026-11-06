@@ -19,6 +19,7 @@ import { useTrialClasses, type TrialClassBooking, type TrialClassStatus, type Bo
 import { FacilityFormDialog } from '@/components/school/FacilityFormDialog';
 import { OwnerReservationModal } from '@/components/school/OwnerReservationModal';
 import { FacilityRatesPanel } from '@/components/reservas/FacilityRatesPanel';
+import { BlackoutsPanel } from '@/components/reservas/BlackoutsPanel';
 import { FacilityAvailabilityModal } from '@/components/school/FacilityAvailabilityModal';
 import { TrialClassBookingModal } from '@/components/school/TrialClassBookingModal';
 import { TrialClassSettingsModal } from '@/components/school/TrialClassSettingsModal';
@@ -303,7 +304,6 @@ export default function SchoolFacilitiesPage() {
     isFetching: reservationsFetching,
     refetch: refetchReservations,
     stats,
-    createReservation,
     deleteReservation,
     approveReservation,
     completeReservation,
@@ -799,6 +799,8 @@ export default function SchoolFacilitiesPage() {
               summary={`${filteredReservations.length} de ${stats.total} reservas`}
             />
           </Card>
+
+          <BlackoutsPanel facilities={facilities} />
         </TabsContent>
 
         {/* ═══════════════ CLASES DE PRUEBA ═══════════════ */}
@@ -922,7 +924,6 @@ export default function SchoolFacilitiesPage() {
         open={reservationModalOpen}
         onOpenChange={setReservationModalOpen}
         facilities={facilities}
-        onBlock={createReservation}
         onChanged={() => void refetchReservations()}
       />
 
@@ -932,7 +933,6 @@ export default function SchoolFacilitiesPage() {
         onOpenChange={(v) => { if (!v) setReschedulingFacilityReservation(null); }}
         facilities={facilities}
         editReservation={reschedulingFacilityReservation}
-        onBlock={createReservation}
         onLegacyReschedule={handleLegacyReschedule}
         onChanged={() => void refetchReservations()}
       />

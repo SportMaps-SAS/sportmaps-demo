@@ -185,7 +185,7 @@ declare f text; v_n int; t text;
 begin
   -- Matriz de EXECUTE (catálogo, sin ejecutar nada)
   foreach f in array array[
-      'public.reservar_cancha(uuid,timestamptz,timestamptz,text,text,text,uuid,uuid,uuid,jsonb,text,integer,text,text,numeric)',
+      'public.reservar_cancha(uuid,timestamptz,timestamptz,text,text,text,uuid,uuid,uuid,jsonb,text,integer,text,text,numeric,text)',
       'public.cancelar_reserva(uuid,text,uuid,uuid)',
       'public.reprogramar_reserva(uuid,timestamptz,timestamptz,uuid,uuid,uuid)',
       'public.disponibilidad_canchas(uuid,date,date,text,uuid,integer,text,uuid)',
@@ -332,6 +332,11 @@ end $$;
 do $$
 declare v_id uuid; v_id2 uuid; r jsonb; v_n int; v_price numeric; v_st text;
 begin
+  -- AJUSTE cierre de seguridad: tras 20261105213611 (revoca la escritura directa) este flujo viejo ya no existe;
+  -- el chequeo equivalente (42501 + RPC funcionando) vive en seguridad-cierre/04-reservas-revocar-escritura.sql.
+  if not has_table_privilege('authenticated', 'public.facility_reservations', 'INSERT') then
+    raise notice 'E7 omitida: la escritura directa ya fue revocada (20261105213611)'; return;
+  end if;
   -- el padre inserta DIRECTO (como lo hace el frontend de hoy) una solicitud, intentando colar status/precio
   perform pg_temp.as_user(current_setting('qa.p1')::uuid);
   insert into public.facility_reservations (facility_id, user_id, reservation_date, start_time, end_time, status, price, amount_paid, payment_status)
@@ -394,6 +399,10 @@ declare
   v_xt uuid := pg_temp.mk_user('qx.ext.c@qa.sportmaps.test', '{"role":"athlete"}'::jsonb);
   v_sc uuid := gen_random_uuid(); v_fc uuid := gen_random_uuid(); r jsonb;
 begin
+  -- AJUSTE cierre de seguridad: 20261105213611 quita EXECUTE de submit_facility_booking_v2 a authenticated.
+  if not has_function_privilege('authenticated', 'public.submit_facility_booking_v2(uuid,uuid,date,time,time,text,text,text,integer,text,numeric,text,text)'::regprocedure, 'EXECUTE') then
+    raise notice 'E8 omitida: submit_facility_booking_v2 ya no es ejecutable por authenticated (20261105213611)'; return;
+  end if;
   -- escuela NORMAL (no venue) sin el addon 'reservations'
   insert into public.schools (id, name, owner_id) values (v_sc, 'QX Escuela C sin addon', v_oc);
   insert into public.school_members (school_id, profile_id, role, status) values (v_sc, v_mem, 'parent', 'active') on conflict do nothing;

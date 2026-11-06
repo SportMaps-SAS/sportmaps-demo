@@ -16,8 +16,8 @@
 - **El `school_id` nunca lo manda el cliente en `reservar/cancelar/reprogramar`:** sale de la instalación. En `disponibilidad_canchas` sí entra (la página pública resuelve slug → school) y se valida contra el entitlement.
 - **Entitlement:** `disponibilidad_canchas`, `reservar_cancha` y `reprogramar_reserva` exigen `has_entitlement(school_id, 'reservations')` (venue o addon `reservations`); si no, `ENTITLEMENT_REQUIRED`. `cancelar_reserva` y `confirmar_pago_reserva` NO lo exigen (nadie queda atrapado en una reserva si la escuela pierde el addon).
 - **Quién es quién** (`rol` de quien llama respecto de la escuela de la cancha):
-  - `staff`: en `user_staff_school_ids()` o dueño o admin de plataforma (con `p_actor_profile_id`, la misma lógica por consulta directa).
-  - `member`: miembro activo de la escuela que no es staff (padre, atleta, contador).
+  - `staff` (**desde 20261105212125 = ADMINISTRATIVO**, helper `_reservas_es_admin`): dueño de la escuela (`schools.owner_id`, el "facility_manager" de una sede venue), `school_members` activo con rol `owner`, `admin`, `school_admin` o `super_admin`, el rol `staff` (recepción/operación de sede), o admin de plataforma activo. Con `p_actor_profile_id` (service_role) la lógica es la misma por consulta directa. **Un `coach`, `viewer`, `reporter` o quien solo está en `school_staff` ya NO es staff**: es `member` (reserva con tarifa member y ve disponibilidad, pero no puede reservar a nombre de terceros/invitados, `p_rate_audience`, `none`/`cash` con `p_amount_paid`, saltarse horario/anticipación/`bookable_by`, cancelar con reembolso 100 % de staff ni reprogramar cambiando duración/cancha).
+  - `member`: miembro activo de la escuela que no es staff administrativo (padre, atleta, contador, coach, viewer, reporter).
   - `external`: cualquier otro (incluye invitados sin cuenta).
 - **Tarifa (`audience`) por `bookable_by`:**
 
@@ -124,7 +124,7 @@ public.reservar_cancha(
   p_facility_id        uuid,
   p_starts_at          timestamptz,
   p_ends_at            timestamptz,
-  p_channel            text,                    -- 'app'|'public'|'whatsapp'|'admin'|'landing'
+  p_channel            text,                    -- 'app'|'public'|'whatsapp'|'admin'|'landing'|'ai'|'import' (los dos últimos: ver "Canales automatizados")
   p_idempotency_key    text,                    -- OBLIGATORIA, 8..128 caracteres
   p_payment_method     text    DEFAULT 'online',-- 'online'|'transfer'|'cash'|'none'
   p_actor_profile_id   uuid    DEFAULT NULL,    -- solo service_role: quien ejecuta
@@ -135,7 +135,8 @@ public.reservar_cancha(
   p_participants       integer DEFAULT 1,
   p_notes              text    DEFAULT NULL,
   p_external_org_name  text    DEFAULT NULL,
-  p_amount_paid        numeric DEFAULT 0        -- solo staff: lo que ya cobró en sede
+  p_amount_paid        numeric DEFAULT 0,       -- solo staff: lo que ya cobró en sede
+  p_source_ref         text    DEFAULT NULL     -- origen del dato; OBLIGATORIO con 'ai'/'import' (ver "Canales automatizados")
 ) RETURNS jsonb
 ```
 
@@ -279,7 +280,7 @@ Errores: `INVALID_ARGUMENT`, `INVALID_AMOUNT`, `RESERVATION_NOT_FOUND`, `INVALID
 |---|---|
 | `SLOT_TAKEN` | **409** (con `alternatives`) |
 | `IDEMPOTENCY_KEY_REUSED` | 409 |
-| `TOO_MANY_ACTIVE` | 429 (o 409) |
+| `TOO_MANY_ACTIVE`, `RATE_LIMITED_AUTOMATION` | 429 (o 409) |
 | `PRICE_NOT_CONFIGURED`, `RESCHEDULE_PRICE_DIFFERS`, `DURATION_TOO_LONG` | 422 |
 | `INVALID_STATE`, `ALREADY_STARTED`, `CANCELLATION_WINDOW_CLOSED`, `RESCHEDULE_WINDOW_CLOSED`, `FACILITY_BLOCKED` | 409 |
 | `FORBIDDEN`, `STAFF_ONLY_FIELD`, `CHANNEL_NOT_ALLOWED`, `AUDIENCE_NOT_ALLOWED`, `MINOR_CANNOT_BOOK`, `GUEST_NOT_VERIFIED` | 403 |
@@ -290,9 +291,25 @@ Errores: `INVALID_ARGUMENT`, `INVALID_AMOUNT`, `RESERVATION_NOT_FOUND`, `INVALID
 
 El `Idempotency-Key` del header HTTP es `p_idempotency_key`. La llave es **por escuela** (UNIQUE `(school_id, idempotency_key)`) y queda atada al reservante: otro usuario con la misma llave recibe `IDEMPOTENCY_KEY_REUSED`.
 
+## 7b. Canales automatizados (`ai`, `import`) — migración 20261105212125
+
+Para que un agente de IA o una importación (Excel/PDF/WhatsApp) cree reservas sin abrir una puerta nueva.
+
+**Quién puede.** Solo `service_role` (`auth.uid()` NULL y, si hay claims JWT, `role = service_role`) con `p_actor_profile_id` = un **administrador estricto** de la escuela de la cancha (dueño, `owner`/`admin`/`school_admin`/`super_admin`, admin de plataforma; **no** el rol `staff` de recepción). Cualquier otro caso devuelve `CHANNEL_NOT_ALLOWED`: llamada desde `authenticated` (aunque sea admin), sin actor, actor no admin o admin de OTRA escuela, o con `p_guest`/`p_guest_booker_id` (nunca para invitados). `anon` no tiene EXECUTE.
+
+**Qué exige / qué cambia:**
+- `p_source_ref` **obligatorio** (si falta o no cumple `^[A-Za-z0-9:_./#-]{1,200}$` → `INVALID_ARGUMENT`): hash del documento + fila, id del mensaje, id de ejecución. Queda en `price_snapshot.source_ref`; `price_snapshot.created_via` = el canal (también se guarda para los demás canales) y `created_by` = el actor.
+- **El dinero no se mueve:** `p_payment_method` solo `online` o `transfer`; `cash`, `none` o `p_amount_paid > 0` → `PAYMENT_METHOD_NOT_ALLOWED`. Resultado: `pending_payment` con hold (10/15 min) o `confirmed` sin cobro **solo** si el total es 0 por una tarifa explícita en `facility_rates` (una cancha sin tarifa → `PRICE_NOT_CONFIGURED`, no se regala).
+- **Tope:** 30 reservas creadas por actor por hora (canales `ai` + `import` sumados); la 31.ª → `RATE_LIMITED_AUTOMATION` (HTTP 429). Se serializa por actor con `pg_advisory_xact_lock`. Un replay idempotente (misma llave) no cuenta.
+- Como staff, puede saltarse horario/anticipación/`bookable_by` (queda `staff_override`), pero **nunca** `booking_enabled`, alineación a la grilla, blackouts ni el EXCLUDE.
+
+**Códigos nuevos:** `RATE_LIMITED_AUTOMATION`; `CHANNEL_NOT_ALLOWED` ahora cubre `ai`/`import`. El CHECK de `facility_reservations.channel` admite los dos canales nuevos.
+
+**Texto libre** (`p_notes` ≤ 500, `p_external_org_name` ≤ 200, `p_guest->>'full_name'` ≤ 200, `phone` ≤ 40, `email` ≤ 254, motivo de cancelación ≤ 500): se eliminan los caracteres de control `\x01-\x08 \x0B \x0C \x0E-\x1F \x7F`; exceso de longitud → `INVALID_ARGUMENT`; un nombre de invitado que quede vacío tras limpiar → `INVALID_ARGUMENT`. Ninguno se interpola en SQL dinámico (las RPC no usan `EXECUTE`/`format`).
+
 ## 8. Cosas que F1 NO hace (para no construir contra lo que no existe)
 
 - No crea el pago ni el link: el BFF lo hace con `payment_reference` y llama `confirmar_pago_reserva` desde el webhook (F2).
-- No revoca la escritura directa en `facility_reservations` (M7): los clientes actuales siguen funcionando mientras migran a estas RPC. Hasta M7, un cliente que inserte directo **sí** ocupa la franja (el trigger escribe la ocupación) pero el servidor no le calcula la tarifa de `facility_rates`.
+- La revocación de la escritura directa en `facility_reservations`/`reservation_payments`/`facility_blackouts` (M7) vive en la migración **20261105213611_reservas_revocar_escritura_directa**, que se aplica **al final**, solo después de desplegar el frontend que ya no escribe directo. Antes de aplicarla, un cliente que inserte directo ocupa la franja pero el servidor no le calcula la tarifa de `facility_rates`; después, recibe 42501.
 - No hay `generar_recurrencia`, ni motor de reglas por segmento (§2.3.1), ni lista de espera, ni pago dividido.
 - La reserva no cruza la medianoche (`reservations_time_valid` exige `end_time > start_time`).

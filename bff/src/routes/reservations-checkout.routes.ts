@@ -55,6 +55,10 @@ import {
 import { createMpPreference } from '../services/mercadopago.service';
 import { validarLlaveCheckoutEscuela } from '../services/wompi-llave-checkout.guard';
 import { appPublica } from '../utils/url-publica-familias';
+import { z } from 'zod';
+import { zodBadRequest } from '../middlewares/reservationsInput';
+import { writeAudit, ctxFromReq } from '../utils/auditWrite';
+import { LIMITS } from '../utils/reservations.schemas';
 import {
     abonoMinimoDeReserva,
     alertarAdminsDeReserva,
@@ -194,6 +198,20 @@ export function resolverMontoCheckout(
     return { ok: true, amount };
 }
 
+// ─── Esquemas de entrada (estrictos) ─────────────────────────────────────────
+
+const CheckoutBodySchema = z.strictObject({
+    // El rango real [abono mínimo, saldo] lo impone resolverMontoCheckout (400 amount_out_of_range).
+    amount: z.number().finite().min(-LIMITS.amountMax).max(LIMITS.amountMax).optional(),
+    mode: z.enum(['total', 'deposit', 'min']).optional(),
+    provider: z.enum(['wompi', 'mercadopago']).optional(),
+    return_path: z.string().max(200).optional(),
+});
+const TransferProofBodySchema = z.strictObject({ proof_url: z.string().max(1000) });
+const ConfirmTransferBodySchema = z.strictObject({
+    amount: z.number().int().min(1).max(LIMITS.amountMax),
+});
+
 // ─── POST /:id/checkout ──────────────────────────────────────────────────────
 
 router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Response) => {
@@ -201,6 +219,9 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
         const cargada = await cargarReservaAutorizada(req);
         if (!cargada) return res.status(404).json({ error: 'reservation_not_found' });
         const { reserva } = cargada;
+        const bodyParsed = CheckoutBodySchema.safeParse(req.body ?? {});
+        if (!bodyParsed.success) return zodBadRequest(res, bodyParsed.error.issues);
+        const body = bodyParsed.data;
 
         if (reserva.status !== 'pending_payment') {
             return res.status(409).json({ error: 'reservation_not_payable', status: reserva.status });
@@ -213,7 +234,7 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
             return res.status(409).json({ error: 'reservation_without_reference' });
         }
 
-        const monto = resolverMontoCheckout(reserva, req.body ?? {});
+        const monto = resolverMontoCheckout(reserva, body);
         if (!monto.ok) {
             return res.status(400).json({ error: 'amount_out_of_range', min: monto.min, max: monto.max });
         }
@@ -221,9 +242,7 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
 
         // Pasarela DE LA ESCUELA. resolveProvider ya es fail-closed para 'unset' y 'direct'
         // sin cuenta; además se exige source 'school_direct' (nada de ENV = otra escuela).
-        const preferred = req.body?.provider === 'mercadopago' || req.body?.provider === 'wompi'
-            ? req.body.provider
-            : null;
+        const preferred = body.provider ?? null;
         const resolved: ResolvedProvider | null = await resolveProvider({ schoolId: reserva.school_id, preferredProvider: preferred });
         if (!resolved || resolved.source !== 'school_direct' || !resolved.accessToken) {
             return res.status(409).json({
@@ -256,7 +275,7 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
             return res.status(500).json({ error: 'checkout_persist_failed' });
         }
 
-        const retorno = `${appPublica()}${rutaDeRetorno(req.body?.return_path)}`;
+        const retorno = `${appPublica()}${rutaDeRetorno(body.return_path)}`;
 
         if (resolved.provider === 'wompi') {
             const guard = validarLlaveCheckoutEscuela(resolved);
@@ -323,7 +342,9 @@ router.post('/:id/transfer-proof', authSesionOInvitado, async (req: Request, res
         if (!cargada) return res.status(404).json({ error: 'reservation_not_found' });
         const { reserva } = cargada;
 
-        const proofUrl = req.body?.proof_url;
+        const proofParsed = TransferProofBodySchema.safeParse(req.body ?? {});
+        if (!proofParsed.success) return zodBadRequest(res, proofParsed.error.issues);
+        const proofUrl = proofParsed.data.proof_url;
         if (!esUrlDeComprobanteValida(proofUrl)) {
             return res.status(400).json({ error: 'invalid_proof_url' });
         }
@@ -393,7 +414,9 @@ router.post('/:id/confirm-transfer', requireAuth, async (req: Request, res: Resp
         if (!snap.transfer_proof?.url) {
             return res.status(409).json({ error: 'no_transfer_proof' });
         }
-        const amount = Number(req.body?.amount);
+        const confirmParsed = ConfirmTransferBodySchema.safeParse(req.body ?? {});
+        if (!confirmParsed.success) return zodBadRequest(res, confirmParsed.error.issues);
+        const amount = confirmParsed.data.amount;
         const saldo = saldoDeReserva(reserva);
         if (!Number.isInteger(amount) || amount <= 0 || amount > saldo) {
             return res.status(400).json({ error: 'amount_out_of_range', min: 1, max: saldo });
@@ -417,6 +440,14 @@ router.post('/:id/confirm-transfer', requireAuth, async (req: Request, res: Resp
         const result = (data ?? {}) as Record<string, any>;
         if (result.ok === false) {
             return res.status(result.error === 'RESERVATION_NOT_FOUND' ? 404 : 422).json({ error: result.error, message: result.message });
+        }
+        if (!result.already_processed && (result.confirmed || result.reconciliation)) {
+            await writeAudit(
+                { ...ctxFromReq(req), schoolId: reserva.school_id },
+                result.reconciliation ? 'reservation_reconciliation' : 'reservation_transfer_confirmed',
+                'facility_reservations', String(reserva.id), { status: reserva.status, amount_paid: reserva.amount_paid },
+                { amount, confirmed: !!result.confirmed, reconciliation: !!result.reconciliation, provider: 'transfer' },
+            );
         }
         if (result.confirmed && !result.already_processed) {
             await notificarReservaConfirmada({ ...(result.reservation ?? {}), id: reserva.id, user_id: reserva.user_id, school_id: reserva.school_id }, req.log);

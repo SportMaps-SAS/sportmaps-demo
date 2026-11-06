@@ -19,11 +19,15 @@ import { format, isBefore, startOfDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
-import type { FacilityReservation, CreateReservationPayload } from '@/hooks/useFacilityReservations';
+import type { FacilityReservation } from '@/hooks/useFacilityReservations';
 import { SlotGrid } from '@/components/reservas/SlotGrid';
 import { db, useAvailability } from '@/components/reservas/reservasHooks';
 import {
+  BLACKOUT_KIND_LABEL,
+  blackoutErrorMessage,
   bookingSignature,
+  buildBlackoutBody,
+  createBlackout,
   createBooking,
   createIdempotencyHolder,
   dropStartedSlots,
@@ -37,6 +41,7 @@ import {
   slotFromAlternative,
   usesNewReservationRoutes,
   type AvailabilitySlot,
+  type BlackoutKind,
   type BookingAlternative,
   type CreateBookingBody,
   type PaymentMethod,
@@ -72,11 +77,6 @@ export interface OwnerReservationModalProps {
   facilities: Facility[];
   /** Si viene, el modal reprograma esa reserva (no crea). */
   editReservation?: FacilityReservation | null;
-  /**
-   * Bloqueo interno: todavía no hay ruta de bloqueos en el BFF (facility_blackouts no tiene
-   * endpoint), así que sigue usando el insert directo de antes.
-   */
-  onBlock: (payload: CreateReservationPayload) => Promise<unknown>;
   /** Reprogramar una fila sin starts_at (rutas viejas de reservations-admin). */
   onLegacyReschedule?: (payload: LegacyReschedulePayload) => Promise<unknown>;
   /** Para que la página refresque su lista cuando algo cambió. */
@@ -123,7 +123,7 @@ function sanitizeSearch(q: string): string {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function OwnerReservationModal({
-  open, onOpenChange, facilities, editReservation, onBlock, onLegacyReschedule, onChanged,
+  open, onOpenChange, facilities, editReservation, onLegacyReschedule, onChanged,
 }: OwnerReservationModalProps) {
   const isEdit = !!editReservation;
   const { schoolId } = useSchoolContext();
@@ -134,6 +134,7 @@ export function OwnerReservationModal({
   const [reservationType, setReservationType] = useState<ReservationType>('manual');
   const [selectedFacilityId, setSelectedFacilityId] = useState('');
   const [notes, setNotes] = useState('');
+  const [blockKind, setBlockKind] = useState<BlackoutKind>('maintenance');
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
   const [duration, setDuration] = useState<number | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<AvailabilitySlot | null>(null);
@@ -161,6 +162,7 @@ export function OwnerReservationModal({
     setReservationType('manual');
     setSelectedFacilityId('');
     setNotes('');
+    setBlockKind('maintenance');
     setSelectedDate(undefined);
     setDuration(null);
     setSelectedSlot(null);
@@ -335,17 +337,16 @@ export function OwnerReservationModal({
     setAlternatives([]);
     try {
       if (isBlock) {
-        // Bloqueo interno: sin ruta de bloqueos en el BFF todavía → insert directo como antes.
-        await onBlock({
+        // Bloqueo: POST /reservations-admin/blackouts (el navegador no escribe en facility_reservations).
+        await createBlackout(buildBlackoutBody({
           facility_id: selectedFacility.id,
-          reservation_date: format(selectedDate, 'yyyy-MM-dd'),
-          start_time: selectedSlot.start_local,
-          end_time: selectedSlot.end_local,
-          price: 0,
-          notes: notes.trim() || 'Bloqueo interno',
-          status: 'confirmed',
-        });
-        onChanged?.();
+          starts_at: selectedSlot.starts_at,
+          ends_at: selectedSlot.ends_at,
+          kind: blockKind,
+          reason: notes,
+        }));
+        toast({ title: '✅ Bloqueo creado' });
+        refreshOutside();
         onOpenChange(false);
         return;
       }
@@ -385,7 +386,7 @@ export function OwnerReservationModal({
       onOpenChange(false);
     } catch (e: unknown) {
       const info = parseBookingError(e);
-      setError(info.message);
+      setError(isBlock ? blackoutErrorMessage(e) : info.message);
       if (info.code === 'SLOT_TAKEN') setAlternatives(info.alternatives);
       refreshOutside();
     } finally {
@@ -587,6 +588,7 @@ export function OwnerReservationModal({
               <Textarea
                 placeholder={isBlock ? 'Ej. Mantenimiento de piso, evento institucional…' : 'Ej. Grupo de 8 personas, trae sus balones…'}
                 value={notes}
+                maxLength={isBlock ? 200 : 1000}
                 onChange={(e) => setNotes(e.target.value)}
                 rows={3}
                 className="bg-muted/30 border-border/50 resize-none focus-visible:ring-primary/20"
@@ -594,9 +596,20 @@ export function OwnerReservationModal({
             </div>
 
             {isBlock && (
-              <p className="text-[11px] text-muted-foreground">
-                El bloqueo interno se registra como siempre (todavía no hay una ruta de bloqueos en el servidor).
-              </p>
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold tracking-tight">Tipo de bloqueo</Label>
+                <Select value={blockKind} onValueChange={(v) => setBlockKind(v as BlackoutKind)}>
+                  <SelectTrigger className="bg-muted/30 border-border/50 h-11" aria-label="Tipo de bloqueo"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(BLACKOUT_KIND_LABEL) as BlackoutKind[]).map((k) => (
+                      <SelectItem key={k} value={k}>{BLACKOUT_KIND_LABEL[k]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  El bloqueo cierra la cancha en el horario elegido. Si ya hay una reserva vigente, el servidor no lo permite.
+                </p>
+              </div>
             )}
 
             <Button className="w-full h-11 text-base font-semibold" onClick={() => setStep('datetime')} disabled={!detailsValid}>

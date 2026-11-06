@@ -10,7 +10,7 @@ export class ReservaApiError extends Error {
   alternatives: Alternative[];
   view: ErrorView;
   body: Record<string, unknown>;
-  constructor(status: number, body: Record<string, unknown>) {
+  constructor(status: number, body: Record<string, unknown>, retryAfterSeconds?: number) {
     // Forma real del BFF: { error: <texto>, code: 'SLOT_TAKEN', ... } (también se acepta error=CODIGO).
     const esCodigo = (v: unknown): v is string => typeof v === 'string' && /^[A-Z][A-Z0-9_]+$/.test(v);
     const code = [body.code, body.error].find(esCodigo) ?? '';
@@ -22,7 +22,7 @@ export class ReservaApiError extends Error {
     this.code = code;
     this.body = body;
     this.alternatives = Array.isArray(body.alternatives) ? (body.alternatives as Alternative[]) : [];
-    this.view = mapApiError({ status, code, message: message || undefined });
+    this.view = mapApiError({ status, code, message: message || undefined, retryAfterSeconds });
   }
 }
 
@@ -44,7 +44,8 @@ export async function apiRequest<T = Record<string, unknown>>(
   }
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok || body.ok === false) {
-    throw new ReservaApiError(res.status || 400, body);
+    const ra = Number(res.headers?.get?.('Retry-After'));
+    throw new ReservaApiError(res.status || 400, body, Number.isFinite(ra) && ra > 0 ? ra : undefined);
   }
   return body as T;
 }
