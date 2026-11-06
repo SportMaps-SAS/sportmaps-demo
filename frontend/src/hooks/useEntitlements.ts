@@ -112,6 +112,8 @@ interface EntitlementsResponse {
     military_discount_enabled?: boolean;
     /** El registro pide el ID del torniquete (`school_settings.registration_zk_pin_enabled`). */
     registration_zk_pin_enabled?: boolean;
+    /** Control de acceso muestra «IDs del lector» (`school_settings.access_roster_enabled`). */
+    access_roster_enabled?: boolean;
     /**
      * true → en esta escuela un deportista puede estar en un SEGUNDO equipo
      * sin salir de su categoría (grupo de trabajo transversal: arqueros,
@@ -238,6 +240,9 @@ export interface Entitlements {
      *  dorsal (`registration_zk_pin_enabled`; Dreamers, Academia Superior). Default false. */
     registrationZkPinEnabled: boolean;
 
+    /** Control de acceso muestra la lista «IDs del lector» (`access_roster_enabled`). Default false. */
+    accessRosterEnabled: boolean;
+
     /** Un deportista puede estar en un SEGUNDO equipo sin salir de su
      *  categoría (`allow_secondary_team_enrollment`, caso Carmel Club: equipo
      *  de arqueros). Default false. */
@@ -323,6 +328,7 @@ const EMPTY_ENTITLEMENTS: Entitlements = {
     coachCanRemoveEnrollments: false,
     militaryDiscountEnabled: false,
     registrationZkPinEnabled: false,
+    accessRosterEnabled: false,
     allowSecondaryTeamEnrollment: false,
     coachAttendanceRetroDays: 7,
 };
@@ -444,6 +450,7 @@ export function useEntitlements(): Entitlements & EntitlementsHelpers & {
             coachCanRemoveEnrollments: data.coach_can_remove_enrollments === true,
             militaryDiscountEnabled: data.military_discount_enabled === true,
             registrationZkPinEnabled: data.registration_zk_pin_enabled === true,
+            accessRosterEnabled: data.access_roster_enabled === true,
             allowSecondaryTeamEnrollment: data.allow_secondary_team_enrollment === true,
             // Un BFF viejo no manda el campo: se queda en el default de siempre.
             coachAttendanceRetroDays:

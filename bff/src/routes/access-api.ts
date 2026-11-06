@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { dayNotAllowedBody, isDateAllowedForEnrollment } from '../utils/planDayRules';
 import { FILTRO_SOLO_MENSUALIDAD } from '../services/payment-accounts';
+import { getAccessRoster, isRosterEnabled, type RosterFilter } from '../services/accessRoster.service';
 
 const router = Router();
 
@@ -516,6 +517,31 @@ router.get('/members', requireAuth, requireRole('owner', 'admin', 'school_admin'
   }
 });
 
+// ─── GET /api/v1/access/device-users ─────────────────────────────────────────
+// «IDs del lector» (F1): usuarios que reporta el lector, cruzados con los deportistas de la
+// escuela, su estado de cobro y una sugerencia de a quién asociar cada PIN. Solo lectura.
+// Habilitado por escuela con school_settings.access_roster_enabled.
+router.get('/device-users', requireAuth, requireRole('owner', 'admin', 'school_admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { schoolId } = req;
+    if (!schoolId) return res.status(400).json({ error: 'school_id requerido' });
+    if (!(await isRosterEnabled(schoolId))) {
+      return res.status(403).json({ error: 'Esta escuela no tiene activa la lista de IDs del lector.', code: 'ROSTER_NOT_ENABLED' });
+    }
+    const filter = (['all', 'sin', 'aso', 'mora'].includes(String(req.query.filter)) ? req.query.filter : 'all') as RosterFilter;
+    const result = await getAccessRoster(schoolId, {
+      filter,
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      page: parseInt(String(req.query.page ?? '1'), 10) || 1,
+      pageSize: parseInt(String(req.query.page_size ?? '25'), 10) || 25,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    req.log?.error?.({ err: err?.message }, 'Error en GET /access/device-users');
+    return res.status(500).json({ error: 'Error al listar los IDs del lector' });
+  }
+});
+
 // ─── POST /api/v1/access/assign-user ─────────────────────────────────────────
 // Mapea un PIN ya existente en el lector (ZK#<pin>) a un usuario registrado, a
 // un atleta no registrado, o a un alumno (children). No envía comando al
@@ -531,6 +557,20 @@ router.post('/assign-user', requireAuth, requireRole('owner', 'admin', 'school_a
 
     if (!zk_pin || (!user_id && !unregistered_athlete_id && !child_id)) {
       return res.status(400).json({ error: 'zk_pin y (user_id, unregistered_athlete_id o child_id) son requeridos' });
+    }
+
+    // La persona debe ser de ESTA escuela: sin esto un admin podía atar un PIN a un menor o un
+    // usuario de otra escuela. Se valida la identidad que de verdad se va a guardar
+    // (user_id manda sobre unregistered_athlete_id y este sobre child_id).
+    const subject = user_id
+      ? supabase.from('school_members').select('id').eq('school_id', schoolId).eq('profile_id', user_id)
+      : unregistered_athlete_id
+        ? supabase.from('unregistered_athletes').select('id').eq('school_id', schoolId).eq('id', unregistered_athlete_id)
+        : supabase.from('children').select('id').eq('school_id', schoolId).eq('id', child_id as string);
+    const { data: subjectRows, error: subjectErr } = await subject.limit(1);
+    if (subjectErr) throw subjectErr;
+    if (!subjectRows?.length) {
+      return res.status(403).json({ error: 'Esa persona no pertenece a esta escuela.', code: 'SUBJECT_NOT_IN_SCHOOL' });
     }
 
     const { error } = await supabase.from('zk_user_mappings').upsert(

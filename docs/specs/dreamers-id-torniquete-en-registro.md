@@ -67,3 +67,24 @@ en él o se enrola después con ese mismo número (igual que `POST /access/assig
 - Altas por CSV y `child_existing` no piden el ID (se asigna en la edición o en Control de acceso).
 - `CreateStudentModal` es código sin uso; no se tocó.
 - Escuelas sin el flag no cambian en nada.
+
+## 7. «IDs del lector» (Control de acceso, F1) — 2026-10-31
+
+Botón «IDs del lector» en Control de acceso → diálogo con los usuarios que reporta el lector (PIN, nombre en el lector,
+credenciales huella/rostro/clave), a quién están asociados, su estado de cobro (staff, al día, mora, sin inscripción) y una
+**sugerencia de asociación por parecido de nombre**. Filtros Todos / Sin asociar / Asociados / Con mora, búsqueda por PIN o
+nombre, paginación. Asociar usa `POST /access/assign-user` (que ahora valida que la persona sea de la escuela).
+
+- **Interruptor por escuela:** `school_settings.access_roster_enabled` (default false). Encendido **solo en Academia Superior
+  Bogotá** (pruebas); Dreamers después, cuando el bridge sincronice.
+- **Datos:** tabla `access_device_users` (foto que se reemplaza en cada sincronización; **sin plantillas biométricas**, solo
+  banderas; RLS sin policies, la lee/escribe solo el BFF). Migración `20261031131601`.
+- **Academia Superior no tiene lector:** se cargó una lista **simulada** (25 filas, `device_serial = 'DEMO-SIMULADO'`,
+  `is_simulated = true`); el diálogo muestra el aviso «Datos simulados». Borrar: `delete from access_device_users where is_simulated`.
+- **Sugerencias** (`services/accessRoster.service.ts`): coincidencia por nombre con tolerancia a iniciales («Katherin T.» →
+  80 %), nombres pegados («NanaPerez») y tildes; **sin sugerencia si hay dos o más deportistas con el mismo nombre** (empate)
+  o si nada pasa del 75 %. 9 pruebas.
+- **Pendiente para Dreamers:** que el bridge envíe los usuarios del lector (pyzk `get_users` ya los lista; falta el comando de
+  sincronización y el endpoint de ingesta autenticado) y encender el flag. Después: F2 (Vencidos con borrar/restaurar), F3
+  (ficha), F4 (ajustes).
+
