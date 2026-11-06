@@ -2470,6 +2470,31 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       hourBankReservationId = r.reservation_id;
     }
 
+    // ── 3a. Tope de secundarias (offering_plans.max_secondary_sessions) ────
+    // move_session_credit toma SELECT … FOR UPDATE sobre la inscripción y
+    // topa en el máximo (NULL = ilimitado): reservar el cupo ANTES de insertar
+    // es atómico — dos llamadas simultáneas no pasan ambas el tope. Si el
+    // insert falla se compensa con delta -1. Planes por horas: el tope es el
+    // saldo del banco (ya validado arriba), no este contador.
+    let secondaryCreditReserved = false;
+    if (!isHoursPlan) {
+      const { data: moved, error: moveErr } = await supabase.rpc('move_session_credit', {
+        p_enrollment_id: enrollment_id, p_delta: 1, p_is_secondary: true,
+      });
+      if (moveErr) throw moveErr; // fail-closed: sin saber el tope no se reserva
+      const m = moved as any;
+      if (m?.capped && !m?.moved) {
+        return res.status(409).json({
+          error: 'Ya usaste todas las clases secundarias de tu plan.',
+          code: 'SECONDARY_CAP_REACHED',
+          reason: 'secondary_cap_reached',
+          secondary_sessions_used: m.secondary_sessions_used ?? null,
+          max_secondary_sessions: m.max_secondary_sessions ?? null,
+        });
+      }
+      secondaryCreditReserved = !!m?.moved;
+    }
+
     // ── 3. Insertar reserva ───────────────────────────────────────────────
     const { data: b, error } = await supabase.from('facility_reservations').insert({
       facility_id,
@@ -2490,6 +2515,11 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       if (hourBankReservationId) {
         await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: hourBankReservationId });
       }
+      if (secondaryCreditReserved) {
+        await supabase.rpc('move_session_credit', {
+          p_enrollment_id: enrollment_id, p_delta: -1, p_is_secondary: true,
+        });
+      }
       // Carrera de dos llamadas con la misma llave: ganó la otra (UNIQUE
       // school_id+idempotency_key). Se compensó el banco arriba; se devuelve la ganadora.
       if (idempotencyKey && (error as any).code === '23505' && error.message?.includes('idempotency')) {
@@ -2506,13 +2536,7 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       throw error;
     }
 
-    // ── 4. Consumir una secundaria (atómico, ver move_session_credit) — solo
-    // el sistema viejo, si no se movió el banco de horas arriba. ───────────
-    if (!isHoursPlan) {
-      await supabase.rpc('move_session_credit', {
-        p_enrollment_id: enrollment_id, p_delta: 1, p_is_secondary: true,
-      });
-    }
+    // (4. La secundaria ya se consumió en 3a, antes del insert.)
 
     try {
       await notifyBookingConfirmed(userId, reservation_date, slots[0].start_time);
