@@ -474,7 +474,7 @@ export async function avisarAdministracion(p: {
     try {
         const ids = [...await adminsDeEscuela(p.schoolId)];
         await Promise.allSettled(ids.map(async (uid) => {
-            const { error } = await supabase.from('notifications').insert({
+            const { data: entro, error } = await supabase.from('notifications').upsert({
                 id: uuidDeClave(`${p.clave}:${uid}`),
                 user_id: uid,
                 school_id: p.schoolId,
@@ -485,8 +485,8 @@ export async function avisarAdministracion(p: {
                 category: 'support',
                 link: p.link,
                 data: { ...(p.data ?? {}), school_id: p.schoolId },
-            });
-            if (error) return; // 23505: ya avisado.
+            }, { onConflict: 'id', ignoreDuplicates: true }).select('id');
+            if (error || !(entro ?? []).length) return; // sin fila: ya avisado.
             avisados++;
             if (p.push !== false) {
                 await sendToUser(uid, { title: p.titulo, body: p.mensaje, data: { ...(p.data ?? {}), school_id: p.schoolId } })

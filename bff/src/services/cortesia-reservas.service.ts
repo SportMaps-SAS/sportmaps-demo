@@ -393,7 +393,8 @@ export async function avisarCortesia(a: AvisoCortesia): Promise<{ inApp: number;
         avisarCortesiaPorPlataforma({ schoolId: a.schoolId, clave, titulo: c.titulo, cuerpo: c.cuerpo });
 
         await Promise.allSettled(ids.map(async (uid) => {
-            const { error } = await supabase.from('notifications').insert({
+            // upsert + ignoreDuplicates = ON CONFLICT DO NOTHING: el dedupe por id no deja un ERROR en el log de Postgres.
+            const { data: entro, error } = await supabase.from('notifications').upsert({
                 id: uuidDeClave(`${clave}:${uid}`),
                 user_id: uid,
                 school_id: a.schoolId,
@@ -406,9 +407,9 @@ export async function avisarCortesia(a: AvisoCortesia): Promise<{ inApp: number;
                     tipo: 'whatsapp_clase_cortesia', evento: a.tipo, school_id: a.schoolId,
                     conversation_id: a.conversationId, lead_id: a.leadId ?? null, wa_me: c.waMe,
                 },
-            });
-            // 23505 = otro BFF ya avisó a este usuario por este evento: no se repite el push.
-            if (error && (error as any).code === '23505') return;
+            }, { onConflict: 'id', ignoreDuplicates: true }).select('id');
+            // Sin fila = otro BFF ya avisó a este usuario por este evento: no se repite el push.
+            if (!error && !(entro ?? []).length) return;
             if (error) console.warn('[cortesia-aviso] in-app no entró; se empuja igual', { err: error.message });
             else salida.inApp++;
             const r = await sendToUser(uid, {

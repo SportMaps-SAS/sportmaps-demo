@@ -359,7 +359,7 @@ export async function avisarEscalacionAlEquipo(a: AvisoDeEscalacion): Promise<nu
         });
         let nuevas = 0;
         await Promise.allSettled(ids.map(async (uid) => {
-            const { error } = await supabase.from('notifications').insert({
+            const { data: entro, error } = await supabase.from('notifications').upsert({
                 id: uuidDeClave(`wa_escalacion:${a.conversationId}:${a.ancla}:${a.etapa}:${uid}`),
                 user_id: uid,
                 school_id: a.schoolId,
@@ -374,8 +374,8 @@ export async function avisarEscalacionAlEquipo(a: AvisoDeEscalacion): Promise<nu
                     tema: a.tema ?? null,
                     conversation_id: a.conversationId, school_id: a.schoolId,
                 },
-            });
-            if (error) return; // 23505: otro BFF ya avisó a esta persona por esta escalación.
+            }, { onConflict: 'id', ignoreDuplicates: true }).select('id');
+            if (error || !(entro ?? []).length) return; // sin fila: otro BFF ya avisó a esta persona por esta escalación.
             nuevas++;
             if (a.push) {
                 await sendToUser(uid, {

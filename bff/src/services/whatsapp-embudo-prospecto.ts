@@ -1544,6 +1544,7 @@ export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pic
         confirmarAgenda: async (p) => (await import('./clase-prueba-agenda.service'))
             .confirmarClaseAgendada({ schoolId, leadId: p.leadId, slotId: p.slotId, evento: p.evento, contactWaId }),
         marcarLead: async (leadId, extra) => {
+            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leadId)) return; // 'lead-simulado' (pruebas)
             await (await import('./whatsapp-prospecto-lead.service')).avanzarEtapaLead(leadId, 'respondido', extra);
         },
         leadDelContacto: async () => {
