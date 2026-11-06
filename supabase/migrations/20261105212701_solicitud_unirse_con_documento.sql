@@ -210,7 +210,7 @@ LANGUAGE plpgsql
 VOLATILE
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $
+AS $$
 DECLARE
     v_uid     uuid := auth.uid();
     v_today   date := (now() AT TIME ZONE 'America/Bogota')::date;
@@ -364,7 +364,7 @@ BEGIN
         'migrated', v_migr
     );
 END;
-$;
+$$;
 
 -- ── 5) Bandeja: documento y coincidencias exactas ────────────────────────────
 CREATE OR REPLACE FUNCTION public.list_school_join_requests(
@@ -376,7 +376,7 @@ LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = pg_catalog, public, pg_temp
-AS $
+AS $$
 DECLARE
     v_rows jsonb;
 BEGIN
@@ -478,7 +478,7 @@ BEGIN
 
     RETURN v_rows;
 END;
-$;
+$$;
 
 -- ── 6) Vincular una solicitud a una ficha (solo por documento o correo) ──────
 CREATE OR REPLACE FUNCTION public.vincular_solicitud_a_ficha(

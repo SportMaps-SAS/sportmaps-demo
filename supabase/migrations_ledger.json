@@ -2,7 +2,7 @@
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
   "count": 900,
-  "head": "20261105234141",
+  "head": "20261106000100",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -890,19 +890,19 @@
     {"v":"20261105212046","file":"20261105212046_schools_manage_owner_with_check.sql","sha256":"6826b5067bee34af1b46a92c15c3a6cfc3c8bcf3ade02c1f08afce4c31d93987","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105212125","file":"20261105212125_reservas_staff_privilegiado_y_canales_ia.sql","sha256":"7fb3e8c08a3f0861cc00c96975d5e1ec14772473d8cdadfea31031b7074b8130","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105212222","file":"20261105212222_comprobante_valor_confirmado_dynasty.sql","sha256":"1e95054070598f17c60b6bb0ad4e4c2b84f626dec8cd501f8ee4274a7e22c695","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105212701","file":"20261105212701_solicitud_unirse_con_documento.sql","sha256":"dfd49d66d90588869c0f97dab418d3db4bf2fa6e55eef8067f400bba59afd844","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105212701","file":"20261105212701_solicitud_unirse_con_documento.sql","sha256":"2e39a83fad4f6320261bff68c6697cec79d5058f787cec215a2ccf86a2353348","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213545","file":"20261105213545_rubrica_na_entrenadores.sql","sha256":"d5ac0de7cd665aa64285473ff47e5f9adddc7e973df8852012704e9ab25bf4f6","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213600","file":"20261105213600_rubrica_na_mesociclo.sql","sha256":"6b559574aadd39ec29e9eda93786d44051a1f2c4ed6d67248bf620b845b2c04c","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213601","file":"20261105213601_anon_sin_escritura_en_tablas_de_planes.sql","sha256":"dbf3d3d0dcf4fdbcf5c0c9606c81d1f91c8107c12949d1cad6bc1b6c3d3dc09b","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105213611","file":"20261105213611_reservas_revocar_escritura_directa.sql","sha256":"0df3831bf101d708060eb23672dfcb697afd8dfc3fef5ca46fbe3240775b459d","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105214559","file":"20261105214559_reservas_select_solo_propias_o_staff.sql","sha256":"27ef2fade993394efbc6dd763e0fec23dd4603f7811b6ca31fb4ab33ea2572ab","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105222237","file":"20261105222237_reclamar_ficha_exime_guard_duplicado.sql","sha256":"045f3334af09818e6fe6ec04cb50e2a9eccabc352ec40f0daba41a4f86b58d99","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105225148","file":"20261105225148_reservas_revocar_submit_v2_ya.sql","sha256":"654097d28d9395361ac67085dda3d6a857e6df82635e250f153bf7a292697480","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231542","file":"20261105231542_carmel_enciende_rubrica_na.sql","sha256":"9497a5be9e76bbd8e711a85e594ea62a5d4dfba236d17dbe1574b48fec72406b","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231554","file":"20261105231554_partido_vivo_flag_agenda_y_dorsal.sql","sha256":"3982660f20ec53a389b0dddd1f60e4200abbb49c8f973921eafab5232ee886ad","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231602","file":"20261105231602_partido_vivo_tablas_y_rls.sql","sha256":"416f0f058a0aba97f442dc16e243cf8b857e6c99ce66315266b0e1e225834d4d","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231608","file":"20261105231608_partido_vivo_rpcs.sql","sha256":"e5a212cbbb686503473473fe532a959ffb7caaa25f594a0f79eb4b7b46014e9c","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105231617","file":"20261105231617_partido_vivo_bloqueo_roster_y_minutos_al_publicar.sql","sha256":"8de9ac3cbf0a781ed00f4f4d1365d577b7fc235615c6bd9656de8388c676a20b","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105234141","file":"20261105234141_partido_vivo_gate_visible_set_director_y_report.sql","sha256":"6a5f0aaed1947d84971ddb3db07081d655fc2c793ad3e60ffb8785b205ebf1d5","added":"2026-11-06","by":"Brayan Steven Lopez"}
+    {"v":"20261105234141","file":"20261105234141_partido_vivo_gate_visible_set_director_y_report.sql","sha256":"6a5f0aaed1947d84971ddb3db07081d655fc2c793ad3e60ffb8785b205ebf1d5","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261106000100","file":"20261106000100_unirse_reclamar_y_vincular_con_valvula_y_rol.sql","sha256":"218b2de337e8f682edc1dfd2ca3da7c2a7eae06ec6954829ccd2d87478ab8898","added":"2026-11-06","by":"Brayan Steven Lopez"}
   ]
 }
