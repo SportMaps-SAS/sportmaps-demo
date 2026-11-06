@@ -68,3 +68,11 @@ Base: `Documents\demo\dynasty-conciliacion-pagos-2026-11-05.xlsx` (lectura de la
 2. ¿Aprobamos que el bot **proponga** cambio de plan por monto? Cambia la decisión del 24-oct, que lo había descartado.
 3. ¿El negocio de Dynasty ya está verificado en Meta?
 4. ¿Mandamos el mensaje a las familias para recuperar los comprobantes que no se pueden leer?
+
+## Registro obligatorio antes de recibir comprobantes (pedido 2026-11-05)
+
+Hoy el bot acepta un comprobante de un número sin saber de quién es (177 casos). Regla nueva:
+- Un número sin familia asociada NO sube comprobantes: el bot primero pide el registro (nombre del deportista, acudiente, plan) con un formulario de Meta (WhatsApp Flow) o, mientras no esté verificado el negocio, con preguntas con botones.
+- Con el registro hecho, el comprobante queda ligado a deportista y acudiente desde el primer momento y va a «Por validar».
+- Mientras tanto, el comprobante se guarda (archivo + lectura) y se retiene sin descartarse.
+Requiere: negocio de Dynasty verificado en Meta para el formulario (sin cédula, por política de Meta).

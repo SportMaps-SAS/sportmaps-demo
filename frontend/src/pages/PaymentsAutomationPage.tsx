@@ -1,3 +1,4 @@
+import { destinoDelComprobante } from '@/lib/destinoComprobante';
 import { useState, useEffect, useRef } from 'react';
 import { BranchChip } from '@/components/common/BranchChip';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -198,6 +199,15 @@ function getOcrStatus(p: { amount: number; ocr_amount?: number | null }): OcrSta
   if (p.ocr_amount == null) return 'no_ocr';
   const diffPct = Math.abs(p.ocr_amount - p.amount) / Math.max(p.amount, 1) * 100;
   return diffPct <= 0.5 ? 'match' : 'mismatch';
+}
+
+function DestinoBadge({ payment }: { payment: { ocr_destination?: string | null; ocr_destination_name?: string | null } }) {
+  const d = destinoDelComprobante(payment.ocr_destination_name, payment.ocr_destination);
+  if (!d) return null;
+  const tono = d.clave === 'giovani' ? 'bg-violet-50 text-violet-700 border-violet-200'
+    : d.clave === 'milena' ? 'bg-pink-50 text-pink-700 border-pink-200'
+    : 'bg-slate-50 text-slate-700 border-slate-200';
+  return <Badge variant="outline" title="A quién se le pagó, según el comprobante" className={`text-[10px] ${tono}`}>→ {d.etiqueta}</Badge>;
 }
 
 function OcrMatchBadge({ payment }: { payment: { amount: number; ocr_amount?: number | null; ocr_bank?: string | null } }) {
@@ -406,6 +416,7 @@ interface PaymentTransaction {
   // Veredicto de reglas (modo sombra, Fase 2). Informativo.
   receipt_verdict?: string | null;
   ocr_destination?: string | null;
+  ocr_destination_name?: string | null;
   receipt_verdict_reasons?: unknown[] | null;
   reconciliation_status?: string | null;
   /** Cuándo entró el comprobante (receipt_submitted_at; si falta, receipt_verdict_at). */
@@ -836,7 +847,7 @@ export default function PaymentsAutomationPage() {
           payment_channel, payment_provider, wompi_reference, wompi_transaction_id,
           provider_transaction_id, qr_id,
           ocr_amount, ocr_currency, ocr_date, ocr_bank, ocr_reference, ocr_provider,
-          receipt_verdict, ocr_destination, receipt_verdict_reasons, reconciliation_status,
+          receipt_verdict, ocr_destination, ocr_destination_name, receipt_verdict_reasons, reconciliation_status,
           receipt_verdict_at,
           requires_review, last_failure_at, last_failure_reason,
           parent:profiles!payments_parent_id_fkey(full_name, email),
@@ -984,6 +995,7 @@ export default function PaymentsAutomationPage() {
         ocr_reference: p.ocr_reference, ocr_provider: p.ocr_provider,
         receipt_verdict: p.receipt_verdict ?? null,
         ocr_destination: p.ocr_destination ?? null,
+        ocr_destination_name: p.ocr_destination_name ?? null,
         receipt_verdict_reasons: p.receipt_verdict_reasons ?? null,
         reconciliation_status: p.reconciliation_status ?? null,
         submitted_at: submittedAt.get(p.id) ?? p.receipt_verdict_at ?? null,
@@ -1767,6 +1779,7 @@ export default function PaymentsAutomationPage() {
                               ) : (
                                 <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Inscripción QR</Badge>
                               )}
+                              <DestinoBadge payment={payment} />
                               <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
                             </div>
                           </div>
@@ -1880,7 +1893,8 @@ export default function PaymentsAutomationPage() {
                                   <Button variant="outline" size="sm" className="h-8 gap-1 text-blue-600 border-blue-200 bg-blue-50" onClick={() => handleShowProof(payment)}>
                                     <Eye className="h-3 w-3" /> Ver
                                   </Button>
-                                  <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                                  <DestinoBadge payment={payment} />
+                              <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
                                 </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">—</span>

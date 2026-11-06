@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 869,
+  "count": 870,
   "head": "20261105212701",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -872,6 +872,7 @@
     {"v":"20261105163452","file":"20261105163452_registro_dueno_de_espacios.sql","sha256":"92daaffbc82e53bd73a23ccb15ab34bfd81a6796f8a2c17066a6101e847156c5","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105164434","file":"20261105164434_schools_school_type_venue_guard.sql","sha256":"32e4aa3b8ee6e1423f0fc4b3d83a1e8e90302cd7b664ef29e2a393c2e4918aac","added":"2026-11-05","by":"Brayan Steven Lopez"},
     {"v":"20261105170624","file":"20261105170624_reservas_addon_backfill_escuelas_con_historial.sql","sha256":"845a335eaec173d6aa18f11ae3ff18397ff59a993bca062bfcfdad9175adec53","added":"2026-11-05","by":"Brayan Steven Lopez"},
+    {"v":"20261105212222","file":"20261105212222_comprobante_valor_confirmado_dynasty.sql","sha256":"1e95054070598f17c60b6bb0ad4e4c2b84f626dec8cd501f8ee4274a7e22c695","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105212701","file":"20261105212701_solicitud_unirse_con_documento.sql","sha256":"dfd49d66d90588869c0f97dab418d3db4bf2fa6e55eef8067f400bba59afd844","added":"2026-11-06","by":"Brayan Steven Lopez"}
   ]
 }
