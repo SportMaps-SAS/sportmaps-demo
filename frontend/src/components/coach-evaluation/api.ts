@@ -34,7 +34,9 @@ export interface Criterion {
 export interface EvaluationScore {
   criterion_id: string;
   criterion_name: string;
-  score: number;
+  /** null cuando not_applicable. */
+  score: number | null;
+  not_applicable: boolean;
   comment: string | null;
 }
 
@@ -133,7 +135,7 @@ export function reorderCriteria(schoolId: string, ids: string[]) {
   return ok(db.rpc('reorder_coach_evaluation_criteria', { p_school_id: schoolId, p_ids: ids }));
 }
 
-const EVAL_COLS = 'id, school_id, staff_id, period_type, period_start, period_end, status, overall_score, strengths, improvements, commitments, other_notes, activity_snapshot, published_at, updated_at, coach_evaluation_scores(criterion_id, criterion_name, score, comment)';
+const EVAL_COLS = 'id, school_id, staff_id, period_type, period_start, period_end, status, overall_score, strengths, improvements, commitments, other_notes, activity_snapshot, published_at, updated_at, coach_evaluation_scores(criterion_id, criterion_name, score, not_applicable, comment)';
 
 /** Evaluaciones de un entrenador (admin: todas; RLS deja al coach solo las publicadas). */
 export function listEvaluations(staffIds: string[]): Promise<CoachEvaluation[]> {
@@ -153,7 +155,7 @@ export function saveEvaluation(input: {
   staffId: string;
   periodType: PeriodType;
   periodStart: string;
-  scores: { criterion_id: string; score: number; comment?: string | null }[];
+  scores: { criterion_id: string; score: number | null; not_applicable?: boolean; comment?: string | null }[];
   strengths?: string;
   improvements?: string;
   commitments?: string;

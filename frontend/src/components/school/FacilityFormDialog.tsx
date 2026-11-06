@@ -4,6 +4,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { z } from 'zod';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -12,6 +13,7 @@ import { NumberStepper } from '@/components/ui/number-stepper';
 import { useEffect } from 'react';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { LIMITES_UBICACION, errorEnlaceMaps, useUbicacionCanchaDisponible } from '@/components/school/canchaUbicacion';
+import { BOOKABLE_BY_LABELS, useBookableByDisponible, type BookableBy } from '@/components/reservas/reservasHooks';
 
 const facilitySchema = z.object({
   name: z.string().min(2, 'Nombre es requerido'),
@@ -20,6 +22,10 @@ const facilitySchema = z.object({
   description: z.string().optional(),
   min_booking_advance_hours: z.string().optional(),
   min_cancellation_hours: z.string().optional(),
+  hourly_rate: z.string().optional().refine((v) => !v || (/^\d+$/.test(v.trim()) && Number(v) >= 0), { message: 'Escribe solo números (COP), sin puntos ni signos.' }),
+  booking_enabled: z.boolean(),
+  // Quién puede reservar (facilities.bookable_by). Solo se envía si la base ya tiene la columna.
+  bookable_by: z.enum(['members', 'public', 'both']),
   // Cómo llegar (lo manda el bot al agendar la clase de prueba). Solo si la base tiene las columnas.
   address: z.string().max(LIMITES_UBICACION.address, 'La dirección es muy larga').optional(),
   maps_url: z.string().optional().refine((v) => !errorEnlaceMaps(v), { message: 'Pega el enlace completo (empieza por https://).' }),
@@ -38,6 +44,11 @@ interface FacilityFormDialogProps {
     description?: string;
     min_booking_advance_hours?: number;
     min_cancellation_hours?: number;
+    /** COP por hora; null = sin tarifa (precio a convenir). */
+    hourly_rate?: number | null;
+    booking_enabled?: boolean;
+    /** undefined = la base todavía no tiene la columna `bookable_by`: no se manda. */
+    bookable_by?: BookableBy;
     /** undefined = la base todavía no tiene las columnas: no se mandan. */
     address?: string;
     maps_url?: string;
@@ -52,6 +63,10 @@ interface FacilityFormDialogProps {
     description: string | null;
     min_booking_advance_hours: number | null;
     min_cancellation_hours: number | null;
+    hourly_rate?: number | null;
+    booking_enabled?: boolean | null;
+    /** Columna nueva (reservas F1): puede no venir si la base aún no la tiene. */
+    bookable_by?: BookableBy | null;
     address?: string | null;
     maps_url?: string | null;
     indicaciones?: string | null;
@@ -75,6 +90,7 @@ const facilityTypes = [
 export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, facility }: FacilityFormDialogProps) {
   const { schoolId } = useSchoolContext();
   const conUbicacion = useUbicacionCanchaDisponible(schoolId, open);
+  const conBookableBy = useBookableByDisponible(schoolId, open);
   const form = useForm<FacilityFormData>({
     resolver: zodResolver(facilitySchema),
     defaultValues: {
@@ -84,6 +100,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
       description: '',
       min_booking_advance_hours: '0',
       min_cancellation_hours: '0',
+      hourly_rate: '',
+      booking_enabled: true,
+      bookable_by: 'members',
       address: '',
       maps_url: '',
       indicaciones: '',
@@ -101,6 +120,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
           description: facility.description || '',
           min_booking_advance_hours: String(facility.min_booking_advance_hours ?? 0),
           min_cancellation_hours: String(facility.min_cancellation_hours ?? 0),
+          hourly_rate: facility.hourly_rate ? String(Math.round(Number(facility.hourly_rate))) : '',
+          booking_enabled: facility.booking_enabled !== false,
+          bookable_by: facility.bookable_by ?? 'members',
           address: facility.address ?? '',
           maps_url: facility.maps_url ?? '',
           indicaciones: facility.indicaciones ?? '',
@@ -113,6 +135,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
           description: '',
           min_booking_advance_hours: '0',
           min_cancellation_hours: '0',
+          hourly_rate: '',
+          booking_enabled: true,
+          bookable_by: 'members',
           address: '',
           maps_url: '',
           indicaciones: '',
@@ -129,6 +154,9 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
       description: data.description || undefined,
       min_booking_advance_hours: data.min_booking_advance_hours ? parseInt(data.min_booking_advance_hours) : 0,
       min_cancellation_hours: data.min_cancellation_hours ? parseInt(data.min_cancellation_hours) : 0,
+      hourly_rate: data.hourly_rate && data.hourly_rate.trim() !== '' ? parseInt(data.hourly_rate, 10) : null,
+      booking_enabled: data.booking_enabled,
+      ...(conBookableBy ? { bookable_by: data.bookable_by } : {}),
       ...(conUbicacion ? { address: data.address ?? '', maps_url: data.maps_url ?? '', indicaciones: data.indicaciones ?? '' } : {}),
     });
     form.reset();
@@ -219,6 +247,65 @@ export function FacilityFormDialog({ open, onOpenChange, onSubmit, isLoading, fa
               <p className="text-[10px] text-muted-foreground">Límite de horas para cancelar</p>
             </div>
           </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="hourly_rate">Tarifa por hora (COP)</Label>
+            <Input
+              id="hourly_rate"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1000}
+              placeholder="Ej: 50000"
+              {...form.register('hourly_rate')}
+            />
+            {form.formState.errors.hourly_rate && (
+              <p className="text-sm text-destructive">{form.formState.errors.hourly_rate.message}</p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Lo que se muestra a quien reserva. Si lo dejas vacío se muestra «Precio a convenir con la escuela».
+            </p>
+          </div>
+
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 p-3">
+            <div className="space-y-1">
+              <Label htmlFor="booking_enabled" className="font-semibold">Recibe reservas</Label>
+              <p className="text-xs text-muted-foreground">
+                Si lo apagas, es un espacio solo de entrenamiento: sigue usándose para clases, pero no recibe reservas.
+              </p>
+            </div>
+            <Switch
+              id="booking_enabled"
+              checked={form.watch('booking_enabled')}
+              onCheckedChange={(v) => form.setValue('booking_enabled', v, { shouldDirty: true })}
+            />
+          </div>
+
+          {conBookableBy && (
+            <div className="space-y-2 rounded-lg border border-border/60 p-3">
+              <Label htmlFor="bookable_by" className="font-semibold">Quién puede reservar</Label>
+              <Select
+                value={form.watch('bookable_by')}
+                onValueChange={(v) => form.setValue('bookable_by', v as BookableBy, { shouldDirty: true })}
+                disabled={!form.watch('booking_enabled')}
+              >
+                <SelectTrigger id="bookable_by" aria-label="Quién puede reservar">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(BOOKABLE_BY_LABELS) as BookableBy[]).map((k) => (
+                    <SelectItem key={k} value={k}>{BOOKABLE_BY_LABELS[k]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                <strong>Solo miembros:</strong> únicamente quienes pertenecen a tu escuela (pagan la tarifa de Socio).{' '}
+                <strong>Solo público:</strong> cualquier persona, con la tarifa Público.{' '}
+                <strong>Ambos:</strong> los miembros pagan tarifa Socio y el resto la tarifa Público.
+                Aplica solo si «Recibe reservas» está encendido; tu equipo siempre puede reservar.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label htmlFor="description">Descripción</Label>

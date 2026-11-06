@@ -18,9 +18,18 @@ import type { ModuleKey } from '@/config/module-catalog';
 // Tipos del payload del BFF
 // ============================================================
 
+/**
+ * Los 10 valores reales de `schools.school_type` (la columna no tiene CHECK; el
+ * plan de reservas §7 los normaliza a 4 más adelante). Si la base suma uno,
+ * se agrega aquí: nadie más en el frontend lee `schoolType` de este hook.
+ */
+export type SchoolType =
+    | 'academy' | 'club' | 'federation' | 'institute' | 'personal_trainer'
+    | 'association' | 'hybrid' | 'gimnasio' | 'escuela' | 'venue';
+
 interface EntitlementsResponse {
     school_id: string;
-    school_type: 'academy' | 'venue' | 'hybrid';
+    school_type: SchoolType;
     plan_code: TierCode;
     tier: 'free' | 'pro' | 'enterprise';
     subscription_status: SubscriptionStatus;
@@ -112,6 +121,8 @@ interface EntitlementsResponse {
     military_discount_enabled?: boolean;
     /** El registro pide el ID del torniquete (`school_settings.registration_zk_pin_enabled`). */
     registration_zk_pin_enabled?: boolean;
+    /** Control de acceso muestra «IDs del lector» (`school_settings.access_roster_enabled`). */
+    access_roster_enabled?: boolean;
     /**
      * true → en esta escuela un deportista puede estar en un SEGUNDO equipo
      * sin salir de su categoría (grupo de trabajo transversal: arqueros,
@@ -128,6 +139,8 @@ interface EntitlementsResponse {
      * tope y no lo usa.
      */
     coach_attendance_retro_days?: number | null;
+    /** «No aplica» en las rúbricas (`school_settings.rubric_allow_na`). Default false. */
+    rubric_allow_na?: boolean;
 }
 
 // ============================================================
@@ -136,7 +149,7 @@ interface EntitlementsResponse {
 
 export interface Entitlements {
     schoolId: string | null;
-    schoolType: 'academy' | 'venue' | 'hybrid';
+    schoolType: SchoolType;
     plan: {
         code: TierCode;
         tier: 'free' | 'pro' | 'enterprise';
@@ -238,6 +251,9 @@ export interface Entitlements {
      *  dorsal (`registration_zk_pin_enabled`; Dreamers, Academia Superior). Default false. */
     registrationZkPinEnabled: boolean;
 
+    /** Control de acceso muestra la lista «IDs del lector» (`access_roster_enabled`). Default false. */
+    accessRosterEnabled: boolean;
+
     /** Un deportista puede estar en un SEGUNDO equipo sin salir de su
      *  categoría (`allow_secondary_team_enrollment`, caso Carmel Club: equipo
      *  de arqueros). Default false. */
@@ -246,6 +262,10 @@ export interface Entitlements {
     /** Días hacia atrás que un entrenador puede pasar lista o reabrir una
      *  sesión (`coach_attendance_retro_days`). Default 7; Carmel Club 90. */
     coachAttendanceRetroDays: number;
+
+    /** Se puede marcar «No aplica» en las rúbricas (evaluación de entrenadores
+     *  y mesociclo); no cuenta en el promedio (`rubric_allow_na`). Default false. */
+    rubricAllowNa: boolean;
 }
 
 export interface EntitlementsHelpers {
@@ -323,8 +343,10 @@ const EMPTY_ENTITLEMENTS: Entitlements = {
     coachCanRemoveEnrollments: false,
     militaryDiscountEnabled: false,
     registrationZkPinEnabled: false,
+    accessRosterEnabled: false,
     allowSecondaryTeamEnrollment: false,
     coachAttendanceRetroDays: 7,
+    rubricAllowNa: false,
 };
 
 // ============================================================
@@ -444,12 +466,14 @@ export function useEntitlements(): Entitlements & EntitlementsHelpers & {
             coachCanRemoveEnrollments: data.coach_can_remove_enrollments === true,
             militaryDiscountEnabled: data.military_discount_enabled === true,
             registrationZkPinEnabled: data.registration_zk_pin_enabled === true,
+            accessRosterEnabled: data.access_roster_enabled === true,
             allowSecondaryTeamEnrollment: data.allow_secondary_team_enrollment === true,
             // Un BFF viejo no manda el campo: se queda en el default de siempre.
             coachAttendanceRetroDays:
                 Number.isInteger(data.coach_attendance_retro_days) && (data.coach_attendance_retro_days as number) >= 0
                     ? (data.coach_attendance_retro_days as number)
                     : 7,
+            rubricAllowNa: data.rubric_allow_na === true,
         };
     }, [query.data]);
 

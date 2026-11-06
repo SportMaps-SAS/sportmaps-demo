@@ -32,10 +32,14 @@ const h = vi.hoisted(() => {
         b.insert = (row: any) => { state.inserts.push({ table, row }); ops.push(['insert', [row]]); return b; };
         b.update = (row: any) => { state.updates.push({ table, row, ops }); ops.push(['update', [row]]); return b; };
         b.delete = () => { state.deletes.push({ table, ops }); ops.push(['delete', []]); return b; };
-        b.upsert = (row: any) => { ops.push(['upsert', [row]]); return b; };
+        b.upsert = (row: any) => {
+            // notifications entra por upsert+ignoreDuplicates: se registra como insert y devuelve la fila.
+            if (table === 'notifications') { state.inserts.push({ table, row }); b.__fila = row; }
+            ops.push(['upsert', [row]]); return b;
+        };
         b.maybeSingle = () => { ops.push(['maybeSingle', []]); return Promise.resolve(state.resolve(table, ops)); };
         b.single = () => { ops.push(['maybeSingle', []]); return Promise.resolve(state.resolve(table, ops)); };
-        b.then = (res: any, rej: any) => Promise.resolve(state.resolve(table, ops)).then(res, rej);
+        b.then = (res: any, rej: any) => Promise.resolve(b.__fila ? { data: [{ id: b.__fila.id }], error: null } : state.resolve(table, ops)).then(res, rej);
         return b;
     }
     return {

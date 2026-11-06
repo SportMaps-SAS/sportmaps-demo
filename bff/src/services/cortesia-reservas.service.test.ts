@@ -18,12 +18,15 @@ vi.mock('../config/supabase', () => {
         const filtros: ((f: Fila) => boolean)[] = [];
         let cambio: Fila | null = null;
         let nueva: Fila | null = null;
+        let ignorar = false;
         const resolver = () => {
             const filas = estado.tablas[tabla] ?? (estado.tablas[tabla] = []);
             if (nueva) {
+                // upsert + ignoreDuplicates = ON CONFLICT DO NOTHING: sin error, sin fila devuelta.
+                if (ignorar && filas.some((f) => f.id === nueva!.id)) return { data: [], error: null };
                 if (filas.some((f) => f.id === nueva!.id)) return { data: null, error: { code: '23505', message: 'duplicate key' } };
                 filas.push({ ...nueva });
-                return { data: null, error: null };
+                return { data: [{ ...nueva }], error: null };
             }
             const sel = filas.filter((f) => filtros.every((p) => p(f)));
             if (cambio) for (const f of sel) Object.assign(f, cambio);
@@ -42,6 +45,7 @@ vi.mock('../config/supabase', () => {
             order: () => api, limit: () => api,
             update: (c: Fila) => { cambio = c; return api; },
             insert: (r: Fila) => { nueva = r; return api; },
+            upsert: (r: Fila, o?: { ignoreDuplicates?: boolean }) => { nueva = r; ignorar = o?.ignoreDuplicates === true; return api; },
             maybeSingle: async () => { const r = resolver(); return { data: r.data?.[0] ?? null, error: r.error }; },
             then: (ok: any, err: any) => Promise.resolve(resolver()).then(ok, err),
         };

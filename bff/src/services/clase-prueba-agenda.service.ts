@@ -281,6 +281,8 @@ export function contenidoAvisoEntrenador(
 
 /** Lead de ESA escuela (nunca de otra). Nunca lanza: null si no existe. */
 export async function leerLeadAgenda(schoolId: string, leadId: string): Promise<LeadAgenda | null> {
+    // El número de pruebas devuelve un id de mentira ('lead-simulado'): no es UUID y la consulta daba 22P02.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leadId)) return null;
     const consulta = (cols: string) => supabase.from('school_signup_leads').select(cols)
         .eq('id', leadId).eq('school_id', schoolId).maybeSingle();
     try {

@@ -86,6 +86,9 @@ interface Facility {
   status: string;
   hourly_rate?: number;
   booking_enabled?: boolean;
+  school_id?: string;
+  /** Reservas F1: quién puede reservar. No llega si la base aún no tiene la columna. */
+  bookable_by?: 'members' | 'public' | 'both' | null;
 }
 
 interface OfferingPlan {
@@ -190,16 +193,9 @@ export default function SchoolDetailPage() {
         .eq('school_id', id)
         .eq('status', 'available');
 
-      if (facilitiesData && facilitiesData.length > 0) {
-        setFacilities(facilitiesData);
-      } else {
-        // Demo facilities
-        setFacilities([
-          { id: 'demo-fac-1', name: 'Cancha Principal', type: 'Cancha', capacity: 22, status: 'available', hourly_rate: 50000, booking_enabled: true },
-          { id: 'demo-fac-2', name: 'Cancha Sintética', type: 'Cancha', capacity: 14, status: 'available', hourly_rate: 35000, booking_enabled: true },
-          { id: 'demo-fac-3', name: 'Gimnasio', type: 'Gimnasio', capacity: 30, status: 'available', hourly_rate: 15000, booking_enabled: true },
-        ]);
-      }
+      // Sin instalaciones: estado vacío honesto (no se inventan instalaciones demo).
+      // bookable_by es text + CHECK en la base: types.ts lo trae como string.
+      setFacilities((facilitiesData ?? []) as Facility[]);
     } catch (error: any) {
       console.error('Error fetching school data:', error);
       toast({
@@ -211,6 +207,11 @@ export default function SchoolDetailPage() {
       setLoading(false);
     }
   };
+
+  // Solo instalaciones que reciben reservas; el precio es el real (sin tarifa = a convenir).
+  const bookableFacilities = facilities.filter((f) => f.booking_enabled !== false);
+  const rates = bookableFacilities.map((f) => Number(f.hourly_rate)).filter((r) => r > 0);
+  const minHourlyRate = rates.length > 0 ? Math.min(...rates) : null;
 
   const handleEnroll = (program: Program) => {
     setSelectedProgram(program);
@@ -713,17 +714,18 @@ export default function SchoolDetailPage() {
                   </CardHeader>
                   <CardContent>
                     <p className="text-muted-foreground mb-4">
-                      Reserva canchas y espacios para prácticas libres. Desde $15,000/hora.
+                      Reserva canchas y espacios para prácticas libres.
+                      {minHourlyRate !== null && ` Desde $${minHourlyRate.toLocaleString('es-CO')}/hora.`}
                     </p>
 
-                    {facilities.length === 0 ? (
+                    {bookableFacilities.length === 0 ? (
                       <div className="text-center py-8">
                         <Building className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                        <p className="text-muted-foreground">No hay instalaciones disponibles para reservar</p>
+                        <p className="text-muted-foreground">Esta escuela aún no tiene instalaciones disponibles para reservar</p>
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {facilities.filter(f => f.booking_enabled !== false).map((facility) => (
+                        {bookableFacilities.map((facility) => (
                           <div
                             key={facility.id}
                             className="flex items-center justify-between p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
@@ -739,15 +741,29 @@ export default function SchoolDetailPage() {
                                   <span>Capacidad: {facility.capacity}</span>
                                   <span>•</span>
                                   <span>{facility.type}</span>
+                                  {facility.bookable_by === 'members' && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="font-medium">Solo miembros</span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>
                             <div className="flex items-center gap-3">
                               <div className="text-right">
-                                <p className="font-bold text-primary">
-                                  ${(facility.hourly_rate || 15000).toLocaleString()}
-                                </p>
-                                <p className="text-xs text-muted-foreground">por hora</p>
+                                {facility.hourly_rate && facility.hourly_rate > 0 ? (
+                                  <>
+                                    <p className="font-bold text-primary">
+                                      ${facility.hourly_rate.toLocaleString('es-CO')}
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">por hora</p>
+                                  </>
+                                ) : (
+                                  <p className="text-xs font-medium text-muted-foreground max-w-[9rem]">
+                                    Precio a convenir con la escuela
+                                  </p>
+                                )}
                               </div>
                               <Button
                                 size="sm"

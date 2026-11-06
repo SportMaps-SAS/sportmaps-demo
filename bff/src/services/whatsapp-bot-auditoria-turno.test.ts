@@ -34,9 +34,14 @@ const h = vi.hoisted(() => {
             b[m] = (...a: any[]) => { ops.push([m, a]); return b; };
         }
         b.insert = (row: any) => { state.inserts.push({ table, row }); ops.push(['insert', [row]]); return b; };
+        b.upsert = (row: any) => {
+            // notifications entra por upsert+ignoreDuplicates: se registra como insert y devuelve la fila.
+            if (table === 'notifications') { state.inserts.push({ table, row }); b.__fila = row; }
+            ops.push(['upsert', [row]]); return b;
+        };
         b.maybeSingle = () => Promise.resolve(resolve(table, ops));
         b.single = b.maybeSingle;
-        b.then = (res: any, rej: any) => Promise.resolve(resolve(table, ops)).then(res, rej);
+        b.then = (res: any, rej: any) => Promise.resolve(b.__fila ? { data: [{ id: b.__fila.id }], error: null } : resolve(table, ops)).then(res, rej);
         return b;
     }
     return {

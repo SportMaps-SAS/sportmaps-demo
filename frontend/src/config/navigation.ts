@@ -175,6 +175,8 @@ const GESTION_DEPORTIVA_ESCUELA: NavItem[] = [
   // Primero: la pregunta del dueño es "¿mis entrenadores están trabajando?"
   // (spec rediseno-seguimiento-deportivo F4). Solo lectura.
   { title: 'Seguimiento deportivo', href: '/seguimiento-deportivo', icon: ClipboardCheck },
+  // Atajo: abre Seguimiento deportivo en modo calificar (sin ruta nueva).
+  { title: 'Calificar entrenadores', href: '/seguimiento-deportivo?calificar=1', icon: Award },
   {
     title: 'Equipos y Planes',
     icon: Users,
@@ -279,8 +281,11 @@ function filterByBuyerStore(items: NavItem[], buyer: BuyerStoreVisibility): NavI
  * (default: todo visible) para no romper si algún caller no lo pasa —
  * `AppSidebar.tsx` sí lo pasa siempre, con el `hasAddon` de `useEntitlements()`.
  */
+/** Rol de menú: los de `UserRole` más el dueño de espacios (facility_manager). */
+export type NavRole = UserRole | 'facility_manager';
+
 export function getNavigationByRole(
-  role: UserRole,
+  role: NavRole,
   hasAddon: (key: AddonKey) => boolean = () => true,
   isModuleEnabled: (key: ModuleKey) => boolean = () => true,
   /** Flag global de la tienda. Default false: fail-closed, como el hook. */
@@ -299,7 +304,30 @@ export function getNavigationByRole(
     ]
   };
 
-  const roleSpecificNav: Record<UserRole, NavGroup[]> = {
+  const roleSpecificNav: Record<NavRole, NavGroup[]> = {
+    // Dueño de espacios (facility_manager, escuela school_type 'venue'): menú
+    // corto de alquiler. Sin atletas, equipos, asistencia ni planes.
+    // Spec: docs/specs/reservas-canchas-plan-unificado-2026-10.md §6.1 y §7.
+    facility_manager: [
+      {
+        title: 'Mi espacio',
+        items: [
+          { title: 'Inicio', href: '/venue/dashboard', icon: Home },
+          { title: 'Instalaciones', href: '/facilities', icon: Building, moduleKey: 'sedes_instalaciones' },
+          { title: 'Reservas', href: '/venue/reservas', icon: Calendar },
+          { title: 'Cobros', href: '/venue/cobros', icon: DollarSign },
+        ]
+      },
+      {
+        title: 'Cuenta',
+        items: [
+          { title: 'Notificaciones', href: '/notifications', icon: Bell },
+          { title: 'Facturación', href: '/mi-plan', icon: CreditCard },
+          { title: 'Configuración', href: '/school-config', icon: Settings }
+        ]
+      }
+    ],
+
     // Deportista V2 (docs/specs/entrenador-deportista-v2.md): las cinco de la
     // barra más la tienda si la escuela vende; lo demás vive en «Más».
     // Con VITE_DEPORTISTA_V2=false vuelve el menú anterior, tal cual.

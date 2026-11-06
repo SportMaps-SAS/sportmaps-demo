@@ -183,3 +183,25 @@ describe('joinErrorMessage', () => {
     expect(joinErrorMessage(null, 'x')).toBe('x');
   });
 });
+
+describe('documento en la solicitud (identidad solo por datos únicos)', () => {
+  const base = { forWhom: 'child' as const, name: 'Juan Perez', birthDate: '2014-03-05', category: '' };
+  const today = '2026-11-05';
+
+  it('sin el campo docNumber no se exige documento (compatibilidad)', () => {
+    expect(validateJoinRequestForm(base, today)).toEqual({});
+  });
+  it('con el campo vacío y sin «no lo tengo» pide el documento', () => {
+    expect(validateJoinRequestForm({ ...base, docNumber: '' }, today).docNumber).toMatch(/documento/i);
+  });
+  it('marcar «no lo tengo a la mano» permite enviar sin documento', () => {
+    expect(validateJoinRequestForm({ ...base, docNumber: '', noDoc: true }, today)).toEqual({});
+  });
+  it('rechaza documentos muy cortos o muy largos', () => {
+    expect(validateJoinRequestForm({ ...base, docNumber: '123' }, today).docNumber).toBeTruthy();
+    expect(validateJoinRequestForm({ ...base, docNumber: '1'.repeat(21) }, today).docNumber).toBeTruthy();
+  });
+  it('acepta un documento con puntos y lo normaliza', () => {
+    expect(validateJoinRequestForm({ ...base, docNumber: '1.031.847.289' }, today)).toEqual({});
+  });
+});

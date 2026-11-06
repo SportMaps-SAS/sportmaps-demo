@@ -118,7 +118,7 @@ interface SessionRow {
     session_blocks?: SessionBlockRow[] | null;
     evaluation?: { rpe?: number; objectives_met?: string } | null;
 }
-interface RubricRow { indicator: string; checkpoint: string; score: number }
+interface RubricRow { indicator: string; checkpoint: string; score: number | null; not_applicable?: boolean }
 interface BlockImage { dataUrl: string; aspect: number }
 
 interface MesocycleExportButtonProps {
@@ -513,7 +513,7 @@ function drawRubric(w: PdfWriter, meso: MesocycleRow, rows: RubricRow[]) {
         w.paragraph('Todavía no hay calificaciones cargadas en la rúbrica.', { size: 9, style: 'italic', color: MUTED, after: 4 });
         return;
     }
-    const scores = new Map(rows.map((r) => [`${r.indicator}__${r.checkpoint}`, r.score]));
+    const scores = new Map<string, number | 'N/A' | null>(rows.map((r) => [`${r.indicator}__${r.checkpoint}`, r.not_applicable ? 'N/A' : r.score]));
     const { doc } = w;
     const firstCol = 62;
     const colW = (w.contentWidth - firstCol) / RUBRIC_CHECKPOINTS.length;
@@ -534,7 +534,7 @@ function drawRubric(w: PdfWriter, meso: MesocycleRow, rows: RubricRow[]) {
         doc.text(ind.label, MARGIN + 2, w.y + 4.7);
         RUBRIC_CHECKPOINTS.forEach((cp, i) => {
             const v = scores.get(`${ind.key}__${cp.key}`);
-            w.setFont(9, v != null ? 'bold' : 'normal', v != null ? INK : [170, 170, 170]);
+            w.setFont(9, typeof v === 'number' ? 'bold' : 'normal', typeof v === 'number' ? INK : [170, 170, 170]);
             doc.text(v != null ? String(v) : '—', MARGIN + firstCol + colW * i + colW / 2, w.y + 4.7, { align: 'center' });
         });
         w.y += rowH;
@@ -617,7 +617,7 @@ export function MesocycleExportButton({ mesocycleId, mesocycle, teamName }: Meso
 
             const { data: rubricData } = await db
                 .from('training_mesocycle_evaluations')
-                .select('indicator, checkpoint, score')
+                .select('indicator, checkpoint, score, not_applicable')
                 .eq('mesocycle_id', mesocycleId);
             const rubric = (rubricData || []) as RubricRow[];
 

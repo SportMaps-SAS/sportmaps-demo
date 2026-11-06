@@ -25,7 +25,7 @@ import { schoolJoinApi, type FichaCandidata, type JoinCodePreview, type Reclamar
 import { DocumentosHijo } from '@/components/parent/v2/hijos/DocumentosHijo';
 import {
   adultChildWarning, clearPendingJoinCode, formatJoinCode, isJoinCodeShape, joinErrorMessage,
-  normalizeJoinCode, readPendingJoinCode, savePendingJoinCode, validateJoinRequestForm,
+  normalizeDocNumber, normalizeJoinCode, readPendingJoinCode, savePendingJoinCode, validateJoinRequestForm,
   type ForWhom, type JoinRequestErrors,
 } from '@/lib/schoolJoinCode';
 
@@ -56,6 +56,10 @@ export default function JoinSchoolByCodePage() {
   const [name, setName] = useState('');
   const [birthDate, setBirthDate] = useState('');
   const [category, setCategory] = useState('');
+  // Documento del deportista: el dato único con el que la escuela lo cruza con su ficha.
+  const [docType, setDocType] = useState('TI');
+  const [docNum, setDocNum] = useState('');
+  const [noDoc, setNoDoc] = useState(false);
   const [errors, setErrors] = useState<JoinRequestErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -173,7 +177,7 @@ export default function JoinSchoolByCodePage() {
 
   async function send() {
     setSubmitError(null);
-    const errs = validateJoinRequestForm({ forWhom, name, birthDate, category }, today);
+    const errs = validateJoinRequestForm({ forWhom, name, birthDate, category, docNumber: docNum, docType, noDoc }, today);
     setErrors(errs);
     if (Object.keys(errs).length || !forWhom) return;
     setSending(true);
@@ -184,6 +188,8 @@ export default function JoinSchoolByCodePage() {
         name: name.replace(/\s+/g, ' ').trim(),
         birthDate,
         category: category.trim() || null,
+        docNumber: noDoc ? null : normalizeDocNumber(docNum) || null,
+        docType: noDoc ? null : docType,
       });
       if (!res.ok) {
         setSubmitError(res.message ?? 'No se pudo enviar la solicitud.');
@@ -204,6 +210,8 @@ export default function JoinSchoolByCodePage() {
     setName('');
     setBirthDate('');
     setCategory('');
+    setDocNum('');
+    setNoDoc(false);
     setErrors({});
     setSubmitError(null);
     setStep('form');
@@ -463,6 +471,41 @@ export default function JoinSchoolByCodePage() {
                 <Input id="join-dob" type="date" value={birthDate} max={today} onChange={(e) => setBirthDate(e.target.value)} className="text-[16px] sm:text-sm" />
                 {errors.birthDate && <p className="text-sm text-destructive">{errors.birthDate}</p>}
                 {warning && <p className="text-xs text-amber-700 dark:text-amber-400">{warning}</p>}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="join-doc-num">Documento {forWhom === 'child' ? 'de tu hijo(a)' : 'tuyo'} *</Label>
+                <div className="flex gap-2">
+                  <select
+                    aria-label="Tipo de documento"
+                    value={docType}
+                    onChange={(e) => setDocType(e.target.value)}
+                    disabled={noDoc}
+                    className="h-10 rounded-md border border-input bg-background px-2 text-[16px] sm:text-sm"
+                  >
+                    <option value="RC">RC</option>
+                    <option value="TI">TI</option>
+                    <option value="CC">CC</option>
+                    <option value="CE">CE</option>
+                    <option value="PP">PP</option>
+                  </select>
+                  <Input
+                    id="join-doc-num"
+                    value={docNum}
+                    onChange={(e) => setDocNum(e.target.value)}
+                    disabled={noDoc}
+                    inputMode="text"
+                    autoComplete="off"
+                    placeholder="Número, sin puntos"
+                    className="text-[16px] sm:text-sm"
+                  />
+                </div>
+                {errors.docNumber && <p className="text-sm text-destructive">{errors.docNumber}</p>}
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={noDoc} onChange={(e) => setNoDoc(e.target.checked)} />
+                  No lo tengo a la mano (la escuela te lo pedirá)
+                </label>
+                <p className="text-xs text-muted-foreground">Con el documento la escuela encuentra su ficha sin equivocarse.</p>
               </div>
 
               <div className="space-y-2">

@@ -3203,6 +3203,8 @@ export const PASO_DISPUTA_DE_PAGO = 'disputa_de_pago';
 async function atenderDisputaDePago(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
     texto: string, rafaga: string | null = null,
+    /** Responde antes lo que el mismo mensaje pregunta aparte (p. ej. la clínica); true si contestó. */
+    antes?: () => Promise<boolean>,
 ): Promise<boolean> {
     try {
         if (!esDisputaDePago(texto) && !esDisputaDePago(rafaga)) return false;
@@ -3213,6 +3215,7 @@ async function atenderDisputaDePago(
             await marcarAbiertaSinAviso(conversationId);
             return true;
         }
+        if (antes) await antes().catch(() => false);
         await deliver(integration, conversationId, contactWaId, textoDisputaDePago(),
             { step: PASO_DISPUTA_DE_PAGO });
         await abrirEnBuzon(integration, conversationId, contactWaId, {
@@ -3473,7 +3476,11 @@ async function atenderDesconocidoEnEscuela(
     // 0a'. Reclamo por un pago («ya envié el comprobante», «me llegó un correo donde dice
     //      que debo»): a la escuela, sin datos de pago. Antes de los flujos de venta y de
     //      «cómo pagar», que lo leían como una pregunta de pago (Monster 2026-11-05).
-    if (!botonId && origen === 'texto' && await atenderDisputaDePago(integration, conversationId, contactWaId, text, rafaga)) {
+    // Si el mismo mensaje pregunta además por un servicio (la clínica), esa ficha sale primero
+    // y la parte de la cuenta se avisa a la escuela (Monster 2026-11-05, 14:12).
+    const cacheDisputa: { recientes?: FilaReciente[] } = {};
+    if (!botonId && origen === 'texto' && await atenderDisputaDePago(integration, conversationId, contactWaId, text, rafaga,
+        async () => Boolean(await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'texto', cacheDisputa)))) {
         return 'disputa_de_pago';
     }
 

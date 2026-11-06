@@ -194,6 +194,8 @@ describe('2. Disputa de pago: a la escuela, sin datos de pago', () => {
         'Ya pagué la mensualidad pero me sigue llegando el cobro',
         'dice que debo pero ya pagué',
         'No entiendo por qué me cobran otra vez',
+        'Buenas tardes quisiera saber si aplicó al descuento de pronto pago ya que falte el día de halloween y además para saber más sobre la clínica de armadores',
+        'el mes pasado habíamos hecho el pago de la pensión de 145 y nos habían quedado 20 mil pesos a favor, ¿cuánto nos toca pagar entonces en noviembre?',
     ])('«%s» es una disputa', (t) => {
         expect(esDisputaDePago(t)).toBe(true);
     });
@@ -204,6 +206,8 @@ describe('2. Disputa de pago: a la escuela, sin datos de pago', () => {
         'A qué número te consigno?',
         'Voy a pagar la mensualidad mañana',
         'Cuándo debo pagar el torneo',
+        '¿Hay descuento por pronto pago?',
+        'Info de la clínica de armadores',
     ])('«%s» NO es una disputa', (t) => {
         expect(esDisputaDePago(t)).toBe(false);
     });

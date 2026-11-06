@@ -49,6 +49,11 @@ import {
 } from '../services/webhook-events.service';
 import { sendPaymentAttemptFailedEmails } from '../services/paymentFailureEmail.service';
 import { autopayAlResultado, autopayCobroDoble } from '../services/autopay.service';
+import {
+    applyReservationPayment,
+    baseReservationReference,
+    schoolIdForReservationReference,
+} from '../services/reservation-payments.service';
 
 const router = Router();
 
@@ -193,6 +198,18 @@ export function motivoPagoParcial(
 async function credsForReference(reference: string): Promise<WompiCreds | null> {
     // La referencia viene del body sin validar todavía, así que se filtra por formato
     // antes de usarla en una query (PostgREST interpola los filtros como texto).
+    // Reservas de canchas (RSV-<16 hex>[-n]): formato propio (solo 2 segmentos), la
+    // escuela sale de facility_reservations.payment_reference. SIN esto la referencia
+    // no pasa SAFE_REFERENCE, caería a las llaves globales y el checksum de una
+    // escuela con cuenta propia ('direct') nunca validaría.
+    if (reference.startsWith('RSV-')) {
+        if (!baseReservationReference(reference)) return null;
+        const rsvSchool = await schoolIdForReservationReference(reference);
+        if (!rsvSchool) return null;
+        const resolvedRsv = await resolveProvider({ schoolId: rsvSchool, preferredProvider: 'wompi' });
+        return wompiCredsFrom(resolvedRsv);
+    }
+
     if (!reference || !SAFE_REFERENCE.test(reference)) return null;
 
     // Tienda: el vendedor cobró con SUS llaves → se valida con las suyas.
@@ -366,6 +383,7 @@ const HANDLERS: Record<string, (args: HandlerArgs) => Promise<HandlerResult>> = 
     MKT: handleMarketplaceTransaction,
     CART: handleCartOrder,
     BKG: handleSessionBooking,
+    RSV: handleReservation,
 };
 
 /**
@@ -966,6 +984,25 @@ async function handleSessionBooking({
     });
 
     return { status: 200, body: { status: 'ok', kind: 'session_booking', internalStatus, flagged_for_review: true } };
+}
+
+// ─── RSV: reservas de canchas (F2) ─────────────────────────────────────────
+//
+// Valida el monto y llama confirmar_pago_reserva (idempotente por id de tx).
+// Toda la logica vive en services/reservation-payments.service.ts, compartida con MP.
+
+async function handleReservation({
+    req, txId, txReference, internalStatus, txAmountCop, rawTransaction,
+}: HandlerArgs): Promise<HandlerResult> {
+    return applyReservationPayment({
+        provider: 'wompi',
+        reference: txReference,
+        internalStatus,
+        amountCop: txAmountCop,
+        currency: String(rawTransaction?.currency ?? 'COP'),
+        eventId: txId,
+        log: req.log,
+    });
 }
 
 // ─── Captura de token reutilizable tras APPROVED ─────────────────────────

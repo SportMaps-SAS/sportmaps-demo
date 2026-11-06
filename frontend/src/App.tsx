@@ -73,6 +73,8 @@ const RecepcionPage = lazy(() => import("./pages/recepcion/RecepcionPage"));
 const EventsMapPage = lazy(() => import("./pages/events/EventsMapPage"));
 const EventPublicPage = lazy(() => import("./pages/events/EventPublicPage"));
 const PublicFacilityBookingPage = lazy(() => import("./pages/booking/PublicFacilityBookingPage"));
+const ReservarPage = lazy(() => import("./pages/reservar/ReservarPage"));
+const ReservaEstadoPage = lazy(() => import("./pages/reservar/ReservaEstadoPage"));
 const PublicTrialClassBookingPage = lazy(() => import("./pages/booking/PublicTrialClassBookingPage"));
 const EventIndividualRegisterPage = lazy(() => import("./pages/events/EventIndividualRegisterPage"));
 const MyEventRegistrationsPage = lazy(() => import("./pages/events/MyEventRegistrationsPage"));
@@ -156,6 +158,11 @@ const WhatsAppPage = lazy(() => import("./pages/WhatsAppPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const MonthlyReportsPage = lazy(() => import("./pages/MonthlyReportsPage"));
 const SchoolFacilitiesPage = lazy(() => import("./pages/SchoolFacilitiesPage"));
+// Dueño de espacios (facility_manager, school_type 'venue')
+const VenueDashboardPage = lazy(() => import("./pages/venue/VenueDashboardPage"));
+const VenueOnboardingPage = lazy(() => import("./pages/venue/VenueOnboardingPage"));
+const VenueReservationsPage = lazy(() => import("./pages/venue/VenueReservationsPage"));
+const VenuePaymentsPage = lazy(() => import("./pages/venue/VenuePaymentsPage"));
 const SchoolBranchesManagementPage = lazy(() => import("./pages/SchoolBranchesManagementPage"));
 const SchoolSettingsPage = lazy(() => import("./pages/SchoolSettingsPage"));
 const PickupMonitorPage = lazy(() => import("./pages/school/PickupMonitorPage"));
@@ -377,6 +384,8 @@ const App = () => (
                     {/* Código de escuela: cuenta existente → bandeja «Por asignar». La página maneja la sesión (guarda el código si no hay). */}
                     <Route path="/unirse" element={<JoinSchoolByCodePage />} />
                     <Route path="/agendar/:slug" element={<PublicFacilityBookingPage />} />
+                    <Route path="/reservar/:slug" element={<ReservarPage />} />
+                    <Route path="/r/:token" element={<ReservaEstadoPage />} />
                     <Route path="/agendar-clase/:slug" element={<PublicTrialClassBookingPage />} />
                     <Route path="/terminos-y-condiciones" element={<TermsPage />} />
                     <Route path="/terms" element={<Navigate to="/terminos-y-condiciones" replace />} />
@@ -769,7 +778,7 @@ const App = () => (
                           El filtro fino vive en MiPlanPage (rol dentro de la entidad activa);
                           esta lista es solo el primer tamiz. */}
                       <Route path="mi-plan" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'wellness_professional', 'store_owner', 'organizer', 'reporter', 'personal_trainer']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'wellness_professional', 'store_owner', 'organizer', 'reporter', 'personal_trainer', 'facility_manager']}>
                           <MiPlanPage />
                         </ProtectedRoute>
                       } />
@@ -970,8 +979,29 @@ const App = () => (
                           </ModuleGate>
                         </ProtectedRoute>
                       } />
+                      {/* Dueño de espacios: solo el perfil facility_manager (menú propio, sin módulos de escuela). */}
+                      <Route path="venue/onboarding" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueOnboardingPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/dashboard" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueDashboardPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/reservas" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueReservationsPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/cobros" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenuePaymentsPage />
+                        </ProtectedRoute>
+                      } />
                       <Route path="facilities" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'facility_manager']}>
                           <ModuleGate moduleKey="sedes_instalaciones">
                             <SchoolFacilitiesPage />
                           </ModuleGate>
@@ -985,7 +1015,7 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school-config" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'facility_manager']}>
                           <SchoolSettingsPage />
                         </ProtectedRoute>
                       } />

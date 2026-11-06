@@ -248,6 +248,25 @@ function RequestRow({
   const age = ageOn(row.birth_date, today);
   const wa = waLink(row.requester_phone);
   const pending = row.status === 'pending';
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [vinculando, setVinculando] = useState<string | null>(null);
+  const exactas = pending ? (row.exact_matches ?? []) : [];
+
+  // Vincula por documento o correo EXACTOS (el servidor lo vuelve a exigir). Nunca por nombre.
+  const vincular = async (m: NonNullable<JoinRequestRow['exact_matches']>[number]) => {
+    setVinculando(m.id);
+    try {
+      const res = await schoolJoinApi.vincular({ requestId: row.id, fichaId: m.id, source: m.source });
+      toast({ title: 'Ficha vinculada', description: `${res.athlete_name} quedó con su familia, con su equipo y sus cobros.` });
+      qc.invalidateQueries({ queryKey: ['school-join-requests'] });
+      qc.invalidateQueries({ queryKey: ['school-students'] });
+    } catch (e) {
+      toast({ title: 'No se pudo vincular', description: joinErrorMessage(e), variant: 'destructive' });
+    } finally {
+      setVinculando(null);
+    }
+  };
   return (
     <li className="rounded-lg border p-3 space-y-2">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -269,6 +288,31 @@ function RequestRow({
         </div>
       </div>
 
+      {pending && (
+        <p className="text-xs text-muted-foreground">
+          Documento que escribió la familia:{' '}
+          {row.athlete_doc_number
+            ? <strong className="font-mono">{row.athlete_doc_type ? `${row.athlete_doc_type} ` : ''}{row.athlete_doc_number}</strong>
+            : <span className="text-amber-700 dark:text-amber-400">no lo tenía a la mano — pídaselo antes de vincular.</span>}
+        </p>
+      )}
+      {exactas.map((m) => (
+        <div key={m.id} className="rounded-md border border-emerald-600/40 bg-emerald-50/50 dark:bg-emerald-950/20 p-2 space-y-1.5">
+          <p className="text-sm">
+            Coincide por <strong>{m.basis === 'documento' ? 'documento' : 'correo'}</strong> con la ficha{' '}
+            <strong>{m.full_name}</strong>{m.team_name ? ` (${m.team_name})` : ''}.
+          </p>
+          {m.basis === 'correo' && (
+            <p className="text-xs text-muted-foreground">
+              Es el correo de la cuenta, no el documento. Confírmelo con la familia si tiene dudas.
+            </p>
+          )}
+          <Button size="sm" disabled={!!vinculando} onClick={() => void vincular(m)} className="gap-1.5">
+            {vinculando === m.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+            Vincular con esta ficha
+          </Button>
+        </div>
+      ))}
       {row.suggested_category && (
         <p className="text-sm">Categoría que sugiere la familia: <strong>{row.suggested_category}</strong></p>
       )}
@@ -278,7 +322,7 @@ function RequestRow({
       {pending && row.candidates.length > 0 && (
         <p className="text-xs flex items-center gap-1 text-amber-700 dark:text-amber-400">
           <AlertTriangle className="h-3.5 w-3.5" />
-          Puede que ya tenga ficha en la escuela ({row.candidates.map((c) => c.full_name).join(', ')}).
+          Hay fichas con un nombre parecido ({row.candidates.map((c) => c.full_name).join(', ')}). Es solo una pista: no se vincula por nombre.
         </p>
       )}
 
