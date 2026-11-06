@@ -141,6 +141,8 @@ interface EntitlementsResponse {
     coach_attendance_retro_days?: number | null;
     /** «No aplica» en las rúbricas (`school_settings.rubric_allow_na`). Default false. */
     rubric_allow_na?: boolean;
+    /** Partido en vivo (`school_settings.live_match_enabled`, piloto Carmel). Default false. */
+    live_match_enabled?: boolean;
 }
 
 // ============================================================
@@ -266,6 +268,9 @@ export interface Entitlements {
     /** Se puede marcar «No aplica» en las rúbricas (evaluación de entrenadores
      *  y mesociclo); no cuenta en el promedio (`rubric_allow_na`). Default false. */
     rubricAllowNa: boolean;
+
+    /** Partido en vivo + formato por partido al agendar (`live_match_enabled`). Default false. */
+    liveMatchEnabled: boolean;
 }
 
 export interface EntitlementsHelpers {
@@ -347,6 +352,7 @@ const EMPTY_ENTITLEMENTS: Entitlements = {
     allowSecondaryTeamEnrollment: false,
     coachAttendanceRetroDays: 7,
     rubricAllowNa: false,
+    liveMatchEnabled: false,
 };
 
 // ============================================================
@@ -474,6 +480,7 @@ export function useEntitlements(): Entitlements & EntitlementsHelpers & {
                     ? (data.coach_attendance_retro_days as number)
                     : 7,
             rubricAllowNa: data.rubric_allow_na === true,
+            liveMatchEnabled: data.live_match_enabled === true,
         };
     }, [query.data]);
 

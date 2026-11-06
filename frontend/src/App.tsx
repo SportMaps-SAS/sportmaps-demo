@@ -128,6 +128,7 @@ const CoachCheckInScanPage = lazy(() => import("./pages/CoachCheckInScanPage"));
 const CoachPlansPage = lazy(() => import("./pages/CoachPlansPage"));
 const ResultsPage = lazy(() => import("./pages/ResultsPage"));
 const PartidoPage = lazy(() => import("./pages/PartidoPage"));
+const PartidoEnVivoPage = lazy(() => import("./pages/PartidoEnVivoPage"));
 const CoachReportsPage = lazy(() => import("./pages/CoachReportsPage"));
 const CoachTeamPostTrainingReportPage = lazy(() => import("./pages/CoachTeamPostTrainingReportPage"));
 const CoachEvaluationsPage = lazy(() => import("./pages/CoachEvaluationsPage"));
@@ -660,6 +661,9 @@ const App = () => (
                           Sin ProtectedRoute, igual que /results: un entrenador multirol puede no tener
                           profile.role='coach'. El gate real son la RLS y las RPC (user_staff_school_ids). */}
                       <Route path="partidos/:matchId" element={<PartidoPage />} />
+                      {/* Partido en vivo (F2-b): pantalla de cancha. La página gatea por flag live_match_enabled + rol staff/coach;
+                          las RPC revalidan adentro (director, alcance, flag). */}
+                      <Route path="partido-en-vivo/:matchId" element={<PartidoEnVivoPage />} />
                       <Route path="training-plans" element={
                         <ModuleGate moduleKey="gestion_deportiva_entrenamiento_metricas">
                           <SesionesSegunRol />

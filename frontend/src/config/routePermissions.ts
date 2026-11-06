@@ -97,6 +97,7 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
     '/coach-plans': { allowedRoles: ['coach'], description: 'Planes del coach' },
     '/pizarra': { allowedRoles: ['coach', 'school', 'school_admin', 'admin', 'super_admin'], description: 'Pizarra táctica libre (sin sesión): Mis jugadas o agregar a una sesión' },
     '/results': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Resultados (partidos de la escuela)' },
+    '/partido-en-vivo/:matchId': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Partido en vivo: pantalla de cancha (flag live_match_enabled)' },
     '/partidos/:matchId': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Pantalla del partido: programar, convocar, resultado, evaluar y reporte' },
     '/training-plans': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Métricas y rendimiento' },
     '/coach-reports': { allowedRoles: ['coach'], requiredPermission: 'reports:create', description: 'Reportes (coach)' },

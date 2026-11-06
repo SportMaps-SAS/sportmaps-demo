@@ -16,7 +16,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { ArrowLeft, Check, ChevronDown, ChevronRight, FileText, Loader2, Minus, Plus, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Check, ChevronDown, ChevronRight, FileText, Loader2, Minus, Plus, Radio, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +26,10 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import { todayColombia } from '@/lib/dateUtils';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { useEntitlements } from '@/hooks/useEntitlements';
+import { useMinutosVivo } from '@/components/partido-vivo/informe/useInformeVivo';
+import { FormatoVivoCampos } from './FormatoVivoCampos';
+import { FORMATO_VIVO_DEFECTO, payloadFormatoVivo, validarFormatoVivo, type FormatoVivoForm } from './partidoVivoAgenda';
 import { useFootballEvents, useCreateFootballEvents, useDeleteFootballEvent } from '@/hooks/useFootballData';
 import { useSchoolPerformanceMetrics } from '@/hooks/usePerformanceData';
 import { useMatchReports } from '@/hooks/useMatchReports';
@@ -124,6 +129,8 @@ export function PartidoFlujo({ matchId, teamId: teamIdNuevo, onCreado, onVolver,
   const esAdmin = ADMIN_ROLES.includes(currentUserRole || '');
   const puedeEditar = EDITAN_PARTIDOS.includes(currentUserRole || '');
   const escuela = partido.data?.school_id ?? equipo.data?.school_id ?? schoolId ?? null;
+  const navigate = useNavigate();
+  const vivoHabilitado = useEntitlements().liveMatchEnabled;
 
   const [paso, setPaso] = useState<PasoPartido | null>(pasoPedido ?? (matchId ? null : 'programar'));
 
@@ -187,6 +194,14 @@ export function PartidoFlujo({ matchId, teamId: teamIdNuevo, onCreado, onVolver,
             {[equipo.data?.name, m?.status === 'cancelled' ? 'Cancelado' : m?.status === 'played' ? 'Jugado' : m ? 'Por jugar' : null].filter(Boolean).join(' · ')}
           </p>
         </div>
+        {vivoHabilitado && m && m.status !== 'cancelled' && puedeEditar && (
+          <Button
+            className="min-h-touch h-11 shrink-0 rounded-xl"
+            onClick={() => navigate(`/partido-en-vivo/${encodeURIComponent(m.id)}`)}
+          >
+            <Radio className="mr-1.5 h-4 w-4" />Llevar en vivo
+          </Button>
+        )}
       </header>
 
       <nav aria-label="Pasos del partido" className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
@@ -255,9 +270,18 @@ function PasoProgramar({ partido, teamId, onGuardado }: {
   const [tipo, setTipo] = useState(partido?.match_type ?? 'Amistoso');
   const [notas, setNotas] = useState(partido?.notes ?? '');
   const [guardando, setGuardando] = useState(false);
+  const vivo = useEntitlements().liveMatchEnabled;
+  const pv = partido as (PartidoFila & Partial<{ live_periods_count: number | null; live_period_minutes: number | null; match_kind: 'official' | 'practice'; referee_name: string | null }>) | null;
+  const [formatoVivo, setFormatoVivo] = useState<FormatoVivoForm>({
+    periodos: pv?.live_periods_count ?? FORMATO_VIVO_DEFECTO.periodos,
+    minutos: pv?.live_period_minutes ?? FORMATO_VIVO_DEFECTO.minutos,
+    clase: pv?.match_kind ?? FORMATO_VIVO_DEFECTO.clase,
+    arbitro: pv?.referee_name ?? '',
+  });
+  const errorVivo = vivo ? validarFormatoVivo(formatoVivo) : null;
 
   const yaPaso = fecha <= hoy;
-  const valido = rival.trim().length >= 2 && !!fecha;
+  const valido = rival.trim().length >= 2 && !!fecha && !errorVivo;
 
   const guardar = async (yaSeJugo: boolean) => {
     if (!valido || guardando) return;
@@ -270,6 +294,7 @@ function PasoProgramar({ partido, teamId, onGuardado }: {
       location: lugar.trim(),
       match_type: tipo,
       notes: notas.trim(),
+      ...payloadFormatoVivo(vivo, formatoVivo),
     };
     try {
       let id = partido?.id ?? null;
@@ -371,6 +396,7 @@ function PasoProgramar({ partido, teamId, onGuardado }: {
           ))}
         </div>
       </div>
+      {vivo && <FormatoVivoCampos value={formatoVivo} onChange={setFormatoVivo} />}
       <div className="space-y-1.5">
         <Label htmlFor="pf-notas" className="text-base">Nota para las familias <span className="font-normal text-muted-foreground">(opcional)</span></Label>
         <Textarea id="pf-notas" rows={2} placeholder="Uniforme, hora de llegada…" value={notas} onChange={(e) => setNotas(e.target.value)} />
@@ -667,6 +693,8 @@ function PasoEvaluar({ partido, schoolId, esAdmin, onIrAConvocar, onSiguiente }:
   const globales = useSchoolPerformanceMetrics();
   const guardadas = useEvaluacionPartido(partido.id);
   const compartir = useCompartirEvaluaciones(schoolId);
+  const vivo = useMinutosVivo(partido.id, schoolId); // null con flag apagado o sin registro en vivo
+  const minutosBase = (j: Jugadora): number | '' => vivo?.get(claveSujeto(j)) ?? j.minutos ?? '';
 
   const deEscuela = useMemo(() => criteriosDePartido(criteriosQ.data ?? []), [criteriosQ.data]);
   const usaEscuela = deEscuela.length > 0;
@@ -702,14 +730,14 @@ function PasoEvaluar({ partido, schoolId, esAdmin, onIrAConvocar, onSiguiente }:
 
   const minutosDe = (j: Jugadora): number | '' => {
     const k = claveSujeto(j);
-    return k in minutos ? minutos[k] : (j.minutos ?? '');
+    return k in minutos ? minutos[k] : minutosBase(j);
   };
 
   const guardar = async () => {
     const entradas = entradasEvaluacion(p, metricas, evaluables);
     // Solo las filas cuyo valor cambió. UPDATE directo de minutes_played: no
     // pasa por save_match_roster, que borra y reinserta (perdería la pizarra).
-    const cambiosMin = evaluables.filter((j) => j.filaId && claveSujeto(j) in minutos && minutosDe(j) !== (j.minutos ?? ''));
+    const cambiosMin = evaluables.filter((j) => j.filaId && claveSujeto(j) in minutos && minutosDe(j) !== minutosBase(j));
     if (cambiosMin.some((j) => { const v = minutosDe(j); return v !== '' && (!Number.isInteger(v) || v < 0 || v > 200); })) {
       toast.error('Los minutos van en números enteros, entre 0 y 200.');
       return;

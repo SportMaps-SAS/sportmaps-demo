@@ -24,6 +24,9 @@ import { usesParentCalendarV2 } from '@/components/parent/v2/parentCalendarModel
 import { ACUDIENTE_V2 } from '@/lib/feature-flags';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameDay, isToday, addMonths, subMonths } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { useEntitlements } from '@/hooks/useEntitlements';
+import { FormatoVivoCampos } from '@/components/partidos/FormatoVivoCampos';
+import { FORMATO_VIVO_DEFECTO, payloadFormatoVivo, validarFormatoVivo, type FormatoVivoForm } from '@/components/partidos/partidoVivoAgenda';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -224,6 +227,9 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
   const [startDateOpen, setStartDateOpen] = useState(false);
   const [endDateOpen, setEndDateOpen] = useState(false);
 
+  const liveMatchEnabled = useEntitlements().liveMatchEnabled;
+  const [formatoVivo, setFormatoVivo] = useState<FormatoVivoForm>(FORMATO_VIVO_DEFECTO);
+
   // Form state
   const [formData, setFormData] = useState({
     title: '',
@@ -401,6 +407,8 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
       // misma transacción; así aparece en Resultados y en Equipos › Partidos
       // sin volver a escribirlo.
       if (esPartidoDeEquipo(fd)) {
+        const errFormato = liveMatchEnabled ? validarFormatoVivo(formatoVivo) : null;
+        if (errFormato) throw new Error(errFormato);
         const { data, error } = await (supabase as any).rpc('create_match', {
           p: {
             team_id: fd.target,
@@ -412,6 +420,7 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
             notes: fd.description || '',
             match_type: fd.event_label || '',
             create_calendar_event: true,
+            ...payloadFormatoVivo(liveMatchEnabled, formatoVivo),
           },
         });
         if (error) throw new Error(error.code === '42501' ? 'No tienes permiso para crear partidos de este equipo' : 'No se pudo crear el partido');
@@ -1076,6 +1085,7 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
                     </SelectContent>
                   </Select>
                 </div>
+                {liveMatchEnabled && <FormatoVivoCampos value={formatoVivo} onChange={setFormatoVivo} />}
                 <p className="col-span-2 text-xs text-muted-foreground">
                   Se crea el partido: aparece en Resultados y en Equipos › Partidos, donde convocas, registras el resultado y evalúas.
                 </p>
