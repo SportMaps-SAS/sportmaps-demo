@@ -10,6 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import { FileText, Loader2, MessageCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { InformeVivoPanel } from '@/components/partido-vivo/informe/InformeVivoPanel';
+import { informeGeneralDe } from '@/components/partido-vivo/informe/informeModel';
 import {
   type MatchReport,
   useMatchReportReplies,
@@ -139,6 +141,8 @@ export function MatchReportDialog({ open, onOpenChange, match, report }: MatchRe
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Solo con live_match_enabled y partido registrado en vivo; si no, no renderiza nada. */}
+          {match && <InformeVivoPanel matchId={match.id} informeGeneral={informeGeneralDe(summary, development)} />}
           <div className="space-y-2">
             <Label htmlFor="mr-summary">Resumen</Label>
             <Textarea
