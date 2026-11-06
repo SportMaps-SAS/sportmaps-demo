@@ -12,6 +12,8 @@ const estado = vi.hoisted(() => ({
     rpcs: [] as { nombre: string; args: any }[],
     rpcRespuesta: null as any,
     rpcError: null as any,
+    // M4: fuente de las llaves con que se resuelve la pasarela de la escuela dueña de la reserva.
+    fuente: 'school_direct' as string | null,
 }));
 
 vi.mock('../config/supabase', () => {
@@ -46,7 +48,7 @@ vi.mock('../services/store-checkout', () => ({
     findStoreOrderById: vi.fn(), sellerGatewayForOrder: vi.fn(), SellerGatewayError: class extends Error {},
 }));
 vi.mock('../services/payment-provider.resolver', () => ({
-    resolveProvider: vi.fn(async () => null),
+    resolveProvider: vi.fn(async (c: any) => (estado.fuente ? { provider: c.preferredProvider, source: estado.fuente } : null)),
     loadProviderConfig: vi.fn(async () => null),
 }));
 vi.mock('../services/paymentFailureEmail.service', () => ({ sendPaymentAttemptFailedEmails: vi.fn() }));
@@ -97,6 +99,7 @@ beforeEach(() => {
     estado.inserts = [];
     estado.rpcs = [];
     estado.rpcError = null;
+    estado.fuente = 'school_direct';
     estado.rpcRespuesta = {
         ok: true, already_processed: false, confirmed: true, reconciliation: false,
         reservation: { id: RES_ID, facility_name: 'Cancha 1', local_date: '2026-11-06', local_start: '17:00' },
@@ -278,5 +281,33 @@ describe('destinatarios de las alertas (QA T1)', () => {
         ];
         const ids = (await adminsDeLaEscuela(ESCUELA)).sort();
         expect(ids).toEqual([ADMIN, 'admin-2', 'sadmin-1'].sort());
+    });
+});
+
+describe('M4: solo se aplica el pago si la escuela tiene pasarela directa propia', () => {
+    for (const fuente of ['env', null] as const) {
+        it(`Wompi con resolución ${fuente ?? 'null'} → 200 ignored not_school_direct, SIN RPC y con alerta al admin`, async () => {
+            estado.fuente = fuente;
+            const r = await routeWompiTransaction({ realTx: txWompi(36000) });
+            expect(r.status).toBe(200);
+            expect(r.body).toMatchObject({ status: 'ignored', reason: 'not_school_direct' });
+            expect(rpcsDeReserva()).toHaveLength(0);
+            expect(alertas()).toHaveLength(1);
+            expect(alertas()[0].fila.user_id).toBe(ADMIN);
+        });
+        it(`MercadoPago con resolución ${fuente ?? 'null'} → 200 ignored not_school_direct, SIN RPC y con alerta al admin`, async () => {
+            estado.fuente = fuente;
+            const r = await routeMercadoPagoTransaction({ payment: pagoMp(36000) });
+            expect(r.status).toBe(200);
+            expect(r.body).toMatchObject({ status: 'ignored', reason: 'not_school_direct' });
+            expect(rpcsDeReserva()).toHaveLength(0);
+            expect(alertas()).toHaveLength(1);
+        });
+    }
+    it('un pago rechazado (no paid) en escuela sin pasarela directa se ignora sin alertar', async () => {
+        estado.fuente = 'env';
+        const r = await routeWompiTransaction({ realTx: txWompi(36000, { status: 'DECLINED' }) });
+        expect(r.body).toMatchObject({ status: 'ignored', reason: 'not_school_direct' });
+        expect(alertas()).toHaveLength(0);
     });
 });

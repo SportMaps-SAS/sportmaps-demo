@@ -25,6 +25,7 @@ import type { Logger } from 'pino';
 import { supabase } from '../config/supabase';
 import { writeAudit } from '../utils/auditWrite';
 import { sanitizeFreeText } from '../utils/sanitize';
+import { resolveProvider } from './payment-provider.resolver';
 
 export type ReservationProvider = 'wompi' | 'mercadopago';
 
@@ -256,6 +257,31 @@ export async function applyReservationPayment(input: ApplyReservationPaymentInpu
 
     const providerEventId = `${provider}:${eventId}`;
     const schoolId = reserva.school_id as string;
+
+    // M4: la plata de una reserva es de LA ESCUELA. Si la escuela no tiene pasarela directa propia de este proveedor
+    // (aggregator/unset: el resolver cae a las llaves de ENV = OTRA cuenta), un pago con esta referencia pudo entrar al
+    // comercio equivocado y la firma/checksum se validó con el secreto global. NO se aplica: 200 `ignored` (reintentar
+    // no sirve) y se avisa al admin para que lo concilie a mano. Cubre los dos webhooks y el reproceso de huérfanos.
+    let directa = false;
+    try {
+        const resolved = await resolveProvider({ schoolId, preferredProvider: provider });
+        directa = !!resolved && resolved.source === 'school_direct' && resolved.provider === provider;
+    } catch (e: any) {
+        log?.error({ err: e?.message, reference, provider }, 'RSV payment: no se pudo resolver la pasarela de la escuela');
+        return { status: 500, body: { error: 'provider_resolution_failed' } };
+    }
+    if (!directa) {
+        log?.warn({ reference, provider, eventId, schoolId }, 'RSV payment ignored: school without direct gateway');
+        if (internalStatus === 'paid') {
+            await alertarAdminsDeReserva({
+                schoolId, reservationId: reserva.id, tipo: 'reservation_payment_rejected',
+                titulo: 'Pago de reserva recibido en una cuenta que no es la tuya',
+                mensaje: `Entró un pago por ${provider} con la referencia de una reserva (tx ${eventId}), pero tu escuela no tiene ese medio de pago directo configurado. NO se aplicó a la reserva. Revisa el pago y concílialo a mano.`,
+                log,
+            });
+        }
+        return { status: 200, body: { status: 'ignored', kind: 'reservation', reason: 'not_school_direct' } };
+    }
 
     // Estados que no mueven plata: la reserva sigue su curso (el hold vence solo).
     if (internalStatus !== 'paid') {

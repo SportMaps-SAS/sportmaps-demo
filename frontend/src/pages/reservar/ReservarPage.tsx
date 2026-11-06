@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import SlotPicker, { useAvailability } from '@/components/reservar/SlotPicker';
 import { Alternatives, ErrorBanner, PolicyBox, PriceBox } from '@/components/reservar/ReservaParts';
-import { apiRequest, publicUrl, RESERVATIONS_BASE, ReservaApiError } from '@/components/reservar/reservasApi';
+import { apiRequest, publicUrl, createGuestReservation, guestCheckout, ReservaApiError } from '@/components/reservar/reservasApi';
 import { safeRedirectUrl } from '@/lib/safeRedirect';
 import {
   formatCountdown, formatCOP, formatDayLong, formatDuration, formatRange, bogotaDateKey, idempotencyKeyFor,
@@ -260,11 +260,9 @@ export default function ReservarPage() {
 
   async function checkout(res: ReservationOut) {
     try {
-      const r = await apiRequest<{ checkout_url: string }>(`${RESERVATIONS_BASE}/${res.id}/checkout`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${guestToken}` },
-        body: {},
-      });
+      const statusToken = res.public_token ?? res.token;
+      if (!statusToken) throw new Error('falta status_token');
+      const r = await guestCheckout(res.id, statusToken);
       setCheckoutFailed(false);
       const dest = safeRedirectUrl(r.checkout_url);
       if (!dest) throw new Error('checkout_url inválida');
@@ -290,18 +288,16 @@ export default function ReservarPage() {
     try {
       let res = reservation;
       if (!res || res.starts_at !== slot.starts_at) {
-        const r = await apiRequest<{ reservation: ReservationOut; requires_payment: boolean }>(publicUrl(''), {
-          method: 'POST',
-          headers: { 'Idempotency-Key': idemKey, Authorization: `Bearer ${guestToken}` },
-          body: {
-            facility_id: facilityId,
-            starts_at: slot.starts_at,
-            ends_at: slot.ends_at,
-            payment_method: method,
-            participants,
-          },
+        const r = await createGuestReservation<ReservationOut>(guestToken, idemKey, {
+          facility_id: facilityId,
+          starts_at: slot.starts_at,
+          ends_at: slot.ends_at,
+          payment_method: method,
+          participants,
         });
-        res = r.reservation;
+        // El BFF entrega el token de estado FUERA de `reservation`: se guarda en public_token
+        // (lo usan el checkout con X-Reservation-Token y el enlace /r/:token).
+        res = { ...r.reservation, public_token: r.status_token ?? r.reservation.public_token };
         setReservation(res);
         if (!r.requires_payment) {
           setStep('confirmada');

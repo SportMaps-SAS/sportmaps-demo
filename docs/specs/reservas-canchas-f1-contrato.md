@@ -313,3 +313,36 @@ Para que un agente de IA o una importación (Excel/PDF/WhatsApp) cree reservas s
 - La revocación de la escritura directa en `facility_reservations`/`reservation_payments`/`facility_blackouts` (M7) vive en la migración **20261105213611_reservas_revocar_escritura_directa**, que se aplica **al final**, solo después de desplegar el frontend que ya no escribe directo. Antes de aplicarla, un cliente que inserte directo ocupa la franja pero el servidor no le calcula la tarifa de `facility_rates`; después, recibe 42501.
 - No hay `generar_recurrencia`, ni motor de reglas por segmento (§2.3.1), ni lista de espera, ni pago dividido.
 - La reserva no cruza la medianoche (`reservations_time_valid` exige `end_time > start_time`).
+
+## 9. Cabeceras del flujo público (BFF, ronda SEC2)
+
+El BFF es **estricto**: cada token viaja en SU cabecera y `Authorization: Bearer` NO sustituye a ninguna de las dos.
+
+| Ruta | Cabecera | Token | Vida |
+|---|---|---|---|
+| `POST /api/v1/public/reservations` (reservar como invitado) | `X-Guest-Token` | `guest_token` de `POST /guests/verify` (`typ:'g'`) | 30 min |
+| `POST /api/v1/reservations/:id/checkout` y `/transfer-proof` (invitado) | `X-Reservation-Token` | `status_token` de la respuesta de `POST /` (`typ:'r'`, atado a esa reserva y a su `guest_booker_id`) | 14 días tras el fin de la reserva |
+| `/api/v1/public/reservations/r/:token[/cancel\|/reschedule]` | ninguna (el token va en la ruta) | el mismo `status_token` | idem |
+| Resto de `/api/v1/reservations/*` | `Authorization: Bearer <sesión Supabase>` | — | — |
+
+- Los tokens llevan `jti` (identificador para una futura lista de revocación; hoy el único corte es `exp`). El de `typ:'g'` es aleatorio; el de `typ:'r'` es determinista (el replay idempotente de `POST /` devuelve el mismo enlace).
+- Como el `status_token` viaja en la URL de `/r/:token`, el BFF lo **redacta** en sus logs (`/r/[REDACTED]`, `utils/redactUrl.ts`). No lo pegues en capturas, tickets ni analytics.
+- `GET /r/:token` y las respuestas públicas devuelven una **lista blanca** de campos (`id, status, payment_status, starts_at, ends_at, facility_id, facility_name, facility{name,type}, price, amount_paid, min_deposit_pct, deposit_min, hold_expires_at, cancellation_reason, cancelled_at, participants, local_date, local_start, local_end, in_review`). Cualquier otra columna no sale.
+- `GET /public/reservations/availability`: rango máximo **14 días**; si la escuela tiene **más de 3 canchas públicas** hay que mandar `facility_id` (422 `FACILITY_REQUIRED`); respuesta cacheada 30 s por (escuela, cancha, from, to, sport, duración). Límites por IP usan `CF-Connecting-IP` validado (no `req.ip`), más un tope por escuela que no depende de la IP.
+- Lecturas públicas: tope de 8 s del lado del cliente (`abortSignal`). El `statement_timeout` de la base **no** se puede fijar por consulta con supabase-js sin un RPC/rol dedicado (requiere migración): queda pendiente a nivel de rol `service_role`/PostgREST.
+
+### Comprobantes de transferencia (`POST /api/v1/reservations/:id/transfer-proof`)
+
+`proof_url` debe ser una URL de Storage **de nuestro proyecto** (`<SUPABASE_URL>/storage/v1/object/(public|sign|authenticated)/<bucket>/<ruta>`) y cumplir TODO:
+
+1. Bucket en la lista blanca: por defecto `payment-receipts` (el de los comprobantes de pago del repo); configurable con `RESERVATION_PROOF_BUCKETS="a,b"`.
+2. Extensión `jpg|jpeg|png|webp|heic|pdf`; sin `..`, `%2e`, `%2f`, credenciales ni otro host/esquema.
+3. **Convención de ruta:** `<actor>/<archivo>` o `<actor>/<reservationId>/<archivo>`, donde `<actor>` es el `user_id` de quien sube (sesión) o su `guest_booker_id` (invitado); también se acepta el **id de la reserva** como primera carpeta (para subidas de invitado con URL firmada). Cualquier otra carpeta -> 403 `proof_not_owned`.
+4. El objeto **existe** en Storage (verificado con `service_role`, `list`) y, si Storage informa metadata, pesa 1 B–10 MB y es imagen o PDF (400 `proof_not_found`; Storage caído -> 503).
+5. Topes por día (24 h móviles) de reservas con comprobante en revisión: **3 por quien reservó** y **20 por escuela** (429 `proof_daily_limit`, `scope: user|school`). El hold solo se alarga **una vez** por reserva (12 h).
+
+Escrituras de `price_snapshot` (checkout y transfer-proof) usan bloqueo optimista (`UPDATE ... WHERE updated_at = <leído>`, hasta 3 reintentos releyendo) para no pisar lo que `confirmar_pago_reserva` guarda (`payment_events`). Agotados los reintentos -> 409 `reservation_busy`.
+
+### Webhooks de pago de reservas
+
+Una referencia `RSV-…` solo se aplica si la escuela dueña tiene pasarela **directa propia** del proveedor (`source: 'school_direct'`). Si no (aggregator/unset: el resolver cae a llaves de ENV = otra cuenta) el webhook responde 200 `{status:'ignored', reason:'not_school_direct'}`, no llama `confirmar_pago_reserva` y avisa a los administradores de la escuela. En producción, el checkout de MercadoPago exige `PUBLIC_API_URL` (409 `PUBLIC_API_URL_REQUIRED`): nunca se confía en la cabecera `Host`.

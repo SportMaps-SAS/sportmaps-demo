@@ -25,7 +25,9 @@ vi.mock('../config/supabase', () => {
         b.then = (ok: any, ko: any) => Promise.resolve({ data: Array.isArray(st.tables[t]) ? st.tables[t] : (st.tables[t] ? [st.tables[t]] : []), error: null }).then(ok, ko);
         return b;
     };
-    return { supabase: { from: builder, rpc: async (n: string, a: any) => { st.rpc.push({ n, a }); return { data: { ok: true, reservation: { id: R, user_id: U } }, error: null }; } } };
+    // Storage mínimo para transfer-proof (SEC2-A2: el objeto debe existir): devuelve el archivo que se busca.
+    const storage = { from: () => ({ list: async (_f: string, o: any) => ({ data: [{ name: o?.search, id: 'o1', metadata: { size: 10, mimetype: 'image/png' } }], error: null }) }) };
+    return { supabase: { storage, from: builder, rpc: async (n: string, a: any) => { st.rpc.push({ n, a }); return { data: { ok: true, reservation: { id: R, user_id: U } }, error: null }; } } };
 });
 vi.mock('../middlewares/authMiddleware', () => {
     const setUser = (req: any) => { const id = req.headers['x-user']; req.user = id ? { id, email: 'u@x.co' } : null; req.role = req.headers['x-role']; req.schoolId = req.headers['x-school-id'] ?? S; };
@@ -100,7 +102,7 @@ const EPS: Ep[] = [
     { name: 'POST /public/reservations', method: 'POST', path: '/api/v1/public/reservations', headers: { ...IDEM, 'x-guest-token': GT }, base: { facility_id: F, starts_at: iso1, ends_at: iso2, payment_method: 'online', notes: 'hola' }, mustNotRpc: true },
     { name: 'POST /public/reservations/r/:t/cancel', method: 'POST', path: `/api/v1/public/reservations/r/${signToken({ typ: 'r', gid: GID, rid: R, exp: Date.now() + 60_000 })}/cancel`, base: { reason: 'x' }, mustNotRpc: true },
     { name: 'POST /reservations/:id/checkout', method: 'POST', path: `/api/v1/reservations/${R}/checkout`, base: { amount: 5000, mode: 'total', provider: 'wompi', return_path: '/venue/reservas' } },
-    { name: 'POST /reservations/:id/transfer-proof', method: 'POST', path: `/api/v1/reservations/${R}/transfer-proof`, base: { proof_url: 'http://127.0.0.1:54321/storage/v1/object/p/x.png' } },
+    { name: 'POST /reservations/:id/transfer-proof', method: 'POST', path: `/api/v1/reservations/${R}/transfer-proof`, base: { proof_url: `http://127.0.0.1:54321/storage/v1/object/public/payment-receipts/${U}/x.png` } },
     { name: 'POST /reservations/:id/confirm-transfer', method: 'POST', path: `/api/v1/reservations/${R}/confirm-transfer`, base: { amount: 5000 }, mustNotRpc: true },
     { name: 'PATCH admin cancel', method: 'PATCH', path: `/api/v1/reservations-admin/facility/${R}/cancel`, base: { reason: 'lluvia' } },
     { name: 'PATCH admin reschedule', method: 'PATCH', path: `/api/v1/reservations-admin/facility/${R}/reschedule`, base: { reservation_date: '2030-11-06', start_time: '10:00', end_time: '11:00' } },

@@ -6,7 +6,11 @@
 //  · interfaz aislada de verificación de canal del invitado (verifyGuestChannel).
 //
 // Contrato: docs/specs/reservas-canchas-f1-contrato.md
-import { createHmac, createHash, timingSafeEqual } from 'crypto';
+import { createHmac, createHash, randomUUID, timingSafeEqual } from 'crypto';
+import { isIP } from 'net';
+import type { Request } from 'express';
+import { MemoryStore, type Options as RateLimitOptions, type Store } from 'express-rate-limit';
+import { storeClientIp } from '../middlewares/storeRateLimit';
 
 // ── Traducción de errores de negocio ─────────────────────────────────────────
 
@@ -94,7 +98,17 @@ export function reservationsSecret(): string {
 const b64u = (s: string) => Buffer.from(s, 'utf8').toString('base64url');
 const sig = (body: string, secret: string) => createHmac('sha256', secret).update(body).digest('base64url');
 
-export interface SignedPayload { typ: 'g' | 'r'; gid: string; rid?: string; exp: number }
+/**
+ * `jti` identifica el token (futura lista de revocación por jti; HOY no hay revocación efectiva: el único
+ * corte es `exp`). En 'g' es aleatorio; en 'r' es determinista (rid+gid) para que el replay idempotente
+ * de POST / devuelva el mismo enlace.
+ */
+export interface SignedPayload { typ: 'g' | 'r'; gid: string; rid?: string; exp: number; jti?: string }
+
+export const newGuestJti = (): string => randomUUID();
+export function linkJti(rid: string, gid: string, secret = reservationsSecret()): string {
+    return createHmac('sha256', secret).update(`jti|${rid}|${gid}`).digest('hex').slice(0, 24);
+}
 
 export function signToken(p: SignedPayload, secret = reservationsSecret()): string {
     const body = b64u(JSON.stringify(p));
@@ -119,8 +133,22 @@ export function verifyToken(token: unknown, typ: 'g' | 'r', secret = reservation
 }
 
 export const GUEST_TOKEN_TTL_MS = 30 * 60_000;
-/** El enlace de estado vence 30 días después del fin de la reserva. */
-export const STATUS_LINK_TTL_MS = 30 * 24 * 3600_000;
+/** El enlace de estado vence 14 días después del fin de la reserva (el token va en la URL: vida corta). */
+export const STATUS_LINK_TTL_MS = 14 * 24 * 3600_000;
+
+/**
+ * IP del cliente para las llaves de los limitadores de las rutas públicas de reservas. Detrás de
+ * Cloudflare + Render `req.ip` es el borde de Cloudflare y rota, así que se usa CF-Connecting-IP /
+ * True-Client-IP (mismo patrón que storeRateLimit.ts y access-adms.ts) SOLO si es una IP válida;
+ * si no, req.ip. (Quien pegue directo a *.onrender.com puede fijar la cabecera: por eso además hay
+ * topes por correo/teléfono/escuela que no dependen de la IP.)
+ */
+export function reservationsClientIp(req: Pick<Request, 'headers' | 'ip'> & { socket?: { remoteAddress?: string } }): string {
+    const ip = storeClientIp(req);
+    if (isIP(ip)) return ip;
+    const fallback = String(req.ip ?? req.socket?.remoteAddress ?? '').trim();
+    return isIP(fallback) ? fallback : (fallback || 'unknown');
+}
 
 // ── OTP de correo sin estado ─────────────────────────────────────────────────
 // código = HMAC(secreto, guest|correo|ventana de 5 min) -> 6 dígitos. Vale la
@@ -186,6 +214,36 @@ export function allowHit(key: string, max: number, windowMs: number, now = Date.
 }
 
 export function resetHits(): void { hits.clear(); store.reset?.(); }
+
+// Almacén de los limitadores por IP (express-rate-limit). Por defecto, memoria del proceso. Para uno compartido
+// (Redis/Upstash) se registra una fábrica ANTES de la primera petición; los limitadores se crean perezosamente.
+let rateLimitStoreFactory: (() => Store) | null = null;
+export function setReservationsRateLimitStoreFactory(f: (() => Store) | null): void { rateLimitStoreFactory = f; }
+
+/**
+ * Store «perezoso» para los limitadores: express-rate-limit exige crear el limitador al iniciar la app, pero la fábrica
+ * del almacén compartido puede registrarse después (en el arranque, antes de la primera petición). Este wrapper
+ * resuelve el almacén real en el primer uso: el de la fábrica si hay, o MemoryStore.
+ */
+class LazyRateLimitStore implements Store {
+    localKeys = false;
+    private inner: Store | null = null;
+    private options: RateLimitOptions | null = null;
+    init(options: RateLimitOptions): void { this.options = options; }
+    private real(): Store {
+        if (!this.inner) {
+            this.inner = rateLimitStoreFactory?.() ?? new MemoryStore();
+            if (this.options) this.inner.init?.(this.options);
+        }
+        return this.inner;
+    }
+    get(key: string) { return this.real().get?.(key) as any; }
+    increment(key: string) { return this.real().increment(key); }
+    decrement(key: string) { return this.real().decrement(key); }
+    resetKey(key: string) { return this.real().resetKey(key); }
+    resetAll() { return this.real().resetAll?.(); }
+}
+export function reservationsRateLimitStore(): Store { return new LazyRateLimitStore(); }
 
 // ── Verificación de canal del invitado (aislada detrás de una interfaz) ──────
 

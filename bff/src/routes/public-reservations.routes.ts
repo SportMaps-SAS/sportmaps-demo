@@ -19,7 +19,7 @@
 //    nadie obtiene el token de otro escribiendo su teléfono con un correo propio.
 //
 // Captcha: no existe infraestructura en el BFF; no se inventa proveedor.
-import { Router, Request, Response, NextFunction } from 'express';
+import { Router, Request, Response, NextFunction, RequestHandler } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { supabase } from '../config/supabase';
@@ -28,7 +28,8 @@ import { escapeHtmlText } from '../utils/sanitize';
 import { requireIdempotencyKey } from '../middlewares/requireIdempotencyKey';
 import {
     GuestRow, GUEST_TOKEN_TTL_MS, STATUS_LINK_TTL_MS, UUID_RE,
-    allowHit, checkOtp, currentOtp, isRpcFailure, signToken, translateRpcError, verifyGuestChannel, verifyToken,
+    allowHit, checkOtp, currentOtp, isRpcFailure, linkJti, newGuestJti, reservationsClientIp, reservationsRateLimitStore,
+    signToken, translateRpcError, verifyGuestChannel, verifyToken,
 } from '../utils/reservations.shared';
 
 import { setReservationGuestAuth } from './reservations-checkout.routes';
@@ -56,9 +57,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const iso = isoZoned;
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,80}$/i;
 
-const limiter = (name: string, max: number, message: string) => rateLimit({
+// La llave usa la IP REAL del cliente (CF-Connecting-IP validada; ver reservationsClientIp), no req.ip: detrás de
+// Cloudflare + Render req.ip es el borde de CF y rota. El almacén se resuelve de forma perezosa para poder
+// enchufar un almacén compartido con setReservationsRateLimitStoreFactory() (el store resuelve el real en el primer uso).
+const limiter = (name: string, max: number, message: string): RequestHandler => rateLimit({
     windowMs: WINDOW_MS, max, standardHeaders: true, legacyHeaders: false,
-    keyGenerator: (req) => `rsv-${name}-${ipKeyGenerator(req.ip ?? '')}`,
+    keyGenerator: (req) => `rsv-${name}-${ipKeyGenerator(reservationsClientIp(req))}`,
+    store: reservationsRateLimitStore(),
     message: { error: message },
 });
 const startLimiter = limiter('guest-start', 5, 'Demasiados intentos. Espera unos minutos.');
@@ -124,22 +129,71 @@ const AvailabilitySchema = z.strictObject({
     duration_min: z.coerce.number().int().min(LIMITS.durationMinMin).max(LIMITS.durationMinMax).optional(),
 });
 
+/** Rango máximo de la consulta PÚBLICA (el RPC acepta 30; el público no necesita tanto). */
+export const PUBLIC_AVAILABILITY_MAX_DAYS = 14;
+/** Con más canchas públicas que esto, la consulta debe traer facility_id (evita un barrido por todas las canchas). */
+export const PUBLIC_AVAILABILITY_MAX_FACILITIES = 3;
+export const PUBLIC_AVAILABILITY_CACHE_MS = 30_000;
+const QUERY_TIMEOUT_MS = 8_000;
+
+const availabilityCache = new Map<string, { exp: number; data: unknown }>();
+
+/** Tope de tiempo del lado del cliente (abortSignal de postgrest-js). El statement_timeout de la BASE no se
+ *  puede fijar por consulta con supabase-js sin un RPC/rol dedicado (migraciones cerradas): ver contrato §Cabeceras. */
+function conTimeout<T>(q: T): T {
+    const b = q as any;
+    return typeof b?.abortSignal === 'function' ? b.abortSignal(AbortSignal.timeout(QUERY_TIMEOUT_MS)) : q;
+}
+
+const daysBetween = (from: string, to: string) => (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+
 router.get('/availability', readLimiter, async (req: Request, res: Response) => {
     try {
         const parsed = AvailabilitySchema.safeParse(req.query);
         if (!parsed.success) return zodBadRequest(res, parsed.error.issues);
         const q = parsed.data;
+        if (daysBetween(q.from, q.to) > PUBLIC_AVAILABILITY_MAX_DAYS) {
+            return fail(res, 422, `El rango de fechas es demasiado grande (máximo ${PUBLIC_AVAILABILITY_MAX_DAYS} días).`, { code: 'RANGE_TOO_LARGE', reason: 'range_too_large' });
+        }
+        // Tope por escuela que NO depende de la IP (quien rota CF-Connecting-IP no lo evade).
+        if (!allowHit(`rsv-avail-school:${q.school_id}`, 600, 60_000)) {
+            return fail(res, 429, 'Demasiadas peticiones. Intenta de nuevo en unos minutos.');
+        }
+        if (!q.facility_id) {
+            const { data: pubs, error: pubErr } = await conTimeout(supabase
+                .from('facilities')
+                .select('id')
+                .eq('school_id', q.school_id)
+                .eq('status', 'available')
+                .in('bookable_by', ['public', 'both'])
+                .or('booking_enabled.is.null,booking_enabled.eq.true')
+                .limit(PUBLIC_AVAILABILITY_MAX_FACILITIES + 1));
+            if (pubErr) throw pubErr;
+            if (Array.isArray(pubs) && pubs.length > PUBLIC_AVAILABILITY_MAX_FACILITIES) {
+                return fail(res, 422, 'Indica la cancha (facility_id) para consultar la disponibilidad.', { code: 'FACILITY_REQUIRED', reason: 'facility_required' });
+            }
+        }
+        const cacheKey = [q.school_id, q.facility_id ?? '', q.from, q.to, q.sport ?? '', q.duration_min ?? ''].join('|');
+        const hit = availabilityCache.get(cacheKey);
+        if (hit && hit.exp > Date.now()) return res.json(hit.data);
+
         // Sin p_actor_profile_id ni p_audience: el público nunca elige tarifa.
         const args: Record<string, unknown> = { p_school_id: q.school_id, p_from: q.from, p_to: q.to };
         if (q.sport) args.p_sport = q.sport;
         if (q.facility_id) args.p_facility_id = q.facility_id;
         if (q.duration_min) args.p_duration_min = q.duration_min;
-        const { data, error } = await supabase.rpc('disponibilidad_canchas', args);
+        const { data, error } = await conTimeout(supabase.rpc('disponibilidad_canchas', args));
         if (error) throw error;
         if (isRpcFailure(data)) {
             const t = translateRpcError(data);
             return res.status(t.status).json(t.body);
         }
+        if (availabilityCache.size >= 500) {
+            const now = Date.now();
+            for (const [k, v] of availabilityCache) if (v.exp <= now) availabilityCache.delete(k);
+            if (availabilityCache.size >= 500) availabilityCache.clear();
+        }
+        availabilityCache.set(cacheKey, { exp: Date.now() + PUBLIC_AVAILABILITY_CACHE_MS, data });
         return res.json(data);
     } catch (err: any) {
         req.log?.error({ err }, 'public-reservations availability error');
@@ -231,7 +285,7 @@ router.post('/guests/verify', verifyLimiter, async (req: Request, res: Response)
             await supabase.from('guest_bookers').update({ verified_email_at: new Date().toISOString() }).eq('id', guest.id);
         }
 
-        const token = signToken({ typ: 'g', gid: guest.id, exp: Date.now() + GUEST_TOKEN_TTL_MS });
+        const token = signToken({ typ: 'g', gid: guest.id, exp: Date.now() + GUEST_TOKEN_TTL_MS, jti: newGuestJti() });
         return res.json({
             guest_token: token,
             expires_in: Math.floor(GUEST_TOKEN_TTL_MS / 1000),
@@ -277,17 +331,43 @@ const ReserveSchema = z.strictObject({
     external_org_name: freeText(LIMITS.externalOrg).optional(),
 }).refine(rangeRefine, rangeMsg).refine(durationRefine, durationMsg);
 
-const PUBLIC_DROP = ['user_id', 'school_id', 'payment_id', 'cancelled_by', 'idempotency_key', 'price_snapshot', 'guest_booker_id', 'recurrence_id'];
+// LISTA BLANCA de lo que ve el invitado de su reserva (nada de approved_by, channel, refund_status, payment_id,
+// idempotency_key, payment_reference, price_snapshot, etc.). El pago se hace por id de reserva + X-Reservation-Token,
+// así que la referencia RSV no hace falta en el cliente.
+export const GUEST_RESERVATION_FIELDS = [
+    'id', 'status', 'payment_status', 'starts_at', 'ends_at', 'facility_id', 'facility_name', 'facility',
+    'price', 'amount_paid', 'min_deposit_pct', 'deposit_min', 'hold_expires_at',
+    'cancellation_reason', 'cancelled_at', 'participants',
+    'local_date', 'local_start', 'local_end', 'in_review',
+] as const;
+export const GUEST_RESERVATION_COLUMNS =
+    'id, status, payment_status, starts_at, ends_at, facility_id, price, amount_paid, min_deposit_pct, hold_expires_at, cancellation_reason, cancelled_at, participants, price_snapshot, facility:facilities(name, type)';
+
 function guestShape(r: any) {
-    const out: any = { ...r };
-    for (const k of PUBLIC_DROP) delete out[k];
+    const src: any = { ...r };
+    // Derivados de lo que sí es publicable (el snapshot completo NUNCA sale).
+    const snap = src.price_snapshot && typeof src.price_snapshot === 'object' ? src.price_snapshot : null;
+    if (src.deposit_min === undefined && snap && Number.isFinite(Number(snap.deposit_min))) src.deposit_min = Number(snap.deposit_min);
+    if (src.in_review === undefined && snap?.transfer_proof?.url) src.in_review = true;
+    if (src.facility_name === undefined && src.facility?.name) src.facility_name = src.facility.name;
+    if (src.starts_at && src.local_date === undefined) {
+        const t = Date.parse(src.starts_at);
+        if (Number.isFinite(t)) { // America/Bogota = UTC-5 todo el año (sin DST)
+            const l = new Date(t - 5 * 3600_000).toISOString();
+            src.local_date = l.slice(0, 10);
+            src.local_start = l.slice(11, 16);
+            if (src.ends_at && Number.isFinite(Date.parse(src.ends_at))) src.local_end = new Date(Date.parse(src.ends_at) - 5 * 3600_000).toISOString().slice(11, 16);
+        }
+    }
+    const out: any = {};
+    for (const k of GUEST_RESERVATION_FIELDS) if (src[k] !== undefined) out[k] = src[k];
     return out;
 }
 
-/** Token del enlace de estado: determinista (vence 30 días después del fin), así el replay devuelve lo mismo. */
+/** Token del enlace de estado: determinista (vence 14 días después del fin), así el replay devuelve lo mismo. */
 function statusToken(rid: string, gid: string, endsAt: string): string {
     const exp = new Date(endsAt).getTime() + STATUS_LINK_TTL_MS;
-    return signToken({ typ: 'r', gid, rid, exp });
+    return signToken({ typ: 'r', gid, rid, exp, jti: linkJti(rid, gid) });
 }
 
 router.post('/', writeLimiter, requireIdempotencyKey, requireGuest, async (req: Request, res: Response) => {
@@ -345,12 +425,12 @@ router.get('/r/:token', readLimiter, async (req: Request, res: Response) => {
     try {
         const l = linkOr401(req, res);
         if (!l) return;
-        const { data: r, error } = await supabase
+        const { data: r, error } = await conTimeout(supabase
             .from('facility_reservations')
-            .select('*, facility:facilities(name, type)')
+            .select(GUEST_RESERVATION_COLUMNS)
             .eq('id', l.rid)
             .eq('guest_booker_id', l.gid)
-            .maybeSingle();
+            .maybeSingle());
         if (error) throw error;
         if (!r) return fail(res, 404, 'Reserva no encontrada.');
         return res.json({ reservation: guestShape(r) });

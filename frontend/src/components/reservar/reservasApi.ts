@@ -51,3 +51,37 @@ export async function apiRequest<T = Record<string, unknown>>(
 }
 
 export const publicUrl = (path: string) => `${PUBLIC_BASE}${path}`;
+
+// ── Cabeceras de invitado (contrato del BFF) ───────────────────────────────────
+// Nunca se usa Authorization con tokens de invitado: ese header es de la sesión de usuario.
+//  · POST /public/reservations ........ X-Guest-Token = guest_token (de /guests/verify)
+//  · POST /reservations/:id/checkout .. X-Reservation-Token = status_token (de la respuesta de POST /)
+//  · /public/reservations/r/:token ... el token va en la ruta, sin cabecera de token.
+export const guestHeaders = (guestToken: string): Record<string, string> => ({ 'X-Guest-Token': guestToken });
+export const reservationHeaders = (statusToken: string): Record<string, string> => ({ 'X-Reservation-Token': statusToken });
+
+export interface CreateReservationBody {
+  facility_id: string;
+  starts_at: string;
+  ends_at: string;
+  payment_method: string;
+  participants?: number;
+}
+
+/** POST /api/v1/public/reservations → { reservation, requires_payment, status_token, status_path }. */
+export function createGuestReservation<R = Record<string, unknown>>(guestToken: string, idemKey: string, body: CreateReservationBody) {
+  return apiRequest<{ reservation: R; requires_payment?: boolean; status_token?: string; status_path?: string }>(publicUrl(''), {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idemKey, ...guestHeaders(guestToken) },
+    body,
+  });
+}
+
+/** POST /api/v1/reservations/:id/checkout con el token de estado de ESA reserva. */
+export function guestCheckout(reservationId: string, statusToken: string) {
+  return apiRequest<{ checkout_url: string }>(`${RESERVATIONS_BASE}/${reservationId}/checkout`, {
+    method: 'POST',
+    headers: reservationHeaders(statusToken),
+    body: {},
+  });
+}

@@ -287,12 +287,21 @@ export function validateMpWebhookSignature(params: {
 
     if (!ts || !v1) return false;
 
-    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-    const expected = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+    // Formato estricto ANTES de tocar Buffers: un v1 no hexadecimal (o de largo raro) no debe lanzar (500) sino
+    // rechazarse con 401 desde el caller.
+    if (!/^[0-9a-f]{64}$/i.test(v1)) return false;
+    if (!/^\d{10,13}$/.test(ts)) return false;
+    // Frescura (anti-replay): ts en ms (MP) o segundos; ±5 min respecto del reloj del servidor.
+    const tsMs = ts.length <= 10 ? Number(ts) * 1000 : Number(ts);
+    const tolerancia = Number(process.env.MP_WEBHOOK_TS_TOLERANCE_MS ?? 5 * 60_000);
+    if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > (Number.isFinite(tolerancia) ? tolerancia : 5 * 60_000)) return false;
 
-    // Timing-safe compare
-    if (expected.length !== v1.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(v1, 'hex'));
+    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+    const expected = crypto.createHmac('sha256', secret).update(manifest).digest();
+    const received = Buffer.from(v1, 'hex'); // 32 bytes garantizados por la regex
+
+    // Timing-safe compare (mismo largo garantizado)
+    return received.length === expected.length && crypto.timingSafeEqual(expected, received);
 }
 
 // ─── Fetch payment (anti-spoofing + reconciliation) ────────────────────────

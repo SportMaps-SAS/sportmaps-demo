@@ -118,7 +118,7 @@ export const TRANSFER_REVIEW_HOLD_MIN = 12 * 60;
 const MAX_CHECKOUT_AMOUNTS = 10;
 
 const RESERVATION_COLUMNS =
-    'id, school_id, facility_id, user_id, guest_booker_id, status, payment_status, price, amount_paid, hold_expires_at, price_snapshot, payment_reference, min_deposit_pct';
+    'id, school_id, facility_id, user_id, guest_booker_id, status, payment_status, price, amount_paid, hold_expires_at, price_snapshot, payment_reference, min_deposit_pct, updated_at';
 
 async function esStaffDeLaEscuela(userId: string, schoolId: string): Promise<boolean> {
     const { data: school } = await supabase.from('schools').select('owner_id').eq('id', schoolId).maybeSingle();
@@ -198,6 +198,152 @@ export function resolverMontoCheckout(
     return { ok: true, amount };
 }
 
+// ─── Escritura de price_snapshot con bloqueo optimista (M5) ──────────────────
+
+const MAX_SNAPSHOT_RETRIES = 3;
+
+type PersistirResultado =
+    | { ok: true; row: Record<string, any> }
+    | { ok: false; reason: 'error' | 'gone' | 'conflict'; error?: string };
+
+/**
+ * confirmar_pago_reserva escribe payment_events / payments en el MISMO jsonb (price_snapshot) y sube updated_at.
+ * Leer-copiar-escribir sin guarda pisaba lo que el webhook había guardado entre la lectura y el UPDATE (p. ej. el id
+ * de evento de repetición). Acá el UPDATE lleva `updated_at = <valor leído>`: si alguien escribió antes, no actualiza
+ * ninguna fila, se RELEE la reserva y se reconstruye el cambio sobre lo nuevo (hasta 3 intentos).
+ *
+ * `construir` recibe la fila más reciente y devuelve las columnas a escribir; se vuelve a llamar en cada reintento.
+ */
+async function persistirConBloqueo(
+    reserva: Record<string, any>,
+    construir: (actual: Record<string, any>) => Record<string, unknown>,
+    opts: { holdVigente?: boolean } = {},
+): Promise<PersistirResultado> {
+    let actual = reserva;
+    for (let intento = 0; intento < MAX_SNAPSHOT_RETRIES; intento++) {
+        let q: any = supabase
+            .from('facility_reservations')
+            .update(construir(actual))
+            .eq('id', actual.id)
+            .eq('status', 'pending_payment');
+        if (typeof actual.updated_at === 'string') q = q.eq('updated_at', actual.updated_at);
+        if (opts.holdVigente) q = q.gt('hold_expires_at', new Date().toISOString());
+        const { data, error } = await q.select('id, hold_expires_at');
+        if (error) return { ok: false, reason: 'error', error: error.message };
+        if (Array.isArray(data) && data.length > 0) return { ok: true, row: data[0] as Record<string, any> };
+
+        // 0 filas: cambió el estado/updated_at (o venció el hold). Se relee y se decide.
+        const { data: fresca } = await supabase.from('facility_reservations').select(RESERVATION_COLUMNS).eq('id', actual.id).maybeSingle();
+        const f = fresca as Record<string, any> | null;
+        if (!f || f.status !== 'pending_payment') return { ok: false, reason: 'gone' };
+        if (opts.holdVigente && !holdVigente(f, 0)) return { ok: false, reason: 'gone' };
+        actual = f;
+    }
+    return { ok: false, reason: 'conflict' };
+}
+
+// ─── Comprobantes de transferencia: validación de la URL (A2) ────────────────
+
+/** Extensiones de comprobante aceptadas. */
+export const PROOF_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf'] as const;
+/** Tamaño máximo del objeto (10 MB) cuando Storage informa metadata. */
+export const PROOF_MAX_BYTES = 10 * 1024 * 1024;
+/** Topes diarios de reservas con comprobante en revisión: por quien reservó y por escuela. */
+export const PROOF_DAILY_LIMIT_PER_USER = 3;
+export const PROOF_DAILY_LIMIT_PER_SCHOOL = 20;
+
+/**
+ * Buckets de comprobantes permitidos. Por defecto `payment-receipts` (el bucket que ya usan los comprobantes de pago
+ * del repo: receipt-approval.service, glosa.service, cobro-enlace-publico). Configurable con
+ * RESERVATION_PROOF_BUCKETS="bucket1,bucket2".
+ */
+export function proofBuckets(): string[] {
+    const raw = String(process.env.RESERVATION_PROOF_BUCKETS ?? 'payment-receipts');
+    return raw.split(',').map(b => b.trim()).filter(Boolean);
+}
+
+export interface ProofRef { bucket: string; path: string; segments: string[] }
+
+/**
+ * Parsea una URL de Storage de NUESTRO proyecto: mismo origen que SUPABASE_URL y ruta
+ * /storage/v1/object/(public|sign|authenticated)/<bucket>/<path...>. Devuelve null si algo no cuadra
+ * (otro host, otro esquema/puerto, credenciales en la URL, `..`, segmentos vacíos, bucket fuera de la lista
+ * blanca o extensión no permitida).
+ */
+export function parseProofUrl(raw: unknown): ProofRef | null {
+    if (typeof raw !== 'string' || raw.length > 1000) return null;
+    // new URL() normaliza `..`; se rechaza ANTES, sobre el texto crudo (también `%2e` / `%2f` / `%5c`).
+    if (/%2e|%2f|%5c|\/\.\.?(\/|$)/i.test(raw.split('?')[0])) return null;
+    let base: URL; let u: URL;
+    try {
+        base = new URL(String(process.env.SUPABASE_URL ?? ''));
+        u = new URL(raw);
+    } catch { return null; }
+    if (base.protocol !== 'https:' && base.protocol !== 'http:') return null;
+    if (u.origin !== base.origin || u.username || u.password) return null;
+    const m = /^\/storage\/v1\/object\/(public|sign|authenticated)\/(.+)$/.exec(u.pathname);
+    if (!m) return null;
+    let segments: string[];
+    try { segments = m[2].split('/').map(decodeURIComponent); } catch { return null; }
+    if (segments.length < 3) return null; // bucket + carpeta + archivo
+    if (segments.some(sg => !sg || sg === '.' || sg === '..' || /[\\/\u0000-\u001f]/.test(sg))) return null;
+    const [bucket, ...rest] = segments;
+    if (!proofBuckets().includes(bucket)) return null;
+    const ext = rest[rest.length - 1].split('.').pop()?.toLowerCase() ?? '';
+    if (!(PROOF_EXTENSIONS as readonly string[]).includes(ext)) return null;
+    return { bucket, path: rest.join('/'), segments: rest };
+}
+
+/**
+ * Convención de ruta (documentada en docs/specs/reservas-canchas-f1-contrato.md §Comprobantes):
+ *   <actor>/<archivo>   o   <actor>/<reservationId>/<archivo>
+ * donde <actor> = user_id de quien sube (sesión) | guest_booker_id (invitado), o bien el id de la RESERVA
+ * (sirve a un invitado que sube con una URL firmada de subida emitida por el BFF).
+ */
+export function proofPathPerteneceAlActor(ref: ProofRef, actorId: string | null, reservationId: string): boolean {
+    const first = ref.segments[0]?.toLowerCase();
+    if (!first) return false;
+    return (!!actorId && first === actorId.toLowerCase()) || first === reservationId.toLowerCase();
+}
+
+/** ¿El objeto existe en Storage (service_role) y parece un comprobante? Sin fetch HTTP arbitrario. */
+export async function comprobanteExisteEnStorage(ref: ProofRef): Promise<'ok' | 'missing' | 'invalid' | 'error'> {
+    const i = ref.path.lastIndexOf('/');
+    const carpeta = ref.path.slice(0, i);
+    const nombre = ref.path.slice(i + 1);
+    try {
+        const { data, error } = await supabase.storage.from(ref.bucket).list(carpeta, { limit: 100, search: nombre });
+        if (error) return 'error';
+        const obj = (data ?? []).find((o: any) => o?.name === nombre && o?.id);
+        if (!obj) return 'missing';
+        const meta = (obj as any).metadata ?? {};
+        if (Number.isFinite(Number(meta.size)) && (Number(meta.size) <= 0 || Number(meta.size) > PROOF_MAX_BYTES)) return 'invalid';
+        const mime = String(meta.mimetype ?? '');
+        if (mime && !/^(image\/|application\/pdf$)/i.test(mime)) return 'invalid';
+        return 'ok';
+    } catch {
+        return 'error';
+    }
+}
+
+/** Cuántas reservas (otras que esta) tienen comprobante en revisión en las últimas 24 h. */
+async function comprobantesEnRevisionHoy(
+    filtro: { col: 'user_id' | 'guest_booker_id' | 'school_id'; id: string },
+    excluirReservaId: string,
+    tope: number,
+): Promise<number> {
+    const desde = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const { data } = await supabase
+        .from('facility_reservations')
+        .select('id')
+        .eq(filtro.col, filtro.id)
+        .eq('status', 'pending_payment')
+        .neq('id', excluirReservaId)
+        .gte('price_snapshot->transfer_proof->>submitted_at', desde)
+        .limit(tope + 1);
+    return Array.isArray(data) ? data.length : 0;
+}
+
 // ─── Esquemas de entrada (estrictos) ─────────────────────────────────────────
 
 const CheckoutBodySchema = z.strictObject({
@@ -261,17 +407,18 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
             : base;
 
         // Se registra lo que se OFRECE antes de entregar el link: el webhook lo usa para validar.
-        const snap = (reserva.price_snapshot && typeof reserva.price_snapshot === 'object') ? { ...reserva.price_snapshot } : {};
-        const previos: number[] = Array.isArray(snap.checkout_amounts) ? snap.checkout_amounts.map(Number) : [];
-        snap.checkout_amounts = [...new Set([...previos, amount])].slice(-MAX_CHECKOUT_AMOUNTS);
-        snap.checkout = { provider: resolved.provider, amount, reference, expires_at: expiresAt, created_at: new Date().toISOString() };
-        const { error: persistErr } = await supabase
-            .from('facility_reservations')
-            .update({ price_snapshot: snap })
-            .eq('id', reserva.id)
-            .eq('status', 'pending_payment');
-        if (persistErr) {
-            req.log?.error({ err: persistErr.message, reservationId: reserva.id }, 'reservations checkout: no se pudo registrar el monto');
+        // Con bloqueo optimista (M5): se re-lee y se fusiona si el webhook escribió el snapshot entre medias.
+        const persist = await persistirConBloqueo(reserva, (actual) => {
+            const snap = (actual.price_snapshot && typeof actual.price_snapshot === 'object') ? { ...actual.price_snapshot } : {};
+            const previos: number[] = Array.isArray(snap.checkout_amounts) ? snap.checkout_amounts.map(Number) : [];
+            snap.checkout_amounts = [...new Set([...previos, amount])].slice(-MAX_CHECKOUT_AMOUNTS);
+            snap.checkout = { provider: resolved.provider, amount, reference, expires_at: expiresAt, created_at: new Date().toISOString() };
+            return { price_snapshot: snap };
+        });
+        if (!persist.ok) {
+            if (persist.reason === 'gone') return res.status(409).json({ error: 'reservation_not_payable' });
+            if (persist.reason === 'conflict') return res.status(409).json({ error: 'reservation_busy', message: 'La reserva cambió mientras se preparaba el pago. Inténtalo de nuevo.' });
+            req.log?.error({ err: persist.error, reservationId: reserva.id }, 'reservations checkout: no se pudo registrar el monto');
             return res.status(500).json({ error: 'checkout_persist_failed' });
         }
 
@@ -303,7 +450,14 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
         if (resolved.sandbox && process.env.NODE_ENV === 'production') {
             return res.status(409).json({ error: 'SIN_PASARELA_DIRECTA', message: 'La pasarela de la escuela no está lista para cobrar.' });
         }
-        const baseApi = process.env.PUBLIC_API_URL ?? `${req.protocol}://${req.get('host')}`;
+        // En producción NUNCA se confía en la cabecera Host (la controla quien llama): la URL de notificación sale de
+        // PUBLIC_API_URL. Sin ella, 409 claro (antes de crear la preferencia en MP).
+        const baseApiEnv = String(process.env.PUBLIC_API_URL ?? '').trim().replace(/\/+$/, '');
+        if (!baseApiEnv && process.env.NODE_ENV === 'production') {
+            req.log?.error({ reservationId: reserva.id }, 'reservations checkout: PUBLIC_API_URL no configurada en producción');
+            return res.status(409).json({ error: 'PUBLIC_API_URL_REQUIRED', message: 'El pago en línea no está disponible por ahora. Paga por transferencia.' });
+        }
+        const baseApi = baseApiEnv || `${req.protocol}://${req.get('host')}`;
         const pref = await createMpPreference({
             accessToken: resolved.accessToken,
             title: 'Reserva de cancha',
@@ -328,12 +482,12 @@ router.post('/:id/checkout', authSesionOInvitado, async (req: Request, res: Resp
 
 // ─── POST /:id/transfer-proof ────────────────────────────────────────────────
 
-/** Solo se acepta un archivo que YA está en nuestro Storage (no una URL arbitraria). */
+/**
+ * Compat: solo valida la FORMA de la URL (host propio, ruta de Storage, bucket permitido, extensión). La pertenencia
+ * al actor, la existencia del objeto y los topes diarios se verifican en la ruta.
+ */
 export function esUrlDeComprobanteValida(raw: unknown): raw is string {
-    if (typeof raw !== 'string' || raw.length > 1000) return false;
-    const base = String(process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-    if (!base) return false;
-    return raw.startsWith(`${base}/storage/v1/object/`);
+    return parseProofUrl(raw) !== null;
 }
 
 router.post('/:id/transfer-proof', authSesionOInvitado, async (req: Request, res: Response) => {
@@ -345,8 +499,14 @@ router.post('/:id/transfer-proof', authSesionOInvitado, async (req: Request, res
         const proofParsed = TransferProofBodySchema.safeParse(req.body ?? {});
         if (!proofParsed.success) return zodBadRequest(res, proofParsed.error.issues);
         const proofUrl = proofParsed.data.proof_url;
-        if (!esUrlDeComprobanteValida(proofUrl)) {
+        const ref = parseProofUrl(proofUrl);
+        if (!ref) {
             return res.status(400).json({ error: 'invalid_proof_url' });
+        }
+        // Debe vivir bajo la carpeta del actor (user_id | guest_booker_id) o de la reserva: nadie referencia el archivo de otro.
+        const actorId = req.reservationGuest?.guestBookerId ?? req.user?.id ?? null;
+        if (!proofPathPerteneceAlActor(ref, actorId, String(reserva.id))) {
+            return res.status(403).json({ error: 'proof_not_owned' });
         }
         if (reserva.status !== 'pending_payment') {
             return res.status(409).json({ error: 'reservation_not_payable', status: reserva.status });
@@ -356,33 +516,44 @@ router.post('/:id/transfer-proof', authSesionOInvitado, async (req: Request, res
             return res.status(409).json({ error: 'hold_expired', message: 'El tiempo para esta reserva se agotó. Vuelve a reservar.' });
         }
 
-        const snap = (reserva.price_snapshot && typeof reserva.price_snapshot === 'object') ? { ...reserva.price_snapshot } : {};
-        const yaAlargado = !!snap.transfer_proof?.hold_extended;
-        const nuevoHold = new Date(Date.now() + TRANSFER_REVIEW_HOLD_MIN * 60 * 1000).toISOString();
-        snap.transfer_proof = {
-            url: proofUrl,
-            submitted_at: new Date().toISOString(),
-            hold_extended: true,
-        };
-
-        const cambios: Record<string, unknown> = { price_snapshot: snap };
-        // Se alarga UNA sola vez: subir comprobantes en cadena no debe congelar la cancha para siempre.
-        if (!yaAlargado) cambios.hold_expires_at = nuevoHold;
-
-        const { data: upd, error: updErr } = await supabase
-            .from('facility_reservations')
-            .update(cambios)
-            .eq('id', reserva.id)
-            .eq('status', 'pending_payment')
-            .gt('hold_expires_at', new Date().toISOString())
-            .select('id, hold_expires_at');
-        if (updErr) {
-            req.log?.error({ err: updErr.message, reservationId: reserva.id }, 'transfer-proof update failed');
-            return res.status(500).json({ error: 'transfer_proof_failed' });
+        // Topes diarios (el hold de 12 h congela la franja: no se regala con cuentas gratis).
+        const dueno = reserva.user_id
+            ? { col: 'user_id' as const, id: String(reserva.user_id) }
+            : reserva.guest_booker_id ? { col: 'guest_booker_id' as const, id: String(reserva.guest_booker_id) } : null;
+        if (dueno && await comprobantesEnRevisionHoy(dueno, String(reserva.id), PROOF_DAILY_LIMIT_PER_USER) >= PROOF_DAILY_LIMIT_PER_USER) {
+            return res.status(429).json({ error: 'proof_daily_limit', scope: 'user', message: 'Ya tienes varias reservas con comprobante en revisión hoy. Espera a que la escuela las revise.' });
         }
-        if (!upd || (Array.isArray(upd) && upd.length === 0)) {
-            // Perdió la carrera contra expirar_holds o un pago.
-            return res.status(409).json({ error: 'hold_expired' });
+        if (reserva.school_id && await comprobantesEnRevisionHoy({ col: 'school_id', id: String(reserva.school_id) }, String(reserva.id), PROOF_DAILY_LIMIT_PER_SCHOOL) >= PROOF_DAILY_LIMIT_PER_SCHOOL) {
+            return res.status(429).json({ error: 'proof_daily_limit', scope: 'school', message: 'Hay demasiados comprobantes en revisión para esta escuela. Intenta más tarde.' });
+        }
+
+        // El objeto debe existir de verdad en Storage y parecer un comprobante.
+        const existe = await comprobanteExisteEnStorage(ref);
+        if (existe === 'error') return res.status(503).json({ error: 'proof_check_unavailable' });
+        if (existe !== 'ok') return res.status(400).json({ error: 'proof_not_found', reason: existe });
+
+        const nuevoHold = new Date(Date.now() + TRANSFER_REVIEW_HOLD_MIN * 60 * 1000).toISOString();
+        let yaAlargado = false;
+        const persist = await persistirConBloqueo(reserva, (actual) => {
+            const snap = (actual.price_snapshot && typeof actual.price_snapshot === 'object') ? { ...actual.price_snapshot } : {};
+            yaAlargado = !!snap.transfer_proof?.hold_extended;
+            snap.transfer_proof = {
+                url: proofUrl,
+                bucket: ref.bucket,
+                path: ref.path,
+                submitted_at: new Date().toISOString(),
+                hold_extended: true,
+            };
+            const cambios: Record<string, unknown> = { price_snapshot: snap };
+            // Se alarga UNA sola vez: subir comprobantes en cadena no debe congelar la cancha para siempre.
+            if (!yaAlargado) cambios.hold_expires_at = nuevoHold;
+            return cambios;
+        }, { holdVigente: true });
+        if (!persist.ok) {
+            if (persist.reason === 'gone') return res.status(409).json({ error: 'hold_expired' }); // perdió la carrera contra expirar_holds o un pago
+            if (persist.reason === 'conflict') return res.status(409).json({ error: 'reservation_busy', message: 'La reserva cambió mientras se guardaba el comprobante. Inténtalo de nuevo.' });
+            req.log?.error({ err: persist.error, reservationId: reserva.id }, 'transfer-proof update failed');
+            return res.status(500).json({ error: 'transfer_proof_failed' });
         }
 
         await alertarAdminsDeReserva({
@@ -394,7 +565,7 @@ router.post('/:id/transfer-proof', authSesionOInvitado, async (req: Request, res
             log: req.log,
         });
 
-        const holdFinal = (Array.isArray(upd) ? (upd[0] as any)?.hold_expires_at : null) ?? (yaAlargado ? reserva.hold_expires_at : nuevoHold);
+        const holdFinal = (persist.row as any)?.hold_expires_at ?? (yaAlargado ? reserva.hold_expires_at : nuevoHold);
         return res.status(200).json({ ok: true, status: 'pending_payment', in_review: true, hold_expires_at: holdFinal });
     } catch (err: any) {
         req.log?.error({ err: err?.message || err }, 'transfer-proof: unexpected error');

@@ -17,6 +17,10 @@ const st = vi.hoisted(() => ({
     rpcRespuesta: null as any,
     proveedor: null as any,
     mpPreference: [] as any[],
+    storage: [] as { bucket: string; name: string; carpeta: string; id?: string | null; metadata?: any }[],
+    storageError: null as any,
+    /** Se ejecuta al empezar un UPDATE (simula un cambio concurrente entre la lectura y la escritura). */
+    alActualizar: null as null | (() => void),
 }));
 
 vi.mock('../config/supabase', () => {
@@ -29,8 +33,15 @@ vi.mock('../config/supabase', () => {
             eq: (c: string, v: any) => { filas = filas.filter(f => f[c] === v); return api; },
             in: (c: string, vs: any[]) => { filas = filas.filter(f => vs.includes(f[c])); return api; },
             gt: (c: string, v: any) => { filas = filas.filter(f => f[c] > v); return api; },
-            maybeSingle: async () => ({ data: filas[0] ?? null, error: null }),
-            update: (c: Fila) => { modo = 'update'; cambios = c; return api; },
+            neq: (c: string, v: any) => { filas = filas.filter(f => f[c] !== v); return api; },
+            gte: (c: string, v: any) => {
+                const get = (f: Fila) => c.split('->').reduce((acc: any, k) => acc?.[k.replace(/^>/, '')], f);
+                filas = filas.filter(f => { const x = get(f); return typeof x === 'string' && x >= v; });
+                return api;
+            },
+            limit: (n: number) => { filas = filas.slice(0, n); return api; },
+            maybeSingle: async () => ({ data: filas[0] ? structuredClone(filas[0]) : null, error: null }), // copia: la base no comparte objetos con el BFF
+            update: (c: Fila) => { modo = 'update'; cambios = c; const h = st.alActualizar; st.alActualizar = null; h?.(); return api; },
             insert: async (fila: Fila) => { st.inserts.push({ tabla, fila }); return { data: null, error: null }; },
             then: (ok: any, ko: any) => {
                 if (modo === 'update') {
@@ -44,6 +55,17 @@ vi.mock('../config/supabase', () => {
     }
     return {
         supabase: {
+            storage: {
+                from: (bucket: string) => ({
+                    list: async (carpeta: string, opts: any) => {
+                        if (st.storageError) return { data: null, error: st.storageError };
+                        const data = st.storage
+                            .filter(o => o.bucket === bucket && o.carpeta === carpeta && (!opts?.search || o.name.includes(opts.search)))
+                            .map(o => ({ name: o.name, id: o.id === undefined ? 'obj-1' : o.id, metadata: o.metadata ?? { size: 1234, mimetype: 'image/png' } }));
+                        return { data, error: null };
+                    },
+                }),
+            },
             from: (t: string) => builder(t),
             rpc: async (nombre: string, args: any) => { st.rpcs.push({ nombre, args }); return { data: st.rpcRespuesta, error: null }; },
         },
@@ -110,6 +132,9 @@ beforeEach(() => {
         school_members: [],
     };
     st.updates = []; st.inserts = []; st.rpcs = []; st.mpPreference = [];
+    st.storage = [{ bucket: 'payment-receipts', carpeta: CLIENTE, name: 'x.png' }];
+    st.storageError = null; st.alActualizar = null;
+    delete process.env.PUBLIC_API_URL; delete process.env.RESERVATION_PROOF_BUCKETS;
     st.proveedor = wompiDirecto;
     st.rpcRespuesta = { ok: true, confirmed: true, already_processed: false, reconciliation: false, reservation: { id: RES } };
     setReservationGuestAuth(null);
@@ -203,7 +228,11 @@ describe('checkout', () => {
 });
 
 describe('transfer-proof', () => {
-    const URL_OK = 'https://proj.supabase.co/storage/v1/object/public/receipts/x.png';
+    const URL_OK = `https://proj.supabase.co/storage/v1/object/public/payment-receipts/${CLIENTE}/x.png`;
+    const enRevision = (id: string, extra: Fila = {}) => reserva({
+        id, payment_reference: `RSV-${id.slice(0, 16).toUpperCase().replace(/-/g, 'A')}`,
+        price_snapshot: { transfer_proof: { submitted_at: new Date().toISOString(), url: 'u' } }, ...extra,
+    });
 
     it('guarda el comprobante, alarga el hold UNA vez y avisa al admin', async () => {
         const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
@@ -213,18 +242,174 @@ describe('transfer-proof', () => {
         const upd = st.updates.find(x => x.tabla === 'facility_reservations')!;
         expect(new Date(upd.cambios.hold_expires_at).getTime()).toBeGreaterThan(Date.now() + 11 * 3600 * 1000);
         expect(upd.cambios.price_snapshot.transfer_proof.url).toBe(URL_OK);
+        expect(upd.cambios.price_snapshot.transfer_proof).toMatchObject({ bucket: 'payment-receipts', path: `${CLIENTE}/x.png` });
         expect(st.inserts.find(i => i.fila.type === 'reservation_transfer_proof')?.fila.user_id).toBe('admin-1');
 
         // Segundo comprobante: no vuelve a alargar.
         st.updates = [];
-        await post(`/${RES}/transfer-proof`, { proof_url: URL_OK + '?v=2' });
+        st.storage.push({ bucket: 'payment-receipts', carpeta: CLIENTE, name: 'y.png' });
+        await post(`/${RES}/transfer-proof`, { proof_url: URL_OK.replace('x.png', 'y.png') });
         expect(st.updates[0].cambios.hold_expires_at).toBeUndefined();
     });
 
-    it('URL que no es de nuestro Storage → 400; hold vencido → 409', async () => {
-        expect((await post(`/${RES}/transfer-proof`, { proof_url: 'https://evil.example/x.png' })).status).toBe(400);
+    it('A2: URL de otro host / esquema / credenciales / bucket no permitido / extensión / traversal → 400 sin tocar nada', async () => {
+        const malas = [
+            'https://evil.example/storage/v1/object/public/payment-receipts/' + CLIENTE + '/x.png',
+            'https://proj.supabase.co.evil.example/storage/v1/object/public/payment-receipts/' + CLIENTE + '/x.png',
+            'https://user:pw@proj.supabase.co/storage/v1/object/public/payment-receipts/' + CLIENTE + '/x.png',
+            'http://proj.supabase.co/storage/v1/object/public/payment-receipts/' + CLIENTE + '/x.png',
+            `https://proj.supabase.co/storage/v1/object/public/avatars/${CLIENTE}/x.png`,           // bucket fuera de la lista
+            `https://proj.supabase.co/storage/v1/object/public/payment-receipts/${CLIENTE}/x.exe`,  // extensión
+            `https://proj.supabase.co/storage/v1/object/public/payment-receipts/${CLIENTE}/../${OTRO}/x.png`, // traversal hacia la carpeta de otro
+            `https://proj.supabase.co/storage/v1/object/public/payment-receipts/${CLIENTE}/%2e%2e%2fx.png`,
+            'https://proj.supabase.co/storage/v1/object/public/payment-receipts/x.png',              // sin carpeta
+            'https://proj.supabase.co/storage/v1/render/image/public/payment-receipts/x/y.png',
+            'no es url',
+        ];
+        for (const proof_url of malas) {
+            const r = await post(`/${RES}/transfer-proof`, { proof_url });
+            expect(r.status, proof_url).toBe(400);
+        }
+        expect(st.updates).toHaveLength(0);
+    });
+
+    it('A2: ruta de OTRO usuario → 403 proof_not_owned; la carpeta de la reserva sí sirve', async () => {
+        const ajena = `https://proj.supabase.co/storage/v1/object/public/payment-receipts/${OTRO}/x.png`;
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: ajena });
+        expect(r.status).toBe(403);
+        expect(await r.json()).toMatchObject({ error: 'proof_not_owned' });
+        expect(st.updates).toHaveLength(0);
+
+        st.storage.push({ bucket: 'payment-receipts', carpeta: RES, name: 'z.pdf' });
+        const ok = await post(`/${RES}/transfer-proof`, { proof_url: `https://proj.supabase.co/storage/v1/object/sign/payment-receipts/${RES}/z.pdf?token=abc` });
+        expect(ok.status).toBe(200);
+    });
+
+    it('A2: el objeto NO existe en Storage → 400 proof_not_found y el hold NO se alarga', async () => {
+        st.storage = [];
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
+        expect(r.status).toBe(400);
+        expect(await r.json()).toMatchObject({ error: 'proof_not_found' });
+        expect(st.updates).toHaveLength(0);
+    });
+
+    it('A2: objeto inválido (tamaño 0 / tipo no imagen ni PDF) → 400; Storage caído → 503', async () => {
+        st.storage = [{ bucket: 'payment-receipts', carpeta: CLIENTE, name: 'x.png', metadata: { size: 0, mimetype: 'image/png' } }];
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(400);
+        st.storage = [{ bucket: 'payment-receipts', carpeta: CLIENTE, name: 'x.png', metadata: { size: 100, mimetype: 'text/html' } }];
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(400);
+        st.storageError = { message: 'boom' };
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(503);
+        expect(st.updates).toHaveLength(0);
+    });
+
+    it('A2: 3 reservas del usuario ya con comprobante en revisión hoy → 429 (scope user)', async () => {
+        st.tablas.facility_reservations = [
+            reserva(),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa2'),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa3'),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa4'),
+        ];
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
+        expect(r.status).toBe(429);
+        expect(await r.json()).toMatchObject({ error: 'proof_daily_limit', scope: 'user' });
+        expect(st.updates).toHaveLength(0);
+    });
+
+    it('A2: con 2 en revisión todavía pasa; las de más de 24 h no cuentan', async () => {
+        st.tablas.facility_reservations = [
+            reserva(),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa2'),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa3'),
+            enRevision('aaaaaaaa-0000-4000-8000-00000000aaa4', { price_snapshot: { transfer_proof: { submitted_at: new Date(Date.now() - 30 * 3600 * 1000).toISOString() } } }),
+        ];
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(200);
+    });
+
+    it('A2: 20 comprobantes en revisión hoy en la escuela (de otros usuarios) → 429 (scope school)', async () => {
+        const otras = Array.from({ length: 20 }, (_, i) => enRevision(`aaaaaaaa-0000-4000-8000-0000000b${String(i).padStart(4, '0')}`, { user_id: `u-${i}` }));
+        st.tablas.facility_reservations = [reserva(), ...otras];
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
+        expect(r.status).toBe(429);
+        expect(await r.json()).toMatchObject({ scope: 'school' });
+    });
+
+    it('A2: invitado — la carpeta debe ser su guest_booker_id o la de la reserva', async () => {
+        st.tablas.facility_reservations = [reserva({ user_id: null, guest_booker_id: 'guest-1' })];
+        setReservationGuestAuth(async () => ({ guestBookerId: 'guest-1' }));
+        const h = { 'x-reservation-token': 'tok' };
+        const ajena = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK }, h); // carpeta de CLIENTE
+        expect(ajena.status).toBe(403);
+        st.storage.push({ bucket: 'payment-receipts', carpeta: 'guest-1', name: 'g.jpg' });
+        const ok = await post(`/${RES}/transfer-proof`, { proof_url: 'https://proj.supabase.co/storage/v1/object/public/payment-receipts/guest-1/g.jpg' }, h);
+        expect(ok.status).toBe(200);
+    });
+
+    it('bucket configurable por RESERVATION_PROOF_BUCKETS', async () => {
+        process.env.RESERVATION_PROOF_BUCKETS = 'reserva-comprobantes';
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(400);
+        st.storage = [{ bucket: 'reserva-comprobantes', carpeta: CLIENTE, name: 'x.png' }];
+        expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK.replace('payment-receipts', 'reserva-comprobantes') })).status).toBe(200);
+    });
+
+    it('hold vencido → 409', async () => {
         st.tablas.facility_reservations = [reserva({ hold_expires_at: new Date(Date.now() - 1000).toISOString() })];
         expect((await post(`/${RES}/transfer-proof`, { proof_url: URL_OK })).status).toBe(409);
+    });
+
+    it('M5: un webhook escribió el snapshot entre la lectura y el UPDATE → se relee y se FUSIONA (no se pierde payment_events)', async () => {
+        const fila = reserva({ updated_at: 'v1' });
+        st.tablas.facility_reservations = [fila];
+        st.alActualizar = () => { fila.updated_at = 'v2'; fila.price_snapshot = { deposit_min: 36000, payment_events: ['wompi:tx-9'] }; };
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
+        expect(r.status).toBe(200);
+        // el primer intento no pegó (0 filas por updated_at); el segundo sí y conserva lo del webhook
+        expect(fila.price_snapshot.payment_events).toEqual(['wompi:tx-9']);
+        expect(fila.price_snapshot.transfer_proof.url).toBe(URL_OK);
+        expect(fila.updated_at).toBe('v2');
+    });
+
+    it('M5: si la reserva dejó de estar pending_payment durante el cambio concurrente → 409, sin sobrescribir', async () => {
+        const fila = reserva({ updated_at: 'v1' });
+        st.tablas.facility_reservations = [fila];
+        st.alActualizar = () => { fila.updated_at = 'v2'; fila.status = 'confirmed'; };
+        const r = await post(`/${RES}/transfer-proof`, { proof_url: URL_OK });
+        expect(r.status).toBe(409);
+        expect(fila.price_snapshot.transfer_proof).toBeUndefined();
+    });
+});
+
+describe('M5 checkout: bloqueo optimista del snapshot', () => {
+    it('el webhook guardó payment_events entre la lectura y el UPDATE → el checkout lo conserva', async () => {
+        const fila = reserva({ updated_at: 'v1' });
+        st.tablas.facility_reservations = [fila];
+        st.alActualizar = () => { fila.updated_at = 'v2'; fila.price_snapshot = { deposit_min: 36000, payment_events: ['mercadopago:77'] }; };
+        const r = await post(`/${RES}/checkout`);
+        expect(r.status).toBe(200);
+        expect(fila.price_snapshot.payment_events).toEqual(['mercadopago:77']);
+        expect(fila.price_snapshot.checkout_amounts).toEqual([36000]);
+        expect(fila.updated_at).toBe('v2');
+    });
+});
+
+describe('notificationUrl de MercadoPago', () => {
+    it('producción sin PUBLIC_API_URL → 409 claro y NO se crea la preferencia (no se confía en Host)', async () => {
+        st.proveedor = mpDirecto;
+        const nodeEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+            const r = await post(`/${RES}/checkout`, { provider: 'mercadopago' }, { 'x-user': CLIENTE, host: 'evil.example' });
+            expect(r.status).toBe(409);
+            expect(await r.json()).toMatchObject({ error: 'PUBLIC_API_URL_REQUIRED' });
+            expect(st.mpPreference).toHaveLength(0);
+        } finally { process.env.NODE_ENV = nodeEnv; }
+    });
+    it('con PUBLIC_API_URL se usa esa base (sin barra final)', async () => {
+        st.proveedor = mpDirecto;
+        process.env.PUBLIC_API_URL = 'https://api.sportmaps.co/';
+        const r = await post(`/${RES}/checkout`, { provider: 'mercadopago' });
+        expect(r.status).toBe(200);
+        expect(st.mpPreference[0].notificationUrl).toBe(`https://api.sportmaps.co/api/v1/webhooks/mercadopago/webhook/${ESC}`);
     });
 });
 

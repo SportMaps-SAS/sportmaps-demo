@@ -152,6 +152,7 @@ import paymentAdjustmentsRouter from './routes/payment-adjustments.routes';
 import athleteChargesRouter from './routes/athlete-charges.routes';
 import { requireStoreEnabled } from './services/store-flag.service';
 import { storeRateLimit } from './middlewares/storeRateLimit';
+import { redactSecretsInUrl } from './utils/redactUrl';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -313,7 +314,7 @@ app.use(pinoHttp({
     customProps: (req) => ({ requestId: req.id }),
     // En producción no loguear bodies completos (pueden tener PII)
     serializers: {
-        req: (req) => ({ method: req.method, url: req.url, id: req.id }),
+        req: (req) => ({ method: req.method, url: redactSecretsInUrl(req.url), id: req.id }),
         res: (res) => ({ statusCode: res.statusCode }),
     },
 }));

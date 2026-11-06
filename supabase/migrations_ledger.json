@@ -898,10 +898,10 @@
     {"v":"20261105214559","file":"20261105214559_reservas_select_solo_propias_o_staff.sql","sha256":"27ef2fade993394efbc6dd763e0fec23dd4603f7811b6ca31fb4ab33ea2572ab","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105222237","file":"20261105222237_reclamar_ficha_exime_guard_duplicado.sql","sha256":"045f3334af09818e6fe6ec04cb50e2a9eccabc352ec40f0daba41a4f86b58d99","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261105225148","file":"20261105225148_reservas_revocar_submit_v2_ya.sql","sha256":"654097d28d9395361ac67085dda3d6a857e6df82635e250f153bf7a292697480","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231542","file":"20261105231542_carmel_enciende_rubrica_na.sql","sha256":"4e03f6b26f8955350c84c6844d2ffb0386c837f1eb63121db5e3cba3284f0557","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231554","file":"20261105231554_partido_vivo_flag_agenda_y_dorsal.sql","sha256":"5488f2dc18c7f9955284b88dbb294778918c572128e0a5c005416c66fad4acce","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231602","file":"20261105231602_partido_vivo_tablas_y_rls.sql","sha256":"d6f6919d70a78ffeb8514f87f7cdc5cb04bb5866b93690b6551b607cd351da7b","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231608","file":"20261105231608_partido_vivo_rpcs.sql","sha256":"87d9724e6723b887cd392f93bf383d73ea77d0a3afcf69b735b4337d6fae479a","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261105231617","file":"20261105231617_partido_vivo_bloqueo_roster_y_minutos_al_publicar.sql","sha256":"65e2ff7d150304022b8ea173329fd2fb2a4b75164b96c2ab3576b72062ab6d17","added":"2026-11-06","by":"Brayan Steven Lopez"}
+    {"v":"20261105231542","file":"20261105231542_carmel_enciende_rubrica_na.sql","sha256":"9497a5be9e76bbd8e711a85e594ea62a5d4dfba236d17dbe1574b48fec72406b","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105231554","file":"20261105231554_partido_vivo_flag_agenda_y_dorsal.sql","sha256":"3982660f20ec53a389b0dddd1f60e4200abbb49c8f973921eafab5232ee886ad","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105231602","file":"20261105231602_partido_vivo_tablas_y_rls.sql","sha256":"416f0f058a0aba97f442dc16e243cf8b857e6c99ce66315266b0e1e225834d4d","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105231608","file":"20261105231608_partido_vivo_rpcs.sql","sha256":"e5a212cbbb686503473473fe532a959ffb7caaa25f594a0f79eb4b7b46014e9c","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261105231617","file":"20261105231617_partido_vivo_bloqueo_roster_y_minutos_al_publicar.sql","sha256":"8de9ac3cbf0a781ed00f4f4d1365d577b7fc235615c6bd9656de8388c676a20b","added":"2026-11-06","by":"Brayan Steven Lopez"}
   ]
 }
