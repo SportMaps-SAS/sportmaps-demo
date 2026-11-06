@@ -30,9 +30,13 @@ export interface PartidoFila {
   notes: string | null;
   evaluation_published_at: string | null;
   calendar_event_id: string | null;
+  live_periods_count: number | null;
+  live_period_minutes: number | null;
+  match_kind: 'official' | 'practice' | null;
+  referee_name: string | null;
 }
 
-const COLUMNAS = 'id, team_id, school_id, opponent, match_date, kickoff_at, location, is_home, home_score, away_score, status, match_type, notes, evaluation_published_at, calendar_event_id';
+const COLUMNAS = 'id, team_id, school_id, opponent, match_date, kickoff_at, location, is_home, home_score, away_score, status, match_type, notes, evaluation_published_at, calendar_event_id, live_periods_count, live_period_minutes, match_kind, referee_name';
 
 export const qkPartido = (id: string | null | undefined) => ['partido', id] as const;
 

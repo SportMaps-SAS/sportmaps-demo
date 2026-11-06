@@ -54,6 +54,7 @@ import {
     identificarStaffPorTelefono, procesarMensajeStaff, esDisparadorDeLista, type StaffIdentificado,
 } from '../services/whatsapp-asistencia-staff.service';
 import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
+import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
 
 /**
  * Corre en segundo plano lo que espera (la ráfaga, el acuse): el webhook
@@ -444,6 +445,21 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
         req.log?.info({ conversationId }, 'WhatsApp: contacto personal; solo metadatos');
         return;
     }
+
+    // Atribución por texto (plan docs/plan-anuncios-atribucion-multiescuela-2026-11-06.md):
+    // el chat que NO trae `referral` pero escribe la frase de un anuncio o la marca de un canal
+    // («(Instagram)») queda atribuido igual. En segundo plano y sin lanzar: no frena al bot.
+    void atribuirPorTexto({
+        integrationId: integration.id,
+        schoolId: integration.school_id,
+        conversationId,
+        contactWaId: msg.contactWaId,
+        type: msg.type,
+        texto: msg.textBody,
+        raw: msg.raw,
+    }).then((r) => {
+        if (r === 'atribuida') req.log?.info({ conversationId }, 'WhatsApp: chat atribuido por texto');
+    }).catch(() => undefined);
 
     // La ingesta detecta las palabras de baja (STOP, baja, no molestar…) y ya
     // registró el opt-out. El bot tiene que confirmarlo y NO seguir su flujo
