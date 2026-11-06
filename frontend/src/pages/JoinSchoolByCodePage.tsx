@@ -422,6 +422,15 @@ export default function JoinSchoolByCodePage() {
             )}
             {/* Recarga completa (no navigate): los roles de la persona se calculan al cargar la app,
                 y recién se le vinculó un hijo o una matrícula. Así el selector de rol aparece ya. */}
+            {claimed.kind === 'child' && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={() => { setClaimed(null); goFind(); }}
+              >
+                Tengo otro hijo(a) en {claimed.school_name}: buscarlo
+              </Button>
+            )}
             <Button className="w-full" onClick={() => window.location.assign('/dashboard')}>Continuar</Button>
           </CardContent>
         </Card>
