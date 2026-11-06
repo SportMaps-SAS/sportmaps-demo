@@ -30,7 +30,9 @@ import { useSportsCatalog } from '@/hooks/useSportsCatalog';
 import { GoogleSignInButton, AuthDivider } from '@/components/auth/GoogleSignInButton';
 
 // Roles que representan instituciones/negocios (no personas físicas)
-const INSTITUTION_ROLES = ['school', 'school_admin', 'store_owner', 'external_vendor', 'organizer', 'personal_trainer'];
+// 'facility_manager' = dueño de espacios («Club / Canchas»): una escuela-venue
+// (school_type 'venue') sin equipos ni atletas. Es un negocio, no una persona.
+const INSTITUTION_ROLES = ['school', 'school_admin', 'store_owner', 'external_vendor', 'organizer', 'personal_trainer', 'facility_manager'];
 
 // Edad mínima para abrir cuenta propia. Los menores NO tienen cuenta en
 // SportMaps: el acudiente los registra como hijos bajo su propio perfil
@@ -106,12 +108,12 @@ const registerSchema = z.object({
   message: 'Tu WhatsApp es obligatorio: por ahí te llegan los cobros y las novedades del menor',
   path: ['phone'],
 }).refine((data) => {
-  if (data.role === 'school' && (!data.schoolName || data.schoolName.trim() === '')) {
+  if ((data.role === 'school' || data.role === 'facility_manager') && (!data.schoolName || data.schoolName.trim() === '')) {
     return false;
   }
   return true;
 }, {
-  message: 'El nombre de la academia es requerido',
+  message: 'El nombre es requerido',
   path: ['schoolName'],
 }).refine((data) => {
   if (data.role === 'school' && !data.sportId) {
@@ -346,6 +348,14 @@ export default function RegisterPage() {
         school_name: data.schoolName,
         referral_code: referralCode || undefined,
       };
+
+      if (data.role === 'facility_manager') {
+        // Dueño de espacios: la cuenta nace con rol facility_manager y una
+        // escuela-venue (school_type 'venue'). Sin deporte, categorías ni equipos.
+        // Lo materializa handle_new_user (ver reporte: hoy su lista blanca de
+        // roles NO incluye facility_manager y la escuela se crea sin school_type).
+        metadata.school_type = 'venue';
+      }
 
       if (data.role === 'school' && selectedSport) {
         metadata.sport_id = selectedSport.id;
@@ -703,6 +713,7 @@ export default function RegisterPage() {
                     { id: 'parent', icon: '👨‍👩‍👧', label: 'Acudiente' },
                     { id: 'coach', icon: '📋', label: 'Coach' },
                     { id: 'school', icon: '🏫', label: 'Escuela' },
+                    { id: 'facility_manager', icon: '🏟️', label: 'Club / Canchas' },
                     { id: 'wellness_professional', icon: '💚', label: 'Profesional' },
                     { id: 'store_owner', icon: '🏪', label: 'Tienda' },
                     { id: 'personal_trainer', icon: '🏋️', label: 'Entrenador' },
@@ -821,6 +832,30 @@ export default function RegisterPage() {
                     )}
                   />
                   {errors.dateOfBirth && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.dateOfBirth.message}</p>}
+                </div>
+              )}
+
+              {/* Dueño de espacios: solo el nombre. Sin deporte, equipos ni atletas. */}
+              {roleValue === 'facility_manager' && !inviteId && (
+                <div className="md:col-span-2 space-y-3 pt-4 animate-in slide-in-from-top-4 duration-300">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#d4d8d0]">Nombre del club o espacio</label>
+                    <div className="relative group">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
+                        <School className="w-4 h-4 text-[#4a5246] group-focus-within:text-[#2ea82d] transition-colors" />
+                      </div>
+                      <input
+                        {...register('schoolName')}
+                        type="text"
+                        placeholder="Ej: Canchas El Campín"
+                        className="w-full bg-[#0f2614] border border-white/5 rounded-xl py-3.5 pl-11 pr-4 text-sm focus:outline-none focus:border-[#248223] focus:ring-4 focus:ring-[#248223]/10 transition-all placeholder:text-[#4a5246]"
+                      />
+                    </div>
+                    {errors.schoolName && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.schoolName.message}</p>}
+                  </div>
+                  <p className="text-[11px] text-[#8a9186] px-1">
+                    Publica tus canchas y recibe reservas, sin necesidad de ser una escuela.
+                  </p>
                 </div>
               )}
 

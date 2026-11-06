@@ -37,6 +37,11 @@ import facilitiesRouter from './routes/facilities';
 import trialClassesRouter from './routes/trial-classes';
 import trialClassesSelfRouter from './routes/trial-classes-self.routes';
 import reservationsAdminRouter from './routes/reservations-admin.routes';
+import reservationsCheckoutRouter from './routes/reservations-checkout.routes';
+import reservationsBatchRouter from './routes/reservations-batch.routes';
+import { reservationsJsonBody, RESERVATIONS_BATCH_BODY_LIMIT_BYTES } from './middlewares/reservationsInput';
+import reservationsRouter from './routes/reservations.routes';
+import publicReservationsRouter from './routes/public-reservations.routes';
 import paymentsRouter from './routes/payments.routes';
 import glosasRouter from './routes/glosas.routes';
 import adminPaymentsRouter from './routes/admin-payments.routes';
@@ -147,6 +152,7 @@ import paymentAdjustmentsRouter from './routes/payment-adjustments.routes';
 import athleteChargesRouter from './routes/athlete-charges.routes';
 import { requireStoreEnabled } from './services/store-flag.service';
 import { storeRateLimit } from './middlewares/storeRateLimit';
+import { redactSecretsInUrl } from './utils/redactUrl';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -260,6 +266,12 @@ app.use(cors({
             origin === allowedProductionDomain ||
             origin === 'https://sportmaps.co' ||
             origin === 'https://app.sportmaps.co' ||
+            // App nativa (Capacitor): el WebView sirve los assets desde https://localhost (Android)
+            // o capacitor://localhost (iOS). Sin esto TODA llamada al BFF desde la app instalada
+            // falla con «Failed to fetch» (la glosa, cobros…). Auth por Bearer JWT, sin cookies.
+            origin === 'https://localhost' ||
+            origin === 'capacitor://localhost' ||
+            origin === 'ionic://localhost' ||
             extraOrigins.has(origin);
 
         if (exactAllowed) return callback(null, true);
@@ -287,6 +299,11 @@ app.use(cors({
 // ANTES de express.json() — protocolo texto plano del F22
 app.use('/', admsRouter);
 
+// Reservas de canchas: cuerpo JSON acotado (20 KB; el lote 200 KB), Content-Type JSON obligatorio, 413/415/400 claros.
+// ANTES del parser global de 5 MB (body-parser salta si el cuerpo ya se parseó).
+app.use('/api/v1/reservations/batch', reservationsJsonBody(RESERVATIONS_BATCH_BODY_LIMIT_BYTES));
+app.use(['/api/v1/reservations', '/api/v1/reservations-admin', '/api/v1/public/reservations'], reservationsJsonBody());
+
 app.use(express.json({
     limit: '5mb',
     verify: (req, _res, buf) => {
@@ -297,7 +314,7 @@ app.use(pinoHttp({
     customProps: (req) => ({ requestId: req.id }),
     // En producción no loguear bodies completos (pueden tener PII)
     serializers: {
-        req: (req) => ({ method: req.method, url: req.url, id: req.id }),
+        req: (req) => ({ method: req.method, url: redactSecretsInUrl(req.url), id: req.id }),
         res: (res) => ({ statusCode: res.statusCode }),
     },
 }));
@@ -414,6 +431,11 @@ app.use('/api/v1/facilities', generalLimiter, facilitiesRouter);
 app.use('/api/v1/trial-classes', generalLimiter, trialClassesRouter);
 app.use('/api/v1/trial-classes-self', generalLimiter, trialClassesSelfRouter);
 app.use('/api/v1/reservations-admin', generalLimiter, reservationsAdminRouter);
+// Cobro de reservas de canchas (F2): checkout con la pasarela de la escuela + comprobante de transferencia.
+app.use('/api/v1/reservations/batch', generalLimiter, reservationsBatchRouter);
+app.use('/api/v1/reservations', generalLimiter, reservationsCheckoutRouter);
+app.use('/api/v1/reservations', generalLimiter, reservationsRouter);
+app.use('/api/v1/public/reservations', publicReservationsRouter);
 // Glosas: montado ANTES de /api/v1/payments para que la ruta más específica gane.
 app.use('/api/v1/payments/glosas', paymentLimiter, glosasRouter);
 app.use('/api/v1/payments/reconciliation', paymentLimiter, reconciliationRouter);

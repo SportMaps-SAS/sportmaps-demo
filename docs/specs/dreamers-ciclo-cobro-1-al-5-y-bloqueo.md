@@ -138,3 +138,50 @@ Regla de Dreamers (`school_settings.late_fee_skip_signup_month = true`): la **pr
 | 11 | ¿Puede `staff` registrar pagos? Hoy solo owner/admin/school_admin | ⏳ decisión de producto |
 | 12 | Interruptor `late_fee_skip_signup_month` sin pantalla (SQL) | 🕓 opcional |
 
+## Bloqueo físico: «borrar y restaurar» con el SDK oficial — prueba del 2026-10-23
+
+**Hecho:** en los MB360 de Dreamers (firmware 6.60) el SDK oficial de ZKTeco (`zkemkeeper` 6.2.5.50, ya instalado con
+ZKAccess 3.5 en la PC de la sede) **lee y escribe rostro y huellas**, cosa que pyzk no puede (solo cuenta rostros).
+Probado con el PIN 12 (usuario de pruebas, huella + clave) en el lector de entrada:
+
+| Paso | Resultado |
+|---|---|
+| Leer rostro (PIN con rostro, 41.216 bytes) y huella (1.148–1.580 bytes) | ✅ |
+| Escribir huella en otro PIN y releerla | ✅ idéntica |
+| Respaldar → borrar → marcar | ✅ huella **no válida** (el lector niega) |
+| Restaurar → verificar → marcar | ✅ idéntica y **deja pasar** |
+
+**Trampa:** el lector **aplica el borrado al cerrar la sesión**: leer en la misma conexión sigue mostrando al usuario
+(dio dos falsos «FALLO»; el usuario ya no estaba al reconectar). Verificar siempre reconectando.
+
+**Falta:** (1) repetir el ciclo con un PIN que tenga **rostro** y probar por separado huella / PIN / rostro; (2) **tarjeta
+RFID** no se respalda; (3) integrar al bridge (Python 64 bits; el SDK es COM de 32 bits → el bridge invocaría el
+PowerShell de 32 bits); (4) **dónde guardar los respaldos** (datos biométricos de menores: solo en la PC de la sede,
+cifrados, no en la nube; decisión legal aparte); (5) decidir si reemplaza o complementa la Opción a de Brayan
+(`dreamers-bloqueo-torniquete-opciones.md`). Scripts de prueba: `scripts/dreamers-bridge/diagnostico_rostro_sdk.ps1`,
+`prueba_escritura_rostro_sdk.ps1`, `ciclo_bloqueo_restaurar_sdk.ps1`. Para registrar el SDK hizo falta `regsvr32` como
+administrador y usar el ProgID `zkemkeeper.ZKEM.1`.
+
+### Resultado del 2026-10-31 — ciclo completo con huella + clave + rostro (PIN 4, usuario de pruebas)
+
+Respaldar → borrar → marcar → restaurar → marcar, sobre el lector de ENTRADA:
+
+| Fase | Huella | Código | Rostro |
+|---|---|---|---|
+| Usuario borrado | negada | negado | **negado** |
+| Usuario restaurado | abre | abre | **abre** |
+
+- Restauración: usuario, huella (1356 bytes) y clave **idénticas**; rostro (41.216 bytes) con **32 posiciones distintas de
+  41.216 (0,08 %)**, repartidas en dos bloques iguales con el mismo patrón → metadatos que el lector reescribe, no contenido; el
+  torniquete lo reconoció. Con un solo usuario: repetir con 2–3 más para confirmar el patrón.
+- **Códigos de verificación del lector** (campo 3 del ATTLOG que arma el bridge: `att.status` de pyzk): **16 = rostro, 1 = huella,
+  0 = clave/código** (consistente con las marcaciones de Athenea; falta confirmar el orden exacto de la prueba).
+- Con el usuario borrado **el lector no registra el intento**: SportMaps no ve a los bloqueados intentando entrar.
+- Diseño resultante: bloquear **solo en el lector de entrada** (la salida nunca se niega y nadie queda atrapado); la verificación
+  de la restauración debe tolerar esos pocos metadatos del rostro y apoyarse en huella/clave idénticas.
+- Falta: **tarjeta RFID** (no se probó; el script ya la respalda), integrar al bridge (SDK COM de 32 bits), y dónde guardar los
+  respaldos (biometría de menores: solo en la PC de la sede). Script: `ciclo_bloqueo_restaurar_sdk.ps1`; diagnóstico del rostro:
+  `comparar_rostro_respaldo.ps1`.
+**Decisión del owner (2026-10-31): la tarjeta RFID queda fuera de alcance — Dreamers no la usa.** El script la omite por defecto
+(`-ConTarjeta` solo para un cliente que sí la use). El bloqueo cubre huella, clave y rostro.
+

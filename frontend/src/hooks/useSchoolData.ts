@@ -5,6 +5,7 @@ import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
 import { bffClient } from '@/lib/api/bffClient';
 import { camposUbicacion, type UbicacionCancha } from '@/components/school/canchaUbicacion';
+import { camposBookableBy, type BookableBy } from '@/components/reservas/reservasHooks';
 
 // Types for staff and facilities
 interface Staff {
@@ -34,6 +35,10 @@ interface Facility {
   description: string | null;
   min_booking_advance_hours: number | null;
   min_cancellation_hours: number | null;
+  hourly_rate?: number | null;
+  booking_enabled?: boolean | null;
+  /** Quién puede reservar (reservas F1); no llega sin la migración. */
+  bookable_by?: BookableBy | null;
   /** Cómo llegar (mig. embudo_y_agenda_clase_prueba); no llegan sin la migración. */
   address?: string | null;
   maps_url?: string | null;
@@ -63,6 +68,11 @@ interface FacilityInput extends UbicacionCancha {
   description?: string;
   min_booking_advance_hours?: number;
   min_cancellation_hours?: number;
+  /** COP por hora; null = sin tarifa (precio a convenir). */
+  hourly_rate?: number | null;
+  booking_enabled?: boolean;
+  /** undefined = no se manda (la base aún no tiene la columna). */
+  bookable_by?: BookableBy;
 }
 
 export function useSchoolStaff() {
@@ -230,12 +240,14 @@ export function useSchoolFacilities() {
         description: input.description || null,
         min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
         min_cancellation_hours: input.min_cancellation_hours ?? 0,
+        hourly_rate: input.hourly_rate ?? null,
+        booking_enabled: input.booking_enabled ?? true,
       };
       const { data, error } = await supabase
         .from('facilities')
         // «Cómo llegar» solo si el formulario lo mostró (la base ya tiene las
         // columnas); todavía no están en types.ts.
-        .insert({ ...fila, ...camposUbicacion(input) } as typeof fila)
+        .insert({ ...fila, ...camposUbicacion(input), ...camposBookableBy(input) } as typeof fila)
         .select()
         .single();
 
@@ -290,10 +302,12 @@ export function useSchoolFacilities() {
         description: input.description || null,
         min_booking_advance_hours: input.min_booking_advance_hours ?? 0,
         min_cancellation_hours: input.min_cancellation_hours ?? 0,
+        hourly_rate: input.hourly_rate ?? null,
+        booking_enabled: input.booking_enabled ?? true,
       };
       const { data, error } = await supabase
         .from('facilities')
-        .update({ ...cambios, ...camposUbicacion(input) } as typeof cambios)
+        .update({ ...cambios, ...camposUbicacion(input), ...camposBookableBy(input) } as typeof cambios)
         .eq('id', id)
         .select()
         .single();

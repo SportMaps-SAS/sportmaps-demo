@@ -176,6 +176,12 @@ const DISPUTA: RegExp[] = [
     // «no entiendo por qué me cobran»
     /\b(no entiendo|no se) (por que|porque|por que razon) me (cobran|cobraron|llega|llegan|siguen cobrando|aparece)\b/,
     /\bpor que me (siguen )?(cobran|cobraron)\b/,
+    // Cuenta de la persona (saldo a favor, descuento aplicado, cuánto le toca): la ve la
+    // escuela; el bot no tiene su cuenta (Monster 2026-11-05).
+    /\b(saldo|qued\w+|tengo|tenemos)\b(\s+\w+){0,6}\s+a favor\b/,
+    /\bcuanto (nos|me|le) toca pagar\b/,
+    /\b(aplic\w+)\b(\s+\w+){0,5}\s+(descuento|pronto pago)\b/,
+    /\b(descuento|pronto pago)\b(\s+\w+){0,6}\s+(aplic\w+)\b/,
     /\bme (cobran|cobraron|siguen cobrando) (de nuevo|otra vez|doble|dos veces|algo que ya|lo que ya)\b/,
 ];
 

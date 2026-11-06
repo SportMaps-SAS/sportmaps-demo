@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -5,10 +6,20 @@ import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
 import { bffClient } from '@/lib/api/bffClient';
 import { format } from 'date-fns';
+import {
+  cancelBooking,
+  describeRefund,
+  parseBookingError,
+  usesNewReservationRoutes,
+  type CancelResult,
+} from '@/components/reservas/reservasApi';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ResvStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed';
+export type ResvStatus =
+  | 'pending' | 'confirmed' | 'cancelled' | 'completed'
+  // F1 (reservas-canchas): estados del hold/pago
+  | 'hold' | 'pending_payment' | 'pending_reconciliation' | 'expired' | 'no_show';
 
 export interface FacilityReservation {
   id: string;
@@ -30,16 +41,13 @@ export interface FacilityReservation {
   facility: { name: string; type: string; capacity: number } | null;
   requester: { full_name: string | null; email: string } | null;
   isSessionBooking?: boolean;
-}
-
-export interface CreateReservationPayload {
-  facility_id: string;
-  reservation_date: string;
-  start_time: string;
-  end_time: string;
-  price: number;
-  notes?: string;
-  status?: ResvStatus;
+  // F1: columnas que trae `select *` cuando la base las tiene (todas opcionales)
+  starts_at?: string | null;
+  ends_at?: string | null;
+  hold_expires_at?: string | null;
+  payment_status?: string | null;
+  payment_reference?: string | null;
+  guest_booker_id?: string | null;
 }
 
 export interface ReservationChangeNotice {
@@ -72,9 +80,56 @@ export interface UpdateReservationPayload {
   price?: number;
   notes?: string;
   status?: ResvStatus;
-  approved_by?: string;
-  approved_at?: string;
 }
+
+/** Convierte 'HH:mm' o 'HH:mm:ss' a minutos desde medianoche. */
+export function timeToMinutes(t: string): number {
+  const [h, m] = t.split(':');
+  return parseInt(h, 10) * 60 + parseInt(m ?? '0', 10);
+}
+
+/**
+ * Todas las franjas horarias ('HH:mm', paso de 60 min) que ocupa el rango
+ * [start, end). Acepta 'HH:mm' y 'HH:mm:ss'. Una reserva de 08:00 a 10:00
+ * ocupa 08:00 y 09:00.
+ */
+export function expandOccupiedSlots(start: string, end: string): string[] {
+  const s = timeToMinutes(start);
+  let e = timeToMinutes(end);
+  if (Number.isNaN(s) || Number.isNaN(e)) return [];
+  if (e <= s) e = s + 60; // dato raro: al menos la hora de inicio
+  const out: string[] = [];
+  for (let m = Math.floor(s / 60) * 60; m < e; m += 60) {
+    out.push(`${String(Math.floor(m / 60)).padStart(2, '0')}:00`);
+  }
+  return out;
+}
+
+/** Traduce errores técnicos del servidor/base a un mensaje que entienda la escuela. */
+export function friendlyReservationError(error: any): string {
+  const msg: string = error?.message ?? '';
+  if (msg.includes('facility_slot_conflict')) {
+    return 'Ese horario ya está ocupado por otra reserva. Elige otro horario.';
+  }
+  // Códigos de las rutas nuevas ({error:'SLOT_TAKEN', message, ...}).
+  const info = parseBookingError(error);
+  if (info.code) return info.message;
+  return msg || 'No se pudo completar la operación.';
+}
+
+/** Errores de cancelar: el servidor puede rechazar con 409 (p. ej. fuera de la ventana de cancelación). */
+export function friendlyCancelError(error: any): string {
+  if (parseBookingError(error).code) return parseBookingError(error).message;
+  if (error?.status === 409) {
+    return error?.message && !/^Error 409/.test(error.message)
+      ? error.message
+      : 'Esta reserva ya no se puede cancelar: está fuera de la ventana de cancelación o cambió de estado.';
+  }
+  return friendlyReservationError(error);
+}
+
+// Máximo de reservas que se traen de una vez (las más recientes por fecha).
+const PAGE_SIZE = 200;
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -84,12 +139,17 @@ export function useFacilityReservations() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const QUERY_KEY = ['facility-reservations', schoolId];
+  // Clave propia de este hook (el modal público usa ['facility-reservations-slots', ...]
+  // para no pisarse con esta lista).
+  const QUERY_KEY = ['school-facility-reservations', schoolId];
 
   // ── READ ──────────────────────────────────────────────────────────────────
 
+  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [hasMore, setHasMore] = useState(false);
+
   const { data: reservations = [], isLoading, isFetching, refetch } = useQuery<FacilityReservation[]>({
-    queryKey: QUERY_KEY,
+    queryKey: [...QUERY_KEY, limit],
     queryFn: async () => {
       if (!schoolId) return [];
 
@@ -112,7 +172,9 @@ export function useFacilityReservations() {
             facility:facilities ( name, type, capacity ),
             requester:profiles!facility_reservations_user_id_fkey ( full_name, email )
           `)
-          .in('facility_id', ids),
+          .in('facility_id', ids)
+          .order('reservation_date', { ascending: false })
+          .limit(limit),
         supabase
           .from('session_bookings')
           .select(`
@@ -135,7 +197,13 @@ export function useFacilityReservations() {
             )
           `)
           .eq('school_id', schoolId)
+          .order('created_at', { ascending: false })
+          .limit(limit)
       ]);
+
+      setHasMore(
+        (resvResult.data?.length ?? 0) >= limit || (sbResult.data?.length ?? 0) >= limit,
+      );
 
       if (resvResult.error) throw resvResult.error;
       if (sbResult.error) {
@@ -205,74 +273,27 @@ export function useFacilityReservations() {
     enabled: !!schoolId,
   });
 
-  // ── CREATE ────────────────────────────────────────────────────────────────
-
-  const { mutateAsync: createReservation, isPending: isCreating } = useMutation({
-    mutationFn: async (payload: CreateReservationPayload) => {
-      if (!user) throw new Error('No autenticado');
-
-      const { data, error } = await supabase
-        .from('facility_reservations')
-        .insert({
-          ...payload,
-          user_id: user.id,
-          status: payload.status ?? 'confirmed',
-        })
-        .select()
-        .single();
-
-      if (error) {
-        if (error.message?.includes('facility_slot_conflict')) {
-          throw new Error('Ese horario ya está ocupado por otra reserva. Elige otro horario.');
-        }
-        throw error;
-      }
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-bookings'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-roster'] });
-      queryClient.invalidateQueries({ queryKey: ['supervision-session'] });
-      toast({ title: '✅ Reserva creada', description: 'La reserva fue registrada exitosamente.' });
-    },
-    onError: (error: any) => {
-      toast({ title: 'Error al crear', description: error.message, variant: 'destructive' });
-    },
-  });
+  // El page memoiza getBookedSlots con deps vacías: leer la lista por ref evita un cierre viejo.
+  const reservationsRef = useRef(reservations);
+  reservationsRef.current = reservations;
 
   // ── UPDATE ────────────────────────────────────────────────────────────────
 
   const { mutateAsync: updateReservation, isPending: isUpdating } = useMutation({
     mutationFn: async ({ id, payload, isSessionBooking }: { id: string; payload: UpdateReservationPayload; isSessionBooking?: boolean }) => {
-      if (isSessionBooking) {
-        const { data, error } = await supabase
-          .from('session_bookings')
-          .update({
-            status: payload.status,
-            updated_at: new Date().toISOString()
-          } as any)
-          .eq('id', id)
-          .select()
-          .single();
-        if (error) throw error;
-        return data;
-      }
-
+      // Solo clases de cortesía (session_bookings). Las reservas de instalación NUNCA se
+      // escriben desde el navegador: van por el BFF (reservations / reservations-admin).
+      if (!isSessionBooking) throw new Error('Las reservas de instalación se actualizan por el servidor.');
       const { data, error } = await supabase
-        .from('facility_reservations')
-        .update({ ...payload, updated_at: new Date().toISOString() })
+        .from('session_bookings')
+        .update({
+          status: payload.status,
+          updated_at: new Date().toISOString()
+        } as any)
         .eq('id', id)
         .select()
         .single();
-
-      if (error) {
-        if (error.message?.includes('facility_slot_conflict')) {
-          throw new Error('Ese horario ya está ocupado por otra reserva. Elige otro horario.');
-        }
-        throw error;
-      }
+      if (error) throw error;
       return data;
     },
     onSuccess: () => {
@@ -290,35 +311,66 @@ export function useFacilityReservations() {
 
   // ── QUICK STATUS HELPERS ──────────────────────────────────────────────────
 
+  // Aprobar y completar pasan por el BFF: el servidor fija approved_by /
+  // approved_at (antes los mandaba el navegador). Las clases de cortesía
+  // (session_bookings) siguen actualizándose por updateReservation.
+  const { mutateAsync: statusViaBffMutation } = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'approve' | 'complete' }) =>
+      bffClient.patch<unknown>(`/api/v1/reservations-admin/facility/${id}/${action}`, {}),
+    onSuccess: (_data, { action }) => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
+      toast({ title: action === 'approve' ? '✅ Reserva aprobada' : '✅ Reserva completada' });
+    },
+    onError: (error: any, { action }) => {
+      toast({
+        title: action === 'approve' ? 'Error al aprobar' : 'Error al completar',
+        description: friendlyReservationError(error),
+        variant: 'destructive',
+      });
+    },
+  });
+
   const approveReservation = async (id: string) => {
     if (!user) return;
     const isSessionBooking = reservations.find(r => r.id === id)?.isSessionBooking;
-    await updateReservation({
-      id,
-      payload: {
-        status: 'confirmed',
-        approved_by: user.id,
-        approved_at: new Date().toISOString(),
-      },
-      isSessionBooking
-    });
+    if (isSessionBooking) {
+      await updateReservation({ id, payload: { status: 'confirmed' }, isSessionBooking });
+      return;
+    }
+    await statusViaBffMutation({ id, action: 'approve' }).catch(() => undefined);
   };
 
   // Cancelar pasa por el BFF (no Supabase directo) para poder mandar el
   // correo de aviso del lado del servidor — ver reservations-admin.routes.ts.
   const { mutateAsync: cancelReservationMutation, isPending: isCancelling } = useMutation({
-    mutationFn: ({ id, isSessionBooking, reason }: { id: string; isSessionBooking?: boolean; reason?: string }) => {
-      const path = isSessionBooking
-        ? `/api/v1/reservations-admin/courtesy/${id}/cancel`
-        : `/api/v1/reservations-admin/facility/${id}/cancel`;
-      return bffClient.patch<ReservationChangeNotice>(path, { reason });
+    // Filas de facility_reservations con starts_at: POST /reservations/:id/cancel (calcula la
+    // devolución según la política). Clases de cortesía: reservations-admin, como siempre.
+    mutationFn: async ({ id, isSessionBooking, reason }: { id: string; isSessionBooking?: boolean; reason?: string }):
+      Promise<ReservationChangeNotice | CancelResult> => {
+      if (isSessionBooking) {
+        return bffClient.patch<ReservationChangeNotice>(`/api/v1/reservations-admin/courtesy/${id}/cancel`, { reason });
+      }
+      const row = reservationsRef.current.find((r) => r.id === id);
+      if (row && usesNewReservationRoutes(row)) return cancelBooking(id, reason);
+      return bffClient.patch<ReservationChangeNotice>(`/api/v1/reservations-admin/facility/${id}/cancel`, { reason });
     },
-    onSuccess: (notice) => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      toast({ title: notice.email_sent ? '✅ Reserva cancelada — correo enviado' : '✅ Reserva cancelada' });
+      queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
+      queryClient.invalidateQueries({ queryKey: ['reservas-availability'] });
+      if ('reservation' in result) {
+        const refund = describeRefund(result.refund);
+        toast({
+          title: result.already_cancelled ? 'La reserva ya estaba cancelada' : '✅ Reserva cancelada',
+          description: refund || undefined,
+        });
+        return;
+      }
+      toast({ title: result.email_sent ? '✅ Reserva cancelada — correo enviado' : '✅ Reserva cancelada' });
     },
     onError: (error: any) => {
-      toast({ title: 'Error al cancelar', description: error.message, variant: 'destructive' });
+      toast({ title: 'Error al cancelar', description: friendlyCancelError(error), variant: 'destructive' });
     },
   });
 
@@ -366,7 +418,11 @@ export function useFacilityReservations() {
 
   const completeReservation = async (id: string) => {
     const isSessionBooking = reservations.find(r => r.id === id)?.isSessionBooking;
-    await updateReservation({ id, payload: { status: 'completed' }, isSessionBooking });
+    if (isSessionBooking) {
+      await updateReservation({ id, payload: { status: 'completed' }, isSessionBooking });
+      return;
+    }
+    await statusViaBffMutation({ id, action: 'complete' }).catch(() => undefined);
   };
 
   // ── DELETE (hard, vía BFF) ───────────────────────────────────────────────
@@ -407,18 +463,35 @@ export function useFacilityReservations() {
     completed: reservations.filter((r) => r.status === 'completed').length,
   };
 
-  // Fetch booked slots for a specific facility + date (used inside modals)
+  // Franjas ocupadas ('HH:mm') de una instalación en una fecha. Normaliza
+  // 'HH:mm:ss' y bloquea TODAS las horas del rango [inicio, fin) de reservas
+  // pending/confirmed, más las clases de cortesía ya cargadas en la lista.
   const getBookedSlots = async (facilityId: string, date: Date, excludeId?: string) => {
+    const day = format(date, 'yyyy-MM-dd');
     const { data } = await supabase
       .from('facility_reservations')
-      .select('start_time, id')
+      .select('id, start_time, end_time')
       .eq('facility_id', facilityId)
-      .eq('reservation_date', format(date, 'yyyy-MM-dd'))
-      .in('status', ['pending', 'confirmed']);
+      .eq('reservation_date', day)
+      .in('status', ['pending', 'confirmed', 'hold', 'pending_payment']);
 
-    return (data ?? [])
+    const ranges: Array<{ start: string; end: string }> = (data ?? [])
       .filter((r) => r.id !== excludeId)
-      .map((r) => r.start_time.slice(0, 5)); // 'HH:mm'
+      .map((r) => ({ start: r.start_time, end: r.end_time }));
+
+    for (const r of reservationsRef.current) {
+      if (
+        r.isSessionBooking &&
+        r.id !== excludeId &&
+        r.facility_id === facilityId &&
+        r.reservation_date === day &&
+        (r.status === 'pending' || r.status === 'confirmed')
+      ) {
+        ranges.push({ start: r.start_time, end: r.end_time });
+      }
+    }
+
+    return Array.from(new Set(ranges.flatMap((r) => expandOccupiedSlots(r.start, r.end))));
   };
 
   return {
@@ -426,10 +499,10 @@ export function useFacilityReservations() {
     isLoading,
     isFetching,
     refetch,
+    hasMore,
+    loadMore: () => setLimit((l) => l + PAGE_SIZE),
     stats,
     // mutations
-    createReservation,
-    isCreating,
     updateReservation,
     isUpdating,
     deleteReservation,

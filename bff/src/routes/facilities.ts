@@ -1,10 +1,9 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../config/supabase';
 import { requireAuth, requireRole } from '../middlewares/authMiddleware';
+import { FACILITY_ADMIN_ROLES } from '../utils/facilityRoles';
 
 const router = Router();
-
-const FACILITY_ADMIN_ROLES = ['owner', 'super_admin', 'admin', 'school_admin'] as const;
 
 // ── Disponibilidad de la instalación (calcado de school-staff.ts :coachId/availability) ──
 

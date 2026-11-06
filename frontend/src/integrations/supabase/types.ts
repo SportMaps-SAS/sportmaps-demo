@@ -717,6 +717,91 @@ export type Database = {
           },
         ]
       }
+      access_device_users: {
+        Row: {
+          device_serial: string
+          has_face: boolean
+          has_fingerprint: boolean
+          has_password: boolean
+          id: string
+          is_simulated: boolean
+          privilege: number
+          reader_name: string
+          school_id: string
+          synced_at: string
+          zk_pin: number
+        }
+        Insert: {
+          device_serial: string
+          has_face?: boolean
+          has_fingerprint?: boolean
+          has_password?: boolean
+          id?: string
+          is_simulated?: boolean
+          privilege?: number
+          reader_name?: string
+          school_id: string
+          synced_at?: string
+          zk_pin: number
+        }
+        Update: {
+          device_serial?: string
+          has_face?: boolean
+          has_fingerprint?: boolean
+          has_password?: boolean
+          id?: string
+          is_simulated?: boolean
+          privilege?: number
+          reader_name?: string
+          school_id?: string
+          synced_at?: string
+          zk_pin?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "access_device_users_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       access_events: {
         Row: {
           access_granted: boolean
@@ -856,6 +941,69 @@ export type Database = {
           },
           {
             foreignKeyName: "access_events_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      account_deletion_requests: {
+        Row: {
+          cancelled_at: string | null
+          completed_at: string | null
+          created_at: string
+          error_message: string | null
+          id: string
+          ip_address: unknown
+          reason: string | null
+          requested_at: string
+          scheduled_for: string
+          status: string
+          updated_at: string
+          user_agent: string | null
+          user_id: string
+        }
+        Insert: {
+          cancelled_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          ip_address?: unknown
+          reason?: string | null
+          requested_at?: string
+          scheduled_for: string
+          status?: string
+          updated_at?: string
+          user_agent?: string | null
+          user_id: string
+        }
+        Update: {
+          cancelled_at?: string | null
+          completed_at?: string | null
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          ip_address?: unknown
+          reason?: string | null
+          requested_at?: string
+          scheduled_for?: string
+          status?: string
+          updated_at?: string
+          user_agent?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_deletion_requests_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "account_deletion_requests_user_id_fkey"
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
@@ -6089,6 +6237,95 @@ export type Database = {
           },
         ]
       }
+      cancellation_policies: {
+        Row: {
+          created_at: string
+          facility_id: string | null
+          hours_full_refund: number
+          hours_partial_refund: number
+          id: string
+          is_active: boolean
+          no_show_penalty_pct: number
+          partial_pct: number
+          school_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          facility_id?: string | null
+          hours_full_refund?: number
+          hours_partial_refund?: number
+          id?: string
+          is_active?: boolean
+          no_show_penalty_pct?: number
+          partial_pct?: number
+          school_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          facility_id?: string | null
+          hours_full_refund?: number
+          hours_partial_refund?: number
+          id?: string
+          is_active?: boolean
+          no_show_penalty_pct?: number
+          partial_pct?: number
+          school_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cancellation_policies_facility_id_fkey"
+            columns: ["facility_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cancellation_policies_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       carts: {
         Row: {
           created_at: string | null
@@ -7739,6 +7976,21 @@ export type Database = {
           },
         ]
       }
+      co_holidays: {
+        Row: {
+          holiday_date: string
+          name: string
+        }
+        Insert: {
+          holiday_date: string
+          name: string
+        }
+        Update: {
+          holiday_date?: string
+          name?: string
+        }
+        Relationships: []
+      }
       coach_availability: {
         Row: {
           available_for_group_classes: boolean | null
@@ -7898,6 +8150,286 @@ export type Database = {
           {
             foreignKeyName: "coach_certifications_coach_id_fkey"
             columns: ["coach_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      coach_evaluation_criteria: {
+        Row: {
+          active: boolean
+          auto_metric: string | null
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          school_id: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          auto_metric?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          school_id: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          auto_metric?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          school_id?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_criteria_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
+      coach_evaluation_scores: {
+        Row: {
+          comment: string | null
+          criterion_id: string
+          criterion_name: string
+          evaluation_id: string
+          score: number
+        }
+        Insert: {
+          comment?: string | null
+          criterion_id: string
+          criterion_name: string
+          evaluation_id: string
+          score: number
+        }
+        Update: {
+          comment?: string | null
+          criterion_id?: string
+          criterion_name?: string
+          evaluation_id?: string
+          score?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coach_evaluation_scores_criterion_id_fkey"
+            columns: ["criterion_id"]
+            isOneToOne: false
+            referencedRelation: "coach_evaluation_criteria"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluation_scores_evaluation_id_fkey"
+            columns: ["evaluation_id"]
+            isOneToOne: false
+            referencedRelation: "coach_evaluations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      coach_evaluations: {
+        Row: {
+          activity_snapshot: Json | null
+          commitments: string | null
+          created_at: string
+          evaluator_id: string | null
+          id: string
+          improvements: string | null
+          other_notes: string | null
+          overall_score: number | null
+          period_end: string
+          period_start: string
+          period_type: string
+          published_at: string | null
+          school_id: string
+          staff_id: string
+          status: string
+          strengths: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          activity_snapshot?: Json | null
+          commitments?: string | null
+          created_at?: string
+          evaluator_id?: string | null
+          id?: string
+          improvements?: string | null
+          other_notes?: string | null
+          overall_score?: number | null
+          period_end: string
+          period_start: string
+          period_type: string
+          published_at?: string | null
+          school_id: string
+          staff_id: string
+          status?: string
+          strengths?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          activity_snapshot?: Json | null
+          commitments?: string | null
+          created_at?: string
+          evaluator_id?: string | null
+          id?: string
+          improvements?: string | null
+          other_notes?: string | null
+          overall_score?: number | null
+          period_end?: string
+          period_start?: string
+          period_type?: string
+          published_at?: string | null
+          school_id?: string
+          staff_id?: string
+          status?: string
+          strengths?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coach_evaluations_evaluator_id_fkey"
+            columns: ["evaluator_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_evaluator_id_fkey"
+            columns: ["evaluator_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_staff_id_fkey"
+            columns: ["staff_id"]
+            isOneToOne: false
+            referencedRelation: "public_staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_staff_id_fkey"
+            columns: ["staff_id"]
+            isOneToOne: false
+            referencedRelation: "school_staff"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_staff_id_fkey"
+            columns: ["staff_id"]
+            isOneToOne: false
+            referencedRelation: "v_coach_team_plans"
+            referencedColumns: ["staff_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_staff_id_fkey"
+            columns: ["staff_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_staff_publico"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "coach_evaluations_updated_by_fkey"
+            columns: ["updated_by"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -11542,49 +12074,82 @@ export type Database = {
         Row: {
           age_validation: string | null
           bag_size: string | null
+          birth_date: string | null
           birth_year: number | null
+          card_version: number
           child_id: string | null
           created_at: string
           crossover_team_id: string | null
-          delegation_id: string
+          delegation_id: string | null
           document_number: string | null
+          extra: Json
           full_name: string
           id: string
           is_crossover: boolean | null
+          is_external: boolean
+          nickname: string | null
+          phone: string | null
+          photo_url: string | null
+          position: string | null
           profile_id: string | null
+          shirt_number: number | null
           shirt_size: string | null
+          suspended: boolean
+          suspended_reason: string | null
           team_id: string
         }
         Insert: {
           age_validation?: string | null
           bag_size?: string | null
+          birth_date?: string | null
           birth_year?: number | null
+          card_version?: number
           child_id?: string | null
           created_at?: string
           crossover_team_id?: string | null
-          delegation_id: string
+          delegation_id?: string | null
           document_number?: string | null
+          extra?: Json
           full_name: string
           id?: string
           is_crossover?: boolean | null
+          is_external?: boolean
+          nickname?: string | null
+          phone?: string | null
+          photo_url?: string | null
+          position?: string | null
           profile_id?: string | null
+          shirt_number?: number | null
           shirt_size?: string | null
+          suspended?: boolean
+          suspended_reason?: string | null
           team_id: string
         }
         Update: {
           age_validation?: string | null
           bag_size?: string | null
+          birth_date?: string | null
           birth_year?: number | null
+          card_version?: number
           child_id?: string | null
           created_at?: string
           crossover_team_id?: string | null
-          delegation_id?: string
+          delegation_id?: string | null
           document_number?: string | null
+          extra?: Json
           full_name?: string
           id?: string
           is_crossover?: boolean | null
+          is_external?: boolean
+          nickname?: string | null
+          phone?: string | null
+          photo_url?: string | null
+          position?: string | null
           profile_id?: string | null
+          shirt_number?: number | null
           shirt_size?: string | null
+          suspended?: boolean
+          suspended_reason?: string | null
           team_id?: string
         }
         Relationships: [
@@ -11650,12 +12215,16 @@ export type Database = {
         Row: {
           accommodation: string
           category_id: string | null
+          club_name: string | null
           created_at: string
-          delegation_id: string
+          delegation_id: string | null
           event_id: string
           id: string
+          is_external: boolean
           locked_price: number | null
+          logo_url: string | null
           package_type: string
+          short_name: string | null
           status: string
           team_name: string
           updated_at: string
@@ -11663,12 +12232,16 @@ export type Database = {
         Insert: {
           accommodation?: string
           category_id?: string | null
+          club_name?: string | null
           created_at?: string
-          delegation_id: string
+          delegation_id?: string | null
           event_id: string
           id?: string
+          is_external?: boolean
           locked_price?: number | null
+          logo_url?: string | null
           package_type?: string
+          short_name?: string | null
           status?: string
           team_name: string
           updated_at?: string
@@ -11676,12 +12249,16 @@ export type Database = {
         Update: {
           accommodation?: string
           category_id?: string | null
+          club_name?: string | null
           created_at?: string
-          delegation_id?: string
+          delegation_id?: string | null
           event_id?: string
           id?: string
+          is_external?: boolean
           locked_price?: number | null
+          logo_url?: string | null
           package_type?: string
+          short_name?: string | null
           status?: string
           team_name?: string
           updated_at?: string
@@ -11749,8 +12326,10 @@ export type Database = {
         Row: {
           address: string
           allow_individual_registration: boolean
+          attachments: Json
           banner_url: string | null
           capacity: number | null
+          card_config: Json | null
           city: string
           coach_discount_usd: number | null
           companion_discount_usd: number | null
@@ -11764,6 +12343,7 @@ export type Database = {
           crossover_allowed: boolean | null
           currency: string | null
           description: string | null
+          end_date: string | null
           end_time: string | null
           event_date: string
           event_type: string
@@ -11778,12 +12358,15 @@ export type Database = {
           lat: number | null
           live_enabled: boolean
           lng: number | null
+          logo_url: string | null
           notes: string | null
           organizer_id: string | null
+          organizer_name: string | null
           payer_mode: string
           payment_deadline: string | null
           payment_gates_approval: boolean
           payment_methods: string[] | null
+          player_form: Json | null
           presential_reg_end: string | null
           presential_reg_start: string | null
           price: number | null
@@ -11791,6 +12374,7 @@ export type Database = {
           registration_deadline: string | null
           registration_type: string
           registrations_open: boolean | null
+          rules_url: string | null
           school_id: string | null
           scoring_config: Json | null
           slug: string
@@ -11801,6 +12385,8 @@ export type Database = {
           title: string
           tournament_scope: string | null
           updated_at: string
+          venue_maps_url: string | null
+          venue_name: string | null
           virtual_reg_end: string | null
           virtual_reg_start: string | null
           visibility: string
@@ -11808,8 +12394,10 @@ export type Database = {
         Insert: {
           address: string
           allow_individual_registration?: boolean
+          attachments?: Json
           banner_url?: string | null
           capacity?: number | null
+          card_config?: Json | null
           city: string
           coach_discount_usd?: number | null
           companion_discount_usd?: number | null
@@ -11823,6 +12411,7 @@ export type Database = {
           crossover_allowed?: boolean | null
           currency?: string | null
           description?: string | null
+          end_date?: string | null
           end_time?: string | null
           event_date: string
           event_type?: string
@@ -11837,12 +12426,15 @@ export type Database = {
           lat?: number | null
           live_enabled?: boolean
           lng?: number | null
+          logo_url?: string | null
           notes?: string | null
           organizer_id?: string | null
+          organizer_name?: string | null
           payer_mode?: string
           payment_deadline?: string | null
           payment_gates_approval?: boolean
           payment_methods?: string[] | null
+          player_form?: Json | null
           presential_reg_end?: string | null
           presential_reg_start?: string | null
           price?: number | null
@@ -11850,6 +12442,7 @@ export type Database = {
           registration_deadline?: string | null
           registration_type?: string
           registrations_open?: boolean | null
+          rules_url?: string | null
           school_id?: string | null
           scoring_config?: Json | null
           slug: string
@@ -11860,6 +12453,8 @@ export type Database = {
           title: string
           tournament_scope?: string | null
           updated_at?: string
+          venue_maps_url?: string | null
+          venue_name?: string | null
           virtual_reg_end?: string | null
           virtual_reg_start?: string | null
           visibility?: string
@@ -11867,8 +12462,10 @@ export type Database = {
         Update: {
           address?: string
           allow_individual_registration?: boolean
+          attachments?: Json
           banner_url?: string | null
           capacity?: number | null
+          card_config?: Json | null
           city?: string
           coach_discount_usd?: number | null
           companion_discount_usd?: number | null
@@ -11882,6 +12479,7 @@ export type Database = {
           crossover_allowed?: boolean | null
           currency?: string | null
           description?: string | null
+          end_date?: string | null
           end_time?: string | null
           event_date?: string
           event_type?: string
@@ -11896,12 +12494,15 @@ export type Database = {
           lat?: number | null
           live_enabled?: boolean
           lng?: number | null
+          logo_url?: string | null
           notes?: string | null
           organizer_id?: string | null
+          organizer_name?: string | null
           payer_mode?: string
           payment_deadline?: string | null
           payment_gates_approval?: boolean
           payment_methods?: string[] | null
+          player_form?: Json | null
           presential_reg_end?: string | null
           presential_reg_start?: string | null
           price?: number | null
@@ -11909,6 +12510,7 @@ export type Database = {
           registration_deadline?: string | null
           registration_type?: string
           registrations_open?: boolean | null
+          rules_url?: string | null
           school_id?: string | null
           scoring_config?: Json | null
           slug?: string
@@ -11919,6 +12521,8 @@ export type Database = {
           title?: string
           tournament_scope?: string | null
           updated_at?: string
+          venue_maps_url?: string | null
+          venue_name?: string | null
           virtual_reg_end?: string | null
           virtual_reg_start?: string | null
           visibility?: string
@@ -12782,7 +13386,9 @@ export type Database = {
       }
       facilities: {
         Row: {
+          address: string | null
           available_hours: Json | null
+          bookable_by: string
           booking_enabled: boolean | null
           branch_id: string | null
           capacity: number
@@ -12790,20 +13396,27 @@ export type Database = {
           description: string | null
           hourly_rate: number | null
           id: string
+          indicaciones: string | null
+          maps_url: string | null
+          max_duration_min: number
           min_booking_advance_hours: number
           min_cancellation_hours: number
           min_deposit_pct: number
+          min_duration_min: number
           name: string
           rental_enabled: boolean
           rental_notes: string | null
           rental_rate: number | null
           school_id: string | null
+          slot_step_min: number
           status: string
           type: string
           updated_at: string
         }
         Insert: {
+          address?: string | null
           available_hours?: Json | null
+          bookable_by?: string
           booking_enabled?: boolean | null
           branch_id?: string | null
           capacity?: number
@@ -12811,20 +13424,27 @@ export type Database = {
           description?: string | null
           hourly_rate?: number | null
           id?: string
+          indicaciones?: string | null
+          maps_url?: string | null
+          max_duration_min?: number
           min_booking_advance_hours?: number
           min_cancellation_hours?: number
           min_deposit_pct?: number
+          min_duration_min?: number
           name: string
           rental_enabled?: boolean
           rental_notes?: string | null
           rental_rate?: number | null
           school_id?: string | null
+          slot_step_min?: number
           status?: string
           type: string
           updated_at?: string
         }
         Update: {
+          address?: string | null
           available_hours?: Json | null
+          bookable_by?: string
           booking_enabled?: boolean | null
           branch_id?: string | null
           capacity?: number
@@ -12832,14 +13452,19 @@ export type Database = {
           description?: string | null
           hourly_rate?: number | null
           id?: string
+          indicaciones?: string | null
+          maps_url?: string | null
+          max_duration_min?: number
           min_booking_advance_hours?: number
           min_cancellation_hours?: number
           min_deposit_pct?: number
+          min_duration_min?: number
           name?: string
           rental_enabled?: boolean
           rental_notes?: string | null
           rental_rate?: number | null
           school_id?: string | null
+          slot_step_min?: number
           status?: string
           type?: string
           updated_at?: string
@@ -12982,6 +13607,109 @@ export type Database = {
           },
         ]
       }
+      facility_blackouts: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          ends_at: string
+          facility_id: string
+          id: string
+          kind: string
+          reason: string | null
+          school_id: string
+          starts_at: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          ends_at: string
+          facility_id: string
+          id?: string
+          kind?: string
+          reason?: string | null
+          school_id: string
+          starts_at: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          ends_at?: string
+          facility_id?: string
+          id?: string
+          kind?: string
+          reason?: string | null
+          school_id?: string
+          starts_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "facility_blackouts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_facility_id_fkey"
+            columns: ["facility_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_blackouts_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       facility_occupancy: {
         Row: {
           created_at: string
@@ -13071,6 +13799,107 @@ export type Database = {
           },
         ]
       }
+      facility_rates: {
+        Row: {
+          audience: string
+          created_at: string
+          facility_id: string
+          from_time: string
+          id: string
+          label: string | null
+          price_per_hour: number
+          priority: number
+          school_id: string
+          to_time: string
+          updated_at: string
+          valid_from: string | null
+          valid_to: string | null
+          weekdays: number[]
+        }
+        Insert: {
+          audience: string
+          created_at?: string
+          facility_id: string
+          from_time: string
+          id?: string
+          label?: string | null
+          price_per_hour: number
+          priority?: number
+          school_id: string
+          to_time: string
+          updated_at?: string
+          valid_from?: string | null
+          valid_to?: string | null
+          weekdays?: number[]
+        }
+        Update: {
+          audience?: string
+          created_at?: string
+          facility_id?: string
+          from_time?: string
+          id?: string
+          label?: string | null
+          price_per_hour?: number
+          priority?: number
+          school_id?: string
+          to_time?: string
+          updated_at?: string
+          valid_from?: string | null
+          valid_to?: string | null
+          weekdays?: number[]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "facility_rates_facility_id_fkey"
+            columns: ["facility_id"]
+            isOneToOne: false
+            referencedRelation: "facilities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "facility_rates_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       facility_reservations: {
         Row: {
           amount_paid: number
@@ -13095,6 +13924,7 @@ export type Database = {
           notes: string | null
           participants: number | null
           payment_id: string | null
+          payment_reference: string | null
           payment_status: Database["public"]["Enums"]["resv_payment_status"]
           price: number | null
           price_snapshot: Json | null
@@ -13108,7 +13938,7 @@ export type Database = {
           status: string | null
           team_id: string | null
           updated_at: string | null
-          user_id: string
+          user_id: string | null
         }
         Insert: {
           amount_paid?: number
@@ -13133,6 +13963,7 @@ export type Database = {
           notes?: string | null
           participants?: number | null
           payment_id?: string | null
+          payment_reference?: string | null
           payment_status?: Database["public"]["Enums"]["resv_payment_status"]
           price?: number | null
           price_snapshot?: Json | null
@@ -13146,7 +13977,7 @@ export type Database = {
           status?: string | null
           team_id?: string | null
           updated_at?: string | null
-          user_id: string
+          user_id?: string | null
         }
         Update: {
           amount_paid?: number
@@ -13171,6 +14002,7 @@ export type Database = {
           notes?: string | null
           participants?: number | null
           payment_id?: string | null
+          payment_reference?: string | null
           payment_status?: Database["public"]["Enums"]["resv_payment_status"]
           price?: number | null
           price_snapshot?: Json | null
@@ -13184,7 +14016,7 @@ export type Database = {
           status?: string | null
           team_id?: string | null
           updated_at?: string | null
-          user_id?: string
+          user_id?: string | null
         }
         Relationships: [
           {
@@ -18040,6 +18872,161 @@ export type Database = {
           },
         ]
       }
+      payment_corrections: {
+        Row: {
+          amount_after: number | null
+          amount_before: number
+          created_at: string
+          created_by: string | null
+          enrollment_id: string | null
+          id: string
+          kind: string
+          motivo: string | null
+          payment_id: string
+          school_id: string
+          status_before: string
+        }
+        Insert: {
+          amount_after?: number | null
+          amount_before: number
+          created_at?: string
+          created_by?: string | null
+          enrollment_id?: string | null
+          id?: string
+          kind: string
+          motivo?: string | null
+          payment_id: string
+          school_id: string
+          status_before: string
+        }
+        Update: {
+          amount_after?: number | null
+          amount_before?: number
+          created_at?: string
+          created_by?: string | null
+          enrollment_id?: string | null
+          id?: string
+          kind?: string
+          motivo?: string | null
+          payment_id?: string
+          school_id?: string
+          status_before?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payment_corrections_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "enrollments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_enrollment_id_fkey"
+            columns: ["enrollment_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["enrollment_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments_with_installments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "pending_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_document_compliance_report"
+            referencedColumns: ["active_payment_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_payment_abonos_summary"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_payment_contacts"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payment_corrections_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       payment_glosas: {
         Row: {
           created_at: string
@@ -19475,6 +20462,7 @@ export type Database = {
           requires_review: boolean
           school_id: string | null
           sibling_discount_applied: number | null
+          signup_lead_id: string | null
           sportmaps_fee: number | null
           status: string
           subscription_end_date: string | null
@@ -19568,6 +20556,7 @@ export type Database = {
           requires_review?: boolean
           school_id?: string | null
           sibling_discount_applied?: number | null
+          signup_lead_id?: string | null
           sportmaps_fee?: number | null
           status: string
           subscription_end_date?: string | null
@@ -19661,6 +20650,7 @@ export type Database = {
           requires_review?: boolean
           school_id?: string | null
           sibling_discount_applied?: number | null
+          signup_lead_id?: string | null
           sportmaps_fee?: number | null
           status?: string
           subscription_end_date?: string | null
@@ -19843,6 +20833,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_school_entitlements"
             referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "payments_signup_lead_id_fkey"
+            columns: ["signup_lead_id"]
+            isOneToOne: false
+            referencedRelation: "school_signup_leads"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "payments_team_id_fkey"
@@ -20561,12 +21558,52 @@ export type Database = {
         }
         Relationships: []
       }
+      platform_wa_auditoria: {
+        Row: {
+          accion: string
+          actor_id: string | null
+          created_at: string
+          detalle: Json
+          id: string
+        }
+        Insert: {
+          accion: string
+          actor_id?: string | null
+          created_at?: string
+          detalle?: Json
+          id?: string
+        }
+        Update: {
+          accion?: string
+          actor_id?: string | null
+          created_at?: string
+          detalle?: Json
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_wa_auditoria_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "platform_wa_auditoria_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       platform_wa_canal: {
         Row: {
           access_token_encrypted: string | null
           conectado_at: string | null
           created_at: string
           display_phone_number: string | null
+          habilitado: boolean
           id: string
           phone_number_id: string
           status: string
@@ -20579,6 +21616,7 @@ export type Database = {
           conectado_at?: string | null
           created_at?: string
           display_phone_number?: string | null
+          habilitado?: boolean
           id?: string
           phone_number_id: string
           status?: string
@@ -20591,6 +21629,7 @@ export type Database = {
           conectado_at?: string | null
           created_at?: string
           display_phone_number?: string | null
+          habilitado?: boolean
           id?: string
           phone_number_id?: string
           status?: string
@@ -25016,6 +26055,7 @@ export type Database = {
           absence_alert_threshold: number
           access_auto_block_overdue_enabled: boolean
           access_block_mechanism: string
+          access_roster_enabled: boolean
           active_modules: string[]
           allow_coach_messaging: boolean | null
           allow_installments: boolean
@@ -25044,6 +26084,7 @@ export type Database = {
           breb_number: string | null
           business_hours: Json | null
           cartera_report_enabled: boolean | null
+          charge_created_notice_enabled: boolean
           charge_notifications_enabled: boolean
           coach_attendance_retro_days: number
           coach_attendance_teams_only: boolean
@@ -25059,12 +26100,14 @@ export type Database = {
           coach_can_upload_enrollment_forms: boolean
           coach_hide_financial_info: boolean
           collection_policy_notice: string | null
+          collection_pre_due_enabled: boolean
           cortesia_unica: boolean
           courtesy_from_training: boolean
           created_at: string | null
           daviplata_number: string | null
           early_payment_discount_days: number
           early_payment_discount_enabled: boolean
+          early_payment_discount_mode: string
           early_payment_discount_percentage: number
           email_collection_reminders_enabled: boolean
           enrollment_validity_mode: string
@@ -25097,6 +26140,7 @@ export type Database = {
           nequi_number: string | null
           online_fee_pct: number | null
           overdue_hold_until: string | null
+          overdue_notices_enabled: boolean
           parent_email_optional: boolean
           pause_enabled: boolean
           pause_max_months_per_year: number
@@ -25141,12 +26185,20 @@ export type Database = {
           updated_at: string | null
           wa_atencion_presencial: string | null
           wa_ayuda_app: boolean
+          wa_bienvenida: string | null
+          wa_botones_sede: Json | null
+          wa_cobro_desde_comprobante: boolean
           wa_cortesia_dias: number
           wa_cortesia_indicaciones: string | null
           wa_cortesia_qr_id: string | null
+          wa_estilo_respuesta: string | null
+          wa_ficha_prospectos: string | null
           wa_modo_cortesia: string
+          wa_modo_discreto: string
+          wa_preguntas_prospecto: Json | null
           wa_reclamos_de_valor: boolean
           wa_responder_precios: boolean
+          wa_temas_a_persona: Json | null
           wa_transcribir_sin_consentimiento: boolean
           wa_ventas_habilitadas: boolean
           whatsapp_collection_reminders_enabled: boolean
@@ -25157,6 +26209,7 @@ export type Database = {
           absence_alert_threshold?: number
           access_auto_block_overdue_enabled?: boolean
           access_block_mechanism?: string
+          access_roster_enabled?: boolean
           active_modules?: string[]
           allow_coach_messaging?: boolean | null
           allow_installments?: boolean
@@ -25185,6 +26238,7 @@ export type Database = {
           breb_number?: string | null
           business_hours?: Json | null
           cartera_report_enabled?: boolean | null
+          charge_created_notice_enabled?: boolean
           charge_notifications_enabled?: boolean
           coach_attendance_retro_days?: number
           coach_attendance_teams_only?: boolean
@@ -25200,12 +26254,14 @@ export type Database = {
           coach_can_upload_enrollment_forms?: boolean
           coach_hide_financial_info?: boolean
           collection_policy_notice?: string | null
+          collection_pre_due_enabled?: boolean
           cortesia_unica?: boolean
           courtesy_from_training?: boolean
           created_at?: string | null
           daviplata_number?: string | null
           early_payment_discount_days?: number
           early_payment_discount_enabled?: boolean
+          early_payment_discount_mode?: string
           early_payment_discount_percentage?: number
           email_collection_reminders_enabled?: boolean
           enrollment_validity_mode?: string
@@ -25238,6 +26294,7 @@ export type Database = {
           nequi_number?: string | null
           online_fee_pct?: number | null
           overdue_hold_until?: string | null
+          overdue_notices_enabled?: boolean
           parent_email_optional?: boolean
           pause_enabled?: boolean
           pause_max_months_per_year?: number
@@ -25282,12 +26339,20 @@ export type Database = {
           updated_at?: string | null
           wa_atencion_presencial?: string | null
           wa_ayuda_app?: boolean
+          wa_bienvenida?: string | null
+          wa_botones_sede?: Json | null
+          wa_cobro_desde_comprobante?: boolean
           wa_cortesia_dias?: number
           wa_cortesia_indicaciones?: string | null
           wa_cortesia_qr_id?: string | null
+          wa_estilo_respuesta?: string | null
+          wa_ficha_prospectos?: string | null
           wa_modo_cortesia?: string
+          wa_modo_discreto?: string
+          wa_preguntas_prospecto?: Json | null
           wa_reclamos_de_valor?: boolean
           wa_responder_precios?: boolean
+          wa_temas_a_persona?: Json | null
           wa_transcribir_sin_consentimiento?: boolean
           wa_ventas_habilitadas?: boolean
           whatsapp_collection_reminders_enabled?: boolean
@@ -25298,6 +26363,7 @@ export type Database = {
           absence_alert_threshold?: number
           access_auto_block_overdue_enabled?: boolean
           access_block_mechanism?: string
+          access_roster_enabled?: boolean
           active_modules?: string[]
           allow_coach_messaging?: boolean | null
           allow_installments?: boolean
@@ -25326,6 +26392,7 @@ export type Database = {
           breb_number?: string | null
           business_hours?: Json | null
           cartera_report_enabled?: boolean | null
+          charge_created_notice_enabled?: boolean
           charge_notifications_enabled?: boolean
           coach_attendance_retro_days?: number
           coach_attendance_teams_only?: boolean
@@ -25341,12 +26408,14 @@ export type Database = {
           coach_can_upload_enrollment_forms?: boolean
           coach_hide_financial_info?: boolean
           collection_policy_notice?: string | null
+          collection_pre_due_enabled?: boolean
           cortesia_unica?: boolean
           courtesy_from_training?: boolean
           created_at?: string | null
           daviplata_number?: string | null
           early_payment_discount_days?: number
           early_payment_discount_enabled?: boolean
+          early_payment_discount_mode?: string
           early_payment_discount_percentage?: number
           email_collection_reminders_enabled?: boolean
           enrollment_validity_mode?: string
@@ -25379,6 +26448,7 @@ export type Database = {
           nequi_number?: string | null
           online_fee_pct?: number | null
           overdue_hold_until?: string | null
+          overdue_notices_enabled?: boolean
           parent_email_optional?: boolean
           pause_enabled?: boolean
           pause_max_months_per_year?: number
@@ -25423,12 +26493,20 @@ export type Database = {
           updated_at?: string | null
           wa_atencion_presencial?: string | null
           wa_ayuda_app?: boolean
+          wa_bienvenida?: string | null
+          wa_botones_sede?: Json | null
+          wa_cobro_desde_comprobante?: boolean
           wa_cortesia_dias?: number
           wa_cortesia_indicaciones?: string | null
           wa_cortesia_qr_id?: string | null
+          wa_estilo_respuesta?: string | null
+          wa_ficha_prospectos?: string | null
           wa_modo_cortesia?: string
+          wa_modo_discreto?: string
+          wa_preguntas_prospecto?: Json | null
           wa_reclamos_de_valor?: boolean
           wa_responder_precios?: boolean
+          wa_temas_a_persona?: Json | null
           wa_transcribir_sin_consentimiento?: boolean
           wa_ventas_habilitadas?: boolean
           whatsapp_collection_reminders_enabled?: boolean
@@ -25595,8 +26673,11 @@ export type Database = {
       school_signup_leads: {
         Row: {
           birth_date: string | null
+          branch_id: string | null
           converted_enrollment_id: string | null
           created_at: string
+          cupo_separado_hasta: string | null
+          cupo_separado_slot_id: string | null
           email: string | null
           full_name: string
           gender: string | null
@@ -25605,18 +26686,23 @@ export type Database = {
           id: string
           notes: string | null
           phone: string
+          respuestas: Json | null
           school_id: string
           source_detail: Json | null
           source_slug: string
           status: string
           suggested_category: string | null
+          team_id: string | null
           trial_slot_id: string | null
           updated_at: string
         }
         Insert: {
           birth_date?: string | null
+          branch_id?: string | null
           converted_enrollment_id?: string | null
           created_at?: string
+          cupo_separado_hasta?: string | null
+          cupo_separado_slot_id?: string | null
           email?: string | null
           full_name: string
           gender?: string | null
@@ -25625,18 +26711,23 @@ export type Database = {
           id?: string
           notes?: string | null
           phone: string
+          respuestas?: Json | null
           school_id: string
           source_detail?: Json | null
           source_slug: string
           status?: string
           suggested_category?: string | null
+          team_id?: string | null
           trial_slot_id?: string | null
           updated_at?: string
         }
         Update: {
           birth_date?: string | null
+          branch_id?: string | null
           converted_enrollment_id?: string | null
           created_at?: string
+          cupo_separado_hasta?: string | null
+          cupo_separado_slot_id?: string | null
           email?: string | null
           full_name?: string
           gender?: string | null
@@ -25645,15 +26736,24 @@ export type Database = {
           id?: string
           notes?: string | null
           phone?: string
+          respuestas?: Json | null
           school_id?: string
           source_detail?: Json | null
           source_slug?: string
           status?: string
           suggested_category?: string | null
+          team_id?: string | null
           trial_slot_id?: string | null
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "school_signup_leads_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "school_branches"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "school_signup_leads_converted_enrollment_id_fkey"
             columns: ["converted_enrollment_id"]
@@ -25667,6 +26767,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "students"
             referencedColumns: ["enrollment_id"]
+          },
+          {
+            foreignKeyName: "school_signup_leads_cupo_separado_slot_id_fkey"
+            columns: ["cupo_separado_slot_id"]
+            isOneToOne: false
+            referencedRelation: "school_trial_slots"
+            referencedColumns: ["id"]
           },
           {
             foreignKeyName: "school_signup_leads_school_id_fkey"
@@ -25709,6 +26816,34 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_school_entitlements"
             referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "school_signup_leads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "team_capacity"
+            referencedColumns: ["team_id"]
+          },
+          {
+            foreignKeyName: "school_signup_leads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "school_signup_leads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["program_id"]
+          },
+          {
+            foreignKeyName: "school_signup_leads_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["team_id"]
           },
           {
             foreignKeyName: "school_signup_leads_trial_slot_id_fkey"
@@ -26075,6 +27210,7 @@ export type Database = {
       }
       school_tournament_items: {
         Row: {
+          abono_minimo_pct: number | null
           active: boolean
           allow_installments: boolean
           capacity: number | null
@@ -26086,7 +27222,10 @@ export type Database = {
           image_url: string | null
           kind: string
           name: string
+          opciones: Json | null
           per_athlete: boolean
+          precio_afiliado: number | null
+          precios_por_fecha: Json | null
           price: number
           school_id: string
           sort_order: number
@@ -26094,6 +27233,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          abono_minimo_pct?: number | null
           active?: boolean
           allow_installments?: boolean
           capacity?: number | null
@@ -26105,7 +27245,10 @@ export type Database = {
           image_url?: string | null
           kind?: string
           name: string
+          opciones?: Json | null
           per_athlete?: boolean
+          precio_afiliado?: number | null
+          precios_por_fecha?: Json | null
           price: number
           school_id: string
           sort_order?: number
@@ -26113,6 +27256,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          abono_minimo_pct?: number | null
           active?: boolean
           allow_installments?: boolean
           capacity?: number | null
@@ -26124,7 +27268,10 @@ export type Database = {
           image_url?: string | null
           kind?: string
           name?: string
+          opciones?: Json | null
           per_athlete?: boolean
+          precio_afiliado?: number | null
+          precios_por_fecha?: Json | null
           price?: number
           school_id?: string
           sort_order?: number
@@ -26185,34 +27332,61 @@ export type Database = {
       }
       school_trial_class_settings: {
         Row: {
+          agendar_al_recibir: boolean
+          avisar_entrenador: boolean
           created_at: string
+          cupos_por_sesion: number | null
+          dias_semana: number[] | null
           enabled: boolean
+          nombre_clase: string | null
           payment_mode: string
+          presencial_enabled: boolean
           requires_approval: boolean
           reschedule_cutoff_hours: number
           school_id: string
           self_service_enabled: boolean
+          separar_horas: number | null
+          trial_price: number | null
           updated_at: string
+          whatsapp_enabled: boolean
         }
         Insert: {
+          agendar_al_recibir?: boolean
+          avisar_entrenador?: boolean
           created_at?: string
+          cupos_por_sesion?: number | null
+          dias_semana?: number[] | null
           enabled?: boolean
+          nombre_clase?: string | null
           payment_mode?: string
+          presencial_enabled?: boolean
           requires_approval?: boolean
           reschedule_cutoff_hours?: number
           school_id: string
           self_service_enabled?: boolean
+          separar_horas?: number | null
+          trial_price?: number | null
           updated_at?: string
+          whatsapp_enabled?: boolean
         }
         Update: {
+          agendar_al_recibir?: boolean
+          avisar_entrenador?: boolean
           created_at?: string
+          cupos_por_sesion?: number | null
+          dias_semana?: number[] | null
           enabled?: boolean
+          nombre_clase?: string | null
           payment_mode?: string
+          presencial_enabled?: boolean
           requires_approval?: boolean
           reschedule_cutoff_hours?: number
           school_id?: string
           self_service_enabled?: boolean
+          separar_horas?: number | null
+          trial_price?: number | null
           updated_at?: string
+          whatsapp_enabled?: boolean
         }
         Relationships: [
           {
@@ -26363,6 +27537,7 @@ export type Database = {
       }
       school_trial_slots: {
         Row: {
+          cerrada_por: string | null
           created_at: string
           created_by: string | null
           end_time: string | null
@@ -26380,6 +27555,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          cerrada_por?: string | null
           created_at?: string
           created_by?: string | null
           end_time?: string | null
@@ -26397,6 +27573,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          cerrada_por?: string | null
           created_at?: string
           created_by?: string | null
           end_time?: string | null
@@ -26903,7 +28080,9 @@ export type Database = {
           created_at: string
           display_phone_number: string | null
           id: string
+          nombre: string | null
           phone_number_id: string
+          proposito: string
           school_id: string
           status: string
           suspended_at: string | null
@@ -26921,7 +28100,9 @@ export type Database = {
           created_at?: string
           display_phone_number?: string | null
           id?: string
+          nombre?: string | null
           phone_number_id: string
+          proposito?: string
           school_id: string
           status?: string
           suspended_at?: string | null
@@ -26939,7 +28120,9 @@ export type Database = {
           created_at?: string
           display_phone_number?: string | null
           id?: string
+          nombre?: string | null
           phone_number_id?: string
+          proposito?: string
           school_id?: string
           status?: string
           suspended_at?: string | null
@@ -29619,6 +30802,96 @@ export type Database = {
           },
         ]
       }
+      tactical_ai_quota_overrides: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          expires_at: string
+          id: string
+          multiplier: number
+          note: string | null
+          school_id: string
+          starts_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          expires_at: string
+          id?: string
+          multiplier: number
+          note?: string | null
+          school_id: string
+          starts_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          expires_at?: string
+          id?: string
+          multiplier?: number
+          note?: string | null
+          school_id?: string
+          starts_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_quota_overrides_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       tactical_ai_runs: {
         Row: {
           cache_read_tokens: number
@@ -29821,6 +31094,105 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_school_entitlements"
             referencedColumns: ["school_id"]
+          },
+        ]
+      }
+      tactical_ai_suggestion_feedback: {
+        Row: {
+          board_hash: string
+          created_at: string
+          id: string
+          saved_as_play_at: string | null
+          school_id: string
+          sport: string
+          suggestion_index: number
+          suggestion_kind: string
+          updated_at: string
+          user_id: string
+          verdict: string | null
+        }
+        Insert: {
+          board_hash: string
+          created_at?: string
+          id?: string
+          saved_as_play_at?: string | null
+          school_id: string
+          sport: string
+          suggestion_index: number
+          suggestion_kind: string
+          updated_at?: string
+          user_id: string
+          verdict?: string | null
+        }
+        Update: {
+          board_hash?: string
+          created_at?: string
+          id?: string
+          saved_as_play_at?: string | null
+          school_id?: string
+          sport?: string
+          suggestion_index?: number
+          suggestion_kind?: string
+          updated_at?: string
+          user_id?: string
+          verdict?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tactical_ai_suggestion_feedback_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -30272,6 +31644,133 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "v_school_entitlements"
             referencedColumns: ["school_id"]
+          },
+        ]
+      }
+      tactical_shared_plays: {
+        Row: {
+          created_at: string
+          created_by: string
+          id: string
+          payload: Json
+          revoked_at: string | null
+          school_id: string
+          sport: string | null
+          status: string
+          team_id: string | null
+          title: string
+          token: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          id?: string
+          payload: Json
+          revoked_at?: string | null
+          school_id: string
+          sport?: string | null
+          status?: string
+          team_id?: string | null
+          title?: string
+          token: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          id?: string
+          payload?: Json
+          revoked_at?: string | null
+          school_id?: string
+          sport?: string | null
+          status?: string
+          team_id?: string | null
+          title?: string
+          token?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tactical_shared_plays_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "team_capacity"
+            referencedColumns: ["team_id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["program_id"]
+          },
+          {
+            foreignKeyName: "tactical_shared_plays_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["team_id"]
           },
         ]
       }
@@ -30841,6 +32340,139 @@ export type Database = {
           },
         ]
       }
+      team_schedule_exceptions: {
+        Row: {
+          creado_por: string | null
+          created_at: string
+          fecha: string
+          hora_fin: string | null
+          hora_inicio: string | null
+          hora_original: string | null
+          id: string
+          lugar: string | null
+          motivo: string | null
+          school_id: string
+          team_id: string
+          tipo: string
+          updated_at: string
+        }
+        Insert: {
+          creado_por?: string | null
+          created_at?: string
+          fecha: string
+          hora_fin?: string | null
+          hora_inicio?: string | null
+          hora_original?: string | null
+          id?: string
+          lugar?: string | null
+          motivo?: string | null
+          school_id: string
+          team_id: string
+          tipo: string
+          updated_at?: string
+        }
+        Update: {
+          creado_por?: string | null
+          created_at?: string
+          fecha?: string
+          hora_fin?: string | null
+          hora_inicio?: string | null
+          hora_original?: string | null
+          id?: string
+          lugar?: string | null
+          motivo?: string | null
+          school_id?: string
+          team_id?: string
+          tipo?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "team_schedule_exceptions_creado_por_fkey"
+            columns: ["creado_por"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_creado_por_fkey"
+            columns: ["creado_por"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "team_capacity"
+            referencedColumns: ["team_id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["program_id"]
+          },
+          {
+            foreignKeyName: "team_schedule_exceptions_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams_full_view"
+            referencedColumns: ["team_id"]
+          },
+        ]
+      }
       team_tactical_presets: {
         Row: {
           arrows: Json
@@ -31001,6 +32633,7 @@ export type Database = {
           name: string
           nota_admision: string | null
           price_monthly: number | null
+          recibe_clase_prueba: boolean
           schedule: Json | null
           school_id: string | null
           season: string | null
@@ -31034,6 +32667,7 @@ export type Database = {
           name: string
           nota_admision?: string | null
           price_monthly?: number | null
+          recibe_clase_prueba?: boolean
           schedule?: Json | null
           school_id?: string | null
           season?: string | null
@@ -31067,6 +32701,7 @@ export type Database = {
           name?: string
           nota_admision?: string | null
           price_monthly?: number | null
+          recibe_clase_prueba?: boolean
           schedule?: Json | null
           school_id?: string | null
           season?: string | null
@@ -31192,6 +32827,144 @@ export type Database = {
         }
         Relationships: []
       }
+      tournament_comments: {
+        Row: {
+          author_name: string
+          author_user_id: string | null
+          body: string
+          created_at: string
+          event_id: string
+          id: string
+          ip_hash: string | null
+          match_id: string | null
+          moderated_by: string | null
+          status: string
+          voter_hash: string | null
+        }
+        Insert: {
+          author_name: string
+          author_user_id?: string | null
+          body: string
+          created_at?: string
+          event_id: string
+          id?: string
+          ip_hash?: string | null
+          match_id?: string | null
+          moderated_by?: string | null
+          status?: string
+          voter_hash?: string | null
+        }
+        Update: {
+          author_name?: string
+          author_user_id?: string | null
+          body?: string
+          created_at?: string
+          event_id?: string
+          id?: string
+          ip_hash?: string | null
+          match_id?: string | null
+          moderated_by?: string | null
+          status?: string
+          voter_hash?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_comments_author_user_id_fkey"
+            columns: ["author_user_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_comments_author_user_id_fkey"
+            columns: ["author_user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_comments_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_comments_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_comments_moderated_by_fkey"
+            columns: ["moderated_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_comments_moderated_by_fkey"
+            columns: ["moderated_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_follows: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          team_id: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          team_id?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          team_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_follows_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_follows_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "event_teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_follows_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_follows_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tournament_match_events: {
         Row: {
           created_at: string
@@ -31308,6 +33081,85 @@ export type Database = {
           },
         ]
       }
+      tournament_match_mvp: {
+        Row: {
+          chosen_at: string
+          chosen_by: string | null
+          match_id: string
+          member_id: string
+        }
+        Insert: {
+          chosen_at?: string
+          chosen_by?: string | null
+          match_id: string
+          member_id: string
+        }
+        Update: {
+          chosen_at?: string
+          chosen_by?: string | null
+          match_id?: string
+          member_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_match_mvp_chosen_by_fkey"
+            columns: ["chosen_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_match_mvp_chosen_by_fkey"
+            columns: ["chosen_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_match_mvp_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: true
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_match_mvp_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "event_team_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_match_notices: {
+        Row: {
+          kind: string
+          match_id: string
+          recipients: number
+          sent_at: string
+        }
+        Insert: {
+          kind: string
+          match_id: string
+          recipients?: number
+          sent_at?: string
+        }
+        Update: {
+          kind?: string
+          match_id?: string
+          recipients?: number
+          sent_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_match_notices_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tournament_matches: {
         Row: {
           away_ref: string | null
@@ -31316,6 +33168,7 @@ export type Database = {
           category_id: string | null
           court: string | null
           created_at: string
+          cup_label: string | null
           event_id: string
           finished_at: string | null
           group_label: string | null
@@ -31346,6 +33199,7 @@ export type Database = {
           category_id?: string | null
           court?: string | null
           created_at?: string
+          cup_label?: string | null
           event_id: string
           finished_at?: string | null
           group_label?: string | null
@@ -31376,6 +33230,7 @@ export type Database = {
           category_id?: string | null
           court?: string | null
           created_at?: string
+          cup_label?: string | null
           event_id?: string
           finished_at?: string | null
           group_label?: string | null
@@ -31426,6 +33281,194 @@ export type Database = {
             columns: ["home_team_id"]
             isOneToOne: false
             referencedRelation: "event_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_mvp_votes: {
+        Row: {
+          created_at: string
+          id: string
+          ip_hash: string | null
+          match_id: string
+          member_id: string
+          voter_hash: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          ip_hash?: string | null
+          match_id: string
+          member_id: string
+          voter_hash: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          ip_hash?: string | null
+          match_id?: string
+          member_id?: string
+          voter_hash?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_mvp_votes_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_mvp_votes_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "event_team_members"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_player_stats: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          match_id: string
+          member_id: string
+          point_index: number
+          side: string
+          stat: string
+          team_id: string
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          match_id: string
+          member_id: string
+          point_index: number
+          side: string
+          stat: string
+          team_id: string
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          match_id?: string
+          member_id?: string
+          point_index?: number
+          side?: string
+          stat?: string
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_player_stats_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_player_stats_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_player_stats_member_id_fkey"
+            columns: ["member_id"]
+            isOneToOne: false
+            referencedRelation: "event_team_members"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_player_stats_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "event_teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_posts: {
+        Row: {
+          body: string | null
+          created_at: string
+          created_by: string | null
+          event_id: string
+          id: string
+          kind: string
+          match_id: string | null
+          media_path: string | null
+          scorekeeper_id: string | null
+          status: string
+          title: string | null
+          video_url: string | null
+        }
+        Insert: {
+          body?: string | null
+          created_at?: string
+          created_by?: string | null
+          event_id: string
+          id?: string
+          kind: string
+          match_id?: string | null
+          media_path?: string | null
+          scorekeeper_id?: string | null
+          status?: string
+          title?: string | null
+          video_url?: string | null
+        }
+        Update: {
+          body?: string | null
+          created_at?: string
+          created_by?: string | null
+          event_id?: string
+          id?: string
+          kind?: string
+          match_id?: string | null
+          media_path?: string | null
+          scorekeeper_id?: string | null
+          status?: string
+          title?: string | null
+          video_url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_posts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_posts_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_posts_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_posts_match_id_fkey"
+            columns: ["match_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_matches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_posts_scorekeeper_id_fkey"
+            columns: ["scorekeeper_id"]
+            isOneToOne: false
+            referencedRelation: "tournament_scorekeepers"
             referencedColumns: ["id"]
           },
         ]
@@ -31487,6 +33530,163 @@ export type Database = {
             columns: ["event_id"]
             isOneToOne: false
             referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_sponsors: {
+        Row: {
+          created_at: string
+          event_id: string
+          id: string
+          logo_url: string | null
+          name: string
+          sort_order: number
+          tier: string
+          updated_at: string
+          url: string | null
+        }
+        Insert: {
+          created_at?: string
+          event_id: string
+          id?: string
+          logo_url?: string | null
+          name: string
+          sort_order?: number
+          tier?: string
+          updated_at?: string
+          url?: string | null
+        }
+        Update: {
+          created_at?: string
+          event_id?: string
+          id?: string
+          logo_url?: string | null
+          name?: string
+          sort_order?: number
+          tier?: string
+          updated_at?: string
+          url?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_sponsors_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tournament_team_invites: {
+        Row: {
+          completed_at: string | null
+          consent_at: string | null
+          consent_version: string | null
+          created_at: string
+          created_by: string | null
+          delegate_email: string | null
+          delegate_name: string | null
+          delegate_phone: string | null
+          event_id: string
+          expires_at: string | null
+          id: string
+          lead_origin: string
+          opened_at: string | null
+          payment_amount: number | null
+          payment_proof_path: string | null
+          payment_status: string
+          revoked_at: string | null
+          roster_submitted_at: string | null
+          roster_target: number | null
+          rules_accepted_at: string | null
+          team_colors: Json | null
+          team_id: string
+          token_hash: string
+          updated_at: string
+          wants_sportmaps_at: string | null
+        }
+        Insert: {
+          completed_at?: string | null
+          consent_at?: string | null
+          consent_version?: string | null
+          created_at?: string
+          created_by?: string | null
+          delegate_email?: string | null
+          delegate_name?: string | null
+          delegate_phone?: string | null
+          event_id: string
+          expires_at?: string | null
+          id?: string
+          lead_origin?: string
+          opened_at?: string | null
+          payment_amount?: number | null
+          payment_proof_path?: string | null
+          payment_status?: string
+          revoked_at?: string | null
+          roster_submitted_at?: string | null
+          roster_target?: number | null
+          rules_accepted_at?: string | null
+          team_colors?: Json | null
+          team_id: string
+          token_hash: string
+          updated_at?: string
+          wants_sportmaps_at?: string | null
+        }
+        Update: {
+          completed_at?: string | null
+          consent_at?: string | null
+          consent_version?: string | null
+          created_at?: string
+          created_by?: string | null
+          delegate_email?: string | null
+          delegate_name?: string | null
+          delegate_phone?: string | null
+          event_id?: string
+          expires_at?: string | null
+          id?: string
+          lead_origin?: string
+          opened_at?: string | null
+          payment_amount?: number | null
+          payment_proof_path?: string | null
+          payment_status?: string
+          revoked_at?: string | null
+          roster_submitted_at?: string | null
+          roster_target?: number | null
+          rules_accepted_at?: string | null
+          team_colors?: Json | null
+          team_id?: string
+          token_hash?: string
+          updated_at?: string
+          wants_sportmaps_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tournament_team_invites_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "tournament_team_invites_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_team_invites_event_id_fkey"
+            columns: ["event_id"]
+            isOneToOne: false
+            referencedRelation: "events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tournament_team_invites_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "event_teams"
             referencedColumns: ["id"]
           },
         ]
@@ -34256,6 +36456,134 @@ export type Database = {
           },
         ]
       }
+      wa_cobros_desde_comprobante: {
+        Row: {
+          concepto_esperado_id: string | null
+          created_at: string
+          es_abono: boolean
+          fuente: string
+          fuente_id: string | null
+          opcion: string | null
+          payment_id: string
+          queue_id: string
+          school_id: string
+        }
+        Insert: {
+          concepto_esperado_id?: string | null
+          created_at?: string
+          es_abono?: boolean
+          fuente: string
+          fuente_id?: string | null
+          opcion?: string | null
+          payment_id: string
+          queue_id: string
+          school_id: string
+        }
+        Update: {
+          concepto_esperado_id?: string | null
+          created_at?: string
+          es_abono?: boolean
+          fuente?: string
+          fuente_id?: string | null
+          opcion?: string | null
+          payment_id?: string
+          queue_id?: string
+          school_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_concepto_esperado_id_fkey"
+            columns: ["concepto_esperado_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_conceptos_esperados"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "payments_with_installments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "pending_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "v_document_compliance_report"
+            referencedColumns: ["active_payment_id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "v_payment_abonos_summary"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: true
+            referencedRelation: "v_payment_contacts"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wa_cobros_desde_comprobante_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
       wa_cobros_sueltos: {
         Row: {
           anulado_at: string | null
@@ -34941,6 +37269,314 @@ export type Database = {
           },
         ]
       }
+      whatsapp_anuncio_destino: {
+        Row: {
+          actualizado_por: string | null
+          created_at: string
+          destino: string
+          id: string
+          nota: string | null
+          school_id: string
+          servicio_id: string | null
+          source_id: string
+          updated_at: string
+        }
+        Insert: {
+          actualizado_por?: string | null
+          created_at?: string
+          destino: string
+          id?: string
+          nota?: string | null
+          school_id: string
+          servicio_id?: string | null
+          source_id: string
+          updated_at?: string
+        }
+        Update: {
+          actualizado_por?: string | null
+          created_at?: string
+          destino?: string
+          id?: string
+          nota?: string | null
+          school_id?: string
+          servicio_id?: string | null
+          source_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_actualizado_por_fkey"
+            columns: ["actualizado_por"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_actualizado_por_fkey"
+            columns: ["actualizado_por"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_anuncio_destino_servicio_id_fkey"
+            columns: ["servicio_id"]
+            isOneToOne: false
+            referencedRelation: "school_tournament_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_atribucion: {
+        Row: {
+          contact_wa_id: string
+          conversation_id: string
+          created_at: string
+          integration_id: string
+          primer_at: string
+          primer_body: string | null
+          primer_ctwa_clid: string | null
+          primer_headline: string | null
+          primer_historial: boolean
+          primer_media_type: string | null
+          primer_media_url: string | null
+          primer_source_id: string
+          primer_source_type: string | null
+          primer_source_url: string | null
+          school_id: string
+          toques: number
+          ultimo_at: string
+          ultimo_ctwa_clid: string | null
+          ultimo_headline: string | null
+          ultimo_source_id: string
+          ultimo_source_type: string | null
+          ultimo_source_url: string | null
+          updated_at: string
+        }
+        Insert: {
+          contact_wa_id: string
+          conversation_id: string
+          created_at?: string
+          integration_id: string
+          primer_at: string
+          primer_body?: string | null
+          primer_ctwa_clid?: string | null
+          primer_headline?: string | null
+          primer_historial?: boolean
+          primer_media_type?: string | null
+          primer_media_url?: string | null
+          primer_source_id: string
+          primer_source_type?: string | null
+          primer_source_url?: string | null
+          school_id: string
+          toques?: number
+          ultimo_at: string
+          ultimo_ctwa_clid?: string | null
+          ultimo_headline?: string | null
+          ultimo_source_id: string
+          ultimo_source_type?: string | null
+          ultimo_source_url?: string | null
+          updated_at?: string
+        }
+        Update: {
+          contact_wa_id?: string
+          conversation_id?: string
+          created_at?: string
+          integration_id?: string
+          primer_at?: string
+          primer_body?: string | null
+          primer_ctwa_clid?: string | null
+          primer_headline?: string | null
+          primer_historial?: boolean
+          primer_media_type?: string | null
+          primer_media_url?: string | null
+          primer_source_id?: string
+          primer_source_type?: string | null
+          primer_source_url?: string | null
+          school_id?: string
+          toques?: number
+          ultimo_at?: string
+          ultimo_ctwa_clid?: string | null
+          ultimo_headline?: string | null
+          ultimo_source_id?: string
+          ultimo_source_type?: string | null
+          ultimo_source_url?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_atribucion_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: true
+            referencedRelation: "whatsapp_conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_atribucion_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
+      whatsapp_audiencia: {
+        Row: {
+          branch_id: string | null
+          clasificado_at: string
+          contact_wa_id: string
+          conversation_id: string | null
+          evidencia_wa_message_id: string | null
+          excluido: string | null
+          fuente: string
+          id: string
+          integration_id: string
+          intereses: string[]
+          primer_entrante_at: string | null
+          school_id: string
+          ultimo_entrante_at: string | null
+          version_reglas: number
+        }
+        Insert: {
+          branch_id?: string | null
+          clasificado_at?: string
+          contact_wa_id: string
+          conversation_id?: string | null
+          evidencia_wa_message_id?: string | null
+          excluido?: string | null
+          fuente?: string
+          id?: string
+          integration_id: string
+          intereses?: string[]
+          primer_entrante_at?: string | null
+          school_id: string
+          ultimo_entrante_at?: string | null
+          version_reglas?: number
+        }
+        Update: {
+          branch_id?: string | null
+          clasificado_at?: string
+          contact_wa_id?: string
+          conversation_id?: string | null
+          evidencia_wa_message_id?: string | null
+          excluido?: string | null
+          fuente?: string
+          id?: string
+          integration_id?: string
+          intereses?: string[]
+          primer_entrante_at?: string | null
+          school_id?: string
+          ultimo_entrante_at?: string | null
+          version_reglas?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_wa_audiencia_integ"
+            columns: ["integration_id", "school_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id", "school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_audiencia_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "school_branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_audiencia_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_conversations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       whatsapp_blocked_numbers: {
         Row: {
           blocked_by: string | null
@@ -34973,6 +37609,537 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "school_whatsapp_integrations"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_campana_envios: {
+        Row: {
+          campana_id: string
+          contact_wa_id: string
+          created_at: string
+          enviado_at: string | null
+          estado: string
+          id: string
+          integration_id: string
+          intentos: number
+          lease_hasta: string | null
+          motivo: string | null
+          proximo_intento_at: string | null
+          respondido_at: string | null
+          school_id: string
+          updated_at: string
+          wa_message_id: string | null
+        }
+        Insert: {
+          campana_id: string
+          contact_wa_id: string
+          created_at?: string
+          enviado_at?: string | null
+          estado?: string
+          id?: string
+          integration_id: string
+          intentos?: number
+          lease_hasta?: string | null
+          motivo?: string | null
+          proximo_intento_at?: string | null
+          respondido_at?: string | null
+          school_id: string
+          updated_at?: string
+          wa_message_id?: string | null
+        }
+        Update: {
+          campana_id?: string
+          contact_wa_id?: string
+          created_at?: string
+          enviado_at?: string | null
+          estado?: string
+          id?: string
+          integration_id?: string
+          intentos?: number
+          lease_hasta?: string | null
+          motivo?: string | null
+          proximo_intento_at?: string | null
+          respondido_at?: string | null
+          school_id?: string
+          updated_at?: string
+          wa_message_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_campana_envios_campana_id_fkey"
+            columns: ["campana_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_campanas"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_campanas: {
+        Row: {
+          aprobada_at: string | null
+          aprobada_por: string | null
+          creada_por: string | null
+          created_at: string
+          declaracion_version: string | null
+          destinatarios: number | null
+          estado: string
+          filtro: Json
+          id: string
+          idioma: string
+          integration_id: string
+          nombre: string
+          pausa_motivo: string | null
+          plantilla: string
+          respuesta_si: string | null
+          school_id: string
+          updated_at: string
+          variables: Json
+          vence_at: string | null
+        }
+        Insert: {
+          aprobada_at?: string | null
+          aprobada_por?: string | null
+          creada_por?: string | null
+          created_at?: string
+          declaracion_version?: string | null
+          destinatarios?: number | null
+          estado?: string
+          filtro?: Json
+          id?: string
+          idioma?: string
+          integration_id: string
+          nombre: string
+          pausa_motivo?: string | null
+          plantilla: string
+          respuesta_si?: string | null
+          school_id: string
+          updated_at?: string
+          variables?: Json
+          vence_at?: string | null
+        }
+        Update: {
+          aprobada_at?: string | null
+          aprobada_por?: string | null
+          creada_por?: string | null
+          created_at?: string
+          declaracion_version?: string | null
+          destinatarios?: number | null
+          estado?: string
+          filtro?: Json
+          id?: string
+          idioma?: string
+          integration_id?: string
+          nombre?: string
+          pausa_motivo?: string | null
+          plantilla?: string
+          respuesta_si?: string | null
+          school_id?: string
+          updated_at?: string
+          variables?: Json
+          vence_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_wa_campana_integ"
+            columns: ["integration_id", "school_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id", "school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_aprobada_por_fkey"
+            columns: ["aprobada_por"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_aprobada_por_fkey"
+            columns: ["aprobada_por"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_creada_por_fkey"
+            columns: ["creada_por"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_creada_por_fkey"
+            columns: ["creada_por"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_campanas_ajustes: {
+        Row: {
+          antiguedad_max_dias: number
+          base_consentimiento: string
+          created_at: string
+          frecuencia_min_dias: number
+          habilitadas: boolean
+          habilitado_at: string | null
+          habilitado_por: string | null
+          lote_piloto: number
+          palabras_sede: Json
+          pausa_motivo: string | null
+          pausada_at: string | null
+          school_id: string
+          tope_diario_max: number
+          updated_at: string
+        }
+        Insert: {
+          antiguedad_max_dias?: number
+          base_consentimiento?: string
+          created_at?: string
+          frecuencia_min_dias?: number
+          habilitadas?: boolean
+          habilitado_at?: string | null
+          habilitado_por?: string | null
+          lote_piloto?: number
+          palabras_sede?: Json
+          pausa_motivo?: string | null
+          pausada_at?: string | null
+          school_id: string
+          tope_diario_max?: number
+          updated_at?: string
+        }
+        Update: {
+          antiguedad_max_dias?: number
+          base_consentimiento?: string
+          created_at?: string
+          frecuencia_min_dias?: number
+          habilitadas?: boolean
+          habilitado_at?: string | null
+          habilitado_por?: string | null
+          lote_piloto?: number
+          palabras_sede?: Json
+          pausa_motivo?: string | null
+          pausada_at?: string | null
+          school_id?: string
+          tope_diario_max?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_habilitado_por_fkey"
+            columns: ["habilitado_por"]
+            isOneToOne: false
+            referencedRelation: "pending_athletes"
+            referencedColumns: ["profile_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_habilitado_por_fkey"
+            columns: ["habilitado_por"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_campanas_ajustes_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: true
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+        ]
+      }
+      whatsapp_conceptos_esperados: {
+        Row: {
+          child_id: string | null
+          consumido_at: string | null
+          created_at: string
+          id: string
+          monto: number | null
+          motivo: string
+          origen: string
+          payment_id: string | null
+          queue_id: string | null
+          school_id: string
+          signup_lead_id: string | null
+          telefono: string
+          updated_at: string
+          vence_en: string
+        }
+        Insert: {
+          child_id?: string | null
+          consumido_at?: string | null
+          created_at?: string
+          id?: string
+          monto?: number | null
+          motivo: string
+          origen?: string
+          payment_id?: string | null
+          queue_id?: string | null
+          school_id: string
+          signup_lead_id?: string | null
+          telefono: string
+          updated_at?: string
+          vence_en: string
+        }
+        Update: {
+          child_id?: string | null
+          consumido_at?: string | null
+          created_at?: string
+          id?: string
+          monto?: number | null
+          motivo?: string
+          origen?: string
+          payment_id?: string | null
+          queue_id?: string | null
+          school_id?: string
+          signup_lead_id?: string | null
+          telefono?: string
+          updated_at?: string
+          vence_en?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "children"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "students"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_child_id_fkey"
+            columns: ["child_id"]
+            isOneToOne: false
+            referencedRelation: "v_document_compliance_report"
+            referencedColumns: ["child_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "payments_with_installments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "pending_payments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_document_compliance_report"
+            referencedColumns: ["active_payment_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_payment_abonos_summary"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_payment_id_fkey"
+            columns: ["payment_id"]
+            isOneToOne: false
+            referencedRelation: "v_payment_contacts"
+            referencedColumns: ["payment_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conceptos_esperados_signup_lead_id_fkey"
+            columns: ["signup_lead_id"]
+            isOneToOne: false
+            referencedRelation: "school_signup_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_consentimientos: {
+        Row: {
+          aceptado: boolean
+          canal: string
+          contact_wa_id: string
+          created_at: string
+          fuente_id: string | null
+          id: string
+          integration_id: string | null
+          revocado_at: string | null
+          school_id: string
+          texto: string | null
+          tipo: string
+          version_politica: string
+        }
+        Insert: {
+          aceptado: boolean
+          canal: string
+          contact_wa_id: string
+          created_at?: string
+          fuente_id?: string | null
+          id?: string
+          integration_id?: string | null
+          revocado_at?: string | null
+          school_id: string
+          texto?: string | null
+          tipo: string
+          version_politica: string
+        }
+        Update: {
+          aceptado?: boolean
+          canal?: string
+          contact_wa_id?: string
+          created_at?: string
+          fuente_id?: string | null
+          id?: string
+          integration_id?: string | null
+          revocado_at?: string | null
+          school_id?: string
+          texto?: string | null
+          tipo?: string
+          version_politica?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_consentimientos_integration_id_fkey"
+            columns: ["integration_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_consentimientos_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
           },
         ]
       }
@@ -35155,6 +38322,244 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_flow_respuestas: {
+        Row: {
+          contact_wa_id: string
+          conversation_id: string | null
+          created_at: string
+          detalle: Json
+          flow_id: string | null
+          id: string
+          integration_id: string
+          nombre_formulario: string | null
+          procesada_at: string | null
+          response_json: Json
+          resultado: string
+          school_id: string
+          servicio_id: string | null
+          token_id: string | null
+          wa_message_id: string
+        }
+        Insert: {
+          contact_wa_id: string
+          conversation_id?: string | null
+          created_at?: string
+          detalle?: Json
+          flow_id?: string | null
+          id?: string
+          integration_id: string
+          nombre_formulario?: string | null
+          procesada_at?: string | null
+          response_json?: Json
+          resultado?: string
+          school_id: string
+          servicio_id?: string | null
+          token_id?: string | null
+          wa_message_id: string
+        }
+        Update: {
+          contact_wa_id?: string
+          conversation_id?: string | null
+          created_at?: string
+          detalle?: Json
+          flow_id?: string | null
+          id?: string
+          integration_id?: string
+          nombre_formulario?: string | null
+          procesada_at?: string | null
+          response_json?: Json
+          resultado?: string
+          school_id?: string
+          servicio_id?: string | null
+          token_id?: string | null
+          wa_message_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_wa_flow_resp_integracion"
+            columns: ["integration_id", "school_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id", "school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_flow_id_fkey"
+            columns: ["flow_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_flows"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flow_respuestas_servicio_id_fkey"
+            columns: ["servicio_id"]
+            isOneToOne: false
+            referencedRelation: "school_tournament_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      whatsapp_flows: {
+        Row: {
+          activo: boolean
+          config: Json
+          created_at: string
+          estado: string
+          flow_id: string | null
+          flow_json_version: string | null
+          health_can_send: string | null
+          health_detalle: Json | null
+          health_revisado_at: string | null
+          id: string
+          integration_id: string
+          nombre: string
+          nombre_en_meta: string | null
+          publicado_at: string | null
+          school_id: string
+          updated_at: string
+          validacion: Json | null
+          version_repo: string | null
+        }
+        Insert: {
+          activo?: boolean
+          config?: Json
+          created_at?: string
+          estado?: string
+          flow_id?: string | null
+          flow_json_version?: string | null
+          health_can_send?: string | null
+          health_detalle?: Json | null
+          health_revisado_at?: string | null
+          id?: string
+          integration_id: string
+          nombre: string
+          nombre_en_meta?: string | null
+          publicado_at?: string | null
+          school_id: string
+          updated_at?: string
+          validacion?: Json | null
+          version_repo?: string | null
+        }
+        Update: {
+          activo?: boolean
+          config?: Json
+          created_at?: string
+          estado?: string
+          flow_id?: string | null
+          flow_json_version?: string | null
+          health_can_send?: string | null
+          health_detalle?: Json | null
+          health_revisado_at?: string | null
+          id?: string
+          integration_id?: string
+          nombre?: string
+          nombre_en_meta?: string | null
+          publicado_at?: string | null
+          school_id?: string
+          updated_at?: string
+          validacion?: Json | null
+          version_repo?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fk_wa_flows_integracion"
+            columns: ["integration_id", "school_id"]
+            isOneToOne: false
+            referencedRelation: "school_whatsapp_integrations"
+            referencedColumns: ["id", "school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "mv_session_health"
+            referencedColumns: ["school_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_detail_view"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_price_range"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "school_public_profile"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "schools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_flows_school_id_fkey"
+            columns: ["school_id"]
+            isOneToOne: false
+            referencedRelation: "v_school_entitlements"
+            referencedColumns: ["school_id"]
           },
         ]
       }
@@ -35761,6 +39166,53 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "school_whatsapp_integrations"
             referencedColumns: ["id", "school_id"]
+          },
+        ]
+      }
+      whatsapp_turnos_pendientes: {
+        Row: {
+          boton_id: string | null
+          contact_wa_id: string
+          conversation_id: string
+          created_at: string
+          integration_id: string
+          intentos: number
+          opted_out: boolean
+          origen: string
+          texto: string | null
+          wa_message_id: string
+        }
+        Insert: {
+          boton_id?: string | null
+          contact_wa_id: string
+          conversation_id: string
+          created_at?: string
+          integration_id: string
+          intentos?: number
+          opted_out?: boolean
+          origen?: string
+          texto?: string | null
+          wa_message_id: string
+        }
+        Update: {
+          boton_id?: string | null
+          contact_wa_id?: string
+          conversation_id?: string
+          created_at?: string
+          integration_id?: string
+          intentos?: number
+          opted_out?: boolean
+          origen?: string
+          texto?: string | null
+          wa_message_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_turnos_pendientes_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_conversations"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -38090,6 +41542,22 @@ export type Database = {
         Args: { p_action: string; p_detail?: Json; p_patient_id: string }
         Returns: undefined
       }
+      _coach_eval_assert_admin: {
+        Args: { p_school_id: string }
+        Returns: undefined
+      }
+      _coach_eval_period_end: {
+        Args: { p_start: string; p_type: string }
+        Returns: string
+      }
+      _cobro_de_otra_inscripcion: {
+        Args: {
+          p_enrollment_id: string
+          p_offering_plan_id: string
+          p_team_id: string
+        }
+        Returns: boolean
+      }
       _confirm_overage_into_payment: {
         Args: {
           p_actor: string
@@ -38227,6 +41695,10 @@ export type Database = {
         Args: { p_school_id: string }
         Returns: number
       }
+      _mover_pago_clase_prueba: {
+        Args: { p_lead_id: string }
+        Returns: undefined
+      }
       _next_certificate_folio: {
         Args: { p_school_id: string }
         Returns: string
@@ -38248,6 +41720,10 @@ export type Database = {
       _notify_store_order: {
         Args: { p_event: string; p_order_id: string }
         Returns: undefined
+      }
+      _notify_user_destinatario_permitido: {
+        Args: { p_target: string }
+        Returns: boolean
       }
       _order_belongs_to_user: { Args: { p_order_id: string }; Returns: boolean }
       _order_has_vendor_item: { Args: { p_order_id: string }; Returns: boolean }
@@ -38342,6 +41818,7 @@ export type Database = {
           requires_review: boolean
           school_id: string | null
           sibling_discount_applied: number | null
+          signup_lead_id: string | null
           sportmaps_fee: number | null
           status: string
           subscription_end_date: string | null
@@ -38427,6 +41904,69 @@ export type Database = {
       _report_send_day: {
         Args: { p_school_id: string; p_team_id: string }
         Returns: number
+      }
+      _reservas_acceso: {
+        Args: {
+          p_actor: string
+          p_guest: string
+          p_res_guest_id: string
+          p_res_user_id: string
+          p_school_id: string
+        }
+        Returns: string
+      }
+      _reservas_alternativas: {
+        Args: {
+          p_actor: string
+          p_dur_min: number
+          p_facility_id: string
+          p_from: string
+          p_pref: string
+          p_school_id: string
+        }
+        Returns: Json
+      }
+      _reservas_audiencia: {
+        Args: { p_bookable_by: string; p_pref: string; p_rol: string }
+        Returns: string
+      }
+      _reservas_err: { Args: { p_code: string }; Returns: Json }
+      _reservas_es_menor: { Args: { p_profile_id: string }; Returns: boolean }
+      _reservas_iso: { Args: { p: string }; Returns: string }
+      _reservas_politica: {
+        Args: { p_facility_id: string; p_school_id: string }
+        Returns: Json
+      }
+      _reservas_precio_pasos: {
+        Args: {
+          p_audience: string
+          p_ends: string
+          p_facility_id: string
+          p_starts: string
+        }
+        Returns: {
+          rate: number
+          source: string
+          step_from: string
+          step_to: string
+        }[]
+      }
+      _reservas_resultado: {
+        Args: { p_replay?: boolean; p_reservation_id: string }
+        Returns: Json
+      }
+      _reservas_rol: {
+        Args: { p_profile_id: string; p_school_id: string }
+        Returns: string
+      }
+      _reservas_validar_rango: {
+        Args: {
+          p_ends: string
+          p_facility_id: string
+          p_staff: boolean
+          p_starts: string
+        }
+        Returns: string
       }
       _resolve_payment_payer: {
         Args: { p_child_id: string; p_unreg_id: string; p_user_id: string }
@@ -38520,6 +42060,7 @@ export type Database = {
         Args: { p_rank: number; p_school_id: string }
         Returns: number
       }
+      _soltar_o_confirmar_cupo: { Args: { p_lead_id: string }; Returns: Json }
       _store_actor: { Args: { p_actor: string }; Returns: string }
       _store_checkout_gateway: {
         Args: { p_method: string; p_vendor_profile_id: string }
@@ -39385,6 +42926,18 @@ export type Database = {
         }
         Returns: Json
       }
+      buscar_ficha_por_codigo: {
+        Args: { p_code: string; p_doc?: string }
+        Returns: {
+          email_match: boolean
+          ficha_id: string
+          nombre: string
+          puede_reclamar: boolean
+          source: string
+          team_name: string
+          tipo: string
+        }[]
+      }
       buscar_menor_por_documento_publico: {
         Args: { p_doc_number: string; p_school_id: string }
         Returns: {
@@ -39456,6 +43009,7 @@ export type Database = {
         Args: { p_enrollment_id: string }
         Returns: boolean
       }
+      cancel_account_deletion: { Args: { p_user_id: string }; Returns: Json }
       cancel_enrollment_pause_request: {
         Args: { p_request_id: string }
         Returns: Json
@@ -39474,6 +43028,26 @@ export type Database = {
       }
       cancel_school_join_request: {
         Args: { p_request_id: string }
+        Returns: Json
+      }
+      cancelar_reserva: {
+        Args: {
+          p_actor_profile_id?: string
+          p_guest_booker_id?: string
+          p_reason?: string
+          p_reservation_id: string
+        }
+        Returns: Json
+      }
+      cerrar_cupo_clase_prueba: { Args: { p_slot_id: string }; Returns: Json }
+      cerrar_prospecto_clase_prueba: {
+        Args: {
+          p_child_id?: string
+          p_estado: string
+          p_lead_id: string
+          p_unregistered_id?: string
+          p_user_id?: string
+        }
         Returns: Json
       }
       check_is_branch_admin: {
@@ -39556,6 +43130,10 @@ export type Database = {
       }
       claim_orphan_children: { Args: { p_school_id?: string }; Returns: number }
       claim_tournament_invitation: { Args: { p_token: string }; Returns: Json }
+      clases_prueba_semana: {
+        Args: { p_desde: string; p_hasta: string; p_school_id: string }
+        Returns: Json
+      }
       cleanup_expired_card_save_intents: { Args: never; Returns: number }
       clinical_patient_has_consent: {
         Args: { p_patient_id: string; p_type: string }
@@ -39620,6 +43198,10 @@ export type Database = {
           vence_en: string
         }[]
       }
+      cobros_abiertos_de_inscripcion: {
+        Args: { p_enrollment_id: string }
+        Returns: Json
+      }
       competition_level_rank: { Args: { p_level: string }; Returns: number }
       complete_onboarding: { Args: never; Returns: undefined }
       complete_refund: {
@@ -39670,6 +43252,20 @@ export type Database = {
         }
         Returns: Json
       }
+      confirmar_cupo_clase_prueba: {
+        Args: { p_lead_id: string; p_payment_id: string }
+        Returns: Json
+      }
+      confirmar_pago_reserva: {
+        Args: {
+          p_amount: number
+          p_payment_id?: string
+          p_provider?: string
+          p_provider_event_id?: string
+          p_reference: string
+        }
+        Returns: Json
+      }
       consume_card_save_intent: {
         Args: { p_reference: string }
         Returns: {
@@ -39687,6 +43283,15 @@ export type Database = {
       consume_tactical_ai_credit: {
         Args: { p_school_id: string }
         Returns: Json
+      }
+      correct_published_athlete_report: {
+        Args: {
+          p_coach_note: string
+          p_reason: string
+          p_report_id: string
+          p_snapshot: Json
+        }
+        Returns: number
       }
       create_cart_order: {
         Args: {
@@ -39888,6 +43493,15 @@ export type Database = {
         }
         Returns: Json
       }
+      create_tactical_shared_play: {
+        Args: {
+          p_payload: Json
+          p_sport: string
+          p_team_id: string
+          p_title: string
+        }
+        Returns: Json
+      }
       create_tournament_invitation: {
         Args: { p_email?: string; p_event_id: string; p_school_name?: string }
         Returns: Json
@@ -39902,6 +43516,7 @@ export type Database = {
         Args: { p_session_id: string }
         Returns: undefined
       }
+      delete_coach_evaluation: { Args: { p_id: string }; Returns: undefined }
       delete_mesocycle_cascade: {
         Args: { p_mesocycle_id: string }
         Returns: undefined
@@ -39909,6 +43524,19 @@ export type Database = {
       detect_enrollment_integrity_issues: { Args: never; Returns: Json }
       detect_payment_anomalies: { Args: never; Returns: Json }
       disable_vendor_profile: { Args: never; Returns: boolean }
+      disponibilidad_canchas: {
+        Args: {
+          p_actor_profile_id?: string
+          p_audience?: string
+          p_duration_min?: number
+          p_facility_id?: string
+          p_from: string
+          p_school_id: string
+          p_sport?: string
+          p_to: string
+        }
+        Returns: Json
+      }
       doc_casi_igual: { Args: { p_a: string; p_b: string }; Returns: boolean }
       duplicate_microcycle_days: {
         Args: { p_source_microcycle_id: string; p_target_microcycle_id: string }
@@ -40002,6 +43630,10 @@ export type Database = {
       enrollment_pausada_en: {
         Args: { p_enrollment_id: string; p_month: number; p_year: number }
         Returns: boolean
+      }
+      ensure_coach_evaluation_criteria: {
+        Args: { p_school_id: string }
+        Returns: number
       }
       equipment_accept: {
         Args: { p_assignment_id: string }
@@ -40131,6 +43763,14 @@ export type Database = {
           p_size?: string
         }
         Returns: string
+      }
+      es_miembro_o_inscrito_de_escuela: {
+        Args: { p_school: string }
+        Returns: boolean
+      }
+      es_staff_de_escuela: {
+        Args: { p_profile: string; p_school: string }
+        Returns: boolean
       }
       expirar_holds: { Args: never; Returns: number }
       expire_school_referrals: { Args: never; Returns: number }
@@ -40926,6 +44566,7 @@ export type Database = {
         Returns: Json
       }
       get_single_branch_id: { Args: { p_school_id: string }; Returns: string }
+      get_tactical_shared_play: { Args: { p_token: string }; Returns: Json }
       get_team_join_info: {
         Args: { p_team_id: string }
         Returns: {
@@ -40995,6 +44636,25 @@ export type Database = {
             }
             Returns: Json
           }
+      guardar_ajustes_clase_prueba: {
+        Args: { p_ajustes: Json; p_school_id: string }
+        Returns: Json
+      }
+      guardar_config_clase_prueba: {
+        Args: {
+          p_cupos_desde_entrenamientos?: boolean
+          p_enabled?: boolean
+          p_indicaciones?: string
+          p_presencial_enabled?: boolean
+          p_school_id: string
+          p_whatsapp_enabled?: boolean
+        }
+        Returns: Json
+      }
+      guardar_valor_clase_prueba: {
+        Args: { p_school_id: string; p_valor: number }
+        Returns: Json
+      }
       guest_order_cancel: {
         Args: { p_reason?: string; p_token: string }
         Returns: Json
@@ -41112,6 +44772,7 @@ export type Database = {
         Returns: boolean
       }
       is_demo_user: { Args: { _user_id: string }; Returns: boolean }
+      is_event_school_admin: { Args: { p_event_id: string }; Returns: boolean }
       is_gov_entity: { Args: { p_school_id: string }; Returns: boolean }
       is_informational_entity: {
         Args: { p_school_type: string }
@@ -41259,6 +44920,11 @@ export type Database = {
       }
       list_school_plans: { Args: { p_school_id: string }; Returns: Json }
       list_school_trial_slots: { Args: { p_school_id: string }; Returns: Json }
+      listar_clase_prueba: { Args: { p_school_id: string }; Returns: Json }
+      listar_cobros_clase_prueba: {
+        Args: { p_school_id: string }
+        Returns: Json
+      }
       lock_delegation_price_phase: {
         Args: { p_delegation_id: string }
         Returns: Json
@@ -41285,6 +44951,14 @@ export type Database = {
           p_team_id?: string
         }
         Returns: boolean
+      }
+      marcar_clase_prueba_entrenador: {
+        Args: {
+          p_asistencia: string
+          p_lead_id: string
+          p_team_recomendado?: string
+        }
+        Returns: Json
       }
       mark_custom_domain_verified: { Args: { p_id: string }; Returns: Json }
       mark_overdue_payments: { Args: { p_school_id: string }; Returns: number }
@@ -41366,6 +45040,7 @@ export type Database = {
           team_name: string
         }[]
       }
+      my_coach_staff_ids: { Args: never; Returns: string[] }
       my_linked_unregistered_ids: { Args: never; Returns: string[] }
       my_school_join_status: { Args: never; Returns: Json }
       my_school_store: { Args: { p_school_id: string }; Returns: Json }
@@ -41400,6 +45075,11 @@ export type Database = {
         }
         Returns: undefined
       }
+      obtener_config_clase_prueba: {
+        Args: { p_school_id: string }
+        Returns: Json
+      }
+      occupancy_backfill_reservas_y_clases: { Args: never; Returns: Json }
       open_month: {
         Args: {
           p_branch_id?: string
@@ -41495,6 +45175,10 @@ export type Database = {
       post_payroll_run: {
         Args: { p_paid_date?: string; p_run_id: string }
         Returns: Json
+      }
+      post_training_plazo_respuesta: {
+        Args: { p_cierre: string }
+        Returns: string
       }
       post_training_send_coach_reminders_system: {
         Args: never
@@ -41687,6 +45371,14 @@ export type Database = {
           resultado: string
         }[]
       }
+      puede_editar_semana_equipo: {
+        Args: { p_school_id: string; p_team_id: string }
+        Returns: boolean
+      }
+      puede_registrar_captura_biomecanica: {
+        Args: { p_school: string; p_session_plan: string }
+        Returns: boolean
+      }
       purge_clinical_test_data: {
         Args: { p_professional_id: string }
         Returns: number
@@ -41712,6 +45404,15 @@ export type Database = {
       recalc_vendor_review_aggregates: {
         Args: { p_vendor_profile_id: string }
         Returns: undefined
+      }
+      reclamar_ficha_por_codigo: {
+        Args: {
+          p_code: string
+          p_doc?: string
+          p_ficha_id: string
+          p_source: string
+        }
+        Returns: Json
       }
       recompute_hour_bank_overage: {
         Args: { p_period_id: string }
@@ -41812,6 +45513,25 @@ export type Database = {
         }
         Returns: Json
       }
+      registrar_clase_prueba_rapida: {
+        Args: {
+          p_acudiente: string
+          p_es_adulto?: boolean
+          p_nombres: string[]
+          p_school_id: string
+          p_telefono: string
+        }
+        Returns: Json
+      }
+      registrar_pago_clase_prueba: {
+        Args: {
+          p_lead_id: string
+          p_metodo: string
+          p_monto: number
+          p_referencia?: string
+        }
+        Returns: Json
+      }
       registrar_saldo_a_favor: {
         Args: {
           p_actor?: string
@@ -41857,6 +45577,14 @@ export type Database = {
         }
         Returns: Json
       }
+      reorder_coach_evaluation_criteria: {
+        Args: { p_ids: string[]; p_school_id: string }
+        Returns: undefined
+      }
+      repetir_semana_equipo: {
+        Args: { p_lunes: string; p_team_id: string }
+        Returns: Json
+      }
       reply_match_report: {
         Args: { p_body: string; p_match: string }
         Returns: {
@@ -41889,6 +45617,26 @@ export type Database = {
           team_name: string
           total: number
         }[]
+      }
+      reprogramar_reserva: {
+        Args: {
+          p_actor_profile_id?: string
+          p_guest_booker_id?: string
+          p_new_ends_at: string
+          p_new_facility_id?: string
+          p_new_starts_at: string
+          p_reservation_id: string
+        }
+        Returns: Json
+      }
+      request_account_deletion: {
+        Args: {
+          p_ip_address?: unknown
+          p_reason?: string
+          p_user_agent?: string
+          p_user_id: string
+        }
+        Returns: Json
       }
       request_athlete_certificate: {
         Args: {
@@ -41945,6 +45693,37 @@ export type Database = {
         Args: { p_month: number; p_school_id: string; p_year: number }
         Returns: number
       }
+      reschedule_tournament_match: {
+        Args: {
+          p_actor_id: string
+          p_court: string
+          p_match_id: string
+          p_scheduled_at: string
+          p_set_court: boolean
+          p_set_time: boolean
+        }
+        Returns: Json
+      }
+      reservar_cancha: {
+        Args: {
+          p_actor_profile_id?: string
+          p_amount_paid?: number
+          p_booker_profile_id?: string
+          p_channel: string
+          p_ends_at: string
+          p_external_org_name?: string
+          p_facility_id: string
+          p_guest?: Json
+          p_guest_booker_id?: string
+          p_idempotency_key: string
+          p_notes?: string
+          p_participants?: number
+          p_payment_method?: string
+          p_rate_audience?: string
+          p_starts_at: string
+        }
+        Returns: Json
+      }
       reserve_hour_bank: {
         Args: {
           p_created_by?: string
@@ -41976,6 +45755,10 @@ export type Database = {
           p_request_id: string
           p_team_id?: string
         }
+        Returns: Json
+      }
+      resolver_cobros_abiertos: {
+        Args: { p_decisiones: Json; p_enrollment_id: string; p_motivo?: string }
         Returns: Json
       }
       respond_callup: {
@@ -42031,6 +45814,10 @@ export type Database = {
         Returns: Json
       }
       revoke_platform_admin: { Args: { admin_email: string }; Returns: Json }
+      revoke_tactical_shared_play: {
+        Args: { p_token: string }
+        Returns: boolean
+      }
       revoke_user_device: {
         Args: { p_device_id: string; p_reason?: string }
         Returns: Json
@@ -42060,6 +45847,32 @@ export type Database = {
           invoice_id: string
           kind: string
         }[]
+      }
+      save_coach_evaluation: {
+        Args: {
+          p_commitments: string
+          p_improvements: string
+          p_other_notes: string
+          p_period_start: string
+          p_period_type: string
+          p_publish: boolean
+          p_scores: Json
+          p_snapshot: Json
+          p_staff_id: string
+          p_strengths: string
+        }
+        Returns: string
+      }
+      save_coach_evaluation_criterion: {
+        Args: {
+          p_active?: boolean
+          p_auto_metric: string
+          p_description: string
+          p_id: string
+          p_name: string
+          p_school_id: string
+        }
+        Returns: string
       }
       save_dashboard_preferences: {
         Args: { p_preferences: Json }
@@ -42458,6 +46271,10 @@ export type Database = {
         Returns: Json
       }
       soft_delete_school_video: { Args: { p_video_id: string }; Returns: Json }
+      soltar_cupos_separados: {
+        Args: { p_lead_id?: string; p_limite?: number }
+        Returns: Json
+      }
       split_order_payment: {
         Args: {
           p_order_id: string
@@ -42634,6 +46451,7 @@ export type Database = {
           p_answers?: Json
           p_child_id?: string
           p_session_id: string
+          p_unregistered_athlete_id?: string
           p_user_id?: string
         }
         Returns: Json
@@ -42729,6 +46547,10 @@ export type Database = {
       tactical_ai_balance: { Args: { p_school_id: string }; Returns: Json }
       tactical_ai_current_period: { Args: never; Returns: string }
       tactical_ai_free_quota: { Args: never; Returns: number }
+      tactical_ai_quota_multiplier: {
+        Args: { p_at?: string; p_school_id: string }
+        Returns: number
+      }
       tactical_ai_record_cache_hit: {
         Args: { p_school_id: string; p_sport: string; p_user_id: string }
         Returns: Json
@@ -42795,6 +46617,10 @@ export type Database = {
         }[]
       }
       toggle_favorite: { Args: { p_school_id: string }; Returns: Json }
+      tomar_cupo_clase_prueba: {
+        Args: { p_lead_id: string; p_slot_id: string }
+        Returns: Json
+      }
       training_days_md_labels: {
         Args: { p_day_dates: string[]; p_team_id: string }
         Returns: {
@@ -43176,6 +47002,10 @@ export type Database = {
         Returns: Json
       }
       vendor_payout_summary: { Args: never; Returns: Json }
+      verificar_organizador: {
+        Args: { p_profile_id: string; p_verificado?: boolean }
+        Returns: boolean
+      }
       verify_athlete_certificate_public: {
         Args: { p_folio?: string; p_qr_token?: string }
         Returns: Json
@@ -43196,6 +47026,43 @@ export type Database = {
         Args: { p_limite?: number; p_margen_minutos?: number }
         Returns: Json
       }
+      wa_audiencia_excluidos: {
+        Args: { p_school_id: string; p_wa_ids: string[] }
+        Returns: {
+          contact_wa_id: string
+          motivo: string
+        }[]
+      }
+      wa_campana_aprobar: {
+        Args: { p_campana_id: string; p_declaracion: string; p_por: string }
+        Returns: number
+      }
+      wa_campana_tomar_lote: {
+        Args: { p_campana_id: string; p_limite_meta: number; p_max: number }
+        Returns: {
+          campana_id: string
+          contact_wa_id: string
+          created_at: string
+          enviado_at: string | null
+          estado: string
+          id: string
+          integration_id: string
+          intentos: number
+          lease_hasta: string | null
+          motivo: string | null
+          proximo_intento_at: string | null
+          respondido_at: string | null
+          school_id: string
+          updated_at: string
+          wa_message_id: string | null
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "whatsapp_campana_envios"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       wa_can_send_template: {
         Args: { p_contact_wa_id: string; p_integration_id: string }
         Returns: boolean
@@ -43209,8 +47076,38 @@ export type Database = {
         Returns: Json
       }
       wa_celular_remitente_co: { Args: { p_phone: string }; Returns: string }
+      wa_consentimientos_de_escuela: {
+        Args: { p_contacto?: string; p_limite?: number; p_school_id: string }
+        Returns: {
+          aceptado: boolean
+          canal: string
+          contact_wa_id: string
+          fecha: string
+          revocado_at: string
+          tipo: string
+          version_politica: string
+        }[]
+      }
       wa_consumo_del_mes: {
         Args: { p_desde?: string; p_integration_id: string }
+        Returns: Json
+      }
+      wa_crear_cobro_desde_comprobante: {
+        Args: {
+          p_categoria: string
+          p_child_id: string
+          p_concepto: string
+          p_concepto_esperado_id?: string
+          p_fuente: string
+          p_fuente_id: string
+          p_monto: number
+          p_opcion?: string
+          p_queue_id: string
+          p_school_id: string
+          p_signup_lead_id: string
+          p_telefono?: string
+          p_unregistered_id: string
+        }
         Returns: Json
       }
       wa_crear_cobro_suelto: {
@@ -43232,6 +47129,39 @@ export type Database = {
           p_school_id: string
         }
         Returns: number
+      }
+      wa_embudo_anuncios: {
+        Args: {
+          p_branch_id?: string
+          p_desde: string
+          p_hasta: string
+          p_school_id: string
+        }
+        Returns: {
+          asistieron: number
+          body: string
+          contestaron: number
+          conversaciones: number
+          de_historial: number
+          es_total: boolean
+          headline: string
+          matriculados: number
+          media_url: string
+          monto: number
+          pagaron: number
+          pagos_por_motivo: Json
+          primera_conversacion: string
+          separaron_o_agendaron: number
+          source_id: string
+          source_type: string
+          source_url: string
+          ultima_conversacion: string
+          volvieron: number
+        }[]
+      }
+      wa_es_afiliado: {
+        Args: { p_school_id: string; p_telefono: string }
+        Returns: Json
       }
       wa_es_familia_sin_registrar: {
         Args: { p_contact_wa_id: string; p_school_id: string }

@@ -91,6 +91,7 @@ router.get('/entitlements', requireAuth, async (req: Request, res: Response) => 
                 coach_can_upload_attendance_sheets: false,
                 coach_can_remove_enrollments: false,
                 registration_zk_pin_enabled: false,
+                access_roster_enabled: false,
             });
         }
 
@@ -131,6 +132,17 @@ router.get('/entitlements', requireAuth, async (req: Request, res: Response) => 
                 .maybeSingle();
             if (zkErr) req.log?.warn({ err: zkErr, schoolId }, 'registration_zk_pin_enabled no legible; queda en false');
             data.registration_zk_pin_enabled = (zk as any)?.registration_zk_pin_enabled === true;
+        }
+
+        // Pestaña «IDs del lector» (mig 20261031131601). Select aparte, mismo motivo: falla cerrado.
+        {
+            const { data: ar, error: arErr } = await supabase
+                .from('school_settings')
+                .select('access_roster_enabled')
+                .eq('school_id', schoolId)
+                .maybeSingle();
+            if (arErr) req.log?.warn({ err: arErr, schoolId }, 'access_roster_enabled no legible; queda en false');
+            data.access_roster_enabled = (ar as any)?.access_roster_enabled === true;
         }
 
         if (process.env.NODE_ENV === 'staging') {

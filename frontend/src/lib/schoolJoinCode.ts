@@ -57,9 +57,19 @@ export interface JoinRequestForm {
   name: string;
   birthDate: string; // YYYY-MM-DD
   category: string;
+  /** Documento del deportista (dato único con el que la escuela lo cruza con su ficha). */
+  docNumber?: string;
+  docType?: string;
+  /** «No lo tengo a la mano»: permite enviar sin documento (la escuela lo pedirá). */
+  noDoc?: boolean;
 }
 
-export type JoinRequestErrors = Partial<Record<'forWhom' | 'name' | 'birthDate' | 'category', string>>;
+export type JoinRequestErrors = Partial<Record<'forWhom' | 'name' | 'birthDate' | 'category' | 'docNumber', string>>;
+
+/** Documento sin puntos, espacios ni guiones, en mayúsculas (como normalize_doc_number). */
+export function normalizeDocNumber(raw: string | null | undefined): string {
+  return (raw ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
 
 /** Años cumplidos a `today` (YYYY-MM-DD). null si la fecha no es válida. */
 export function ageOn(birthDate: string | null | undefined, today: string): number | null {
@@ -87,6 +97,12 @@ export function validateJoinRequestForm(form: JoinRequestForm, today: string): J
   }
   if (form.category.trim().length > 120) {
     errors.category = 'La categoría sugerida es muy larga (máximo 120 caracteres).';
+  }
+  // El documento se valida solo si el formulario lo trae (docNumber definido).
+  if (form.docNumber !== undefined && !form.noDoc) {
+    const doc = normalizeDocNumber(form.docNumber);
+    if (!doc) errors.docNumber = 'Escribe el documento del deportista, o marca que no lo tienes a la mano.';
+    else if (doc.length < 5 || doc.length > 20) errors.docNumber = 'Revisa el número de documento.';
   }
   return errors;
 }
@@ -120,6 +136,17 @@ export interface JoinRequestRow {
   requester_name: string | null;
   requester_email: string | null;
   requester_phone: string | null;
+  /** Documento que escribió quien pidió (null si no lo tenía a la mano). */
+  athlete_doc_number?: string | null;
+  athlete_doc_type?: string | null;
+  /** Fichas que coinciden por DOCUMENTO o CORREO exactos: la única base para vincular. */
+  exact_matches?: Array<{
+    id: string;
+    source: 'unregistered_athlete' | 'children';
+    full_name: string;
+    team_name: string | null;
+    basis: 'documento' | 'correo';
+  }>;
   needs_enrollment: boolean;
   has_enrollment: boolean;
   candidates: Array<{

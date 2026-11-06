@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { requireAuth, requireRole } from '../middlewares/authMiddleware';
+import { requireAuth, requireRole, auditLog } from '../middlewares/authMiddleware';
 import { supabase } from '../config/supabase';
 import { z } from 'zod';
 import {
@@ -2396,10 +2396,57 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       return res.status(403).json({ error: 'unauthorized' });
 
     // ── 2. Validar que el enrollment pertenece al atleta ──────────────────
-    const { valid: enrollmentValid } =
+    const { valid: enrollmentValid, schoolId: enrollmentSchoolId } =
       await validateEnrollmentOwnership(enrollment_id, child_id ? { childId: child_id } : { userId });
-    if (!enrollmentValid)
+    if (!enrollmentValid || !enrollmentSchoolId)
       return res.status(403).json({ error: 'enrollment_unauthorized' });
+
+    // ── 2a. Instalación: debe ser de la escuela de la inscripción, recibir
+    // reservas y estar disponible. Antes se aceptaba cualquier facility_id
+    // (de otra escuela, deshabilitada o en mantenimiento). Un solo 404 para
+    // "no existe" y "es de otra escuela" para no filtrar qué ids existen.
+    const { data: facilityRow } = await supabase
+      .from('facilities')
+      .select('id, school_id, booking_enabled, status')
+      .eq('id', facility_id)
+      .maybeSingle();
+    if (!facilityRow || facilityRow.school_id !== enrollmentSchoolId) {
+      return res.status(404).json({ error: 'Instalación no encontrada para tu escuela.', reason: 'facility_not_found' });
+    }
+    if (facilityRow.booking_enabled === false) {
+      return res.status(422).json({ error: 'Esta instalación no recibe reservas por ahora.', reason: 'facility_not_bookable' });
+    }
+    if (facilityRow.status !== 'available') {
+      return res.status(422).json({ error: 'Esta instalación no está disponible en este momento.', reason: 'facility_unavailable' });
+    }
+
+    // ── 2b. Idempotencia (opcional): header Idempotency-Key. Si ya hay una
+    // reserva de esta escuela con esa llave se devuelve la misma, sin volver
+    // a mover crédito ni banco de horas. Sin header: comportamiento de siempre.
+    const idemRaw = req.header('Idempotency-Key');
+    const idempotencyKey = idemRaw ? idemRaw.trim() : null;
+    if (idemRaw !== undefined && (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128)) {
+      return res.status(400).json({ error: 'Idempotency-Key inválida: debe tener entre 8 y 128 caracteres.', reason: 'invalid_idempotency_key' });
+    }
+    const findByIdempotencyKey = async () => {
+      const { data } = await supabase
+        .from('facility_reservations')
+        .select('*')
+        .eq('school_id', enrollmentSchoolId)
+        .eq('idempotency_key', idempotencyKey as string)
+        .maybeSingle();
+      return data as any;
+    };
+    if (idempotencyKey) {
+      const prior = await findByIdempotencyKey();
+      if (prior) {
+        const sameOwner = child_id ? prior.child_id === child_id : prior.user_id === userId;
+        if (!sameOwner || prior.facility_id !== facility_id || prior.reservation_date !== reservation_date) {
+          return res.status(409).json({ error: 'Esa Idempotency-Key ya se usó con otra solicitud distinta.', reason: 'idempotency_key_conflict' });
+        }
+        return res.status(200).json({ reservation: prior, idempotent_replay: true });
+      }
+    }
 
     // ── 3b. Banco de horas — mismo criterio que /:id/book: si la inscripción
     // tiene plan por horas, reserve_hour_bank ANTES de insertar (D-2: bloquea
@@ -2426,7 +2473,7 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
     // ── 3. Insertar reserva ───────────────────────────────────────────────
     const { data: b, error } = await supabase.from('facility_reservations').insert({
       facility_id,
-      school_id: req.schoolId,
+      school_id: enrollmentSchoolId,
       user_id: child_id ? null : userId,
       child_id: child_id || null,
       enrollment_id,
@@ -2436,11 +2483,18 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       status: 'confirmed',
       resv_type: 'secondary_class',
       hour_bank_reservation_id: hourBankReservationId,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     }).select().single();
 
     if (error) {
       if (hourBankReservationId) {
         await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: hourBankReservationId });
+      }
+      // Carrera de dos llamadas con la misma llave: ganó la otra (UNIQUE
+      // school_id+idempotency_key). Se compensó el banco arriba; se devuelve la ganadora.
+      if (idempotencyKey && (error as any).code === '23505' && error.message?.includes('idempotency')) {
+        const winner = await findByIdempotencyKey();
+        if (winner) return res.status(200).json({ reservation: winner, idempotent_replay: true });
       }
       // Trigger fn_check_facility_reservation_overlap (DB) rechaza choques de horario
       if (error.message?.includes('facility_slot_conflict')) {
@@ -2466,6 +2520,8 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
       req.log?.error({ err: notifErr }, 'book-secondary: fallo notificando (no bloquea la reserva)');
     }
 
+    await auditLog(req, 'facility_reservation_book_secondary', 'facility_reservations', String((b as any)?.id), null,
+      { facility_id, reservation_date, enrollment_id, school_id: enrollmentSchoolId, hours_plan: isHoursPlan }, { metadata: { school_id: enrollmentSchoolId } });
     res.status(201).json({ reservation: b });
   } catch (err: any) {
     req.log?.error({ err }, 'session-bookings unhandled error');
@@ -2571,6 +2627,7 @@ router.delete('/athlete/secondary/:id/cancel', requireAuth, async (req: Request,
       });
     }
 
+    await auditLog(req, 'facility_reservation_cancel_secondary', 'facility_reservations', String(id), { status: r.status }, { status: 'cancelled', enrollment_id: r.enrollment_id });
     res.json({ success: true });
   } catch (err: any) {
     req.log?.error({ err }, 'session-bookings unhandled error');

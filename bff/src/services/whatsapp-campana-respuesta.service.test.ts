@@ -21,7 +21,7 @@ const est = vi.hoisted(() => ({
 vi.mock('../config/supabase', () => {
     function builder(tabla: string) {
         const filtros: ((r: any) => boolean)[] = [];
-        let op: 'select' | 'insert' | 'update' = 'select';
+        let op: 'select' | 'insert' | 'update' | 'upsert' = 'select';
         let payload: any = null;
         let single = false;
         let lim = Infinity;
@@ -32,6 +32,12 @@ vi.mock('../config/supabase', () => {
                 if (filas.some((r) => r.id === fila.id)) return { data: null, error: { code: '23505', message: 'duplicate' } };
                 filas.push(fila);
                 return { data: fila, error: null };
+            }
+            if (op === 'upsert') { // ON CONFLICT DO NOTHING: duplicado = sin error y sin fila.
+                const fila = { id: `${tabla}-${++db.seq}`, ...payload };
+                if (filas.some((r) => r.id === fila.id)) return { data: [], error: null };
+                filas.push(fila);
+                return { data: [fila], error: null };
             }
             const sel = filas.filter((r) => filtros.every((f) => f(r)));
             if (op === 'update') { for (const r of sel) Object.assign(r, payload); return { data: sel, error: null }; }
@@ -46,6 +52,7 @@ vi.mock('../config/supabase', () => {
             limit: (n: number) => { lim = n; return api; },
             insert: (p: any) => { op = 'insert'; payload = p; return api; },
             update: (p: any) => { op = 'update'; payload = p; return api; },
+            upsert: (p: any) => { op = 'upsert'; payload = p; return api; },
             maybeSingle: () => { single = true; return api; },
             then: (ok: any, ko: any) => Promise.resolve(resolver()).then(ok, ko),
         };

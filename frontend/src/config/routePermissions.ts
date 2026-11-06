@@ -13,7 +13,7 @@ import { Permission } from '@/lib/permissions';
 type UserRole =
     | 'athlete' | 'parent' | 'coach' | 'school' | 'school_admin'
     | 'super_admin' | 'wellness_professional' | 'store_owner'
-    | 'admin' | 'organizer' | 'reporter' | 'personal_trainer' | 'accountant';
+    | 'admin' | 'organizer' | 'reporter' | 'personal_trainer' | 'accountant' | 'facility_manager';
 
 export interface RoutePermission {
     /** Roles que pueden acceder. Si vacío, cualquier autenticado puede acceder. */
@@ -134,7 +134,12 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
     '/whatsapp': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Canal de WhatsApp' },
     '/message-templates': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Plantillas de mensaje' },
     '/school-reports': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], requiredPermission: 'reports:view', description: 'Reportes escolares' },
-    '/facilities': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Instalaciones' },
+    '/facilities': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'facility_manager'], description: 'Instalaciones' },
+    // ── Dueño de espacios (facility_manager, school_type 'venue') ──
+    '/venue/onboarding': { allowedRoles: ['facility_manager'], description: 'Onboarding del dueño de espacios' },
+    '/venue/dashboard': { allowedRoles: ['facility_manager'], description: 'Inicio del dueño de espacios' },
+    '/venue/reservas': { allowedRoles: ['facility_manager'], description: 'Reservas de las instalaciones' },
+    '/venue/cobros': { allowedRoles: ['facility_manager'], description: 'Forma de cobro del dueño de espacios' },
     '/branches': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Gestión de sedes' },
     '/school-config': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], requiredPermission: 'settings:edit', description: 'Configuración de escuela' },
     '/pickup': { allowedRoles: ['school', 'admin'], description: 'Monitor de salida segura' },

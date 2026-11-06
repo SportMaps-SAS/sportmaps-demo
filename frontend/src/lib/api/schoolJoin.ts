@@ -94,14 +94,37 @@ export interface SchoolJoinCodeInfo {
 export const schoolJoinApi = {
   preview: (code: string) => call<JoinCodePreview>('preview_school_join_code', { p_code: code }),
 
-  submit: (p: { code: string; forWhom: ForWhom; name: string; birthDate: string; category: string | null }) =>
-    call<SubmitJoinResult>('submit_school_join_request', {
+  submit: async (p: {
+    code: string; forWhom: ForWhom; name: string; birthDate: string; category: string | null;
+    docNumber?: string | null; docType?: string | null;
+  }): Promise<SubmitJoinResult> => {
+    const base = {
       p_code: p.code,
       p_for_whom: p.forWhom,
       p_name: p.name,
       p_birth_date: p.birthDate,
       p_category: p.category,
-    }),
+    };
+    try {
+      return await call<SubmitJoinResult>('submit_school_join_request', {
+        ...base, p_doc_number: p.docNumber ?? null, p_doc_type: p.docType ?? null,
+      });
+    } catch (e) {
+      // Migración 20261105212701 aún sin aplicar: la función no tiene los parámetros de documento.
+      // La solicitud sale igual (sin documento) en vez de fallar para la familia.
+      if (/could not find the function|PGRST202|schema cache/i.test(String((e as Error)?.message ?? ''))) {
+        return call<SubmitJoinResult>('submit_school_join_request', base);
+      }
+      throw e;
+    }
+  },
+
+  /** Administración: vincula la solicitud a una ficha. El servidor exige documento o correo exactos. */
+  vincular: (p: { requestId: string; fichaId: string; source: 'unregistered_athlete' | 'children' }) =>
+    call<{ request_id: string; status: 'linked'; child_id: string | null; athlete_name: string }>(
+      'vincular_solicitud_a_ficha',
+      { p_request_id: p.requestId, p_ficha_id: p.fichaId, p_source: p.source },
+    ),
 
   /** Busca la ficha que la escuela ya cargó: por documento y/o por el correo confirmado de la cuenta. */
   buscarFicha: (code: string, doc: string | null) =>

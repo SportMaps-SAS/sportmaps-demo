@@ -43,6 +43,7 @@ import {
     type InternalStatus,
 } from '../services/mercadopago.service';
 import { loadProviderConfig } from '../services/payment-provider.resolver';
+import { applyReservationPayment, schoolIdForReservationReference } from '../services/reservation-payments.service';
 // Mismo formato de motivo que Wompi para que el frontend lo parsee una sola vez.
 import { buildFailureReason, bankMessageFrom, conciliarMontoRecibido, motivoPagoParcial } from './wompi';
 import { sendPaymentAttemptFailedEmails } from '../services/paymentFailureEmail.service';
@@ -334,6 +335,11 @@ async function locateMerchantContext(externalRef: string): Promise<{
         return { schoolId: null, vendorId: data?.vendor_id ?? null };
     }
 
+    // Reservas de canchas: el comercio es la escuela dueña de la reserva (cuenta propia).
+    if (prefix === 'RSV') {
+        return { schoolId: await schoolIdForReservationReference(externalRef), vendorId: null };
+    }
+
     return { schoolId: null, vendorId: null };
 }
 
@@ -364,6 +370,7 @@ const HANDLERS: Record<string, (args: HandlerArgs) => Promise<HandlerResult>> = 
     MKT: handleMarketplaceTransaction,
     CART: handleCartOrder,
     BKG: handleSessionBooking,
+    RSV: handleReservation,
 };
 
 /**
@@ -716,6 +723,21 @@ async function handleCartOrder(args: HandlerArgs): Promise<HandlerResult> {
         return { status: 500, body: { error: 'cart_failure_update_failed' } };
     }
     return { status: 200, body: { status: 'ok', kind: 'cart', internalStatus, result: failRes } };
+}
+
+// RSV: reservas de canchas (F2). Logica compartida con Wompi en
+// services/reservation-payments.service.ts (valida monto, confirmar_pago_reserva).
+async function handleReservation(args: HandlerArgs): Promise<HandlerResult> {
+    const { req, paymentId, externalRef, internalStatus, amount, payment } = args;
+    return applyReservationPayment({
+        provider: 'mercadopago',
+        reference: externalRef,
+        internalStatus,
+        amountCop: amount,
+        currency: String(payment?.currency_id ?? 'COP').toUpperCase(),
+        eventId: paymentId,
+        log: req.log,
+    });
 }
 
 async function handleSessionBooking(args: HandlerArgs): Promise<HandlerResult> {
