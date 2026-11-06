@@ -19,6 +19,12 @@ export function InstallBanner() {
   // absolutamente nada y no habia forma de saber que la app era instalable.
   const [mostrarIos, setMostrarIos] = useState(false)
 
+  // Android: Chrome a veces NO lanza `beforeinstallprompt` (app ya instalada en
+  // otra sesion, criterios de engagement, navegador interno de WhatsApp/Instagram).
+  // Sin evento no habia aviso alguno. Respaldo: tras unos segundos, si no llego
+  // el evento, se explica la instalacion manual (o que abra en Chrome).
+  const [mostrarAndroid, setMostrarAndroid] = useState(false)
+
   // Escuela ya verificada de la sesion autenticada (usePwaTenantSync, corre
   // dentro del auth boundary). Se prefiere sobre resolveTenantSlug(), que es
   // el fallback conservador para visitantes anonimos (?t=, subdominio, o app
@@ -52,6 +58,7 @@ export function InstallBanner() {
       if (e.key === INSTALL_DISMISS_KEY && e.newValue === '1') {
         setPrompt(null)
         setMostrarIos(false)
+        setMostrarAndroid(false)
       }
     }
 
@@ -60,16 +67,25 @@ export function InstallBanner() {
     window.addEventListener('appinstalled', onInstalled)
     window.addEventListener('storage', onStorage)
 
-    // iOS: se muestra solo si hay ESCUELA, esta en Safari (no ya instalada) y no
-    // lo cerraron. El gate por escuela es deliberado: en iOS no existe boton de
-    // instalar, asi que este banner es contenido nuevo, y aparecerle de golpe a
-    // todos los usuarios de SportMaps seria un cambio de producto que nadie
-    // pidio. Se limita a quien viene de la app de su escuela.
-    if (slug && isIos() && getDisplayMode() === 'browser' && !yaFueCerrado()) {
+    // iOS: se muestra automaticamente a todos (con o sin escuela) mientras este
+    // en el navegador (no ya instalada) y no lo hayan cerrado. Sin escuela el
+    // banner anuncia SportMaps. (Antes exigia `slug`; se quito 2026-11-06 porque
+    // en iPhone nadie veia nunca el aviso de instalar.)
+    if (isIos() && getDisplayMode() === 'browser' && !yaFueCerrado()) {
       setMostrarIos(true)
     }
 
+    let timerAndroid: ReturnType<typeof setTimeout> | undefined
+    try {
+      if (/Android/i.test(navigator.userAgent) && getDisplayMode() === 'browser' && !yaFueCerrado()) {
+        timerAndroid = setTimeout(() => {
+          if (!(window as any).__installPrompt && !yaFueCerrado()) setMostrarAndroid(true)
+        }, 4000)
+      }
+    } catch { /* sin UA: no se muestra respaldo */ }
+
     return () => {
+      if (timerAndroid) clearTimeout(timerAndroid)
       window.removeEventListener('pwa:can-install', onCanInstall)
       window.removeEventListener('beforeinstallprompt', onBeforePrompt)
       window.removeEventListener('appinstalled', onInstalled)
@@ -82,6 +98,7 @@ export function InstallBanner() {
   const cerrarDefinitivo = () => {
     setPrompt(null)
     setMostrarIos(false)
+    setMostrarAndroid(false)
     try { localStorage.setItem(INSTALL_DISMISS_KEY, '1') } catch { /* modo privado: no persiste, pero cierra igual */ }
   }
 
@@ -123,6 +140,25 @@ export function InstallBanner() {
           </button>
           <Cerrar onClick={cerrarDefinitivo} />
         </div>
+      </div>
+    )
+  }
+
+  // Android sin evento de instalacion: instrucciones manuales.
+  if (mostrarAndroid && !prompt) {
+    const enAppInterna = /FBAN|FBAV|Instagram|WhatsApp|Line\/|; wv\)|MicroMessenger|TikTok/i.test(navigator.userAgent)
+    return (
+      <div className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom)+1rem)] left-4 right-4 bg-card rounded-xl shadow-lg p-4 flex items-start gap-3 z-50 border border-border animate-in slide-in-from-bottom-5 duration-300">
+        <Icono />
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-sm text-foreground">Instalar {nombre}</p>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            {enAppInterna
+              ? <>Abre este enlace en <strong className="text-foreground">Chrome</strong> (menú ⋮ → «Abrir en el navegador») y luego elige <strong className="text-foreground">Instalar app</strong>.</>
+              : <>Toca el menú <strong className="text-foreground">⋮</strong> de Chrome y elige <strong className="text-foreground">Instalar app</strong> o <strong className="text-foreground">Añadir a pantalla de inicio</strong>.</>}
+          </p>
+        </div>
+        <Cerrar onClick={cerrarDefinitivo} />
       </div>
     )
   }
