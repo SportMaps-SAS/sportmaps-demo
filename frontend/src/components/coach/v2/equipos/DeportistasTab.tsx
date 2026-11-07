@@ -34,6 +34,7 @@ import {
 } from '../coachV2Logic';
 import { useDeportistasEquipo, useEstadoPagoEquipo } from '../useCoachV2Data';
 import type { ObjetivoFelicitar } from '../felicitar';
+import { BotonesAltaDeportista } from './AltasDelProfe';
 
 const TONO_PAGO: Record<EstadoPago, string> = {
   al_dia: 'bg-primary/10 text-primary',
@@ -67,10 +68,15 @@ interface Props {
   felicitados: Set<string>;
   onFelicitar: (o: ObjetivoFelicitar) => void;
   rutas: RutasCoachV2;
+  /** Nombre, deporte y conteo del equipo: para «Inscribir deportistas» (si la escuela lo activó). */
+  equipo?: { nombre: string; deporte?: string | null; deportistas?: number };
 }
 
-export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, felicitados, onFelicitar, rutas }: Props) {
-  const { coachHideFinancialInfo } = useEntitlements();
+export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, felicitados, onFelicitar, rutas, equipo }: Props) {
+  const { coachHideFinancialInfo, coachCanCreateAthletes } = useEntitlements();
+  // Inscribir / Nuevo deportista: solo si la escuela lo activó (coach_can_create_athletes, Carmel).
+  const puedeAlta = coachCanCreateAthletes === true;
+  const altas = <BotonesAltaDeportista schoolId={schoolId} equipo={{ id: teamId, nombre: equipo?.nombre ?? 'Equipo', deporte: equipo?.deporte, deportistas: equipo?.deportistas }} />;
   const deportistas = useDeportistasEquipo(schoolId, teamId);
   const pago = useEstadoPagoEquipo(teamId, !coachHideFinancialInfo);
   const salud = useSchoolAthleteAvailability(schoolId);
@@ -90,11 +96,19 @@ export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, 
   if (deportistas.isLoading) return <SectionSkeleton rows={6} label="Cargando deportistas" />;
   if (deportistas.isError) return <InlineError message="No pudimos traer a los deportistas del equipo." onRetry={() => deportistas.refetch()} />;
   if ((deportistas.data ?? []).length === 0) {
-    return <EmptyNote>Este equipo todavía no tiene deportistas activos. La escuela los inscribe.</EmptyNote>;
+    return puedeAlta ? (
+      <div className="flex flex-col gap-3">
+        <EmptyNote>Este equipo todavía no tiene deportistas. Inscribe a los que ya están en la escuela o crea uno nuevo.</EmptyNote>
+        {altas}
+      </div>
+    ) : (
+      <EmptyNote>Este equipo todavía no tiene deportistas activos. La escuela los inscribe.</EmptyNote>
+    );
   }
 
   return (
     <div className="flex flex-col gap-3">
+      {altas}
       <label className="relative block">
         <span className="sr-only">Buscar deportista</span>
         <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
