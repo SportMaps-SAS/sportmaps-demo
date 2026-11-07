@@ -484,3 +484,86 @@ espera:
 | 2 | Restricción única de `athlete_absence_notices` | ✔ Solo `uq_athlete_absence_notice_day`: parcial (`status='active'`) sobre `(school_id, COALESCE(child_id, user_id), absence_date)`. No sirve como `onConflict` → leer e insertar lo que falta (§11.3). |
 | 3 | CHECK de `collection_notices.notice_type` y plantilla de Meta | ✔ El CHECK admite solo los seis escalones del cron. Además, `UNIQUE (payment_id, notice_type)` impediría repetir un manual, y el candado familia-día es un índice único parcial. No hace falta plantilla nueva: el manual usa la del escalón (§4). |
 | 4 | Límite de envío de la cuenta de WhatsApp Business y costo por plantilla | ⏳ Pendiente. No está documentado en el repo. Cada escuela envía desde su propia WABA, así que el límite diario de conversaciones iniciadas por la empresa depende del nivel de cada número, y en números nuevos puede ser menor que 300. Se revisa en el Business Manager de la escuela piloto antes de fijar el tope. |
+
+## 19. Alcance: Mapi en todo lo que hace un admin o un entrenador (2026-11-07)
+
+> Dirección del usuario, 2026-11-07: «un Mapi que sea asistente en todo: al crear,
+> usar, revisar; todas las acciones que haga un admin o un entrenador, como un LLM con
+> los datos de cada escuela». Este plan (§1–§18) pasa a ser la **oleada 1**; esta
+> sección fija el alcance completo y cómo crece. Lo marcado *(propuesta)* queda para
+> aprobar. Lámina: «V2 · Mapi en todo» en el lienzo del rediseño.
+
+### 19.1 «Con los datos de cada escuela»
+
+- No se entrena ni se ajusta un modelo por escuela. Es un solo modelo; los datos llegan
+  en cada turno por herramientas que leen la base con el alcance de quien habla (§3.4).
+  Por eso las cifras coinciden con la pantalla y una escuela nunca ve a otra.
+- *(Propuesta)* **Ficha de la escuela** en cada turno, después del corte de caché
+  (§3.2): día de corte, planes, sedes, horarios, módulos encendidos y vocabulario. Se
+  arma sola desde la configuración; el admin le suma notas cortas (tope ~20, sin datos
+  de menores ni de pagos). Es dato, no instrucción: se trata como los nombres (§3.4).
+  Reemplaza el `school_memory` de la v1 pegada el 2026-11-06.
+
+### 19.2 Una herramienta por acción de pantalla
+
+- Cada acción que un admin o un coach hace en la app tiene su herramienta, y la
+  herramienta llama **al mismo servicio del BFF o a la misma RPC** que la pantalla (§4:
+  «si la pantalla no lo deja, Mapi tampoco, y al revés»). No hay lógica de negocio
+  dentro de Mapi.
+- Si la acción no tiene servicio reutilizable (vive en el componente React, o son
+  inserts sueltos desde el cliente), primero se extrae a un servicio o a una RPC
+  transaccional y la pantalla pasa a usarlo. Ese trabajo es parte de la oleada.
+- Todo lo que escribe va por borrador → Confirmar (§2, §10). Deshacer solo donde la
+  acción se puede revertir y su efecto externo (aviso, WhatsApp) se puede retrasar.
+- `registro.ts` sigue filtrando por rol, flag y escuela: una herramienta que el rol no
+  puede usar no se declara, ni siquiera diferida.
+
+### 19.3 Muchas herramientas sin confundir al modelo
+
+Verificado contra la guía de la API (2026-11-07); revisar la documentación vigente antes
+de escribir código, porque los tipos del SDK van atrás de estos bloques.
+
+- **Siempre cargadas:** las básicas (`buscar_deportista`, `resumen_deportista`, buscar
+  equipo, `escalar_a_soporte`). El resto se declara con `defer_loading: true`. La API
+  rechaza (400) que todas estén diferidas.
+- **Las del módulo de la pantalla** (contexto de §3.3) se suman con `tool_addition` en
+  un mensaje de sistema (beta `mid-conversation-tool-changes-2026-07-01`, soportada en
+  `claude-sonnet-5-5`). Agrega sin romper la caché.
+- **Lo demás**, con la herramienta de búsqueda de la API
+  (`tool_search_tool_bm25_20251119`). Según la guía, paga cuando los esquemas pasan de
+  ~10K tokens; antes es sobrecosto. La oleada 1 (6 herramientas) no la necesita; se
+  enciende cuando el catálogo cruce ese umbral.
+
+### 19.4 Oleadas *(propuesta)*
+
+| # | Qué entra | Ejemplos de herramientas | Entrenador |
+|---|---|---|---|
+| 1 | Este plan (§4) | buscar y resumir, `excusar_ausencia`, `cartera`, `enviar_recordatorio_pago` | excusas, si `coach_mapi_attendance` |
+| 2 | El entrenador en la cancha | `registrar_asistencia` (`guardarSesionAsistencia`), evaluar, felicitar (`give_kudos`), preparar el entreno del día | su día a día |
+| 3 | Escuela y cobros únicos | inscribir, mover de equipo, pausar o reactivar, crear equipo y horario, cancelar sesión y avisar, `enviar_aviso`, cobro único (torneo, uniforme) | crear equipos o deportistas solo si se lo delegan; cobros nunca |
+| 4 | Informes, torneos, clase de prueba | `generar_reporte` (spec §4.3), `enviar_informe_atleta`, convocar, inscribir a torneo, agendar prueba, pasar prospecto a deportista | sus equipos, sin plata |
+| 5 | Tienda, reservas, contabilidad | crear producto, reservar, cierre de caja (lectura) | — |
+
+Cada oleada entra con: sus herramientas, al menos 3 evals por herramienta (uno de ellos
+un rechazo por permiso), las pruebas de seguridad de §7 (paso 5) y el encendido escuela de
+pruebas → piloto → resto. El tope de §13.2 y las métricas de §13.3 se revisan al
+cerrar cada oleada.
+
+### 19.5 Lo que sigue fuera
+
+Sin cambios respecto al spec aprobado (§4.2): borrar datos, anular o editar pagos,
+cambiar precios, cambiar roles o permisos (incluye invitar administradores) y configurar
+pasarelas. Se suma encender o cambiar la aprobación automática. Todo eso se hace en su
+pantalla.
+
+### 19.6 Decisiones pendientes
+
+1. **Aprobar un comprobante desde el chat.** Propuesta: la tarjeta trae el mismo
+   control de la pantalla Aprobar, con su porqué, y quien aprueba es el dueño al tocar.
+   Choca con la letra de «Mapi no mueve plata» (spec §4.2). Se decide antes de la
+   oleada 3.
+2. **Registrar un pago en efectivo desde el chat** («Ana pagó $120.000 en efectivo»).
+   Mismo dilema. Es el pedido más común en Modo Recepción.
+3. **Ficha de la escuela con notas del admin** (§19.1): sí o no, y el tope.
+4. **Orden de las oleadas 2 y 3.** Propuesta: primero el entrenador, porque es de uso
+   diario y sus acciones se pueden revertir.
