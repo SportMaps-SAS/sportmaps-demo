@@ -226,6 +226,10 @@ export default function TrainerClientProfile() {
           doc_type:      person?.doc_type,
           doc_number:    person?.doc_number,
           grade:         !isAdultLike ? person?.grade : undefined,
+          guardian_doc_type:   type !== 'adult' ? person?.guardian_doc_type : undefined,
+          guardian_doc_number: type !== 'adult' ? person?.guardian_doc_number : undefined,
+          profile_doc_type:    type === 'adult' ? person?.profile_doc_type : undefined,
+          profile_doc_number:  type === 'adult' ? person?.profile_doc_number : undefined,
         }}
       />
     </div>
