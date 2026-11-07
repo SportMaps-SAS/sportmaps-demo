@@ -62,6 +62,7 @@ router.get('/schools/:slug', async (req: Request, res: Response) => {
       .eq('school_id', school.id)
       .eq('status', 'available')
       .eq('booking_enabled', true)
+      .in('bookable_by', ['public', 'both']) // un espacio solo `members` no se ofrece a externos
       .order('name');
 
     const { data: courtesy } = await supabase
@@ -710,6 +711,7 @@ router.get('/slots', async (req: Request, res: Response) => {
       .eq('school_id', schoolId)
       .eq('booking_enabled', true)
       .eq('status', 'available')
+      .in('bookable_by', ['public', 'both']) // `members` no ofrece franjas a externos (404 igual que no reservable)
       .maybeSingle();
     if (!facility) return res.status(404).json({ error: 'Instalación no encontrada.' });
 

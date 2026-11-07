@@ -6,14 +6,13 @@
 // EXECUTE en ninguna, así que este router es la única puerta.
 //
 // IDENTIDAD DEL INVITADO (decisión importante):
-//  · El contrato exige `guest_bookers.verified_phone_at` para los canales
-//    public/whatsapp/landing. HOY el BFF solo tiene OTP por correo y NO existe
-//    OTP por SMS/WhatsApp. Un OTP de correo prueba el CORREO, no el teléfono:
-//    por eso /guests/verify marca SOLO `verified_email_at` y NUNCA
-//    `verified_phone_at`.
-//  · Reservar (POST /) pasa por verifyGuestChannel(): mientras el invitado no
-//    tenga `verified_phone_at`, responde 501 PHONE_VERIFICATION_PENDING. Cuando
-//    exista el adaptador de WhatsApp se reemplaza SOLO esa función.
+//  · Decisión de producto: en la web el invitado se verifica SOLO por correo (OTP -> X-Guest-Token). El teléfono es un
+//    dato de contacto NO verificado: /guests/verify marca SOLO `verified_email_at` y NUNCA `verified_phone_at`, que
+//    solo lo escribe el canal WhatsApp.
+//  · El contrato (§3) aún exige `verified_phone_at` para p_channel='public' en `reservar_cancha`. Por eso reservar
+//    (POST /) pasa por verifyGuestChannel(): con GUEST_WEB_BOOKING_ENABLED != 'true' (default) responde 501
+//    PHONE_VERIFICATION_PENDING a quien no tenga teléfono verificado; con el interruptor encendido (solo tras aplicar la
+//    migración que acepta correo verificado en canal public) deja pasar al invitado con correo verificado.
 //  · Anti-suplantación: como el teléfono no está probado, un invitado existente
 //    solo se reutiliza si el correo coincide con el que ya tiene guardado; así
 //    nadie obtiene el token de otro escribiendo su teléfono con un correo propio.
@@ -28,7 +27,7 @@ import { escapeHtmlText } from '../utils/sanitize';
 import { requireIdempotencyKey } from '../middlewares/requireIdempotencyKey';
 import {
     GuestRow, GUEST_TOKEN_TTL_MS, STATUS_LINK_TTL_MS, UUID_RE,
-    allowHit, checkOtp, currentOtp, isRpcFailure, linkJti, newGuestJti, reservationsClientIp, reservationsRateLimitStore,
+    allowHit, checkOtp, currentOtp, guestWebBookingEnabled, isRpcFailure, linkJti, newGuestJti, reservationsClientIp, reservationsRateLimitStore,
     signToken, translateRpcError, verifyGuestChannel, verifyToken,
 } from '../utils/reservations.shared';
 
@@ -290,10 +289,10 @@ router.post('/guests/verify', verifyLimiter, async (req: Request, res: Response)
             guest_token: token,
             expires_in: Math.floor(GUEST_TOKEN_TTL_MS / 1000),
             email_verified: true,
-            // El teléfono sigue sin verificar hasta que exista el adaptador de WhatsApp.
+            // El teléfono es solo contacto en la web: no se verifica aquí.
             phone_verified: !!guest.verified_phone_at,
-            ...(guest.verified_phone_at ? {} : {
-                notice: 'Correo verificado. Para reservar se requiere además verificar el teléfono por WhatsApp (pendiente).',
+            ...(guest.verified_phone_at || guestWebBookingEnabled() ? {} : {
+                notice: 'Correo verificado. La reserva en línea para invitados aún no está disponible.',
             }),
         });
     } catch (err: any) {
@@ -302,7 +301,7 @@ router.post('/guests/verify', verifyLimiter, async (req: Request, res: Response)
     }
 });
 
-// ── POST /guests/verify-phone — adaptador pendiente ─────────────────────────
+// ── POST /guests/verify-phone — adaptador pendiente (WhatsApp; no aplica a la web) ─────────────────────────
 router.post('/guests/verify-phone', verifyLimiter, (_req: Request, res: Response) =>
     fail(res, 501, 'Verificación por WhatsApp pendiente.', { code: 'PHONE_VERIFICATION_PENDING', reason: 'phone_verification_pending' }));
 

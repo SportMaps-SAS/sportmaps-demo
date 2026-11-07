@@ -257,24 +257,37 @@ export interface GuestRow {
 }
 
 export type ChannelVerification =
-    | { ok: true; method: 'phone' }
-    | { ok: false; status: 501; code: 'PHONE_VERIFICATION_PENDING'; message: string };
+    | { ok: true; method: 'phone' | 'email' }
+    | { ok: false; status: 501; code: 'PHONE_VERIFICATION_PENDING'; message: string }
+    | { ok: false; status: 403; code: 'GUEST_EMAIL_NOT_VERIFIED'; message: string };
+
+/** Interruptor de la reserva web de invitados verificados SOLO por correo. Default APAGADO: no se activa hasta
+ *  aplicar la migración que permite `p_channel='public'` con `verified_email_at` (docs/specs/reservas-canchas-f1-contrato.md §3 y §9).
+ *  Se lee en cada llamada (no al cargar el módulo) para poder apagarlo/probarlo sin reiniciar. */
+export const guestWebBookingEnabled = (): boolean => process.env.GUEST_WEB_BOOKING_ENABLED === 'true';
 
 /**
- * Las reservas por canal public/whatsapp/landing exigen `verified_phone_at`
- * (contrato §3). HOY no existe OTP por SMS/WhatsApp en el BFF y un OTP de correo
- * NO prueba el teléfono, así que este adaptador solo acepta a quien ya tenga
- * `verified_phone_at` (lo marcará el futuro adaptador de WhatsApp o el bot).
- * Cuando exista el proveedor, se reemplaza SOLO esta función.
+ * Decisión de producto: en la web pública el invitado se verifica SOLO por correo (OTP -> X-Guest-Token); el teléfono es
+ * un dato de contacto NO verificado y `verified_phone_at` solo lo marca el canal WhatsApp (Meta ya verificó el número).
+ *  · Con `verified_phone_at` (p. ej. nació por WhatsApp) -> siempre pasa, igual que antes.
+ *  · Sin él: con el interruptor apagado -> 501 (la RPC aún exige teléfono verificado para canal public);
+ *    con el interruptor encendido -> exige `verified_email_at`, y si falta -> 403.
+ *  Nunca escribe `verified_phone_at`.
  */
-export function verifyGuestChannel(guest: Pick<GuestRow, 'verified_phone_at'>): ChannelVerification {
+export function verifyGuestChannel(guest: Pick<GuestRow, 'verified_phone_at' | 'verified_email_at'>): ChannelVerification {
     if (guest.verified_phone_at) return { ok: true, method: 'phone' };
-    return {
-        ok: false,
-        status: 501,
-        code: 'PHONE_VERIFICATION_PENDING',
-        message: 'La verificación por WhatsApp está pendiente. Por ahora reserva desde la app o comunícate con la escuela.',
-    };
+    if (!guestWebBookingEnabled()) {
+        return {
+            ok: false,
+            status: 501,
+            code: 'PHONE_VERIFICATION_PENDING',
+            message: 'La reserva en línea para invitados aún no está disponible. Por ahora reserva desde la app o comunícate con la escuela.',
+        };
+    }
+    if (!guest.verified_email_at) {
+        return { ok: false, status: 403, code: 'GUEST_EMAIL_NOT_VERIFIED', message: 'Verifica tu correo para reservar.' };
+    }
+    return { ok: true, method: 'email' };
 }
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
