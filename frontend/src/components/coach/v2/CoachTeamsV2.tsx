@@ -36,6 +36,8 @@ import { DeportistasTab } from './equipos/DeportistasTab';
 import { PartidosTab } from './equipos/PartidosTab';
 import { EvaluarTab } from './equipos/EvaluarTab';
 import { AgregarHorarioBoton } from './equipos/AgregarHorarioSheet';
+import { BotonCrearEquipo } from './equipos/AltasDelProfe';
+import { useEntitlements } from '@/hooks/useEntitlements';
 
 const TABS: { id: TabEquipo; label: string }[] = [
   { id: 'deportistas', label: 'Deportistas' },
@@ -53,8 +55,9 @@ interface Props {
 export function CoachTeamsV2({ nombreProfe, rutas: rutasProp, hoy }: Props) {
   const rutas = conRutas(rutasProp);
   const ahora = useAhora(hoy);
-  const { schoolId, schoolName, loading: cargandoEscuela } = useSchoolContext();
+  const { schoolId, schoolName, activeBranchId, loading: cargandoEscuela } = useSchoolContext();
   const equipos = useEquiposCoach(schoolId);
+  const puedeCrearEquipo = useEntitlements().coachCanCreateTeams === true;
   const [params, setParams] = useSearchParams();
   const equipoId = params.get('equipo');
   const tabParam = params.get('tab') as TabEquipo | null;
@@ -126,16 +129,24 @@ export function CoachTeamsV2({ nombreProfe, rutas: rutasProp, hoy }: Props) {
         />
       ) : (
         <>
-          <header className="flex flex-col gap-0.5">
-            <h1 className="text-2xl font-bold tracking-tight">Mis equipos</h1>
-            <span className="text-xs text-muted-foreground">
-              {[schoolName, `${lista.length} ${lista.length === 1 ? 'equipo' : 'equipos'}`, `${lista.reduce((a, e) => a + e.deportistas, 0)} deportistas`].filter(Boolean).join(' · ')}
-            </span>
+          <header className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <h1 className="text-2xl font-bold tracking-tight">Mis equipos</h1>
+              <span className="text-xs text-muted-foreground">
+                {[schoolName, `${lista.length} ${lista.length === 1 ? 'equipo' : 'equipos'}`, `${lista.reduce((a, e) => a + e.deportistas, 0)} deportistas`].filter(Boolean).join(' · ')}
+              </span>
+            </div>
+            {/* Solo si la escuela deja al profe crear equipos (coach_can_create_teams, Carmel). */}
+            <BotonCrearEquipo schoolId={schoolId} branchId={activeBranchId} className="shrink-0" />
           </header>
           {lista.length === 0 ? (
             <EmptyNote>
               <p className="font-semibold text-foreground">Todavía no tienes equipos asignados.</p>
-              <p className="mt-1">La escuela te asigna a tus equipos. Pídeselo a la administración.</p>
+              <p className="mt-1">
+                {puedeCrearEquipo
+                  ? 'Crea tu primer equipo con «Crear equipo», o pídele a la administración que te asigne.'
+                  : 'La escuela te asigna a tus equipos. Pídeselo a la administración.'}
+              </p>
             </EmptyNote>
           ) : (
             <ul className="grid gap-3 md:grid-cols-2">
@@ -224,6 +235,7 @@ function Detalle({
             felicitados={felicitados}
             onFelicitar={onFelicitar}
             rutas={rutas}
+            equipo={{ nombre: equipo.nombre, deporte: equipo.deporte, deportistas: equipo.deportistas }}
           />
         )}
         {tab === 'partidos' && <PartidosTab schoolId={schoolId} teamId={equipo.id} equipo={equipo.nombre} hoy={ahora} rutas={rutas} />}

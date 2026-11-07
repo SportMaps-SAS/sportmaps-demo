@@ -86,6 +86,12 @@ interface EntitlementsResponse {
      */
     coach_can_create_athletes?: boolean;
     /**
+     * true → los coaches de la escuela crean sus propios equipos
+     * (`school_settings.coach_can_create_teams`, caso Carmel Club; el gate real
+     * es la policy de `teams`). Default false.
+     */
+    coach_can_create_teams?: boolean;
+    /**
      * true → la escuela no exige el correo del acudiente al dar de alta un
      * menor (excepción de política de datos, `school_settings.parent_email_optional`,
      * caso Carmel Club). Default false: no cambia nada para el resto.
@@ -222,6 +228,10 @@ export interface Entitlements {
      *  activada por la escuela, `coach_can_create_athletes`). Default false. */
     coachCanCreateAthletes: boolean;
 
+    /** El coach de esta escuela crea sus propios equipos (`coach_can_create_teams`,
+     *  caso Carmel Club). Default false. */
+    coachCanCreateTeams: boolean;
+
     /** Esta escuela no exige el correo del acudiente al dar de alta un menor
      *  (`parent_email_optional`, caso Carmel Club). Default false. */
     parentEmailOptional: boolean;
@@ -340,6 +350,7 @@ const EMPTY_ENTITLEMENTS: Entitlements = {
     marcaPropia: false,
     appNativa: false,
     coachCanCreateAthletes: false,
+    coachCanCreateTeams: false,
     parentEmailOptional: false,
     coachHideFinancialInfo: false,
     coachCanEditCategories: false,
@@ -464,6 +475,7 @@ export function useEntitlements(): Entitlements & EntitlementsHelpers & {
             marcaPropia: (data.has_pwa_branding ?? false) === true,
             appNativa: data.has_whitelabel === true,
             coachCanCreateAthletes: data.coach_can_create_athletes === true,
+            coachCanCreateTeams: data.coach_can_create_teams === true,
             parentEmailOptional: data.parent_email_optional === true,
             coachHideFinancialInfo: data.coach_hide_financial_info === true,
             coachCanEditCategories: data.coach_can_edit_categories === true,

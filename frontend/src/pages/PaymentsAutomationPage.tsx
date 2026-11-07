@@ -35,6 +35,7 @@ import { todayColombia, formatDayCO, daysDiffFromToday } from '@/lib/dateUtils';
 import { SportMapsPaySettings } from '@/components/settings/SportMapsPaySettings';
 import { PaymentProvidersAdmin } from '@/components/admin/PaymentProvidersAdmin';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
+import { claveAtleta, juntarPorAtleta, marcarGrupos, ordenarPagosRecibidos } from '@/lib/pagosRecibidosOrden';
 import { ClasesDePruebaDialog } from '@/components/payment/ClasesDePruebaDialog';
 import { OperacionesTab } from '@/components/payment/OperacionesTab';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
@@ -42,7 +43,7 @@ import { canManageCharges, canReadChargeBatches, isMensualidad } from '@/lib/cob
 import { ApprovePaymentMethodSheet } from '@/components/payment/ApprovePaymentMethodSheet';
 import { RejectReceiptDialog } from '@/components/payment/RejectReceiptDialog';
 import { BulkApproveGreensDialog } from '@/components/payment/BulkApproveGreensDialog';
-import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection } from '@/lib/receiptReview';
+import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish } from '@/lib/receiptReview';
 import { bffClient } from '@/lib/api/bffClient';
 import { GlosaConciliationDialog } from '@/components/payment/GlosaConciliationDialog';
 import { ReconciliationTab } from '@/components/payment/ReconciliationTab';
@@ -574,7 +575,8 @@ export default function PaymentsAutomationPage() {
   // mostraba "Histórico acumulado" de solo las últimas horas.
   const [kpis, setKpis] = useState<PaymentKpis | null>(null);
   const [teamSubscriptions, setTeamSubscriptions] = useState<TeamSubscription[]>([]);
-  const [viewingProof, setViewingProof] = useState<{ open: boolean; url: string; student: string; amount: number }>({
+  // `group`: el comprobante paga varios cobros de la cola (mismo receipt_url).
+  const [viewingProof, setViewingProof] = useState<{ open: boolean; url: string; student: string; amount: number; group?: string | null }>({
     open: false, url: '', student: '', amount: 0,
   });
   // Rechazo de comprobante (con motivo) y aprobación en lote de los verdes.
@@ -1296,17 +1298,24 @@ export default function PaymentsAutomationPage() {
     toast({ title: 'Reporte Generado', description: 'El archivo CSV se ha descargado correctamente.' });
   };
 
+  /** «Cubre 3 cobros: Septiembre 2026, Octubre 2026 y Noviembre 2026 · $450.000», o null. */
+  const proofGroupNote = (payment: PaymentTransaction): string | null => {
+    const group = payment.receipt_url ? pendingReceiptGroups.get(payment.receipt_url) : undefined;
+    if (!group) return null;
+    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    return `Cubre ${group.length} cobros: ${joinSpanish(orderReceiptGroup(group).map(o => (o as any).period_label || o.concept))} · ${formatCurrency(total)}`;
+  };
   const handleShowProof = async (payment: PaymentTransaction) => {
     if (!payment.receipt_url) return;
     if (payment.receipt_url.startsWith('http')) {
-      setViewingProof({ open: true, url: payment.receipt_url, student: payment.child?.full_name || 'Deportista', amount: payment.amount });
+      setViewingProof({ open: true, url: payment.receipt_url, student: payment.child?.full_name || 'Deportista', amount: payment.amount, group: proofGroupNote(payment) });
       return;
     }
     try {
       const cleanPath = normalizeReceiptUrl(payment.receipt_url);
       const { data, error } = await supabase.storage.from('payment-receipts').createSignedUrl(cleanPath, 300);
       if (error) throw error;
-      setViewingProof({ open: true, url: data.signedUrl, student: payment.child?.full_name || 'Deportista', amount: payment.amount });
+      setViewingProof({ open: true, url: data.signedUrl, student: payment.child?.full_name || 'Deportista', amount: payment.amount, group: proofGroupNote(payment) });
     } catch {
       toast({ title: 'Error de acceso', description: 'No se pudo generar el acceso al comprobante.', variant: 'destructive' });
     }
@@ -1363,7 +1372,22 @@ export default function PaymentsAutomationPage() {
   });
   // Orden de la cola: verde primero (se aprueba en un clic), luego amarillo,
   // sin veredicto y rojo; dentro de cada grupo, el que más lleva esperando.
-  const pendingPayments = sortReviewQueue(rawPendingPayments.filter(p => {
+  // Un comprobante que paga varios meses viene ligado a cada cobro (mismo
+  // receipt_url): se muestran juntos y la hoja de aprobación los aprueba juntos.
+  const pendingReceiptGroups = receiptGroups(rawPendingPayments);
+  const receiptSiblings = (p: PaymentTransaction | null): PaymentTransaction[] =>
+    p?.receipt_url ? (pendingReceiptGroups.get(p.receipt_url) ?? []).filter(o => o.id !== p.id) : [];
+  const renderReceiptGroupChip = (p: PaymentTransaction) => {
+    const group = p.receipt_url ? pendingReceiptGroups.get(p.receipt_url) : undefined;
+    if (!group) return null;
+    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    return (
+      <Badge variant="outline" title={group.map(o => (o as any).period_label || o.concept).join(' · ')} className="text-[10px] py-0 h-5 whitespace-nowrap bg-violet-50 text-violet-700 border-violet-200">
+        1 comprobante · {group.length} cobros · {formatCurrency(total)}
+      </Badge>
+    );
+  };
+  const pendingPayments = keepReceiptGroupsTogether(sortReviewQueue(rawPendingPayments.filter(p => {
     if (!pendingSearch) return true;
     const term = pendingSearch.toLowerCase();
     return p.child?.full_name?.toLowerCase().includes(term) ||
@@ -1371,7 +1395,7 @@ export default function PaymentsAutomationPage() {
       p.concept?.toLowerCase().includes(term) ||
       p.program?.name?.toLowerCase().includes(term) ||
       p.team?.name?.toLowerCase().includes(term);
-  }));
+  })));
   // «Aprobar todos los verdes» trabaja sobre TODA la cola, no sobre la búsqueda.
   const greenSelection = bulkGreenSelection(rawPendingPayments);
   const WAIT_TONE_CLASS = {
@@ -1447,12 +1471,12 @@ export default function PaymentsAutomationPage() {
   // `created_at` (necesario para que el tope de 500 recorte lo más viejo), y con
   // ese orden un pago recibido hoy sobre una mensualidad emitida el 30/jul
   // aparecía sepultado entre las filas de julio en vez de arriba.
-  const historyPayments = historyBase
-    .filter(p => historyStatusFilter === 'all' || p.status === historyStatusFilter)
-    .sort((a, b) =>
-      paymentDay(b).localeCompare(paymentDay(a)) ||
-      (b.created_at ?? '').localeCompare(a.created_at ?? ''),
-    );
+  // Dentro de cada día, los pagos de un mismo atleta van juntos (2026-11-07,
+  // Dreamers: la mensualidad y las horas de una niña quedaban partidas).
+  const historyPayments = ordenarPagosRecibidos(
+    historyBase.filter(p => historyStatusFilter === 'all' || p.status === historyStatusFilter),
+    paymentDay,
+  );
 
   const historyCounts = historyBase.reduce<Record<string, number>>((acc, p) => {
     acc[p.status] = (acc[p.status] ?? 0) + 1;
@@ -1461,6 +1485,8 @@ export default function PaymentsAutomationPage() {
 
   const historyTotalPages = Math.max(1, Math.ceil(historyPayments.length / HISTORY_ROWS_PER_VIEW));
   const pagedHistory = historyPayments.slice((historyPage - 1) * HISTORY_ROWS_PER_VIEW, historyPage * HISTORY_ROWS_PER_VIEW);
+  // Filas seguidas del mismo atleta en el mismo día se dibujan como un bloque.
+  const grupoHistorial = marcarGrupos(pagedHistory, p => `${paymentDay(p)}|${claveAtleta(p)}`);
 
   // Los agregados de dinero (ingresos históricos, saldo por validar, tasa de
   // aprobación) ya NO se calculan acá: se pedían sobre `payments`, que es la
@@ -1783,6 +1809,7 @@ export default function PaymentsAutomationPage() {
                               )}
                               <DestinoBadge payment={payment} />
                               <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                              {renderReceiptGroupChip(payment)}
                             </div>
                           </div>
                         </div>
@@ -1897,6 +1924,7 @@ export default function PaymentsAutomationPage() {
                                   </Button>
                                   <DestinoBadge payment={payment} />
                               <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                                  {renderReceiptGroupChip(payment)}
                                 </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">—</span>
@@ -2199,7 +2227,7 @@ export default function PaymentsAutomationPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {glosas.map(g => (
+                  {juntarPorAtleta(glosas, g => g.payments?.child?.full_name || g.payments?.parent?.full_name).map(g => (
                     <div key={g.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -2363,11 +2391,12 @@ export default function PaymentsAutomationPage() {
                   <p className="text-center text-muted-foreground py-8">No hay historial disponible.</p>
                 ) : pagedHistory.map((payment) => {
                   const cfg = STATUS_CONFIG[payment.status] ?? { label: payment.status, className: 'bg-gray-100 text-gray-600' };
+                  const g = grupoHistorial.get(payment.id);
                   return (
-                    <div key={payment.id} className="border rounded-lg p-4 space-y-2">
+                    <div key={payment.id} className={`border p-4 space-y-2 ${g?.continua ? '-mt-3 rounded-t-none border-t-0' : 'rounded-t-lg'} ${g?.sigue ? 'rounded-b-none' : 'rounded-b-lg'}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{(payment as any).athlete_name || 'Sin nombre'}</p>
+                          {!g?.continua && <p className="font-medium text-sm truncate">{(payment as any).athlete_name || 'Sin nombre'}</p>}
                           <div className="flex gap-1 flex-wrap mt-0.5">
                             {payment.team?.name && (
                               <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200 py-0 h-4">
@@ -2446,8 +2475,9 @@ export default function PaymentsAutomationPage() {
                       <TableRow><TableCell colSpan={showBranchCol ? 8 : 7} className="text-center py-8 text-muted-foreground">No se encontraron transacciones con los filtros actuales.</TableCell></TableRow>
                     ) : pagedHistory.map((payment) => {
                       const cfg = STATUS_CONFIG[payment.status] ?? { label: payment.status, className: 'bg-gray-100 text-gray-600' };
+                      const g = grupoHistorial.get(payment.id);
                       return (
-                        <TableRow key={payment.id}>
+                        <TableRow key={payment.id} className={g?.sigue ? 'border-b-0' : undefined}>
                           {/* CUÁNDO ENTRÓ LA PLATA, no cuándo se emitió el cobro. Con
                               `created_at` la mensualidad de agosto generada el 30/jul se leía
                               como un pago "del 30 de jul" aunque el comprobante fuera del 3 de
@@ -2456,10 +2486,10 @@ export default function PaymentsAutomationPage() {
                             className="text-xs text-muted-foreground whitespace-nowrap"
                             title={payment.payment_date ? `Cobro emitido el ${formatDate(payment.created_at)}` : undefined}
                           >
-                            {reportedDate(payment)}
+                            {g?.continua ? null : reportedDate(payment)}
                           </TableCell>
                           <TableCell className="font-medium">
-                            <div className="flex flex-col">
+                            <div className={`flex flex-col ${g?.continua ? 'invisible' : ''}`}>
                               <span className="font-bold">{(payment as any).athlete_name || 'Sin nombre'}</span>
                               <span className="text-xs text-muted-foreground">
                                 {(payment as any).parent_responsible || <span className="text-muted-foreground text-xs">—</span>}
@@ -3201,7 +3231,10 @@ export default function PaymentsAutomationPage() {
         <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>Comprobante de Pago</DialogTitle>
-            <DialogDescription>{viewingProof.student} — {formatCurrency(viewingProof.amount)}</DialogDescription>
+            <DialogDescription>
+              {viewingProof.student} — {formatCurrency(viewingProof.amount)}
+              {viewingProof.group && <span className="block mt-1 font-semibold text-violet-700">{viewingProof.group}</span>}
+            </DialogDescription>
           </DialogHeader>
           <div className="p-4 flex flex-col items-center justify-center bg-muted rounded-lg min-h-48 sm:min-h-72">
             {viewingProof.url ? (
@@ -3257,7 +3290,11 @@ export default function PaymentsAutomationPage() {
         open={!!paymentToApprove}
         onOpenChange={(open) => !open && setPaymentToApprove(null)}
         payment={paymentToApprove}
-        familyNote={paymentToApprove ? familyNotes[paymentToApprove.id]?.pie ?? null : null}
+        siblings={receiptSiblings(paymentToApprove)}
+        // En un comprobante de varios meses el pie de foto quedó en uno solo.
+        familyNote={paymentToApprove
+          ? [paymentToApprove, ...receiptSiblings(paymentToApprove)].map(p => familyNotes[p.id]?.pie).find(Boolean) ?? null
+          : null}
         onSuccess={() => {
           setPaymentToApprove(null);
           fetchPayments();

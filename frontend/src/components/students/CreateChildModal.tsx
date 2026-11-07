@@ -89,6 +89,8 @@ interface CreateChildModalProps {
    * responde 403. Por defecto sigue a `canWaiveFees` (false para el coach).
    */
   canUseSiblings?: boolean;
+  /** Equipo ya elegido al abrir (el profe lo abre desde SU equipo). Se puede cambiar. */
+  defaultTeamId?: string | null;
 }
 
 interface BillingSettings {
@@ -116,7 +118,7 @@ function Section({
   );
 }
 
-export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true, canUseSiblings, prefill }: CreateChildModalProps) {
+export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true, canUseSiblings, prefill, defaultTeamId }: CreateChildModalProps) {
   const siblingsAllowed = canUseSiblings ?? canWaiveFees;
   const { toast } = useToast();
   const [submitting, setSubmitting] = useState(false);
@@ -276,6 +278,11 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
     if (prefill.parentName) setParentName(prefill.parentName);
     if (prefill.phone) setParentPhone(phoneForForm(prefill.phone));
   }, [open, prefill]);
+
+  // Abierto desde un equipo: ese equipo ya elegido (también llena la mensualidad del equipo).
+  useEffect(() => {
+    if (open && defaultTeamId) setTeamId(defaultTeamId);
+  }, [open, defaultTeamId]);
 
   // ── Búsqueda silenciosa en acudiente ──────────────────────────────────────────
   const checkParentEmailExists = useCallback(async (emailVal: string) => {

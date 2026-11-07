@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { adjustmentLabel, formatPesos, isMensualidad } from '@/lib/cobrosYPagos';
 import { todayColombia } from '@/lib/dateUtils';
+import { juntarPorAtleta } from '@/lib/pagosRecibidosOrden';
 import {
     chargeBatchesApi,
     toChargeBatchError,
@@ -332,7 +333,7 @@ export function OperacionesTab({ canManage }: { canManage: boolean }) {
                             </div>
                             {expanded === b.id && (
                                 <div className="rounded-lg bg-muted/30 p-2 space-y-1.5">
-                                    {!d ? <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Cargando…</p> : d.rows.map((r) => (
+                                    {!d ? <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Cargando…</p> : juntarPorAtleta(d.rows, (r) => r.athlete_name).map((r) => (
                                         <div key={r.payment_id} className="text-xs space-y-1 border-b last:border-0 pb-1.5">
                                             <div className="flex flex-wrap justify-between gap-2">
                                                 <span>{r.athlete_name ? <><b>{r.athlete_name}</b> · </> : null}{r.concept}</span>
@@ -368,7 +369,7 @@ export function OperacionesTab({ canManage }: { canManage: boolean }) {
                     </Button>
                     {report && (report.length === 0 ? <p className="text-xs text-muted-foreground">Sin descuentos este mes.</p> : (
                         <div className="max-h-64 overflow-y-auto space-y-1 text-xs">
-                            {report.map((r) => (
+                            {juntarPorAtleta(report, (r) => r.athlete_name).map((r) => (
                                 <p key={r.id}>
                                     {fmtDate(r.created_at)} · <b>{r.athlete_name}</b> · {r.concept} · {r.label ?? adjustmentLabel({ origin: r.origin, kind: r.kind, reason_code: r.reason_code, amount: r.amount, basis: r.basis ?? 'valor', pct: r.pct })}{r.reverted ? ' (quitado)' : ''}
                                     {r.created_by_name ? ` · ${r.created_by_name}` : ''}

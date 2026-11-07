@@ -33,6 +33,12 @@ Cómo se cobran si toca: **Deportistas → ⋯ → Editar deportista → «Inscr
 
 **b) Diciembre no se va a generar solo.** Dreamers tiene `auto_generate_payments = false`. El 1-dic nadie va a recibir su cobro a menos que alguien abra el mes.
 
+Simulación de solo lectura del 2026-11-07, con la misma lógica de `preview_open_month`:
+- **Noviembre: 0 cobros nuevos.** Los 12 ya tienen el suyo. Encender el automático hoy es seguro: el cron (`generate-monthly-charges-daily`, 01:30 COT, todos los días, abre el mes **en curso**) no crearía nada. Antes de la migración `20261107104128` habría duplicado 8 cobros de noviembre.
+- **Diciembre: 12 cobros, $3.526.500**, todos por el valor del plan. Sin pausas ni referidos. El descuento por hermanos (5 %) está encendido, pero no hay hermanos vinculados. Vencen el 1-dic si se generan ese día; si se abre el mes después, vencen 5 días después de abrirlo. Los 2 atletas con noviembre vencido quedarían debiendo dos meses.
+
+**c) Solo 2 de los 12 atletas tienen acudiente vinculado en la app.** Las otras 10 familias no tienen cuenta: no ven sus cobros ni reciben avisos, y sus cobros nacen sin pagador. Todo pasa por la escuela (registro manual o comprobantes). Por eso «sale octubre» solo lo vieron 2 familias. Antes de diciembre conviene invitarlas: la invitación precargada ya existe. Si no, la generación automática les crea el cobro, pero nadie del lado de la familia lo ve.
+
 ## 4. Plan de mitigación
 
 ### Frente A — El primer cobro nace en el mes correcto

@@ -14,6 +14,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { todayColombia } from '@/lib/dateUtils';
 import { formatCurrency } from '@/lib/utils';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
+import { joinSpanish } from '@/lib/receiptReview';
 
 export interface ApprovablePayment {
   id: string;
@@ -40,6 +41,12 @@ export interface ApproveOptions {
   confirmedAmount?: number;
   /** Razón cuando el valor confirmado difiere del que leyó el comprobante. */
   confirmedReason?: string;
+  /**
+   * false = no avisar a la familia por este cobro. Lo usa la aprobación de un
+   * comprobante de varios meses, que manda UN solo aviso con todos (ver
+   * notifyGroupApproved). Por defecto avisa.
+   */
+  notify?: boolean;
 }
 
 export type ApproveResult =
@@ -121,7 +128,7 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
 
   // Aviso a la familia / responsable si tiene cuenta. No bloquea la aprobación.
   const recipientId = payment.parent_id || payment.user_id;
-  if (recipientId) {
+  if (recipientId && opts.notify !== false) {
     const escuela = opts.schoolName || 'La escuela';
     await supabase.rpc('notify_user', {
       p_user_id: recipientId,
@@ -135,4 +142,34 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
   }
 
   return { ok: true, isAbono, abono, saldoPendiente };
+}
+
+/**
+ * Un solo aviso por responsable cuando un comprobante cubrió varios cobros:
+ * «confirmó tu pago de $450.000 por Septiembre 2026, Octubre 2026 y Noviembre 2026».
+ * No bloquea: si falla, la aprobación ya quedó hecha.
+ */
+export async function notifyGroupApproved(
+  approved: ReadonlyArray<{ payment: ApprovablePayment; label: string }>,
+  schoolName?: string | null,
+): Promise<void> {
+  const byRecipient = new Map<string, { total: number; labels: string[] }>();
+  for (const { payment, label } of approved) {
+    const recipientId = payment.parent_id || payment.user_id;
+    if (!recipientId) continue;
+    const entry = byRecipient.get(recipientId) ?? { total: 0, labels: [] };
+    entry.total += Math.max((Number(payment.amount) || 0) - (Number(payment.amount_paid) || 0), 0);
+    entry.labels.push(label);
+    byRecipient.set(recipientId, entry);
+  }
+  const escuela = schoolName || 'La escuela';
+  await Promise.all([...byRecipient].map(([recipientId, { total, labels }]) =>
+    supabase.rpc('notify_user', {
+      p_user_id: recipientId,
+      p_title: '✅ Pago confirmado',
+      p_message: `${escuela} confirmó tu pago de ${formatCurrency(total)} por ${joinSpanish(labels)}.`,
+      p_type: 'success',
+      p_link: '/my-payments',
+    }).then(() => undefined, () => undefined),
+  ));
 }
