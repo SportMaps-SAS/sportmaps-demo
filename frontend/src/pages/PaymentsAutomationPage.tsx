@@ -42,7 +42,7 @@ import { canManageCharges, canReadChargeBatches, isMensualidad } from '@/lib/cob
 import { ApprovePaymentMethodSheet } from '@/components/payment/ApprovePaymentMethodSheet';
 import { RejectReceiptDialog } from '@/components/payment/RejectReceiptDialog';
 import { BulkApproveGreensDialog } from '@/components/payment/BulkApproveGreensDialog';
-import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection } from '@/lib/receiptReview';
+import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish } from '@/lib/receiptReview';
 import { bffClient } from '@/lib/api/bffClient';
 import { GlosaConciliationDialog } from '@/components/payment/GlosaConciliationDialog';
 import { ReconciliationTab } from '@/components/payment/ReconciliationTab';
@@ -574,7 +574,8 @@ export default function PaymentsAutomationPage() {
   // mostraba "Histórico acumulado" de solo las últimas horas.
   const [kpis, setKpis] = useState<PaymentKpis | null>(null);
   const [teamSubscriptions, setTeamSubscriptions] = useState<TeamSubscription[]>([]);
-  const [viewingProof, setViewingProof] = useState<{ open: boolean; url: string; student: string; amount: number }>({
+  // `group`: el comprobante paga varios cobros de la cola (mismo receipt_url).
+  const [viewingProof, setViewingProof] = useState<{ open: boolean; url: string; student: string; amount: number; group?: string | null }>({
     open: false, url: '', student: '', amount: 0,
   });
   // Rechazo de comprobante (con motivo) y aprobación en lote de los verdes.
@@ -1296,17 +1297,24 @@ export default function PaymentsAutomationPage() {
     toast({ title: 'Reporte Generado', description: 'El archivo CSV se ha descargado correctamente.' });
   };
 
+  /** «Cubre 3 cobros: Septiembre 2026, Octubre 2026 y Noviembre 2026 · $450.000», o null. */
+  const proofGroupNote = (payment: PaymentTransaction): string | null => {
+    const group = payment.receipt_url ? pendingReceiptGroups.get(payment.receipt_url) : undefined;
+    if (!group) return null;
+    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    return `Cubre ${group.length} cobros: ${joinSpanish(orderReceiptGroup(group).map(o => (o as any).period_label || o.concept))} · ${formatCurrency(total)}`;
+  };
   const handleShowProof = async (payment: PaymentTransaction) => {
     if (!payment.receipt_url) return;
     if (payment.receipt_url.startsWith('http')) {
-      setViewingProof({ open: true, url: payment.receipt_url, student: payment.child?.full_name || 'Deportista', amount: payment.amount });
+      setViewingProof({ open: true, url: payment.receipt_url, student: payment.child?.full_name || 'Deportista', amount: payment.amount, group: proofGroupNote(payment) });
       return;
     }
     try {
       const cleanPath = normalizeReceiptUrl(payment.receipt_url);
       const { data, error } = await supabase.storage.from('payment-receipts').createSignedUrl(cleanPath, 300);
       if (error) throw error;
-      setViewingProof({ open: true, url: data.signedUrl, student: payment.child?.full_name || 'Deportista', amount: payment.amount });
+      setViewingProof({ open: true, url: data.signedUrl, student: payment.child?.full_name || 'Deportista', amount: payment.amount, group: proofGroupNote(payment) });
     } catch {
       toast({ title: 'Error de acceso', description: 'No se pudo generar el acceso al comprobante.', variant: 'destructive' });
     }
@@ -1363,7 +1371,22 @@ export default function PaymentsAutomationPage() {
   });
   // Orden de la cola: verde primero (se aprueba en un clic), luego amarillo,
   // sin veredicto y rojo; dentro de cada grupo, el que más lleva esperando.
-  const pendingPayments = sortReviewQueue(rawPendingPayments.filter(p => {
+  // Un comprobante que paga varios meses viene ligado a cada cobro (mismo
+  // receipt_url): se muestran juntos y la hoja de aprobación los aprueba juntos.
+  const pendingReceiptGroups = receiptGroups(rawPendingPayments);
+  const receiptSiblings = (p: PaymentTransaction | null): PaymentTransaction[] =>
+    p?.receipt_url ? (pendingReceiptGroups.get(p.receipt_url) ?? []).filter(o => o.id !== p.id) : [];
+  const renderReceiptGroupChip = (p: PaymentTransaction) => {
+    const group = p.receipt_url ? pendingReceiptGroups.get(p.receipt_url) : undefined;
+    if (!group) return null;
+    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    return (
+      <Badge variant="outline" title={group.map(o => (o as any).period_label || o.concept).join(' · ')} className="text-[10px] py-0 h-5 whitespace-nowrap bg-violet-50 text-violet-700 border-violet-200">
+        1 comprobante · {group.length} cobros · {formatCurrency(total)}
+      </Badge>
+    );
+  };
+  const pendingPayments = keepReceiptGroupsTogether(sortReviewQueue(rawPendingPayments.filter(p => {
     if (!pendingSearch) return true;
     const term = pendingSearch.toLowerCase();
     return p.child?.full_name?.toLowerCase().includes(term) ||
@@ -1371,7 +1394,7 @@ export default function PaymentsAutomationPage() {
       p.concept?.toLowerCase().includes(term) ||
       p.program?.name?.toLowerCase().includes(term) ||
       p.team?.name?.toLowerCase().includes(term);
-  }));
+  })));
   // «Aprobar todos los verdes» trabaja sobre TODA la cola, no sobre la búsqueda.
   const greenSelection = bulkGreenSelection(rawPendingPayments);
   const WAIT_TONE_CLASS = {
@@ -1783,6 +1806,7 @@ export default function PaymentsAutomationPage() {
                               )}
                               <DestinoBadge payment={payment} />
                               <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                              {renderReceiptGroupChip(payment)}
                             </div>
                           </div>
                         </div>
@@ -1897,6 +1921,7 @@ export default function PaymentsAutomationPage() {
                                   </Button>
                                   <DestinoBadge payment={payment} />
                               <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                                  {renderReceiptGroupChip(payment)}
                                 </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">—</span>
@@ -3201,7 +3226,10 @@ export default function PaymentsAutomationPage() {
         <DialogContent className="w-[95vw] max-w-2xl">
           <DialogHeader>
             <DialogTitle>Comprobante de Pago</DialogTitle>
-            <DialogDescription>{viewingProof.student} — {formatCurrency(viewingProof.amount)}</DialogDescription>
+            <DialogDescription>
+              {viewingProof.student} — {formatCurrency(viewingProof.amount)}
+              {viewingProof.group && <span className="block mt-1 font-semibold text-violet-700">{viewingProof.group}</span>}
+            </DialogDescription>
           </DialogHeader>
           <div className="p-4 flex flex-col items-center justify-center bg-muted rounded-lg min-h-48 sm:min-h-72">
             {viewingProof.url ? (
@@ -3257,7 +3285,11 @@ export default function PaymentsAutomationPage() {
         open={!!paymentToApprove}
         onOpenChange={(open) => !open && setPaymentToApprove(null)}
         payment={paymentToApprove}
-        familyNote={paymentToApprove ? familyNotes[paymentToApprove.id]?.pie ?? null : null}
+        siblings={receiptSiblings(paymentToApprove)}
+        // En un comprobante de varios meses el pie de foto quedó en uno solo.
+        familyNote={paymentToApprove
+          ? [paymentToApprove, ...receiptSiblings(paymentToApprove)].map(p => familyNotes[p.id]?.pie).find(Boolean) ?? null
+          : null}
         onSuccess={() => {
           setPaymentToApprove(null);
           fetchPayments();

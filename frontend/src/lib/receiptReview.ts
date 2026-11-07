@@ -125,10 +125,85 @@ export function greenExclusion(p: QueueItem): string | null {
 export function bulkGreenSelection<T extends QueueItem>(items: readonly T[]): { eligible: T[]; excludedGreens: { item: T; reason: string }[]; total: number } {
   const eligible: T[] = [];
   const excludedGreens: { item: T; reason: string }[] = [];
+  const groups = receiptGroups(items);
   for (const p of items) {
-    const reason = greenExclusion(p);
+    // Un comprobante de varios meses se aprueba entero desde su fila: en lote
+    // se aprobaría un mes y los demás quedarían sueltos en la cola.
+    const reason = p.receipt_url && groups.has(p.receipt_url)
+      ? 'el comprobante cubre varios cobros: apruébalo desde su fila'
+      : greenExclusion(p);
     if (reason === null) eligible.push(p);
     else if (p.receipt_verdict === 'verde' && p.status === 'awaiting_approval') excludedGreens.push({ item: p, reason });
   }
   return { eligible, excludedGreens, total: eligible.reduce((s, p) => s + remainingOf(p), 0) };
+}
+
+// ─── Un comprobante, varios cobros ───────────────────────────────────────────
+//
+// Cuando la familia paga varios meses en una sola transferencia, el bot liga el
+// MISMO archivo (receipt_url) a cada cobro que cubre (wa_cubrir_cobros_con_comprobante,
+// mig 20261013165308). Caso origen (Dynasty, 2026-11-06): Juliana Martínez Yopasa,
+// $450.000 con el motivo «Pago Dynasty Sept Oct y Nov»; la hoja de aprobación
+// solo veía septiembre y ofrecía aprobar $150.000.
+
+/** Cobros de la cola que comparten comprobante. Solo grupos de 2 o más. No muta. */
+export function receiptGroups<T extends QueueItem>(items: readonly T[]): Map<string, T[]> {
+  const byReceipt = new Map<string, T[]>();
+  for (const p of items) {
+    if (!p.receipt_url) continue;
+    const list = byReceipt.get(p.receipt_url);
+    if (list) list.push(p);
+    else byReceipt.set(p.receipt_url, [p]);
+  }
+  for (const [k, list] of byReceipt) if (list.length < 2) byReceipt.delete(k);
+  return byReceipt;
+}
+
+/**
+ * Junta en la cola los cobros del mismo comprobante, en el lugar del primero
+ * que aparece (el resto del orden no cambia). Sin esto, los meses sin monto
+ * leído caían al fondo, lejos del que trae la foto. No muta.
+ */
+export function keepReceiptGroupsTogether<T extends QueueItem>(sorted: readonly T[]): T[] {
+  const groups = receiptGroups(sorted);
+  if (groups.size === 0) return [...sorted];
+  const out: T[] = [];
+  const placed = new Set<string>();
+  for (const p of sorted) {
+    if (placed.has(p.id)) continue;
+    const group = p.receipt_url ? groups.get(p.receipt_url) : undefined;
+    for (const g of group ?? [p]) {
+      out.push(g);
+      placed.add(g.id);
+    }
+  }
+  return out;
+}
+
+export interface PeriodItem {
+  id: string;
+  ocr_amount?: number | null;
+  period_year?: number | null;
+  period_month?: number | null;
+  created_at: string;
+}
+
+/**
+ * Orden para aprobar un grupo: primero el cobro que trae el monto leído (el que
+ * el bot estampó con la foto: ahí queda el valor confirmado), luego por mes.
+ */
+export function orderReceiptGroup<T extends PeriodItem>(items: readonly T[]): T[] {
+  const period = (p: T) => (p.period_year && p.period_month ? p.period_year * 12 + p.period_month : Number.MAX_SAFE_INTEGER);
+  return [...items].sort((a, b) =>
+    Number(b.ocr_amount != null) - Number(a.ocr_amount != null) ||
+    period(a) - period(b) ||
+    a.created_at.localeCompare(b.created_at) ||
+    a.id.localeCompare(b.id),
+  );
+}
+
+/** «a», «a y b», «a, b y c». */
+export function joinSpanish(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts[0] ?? '';
+  return `${parts.slice(0, -1).join(', ')} y ${parts[parts.length - 1]}`;
 }
