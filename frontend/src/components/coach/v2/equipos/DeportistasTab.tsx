@@ -28,6 +28,7 @@ import {
   iniciales,
   primerNombre,
   whatsappAcudiente,
+  altasPermitidas,
   type Deportista,
   type EstadoPago,
   type RutasCoachV2,
@@ -73,9 +74,11 @@ interface Props {
 }
 
 export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, felicitados, onFelicitar, rutas, equipo }: Props) {
-  const { coachHideFinancialInfo, coachCanCreateAthletes } = useEntitlements();
-  // Inscribir / Nuevo deportista: solo si la escuela lo activó (coach_can_create_athletes, Carmel).
-  const puedeAlta = coachCanCreateAthletes === true;
+  const ent = useEntitlements();
+  const { coachHideFinancialInfo } = ent;
+  // Inscribir / Nuevo deportista: solo si la escuela lo activó (Carmel crea; Besser pasa de categoría).
+  const permisos = altasPermitidas(ent);
+  const puedeAlta = permisos.inscribir || permisos.nuevo;
   const altas = <BotonesAltaDeportista schoolId={schoolId} equipo={{ id: teamId, nombre: equipo?.nombre ?? 'Equipo', deporte: equipo?.deporte, deportistas: equipo?.deportistas }} />;
   const deportistas = useDeportistasEquipo(schoolId, teamId);
   const pago = useEstadoPagoEquipo(teamId, !coachHideFinancialInfo);
@@ -98,7 +101,11 @@ export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, 
   if ((deportistas.data ?? []).length === 0) {
     return puedeAlta ? (
       <div className="flex flex-col gap-3">
-        <EmptyNote>Este equipo todavía no tiene deportistas. Inscribe a los que ya están en la escuela o crea uno nuevo.</EmptyNote>
+        <EmptyNote>
+          {permisos.nuevo
+            ? 'Este equipo todavía no tiene deportistas. Inscribe a los que ya están en la escuela o crea uno nuevo.'
+            : 'Este equipo todavía no tiene deportistas. Inscribe a los que ya están en la escuela.'}
+        </EmptyNote>
         {altas}
       </div>
     ) : (

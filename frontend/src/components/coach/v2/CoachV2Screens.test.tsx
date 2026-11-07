@@ -19,6 +19,8 @@ const st = vi.hoisted(() => ({
   /** coach_can_create_athletes / coach_can_create_teams (Carmel). */
   altas: false,
   crearEquipos: false,
+  /** coach_can_edit_categories (Besser). */
+  editarCat: false,
   equipos: null as unknown,
   deportistas: null as unknown,
   pago: null as unknown,
@@ -60,7 +62,7 @@ vi.mock('@/components/support/SupportChatModal', () => ({ SupportChatModal: () =
 vi.mock('@/hooks/useSchoolContext', () => ({ useSchoolContext: () => ({ ...st.escuela, schoolName: 'Club Campestre Demo' }) }));
 vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ user: { id: 'u-coach' }, profile: { full_name: 'Laura Gómez' } }) }));
 vi.mock('@/hooks/useEntitlements', () => ({
-  useEntitlements: () => ({ coachHideFinancialInfo: st.hide, coachCanCreateAthletes: st.altas, coachCanCreateTeams: st.crearEquipos }),
+  useEntitlements: () => ({ coachHideFinancialInfo: st.hide, coachCanCreateAthletes: st.altas, coachCanCreateTeams: st.crearEquipos, coachCanEditCategories: st.editarCat }),
 }));
 // Los modales de alta son los de la pantalla clásica (se prueban aparte): aquí solo que se abran con el equipo correcto.
 vi.mock('@/components/teams/EnrollTeamStudentModal', () => ({
@@ -102,6 +104,7 @@ beforeEach(() => {
   st.hide = false;
   st.altas = false;
   st.crearEquipos = false;
+  st.editarCat = false;
   st.equipos = q([EQUIPO]);
   st.deportistas = q(DEPORTISTAS);
   st.pago = q({ disponible: true, mapa: new Map<string, EstadoPago>([['c1', 'al_dia'], ['c2', 'pendiente'], ['c3', 'vencido']]) });
@@ -223,6 +226,28 @@ describe('Equipos › altas del profe (Carmel 11-07: la V2 había quitado Inscri
     expect(screen.queryByText(/La escuela los inscribe/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inscribir deportistas/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Nuevo deportista/ })).toBeInTheDocument();
+  });
+
+  it('Besser (coach_can_edit_categories): solo «Inscribir deportistas», sin ficha nueva ni crear equipo', async () => {
+    st.editarCat = true;
+    pintar(<CoachTeamsV2 hoy={HOY} />, '/teams?equipo=t11');
+    expect(screen.queryByRole('button', { name: /Nuevo deportista/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Inscribir deportistas/ }));
+    expect(await screen.findByTestId('modal-inscribir')).toHaveTextContent('t11:Fútbol Sub 11');
+  });
+
+  it('Besser con el equipo vacío: invita a inscribir, no a crear', () => {
+    st.editarCat = true;
+    st.deportistas = q([]);
+    pintar(<CoachTeamsV2 hoy={HOY} />, '/teams?equipo=t11');
+    expect(screen.getByText('Este equipo todavía no tiene deportistas. Inscribe a los que ya están en la escuela.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Nuevo deportista/ })).not.toBeInTheDocument();
+  });
+
+  it('Besser no ve «Crear equipo»', () => {
+    st.editarCat = true;
+    pintar(<CoachTeamsV2 hoy={HOY} />, '/teams');
+    expect(screen.queryByTestId('crear-equipo')).not.toBeInTheDocument();
   });
 
   it('«Crear equipo» solo con coach_can_create_teams, también con la lista vacía', async () => {

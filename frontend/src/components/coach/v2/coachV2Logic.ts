@@ -663,3 +663,13 @@ export function rutasDePreview(base: string): Partial<RutasCoachV2> {
     evaluar: (sessionId) => `${b}/evaluar/${encodeURIComponent(sessionId)}`,
   };
 }
+
+/**
+ * Altas del profe en Equipos (Carmel/Besser 2026-11-07). Inscribir: crea
+ * deportistas (Carmel) o pasa de categoría (Besser). Ficha nueva: solo Carmel.
+ */
+/** ¿Qué altas deja la escuela al profe? (mismos flags que el BFF). */
+export function altasPermitidas(e: { coachCanCreateAthletes?: boolean; coachCanEditCategories?: boolean }): { inscribir: boolean; nuevo: boolean } {
+  const nuevo = e.coachCanCreateAthletes === true;
+  return { inscribir: nuevo || e.coachCanEditCategories === true, nuevo };
+}

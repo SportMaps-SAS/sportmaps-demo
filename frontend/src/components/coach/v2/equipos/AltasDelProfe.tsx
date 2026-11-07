@@ -2,8 +2,10 @@
  * Altas del entrenador en la V2: inscribir deportistas en su equipo, crear uno
  * nuevo y crear un equipo. SOLO en escuelas que lo activaron:
  *
- *   · Inscribir / Nuevo deportista → `coach_can_create_athletes` (Carmel).
- *   · Crear equipo                 → `coach_can_create_teams`    (Carmel).
+ *   · Inscribir deportistas → `coach_can_create_athletes` (Carmel) o
+ *     `coach_can_edit_categories` (Besser: pasar a alguien a su categoría).
+ *   · Nuevo deportista      → `coach_can_create_athletes` (Carmel).
+ *   · Crear equipo          → `coach_can_create_teams`    (Carmel).
  *
  * Por qué existe (Carmel, 2026-11-07): la V2 del entrenador (10-25) cambió
  * /teams por CoachTeamsV2, que no traía ninguno de los tres botones. Los
@@ -21,6 +23,7 @@ import { Plus, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/hooks/useEntitlements';
+import { altasPermitidas } from '../coachV2Logic';
 
 const EnrollTeamStudentModal = lazy(() =>
   import('@/components/teams/EnrollTeamStudentModal').then((m) => ({ default: m.EnrollTeamStudentModal })));
@@ -46,25 +49,29 @@ interface EquipoAlta {
 }
 
 /**
- * «Inscribir deportistas» (los que ya están en la escuela) y «Nuevo
- * deportista» (ficha nueva, ya con este equipo elegido). Nada si la escuela no
- * lo activó.
+ * «Inscribir deportistas» (los que ya están en la escuela; si están en otro
+ * equipo, el modal ofrece moverlo) y «Nuevo deportista» (ficha nueva, ya con
+ * este equipo elegido). Nada si la escuela no lo activó.
  */
 export function BotonesAltaDeportista({ schoolId, equipo, className }: { schoolId: string; equipo: EquipoAlta; className?: string }) {
-  const puede = useEntitlements().coachCanCreateAthletes === true;
+  const permisos = altasPermitidas(useEntitlements());
   const refrescar = useRefrescarEquipos();
   const [inscribir, setInscribir] = useState(false);
   const [nuevo, setNuevo] = useState(false);
-  if (!puede) return null;
+  if (!permisos.inscribir && !permisos.nuevo) return null;
 
   return (
-    <div className={cn('grid grid-cols-2 gap-2', className)} data-testid="altas-deportista">
-      <Button variant="outline" className="min-h-touch rounded-xl text-sm font-semibold" onClick={() => setInscribir(true)}>
-        <UserPlus className="mr-1.5 h-4 w-4" aria-hidden /> Inscribir deportistas
-      </Button>
-      <Button variant="outline" className="min-h-touch rounded-xl text-sm font-semibold" onClick={() => setNuevo(true)}>
-        <Plus className="mr-1.5 h-4 w-4" aria-hidden /> Nuevo deportista
-      </Button>
+    <div className={cn('grid gap-2', permisos.inscribir && permisos.nuevo ? 'grid-cols-2' : 'grid-cols-1', className)} data-testid="altas-deportista">
+      {permisos.inscribir && (
+        <Button variant="outline" className="min-h-touch rounded-xl text-sm font-semibold" onClick={() => setInscribir(true)}>
+          <UserPlus className="mr-1.5 h-4 w-4" aria-hidden /> Inscribir deportistas
+        </Button>
+      )}
+      {permisos.nuevo && (
+        <Button variant="outline" className="min-h-touch rounded-xl text-sm font-semibold" onClick={() => setNuevo(true)}>
+          <Plus className="mr-1.5 h-4 w-4" aria-hidden /> Nuevo deportista
+        </Button>
+      )}
 
       {inscribir && (
         <Suspense fallback={null}>
