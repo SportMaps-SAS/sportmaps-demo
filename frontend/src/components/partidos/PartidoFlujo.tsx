@@ -431,6 +431,8 @@ function PasoProgramar({ partido, teamId, onGuardado }: {
 // ── 2. Convocar ─────────────────────────────────────────────────────────────
 
 function PasoConvocar({ partido, schoolId, onSiguiente }: { partido: PartidoFila; schoolId: string; onSiguiente: () => void }) {
+  const navigate = useNavigate();
+  const vivoHabilitado = useEntitlements().liveMatchEnabled;
   const partidos = usePartidosEquipo(partido.team_id);
   const propio = aPartidoCoach(partido);
   // La convocatoria arranca con la del último partido anterior a este.
@@ -442,8 +444,13 @@ function PasoConvocar({ partido, schoolId, onSiguiente }: { partido: PartidoFila
   return (
     <div className="flex flex-col gap-3">
       <ConvocatoriaPartido schoolId={schoolId} teamId={partido.team_id} partido={propio} todos={todos} etiqueta="Convocatoria" />
+      {vivoHabilitado && partido.status !== 'played' && partido.status !== 'cancelled' && (
+        <Button className="h-14 rounded-2xl text-base font-semibold" onClick={() => navigate(`/partido-en-vivo/${encodeURIComponent(partido.id)}`)}>
+          <Radio className="mr-2 h-5 w-5" aria-hidden />Iniciar partido (titulares, cambios y tiempo)
+        </Button>
+      )}
       <Button variant="outline" className="h-14 rounded-2xl text-base font-semibold" onClick={onSiguiente}>
-        Siguiente: resultado <ChevronRight className="ml-1 h-5 w-5" aria-hidden />
+        {vivoHabilitado ? 'Registrar el resultado a mano' : 'Siguiente: resultado'} <ChevronRight className="ml-1 h-5 w-5" aria-hidden />
       </Button>
     </div>
   );
