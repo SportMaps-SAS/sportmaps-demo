@@ -67,32 +67,6 @@ const MONTH_NAMES_ES = [
 const formatPeriodLabel = (year?: number | null, month?: number | null): string | null =>
   year && month && month >= 1 && month <= 12 ? `${MONTH_NAMES_ES[month - 1]} ${year}` : null;
 
-/**
- * Cuando el vencimiento cae en un mes posterior al periodo (p.ej. "primer cobro
- * sin recargo" de Dreamers: el trigger de BD mueve el vencimiento al corte del
- * mes siguiente pero deja el periodo en el mes de alta a propósito, para el
- * dedup y la exoneración de mora), mostrarle al acudiente el mes del periodo
- * confunde: un cobro que vence el 01/11 etiquetado "Octubre" parece atrasado.
- * Se muestra el mes del vencimiento en ese caso puntual; period_year/period_month
- * en BD no se tocan.
- */
-const displayPeriodLabel = (
-  year?: number | null,
-  month?: number | null,
-  dueDate?: string | null,
-): string | null => {
-  if (!year || !month || month < 1 || month > 12) return null;
-  const m = dueDate ? /^(\d{4})-(\d{2})-\d{2}/.exec(dueDate) : null;
-  if (m) {
-    const dueYear = Number(m[1]);
-    const dueMonth = Number(m[2]);
-    if (dueYear * 12 + dueMonth > year * 12 + month) {
-      return formatPeriodLabel(dueYear, dueMonth);
-    }
-  }
-  return formatPeriodLabel(year, month);
-};
-
 // Estados que el atajo `?pay=` del Inicio puede abrir solo (sin cambios en V2:
 // un abono `partial` se paga desde la lista, no desde el atajo).
 const DIRECTLY_PAYABLE_STATES = ['pending', 'overdue', 'rejected', 'failed'];
@@ -363,10 +337,10 @@ export default function MyPaymentsPage() {
           receipt_url: p.receipt_url,
           period_year:  periodMap[p.id]?.period_year ?? p.period_year ?? null,
           period_month: periodMap[p.id]?.period_month ?? p.period_month ?? null,
-          period_label: displayPeriodLabel(
+          // El mes es el periodo, no el vencimiento (ver estadoCuentaModel.mesDe).
+          period_label: formatPeriodLabel(
             periodMap[p.id]?.period_year ?? p.period_year,
             periodMap[p.id]?.period_month ?? p.period_month,
-            p.due_date,
           ),
           late_fee_amount: periodMap[p.id]?.late_fee_amount ?? p.late_fee_amount ?? null,
           sibling_discount_applied: periodMap[p.id]?.sibling_discount_applied ?? p.sibling_discount_applied ?? null,
