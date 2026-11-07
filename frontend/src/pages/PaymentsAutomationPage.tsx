@@ -35,6 +35,7 @@ import { todayColombia, formatDayCO, daysDiffFromToday } from '@/lib/dateUtils';
 import { SportMapsPaySettings } from '@/components/settings/SportMapsPaySettings';
 import { PaymentProvidersAdmin } from '@/components/admin/PaymentProvidersAdmin';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
+import { claveAtleta, juntarPorAtleta, marcarGrupos, ordenarPagosRecibidos } from '@/lib/pagosRecibidosOrden';
 import { ClasesDePruebaDialog } from '@/components/payment/ClasesDePruebaDialog';
 import { OperacionesTab } from '@/components/payment/OperacionesTab';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
@@ -1470,12 +1471,12 @@ export default function PaymentsAutomationPage() {
   // `created_at` (necesario para que el tope de 500 recorte lo más viejo), y con
   // ese orden un pago recibido hoy sobre una mensualidad emitida el 30/jul
   // aparecía sepultado entre las filas de julio en vez de arriba.
-  const historyPayments = historyBase
-    .filter(p => historyStatusFilter === 'all' || p.status === historyStatusFilter)
-    .sort((a, b) =>
-      paymentDay(b).localeCompare(paymentDay(a)) ||
-      (b.created_at ?? '').localeCompare(a.created_at ?? ''),
-    );
+  // Dentro de cada día, los pagos de un mismo atleta van juntos (2026-11-07,
+  // Dreamers: la mensualidad y las horas de una niña quedaban partidas).
+  const historyPayments = ordenarPagosRecibidos(
+    historyBase.filter(p => historyStatusFilter === 'all' || p.status === historyStatusFilter),
+    paymentDay,
+  );
 
   const historyCounts = historyBase.reduce<Record<string, number>>((acc, p) => {
     acc[p.status] = (acc[p.status] ?? 0) + 1;
@@ -1484,6 +1485,8 @@ export default function PaymentsAutomationPage() {
 
   const historyTotalPages = Math.max(1, Math.ceil(historyPayments.length / HISTORY_ROWS_PER_VIEW));
   const pagedHistory = historyPayments.slice((historyPage - 1) * HISTORY_ROWS_PER_VIEW, historyPage * HISTORY_ROWS_PER_VIEW);
+  // Filas seguidas del mismo atleta en el mismo día se dibujan como un bloque.
+  const grupoHistorial = marcarGrupos(pagedHistory, p => `${paymentDay(p)}|${claveAtleta(p)}`);
 
   // Los agregados de dinero (ingresos históricos, saldo por validar, tasa de
   // aprobación) ya NO se calculan acá: se pedían sobre `payments`, que es la
@@ -2224,7 +2227,7 @@ export default function PaymentsAutomationPage() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {glosas.map(g => (
+                  {juntarPorAtleta(glosas, g => g.payments?.child?.full_name || g.payments?.parent?.full_name).map(g => (
                     <div key={g.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
@@ -2388,11 +2391,12 @@ export default function PaymentsAutomationPage() {
                   <p className="text-center text-muted-foreground py-8">No hay historial disponible.</p>
                 ) : pagedHistory.map((payment) => {
                   const cfg = STATUS_CONFIG[payment.status] ?? { label: payment.status, className: 'bg-gray-100 text-gray-600' };
+                  const g = grupoHistorial.get(payment.id);
                   return (
-                    <div key={payment.id} className="border rounded-lg p-4 space-y-2">
+                    <div key={payment.id} className={`border p-4 space-y-2 ${g?.continua ? '-mt-3 rounded-t-none border-t-0' : 'rounded-t-lg'} ${g?.sigue ? 'rounded-b-none' : 'rounded-b-lg'}`}>
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <p className="font-medium text-sm truncate">{(payment as any).athlete_name || 'Sin nombre'}</p>
+                          {!g?.continua && <p className="font-medium text-sm truncate">{(payment as any).athlete_name || 'Sin nombre'}</p>}
                           <div className="flex gap-1 flex-wrap mt-0.5">
                             {payment.team?.name && (
                               <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200 py-0 h-4">
@@ -2471,8 +2475,9 @@ export default function PaymentsAutomationPage() {
                       <TableRow><TableCell colSpan={showBranchCol ? 8 : 7} className="text-center py-8 text-muted-foreground">No se encontraron transacciones con los filtros actuales.</TableCell></TableRow>
                     ) : pagedHistory.map((payment) => {
                       const cfg = STATUS_CONFIG[payment.status] ?? { label: payment.status, className: 'bg-gray-100 text-gray-600' };
+                      const g = grupoHistorial.get(payment.id);
                       return (
-                        <TableRow key={payment.id}>
+                        <TableRow key={payment.id} className={g?.sigue ? 'border-b-0' : undefined}>
                           {/* CUÁNDO ENTRÓ LA PLATA, no cuándo se emitió el cobro. Con
                               `created_at` la mensualidad de agosto generada el 30/jul se leía
                               como un pago "del 30 de jul" aunque el comprobante fuera del 3 de
@@ -2481,10 +2486,10 @@ export default function PaymentsAutomationPage() {
                             className="text-xs text-muted-foreground whitespace-nowrap"
                             title={payment.payment_date ? `Cobro emitido el ${formatDate(payment.created_at)}` : undefined}
                           >
-                            {reportedDate(payment)}
+                            {g?.continua ? null : reportedDate(payment)}
                           </TableCell>
                           <TableCell className="font-medium">
-                            <div className="flex flex-col">
+                            <div className={`flex flex-col ${g?.continua ? 'invisible' : ''}`}>
                               <span className="font-bold">{(payment as any).athlete_name || 'Sin nombre'}</span>
                               <span className="text-xs text-muted-foreground">
                                 {(payment as any).parent_responsible || <span className="text-muted-foreground text-xs">—</span>}
