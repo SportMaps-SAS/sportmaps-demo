@@ -37,6 +37,8 @@ import {
   type JoinRequestRow,
 } from '@/lib/schoolJoinCode';
 import { SchoolJoinCodeCard } from './SchoolJoinCodeCard';
+import { SoportesBloqueoDialog, bloqueoDesdeError, type BloqueoSoportes } from '@/components/soportes/SoportesBloqueoDialog';
+import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 interface TeamOpt { id: string; name: string; branch_id: string | null; price_monthly: number | null }
 interface PlanOpt { id: string; name: string; price: number | null; offering_id: string; offering_name: string }
@@ -70,11 +72,14 @@ export function PorAsignarSection({
   onVerProspectos: () => void;
 }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const fromNotification = searchParams.get('bandeja') === 'por-asignar';
   const [open, setOpen] = useState(fromNotification);
   const [dialog, setDialog] = useState<DialogState | null>(null);
   const [rejecting, setRejecting] = useState<JoinRequestRow | null>(null);
+  // La inscripción quedó creada pero la confirmación espera a los soportes (SP001).
+  const [bloqueo, setBloqueo] = useState<{ requestId: string; info: BloqueoSoportes } | null>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const autoOpened = useRef(false);
 
@@ -219,6 +224,21 @@ export function PorAsignarSection({
           loadingOptions={teamsQ.isLoading || plansQ.isLoading}
           onClose={() => setDialog(null)}
           onDone={() => { setDialog(null); refresh(); }}
+          onBloqueo={(b) => { setDialog(null); refresh(); setBloqueo(b); }}
+        />
+      )}
+
+      {bloqueo && (
+        <SoportesBloqueoDialog
+          schoolId={schoolId}
+          info={bloqueo.info}
+          onClose={() => setBloqueo(null)}
+          onReintentar={() => schoolJoinApi.confirmEnrollment(bloqueo.requestId)}
+          onConfirmado={() => {
+            toast({ title: 'Listo', description: `${bloqueo.info.athleteName} quedó confirmado. La familia recibe un aviso.` });
+            setBloqueo(null);
+            refresh();
+          }}
         />
       )}
 
@@ -359,7 +379,7 @@ function RequestRow({
 // ─── Asignar / vincular / inscribir ──────────────────────────────────────────
 
 function AssignDialog({
-  state, schoolId, teams, plans, branches, loadingOptions, onClose, onDone,
+  state, schoolId, teams, plans, branches, loadingOptions, onClose, onDone, onBloqueo,
 }: {
   state: DialogState;
   schoolId: string;
@@ -369,8 +389,10 @@ function AssignDialog({
   loadingOptions: boolean;
   onClose: () => void;
   onDone: () => void;
+  onBloqueo: (b: { requestId: string; info: BloqueoSoportes }) => void;
 }) {
   const { toast } = useToast();
+  const referido = useReferidoAlta(schoolId);
   const { mode, row } = state;
   const [teamId, setTeamId] = useState<string>(mode === 'enroll' ? (row.assigned_team_id ?? '') : '');
   const [branchId, setBranchId] = useState<string>(mode === 'enroll' ? (row.assigned_branch_id ?? '') : '');
@@ -435,8 +457,29 @@ function AssignDialog({
           teamPrice: team?.price_monthly ?? null,
         }));
       }
+      // Referido: DESPUÉS de crear la inscripción. Un fallo aquí no deshace el alta.
+      const sujetoAlta = target.childId
+        ? { tipo: 'child' as const, id: target.childId }
+        : target.userId ? { tipo: 'profile' as const, id: target.userId } : null;
+      if (teamId && sujetoAlta) await referido.registrarTras({ ...sujetoAlta, nombre: row.athlete_name });
+
       if (teamId) {
-        await schoolJoinApi.confirmEnrollment(row.id).catch(() => undefined);
+        try {
+          await schoolJoinApi.confirmEnrollment(row.id);
+        } catch (err) {
+          // Antes se tragaba todo. El bloqueo por soportes (SP001) SÍ se muestra:
+          // la inscripción ya existe, solo la confirmación espera. Lo demás sigue
+          // como antes (la solicitud queda en la bandeja para reintentar).
+          const b = bloqueoDesdeError(err, row.athlete_name, sujetoAlta);
+          if (b) {
+            toast({
+              title: 'Inscripción creada, falta confirmar',
+              description: 'Faltan soportes del deportista. Súbelos y confirma desde el aviso.',
+            });
+            onBloqueo({ requestId: row.id, info: b });
+            return;
+          }
+        }
       }
 
       toast({
@@ -565,6 +608,9 @@ function AssignDialog({
               Ya tiene una inscripción activa en la escuela. Solo falta sacarlo de la bandeja; no se crea otro cobro.
             </p>
           )}
+
+          {/* Solo con la campaña de referidos activa; se registra tras crear la inscripción. */}
+          {!onlyConfirm && mode !== 'link' && !!teamId && referido.campo}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
@@ -575,6 +621,7 @@ function AssignDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      {referido.dialogo}
     </Dialog>
   );
 }

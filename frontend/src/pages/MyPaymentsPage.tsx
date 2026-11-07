@@ -31,6 +31,8 @@ import { DebitoAutomaticoCard, DebitoSugerenciaBanner } from '@/components/autop
 import { useMiDebito } from '@/components/autopay/useMiDebito';
 import { AcuPagosV2 } from '@/components/parent/v2/AcuPagosV2';
 import { fetchAjustesDeCobros } from '@/lib/cobrosAbiertos';
+import { PagarPorPlazos } from '@/components/familia/plazos/PagarPorPlazos';
+import { cobrosParaPlazos } from '@/components/familia/plazos/plazosModelo';
 import { PAYABLE_STATES, rotuloCobroSinHijo, rowTitle, type Transaction } from '@/components/parent/v2/pagosModel';
 
 interface Enrollment {
@@ -729,6 +731,8 @@ export default function MyPaymentsPage() {
                 onActivarSchoolIdChange={setActivarDebitoSchoolId}
               />
             </div>
+            {/* Pagar por plazos: solo aparece si la escuela lo tiene prendido. */}
+            <PagarPorPlazos cobros={cobrosParaPlazos(transactions)} />
             {/* Adelantar una mensualidad sin cobro creado (modo create del mismo modal). */}
             <div className="text-center">
               <Button variant="link" className="min-h-touch text-sm" onClick={() => setShowChildPicker(true)}>

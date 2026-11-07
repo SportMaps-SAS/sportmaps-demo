@@ -13,6 +13,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { PaymentCheckoutModal } from '@/components/payment/PaymentCheckoutModal';
+import { PagarPorPlazos } from '@/components/familia/plazos/PagarPorPlazos';
+import { cobrosParaPlazos } from '@/components/familia/plazos/plazosModelo';
 import { Progress } from '@/components/ui/progress';
 import { FileUpload } from '@/components/common/FileUpload';
 import { supabase } from '@/integrations/supabase/client';
@@ -381,6 +383,9 @@ export default function AthletePaymentsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Pagar por plazos: solo aparece si la escuela lo tiene prendido. */}
+      <PagarPorPlazos cobros={cobrosParaPlazos(payments)} />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
         <TabsList>

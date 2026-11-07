@@ -53,6 +53,12 @@ import { EnrollmentFeesSection, NO_FEES_MARKED, cobrarInscripcionSeguro, type Fe
 import { ZkPinField } from '@/components/students/ZkPinField';
 import { CreateAdultAthleteModal } from '@/components/students/CreateAdultAthleteModal';
 import { PorAsignarSection } from '@/components/school-join/PorAsignarSection';
+import { useSoportesEstado } from '@/components/soportes/useSoportesEstado';
+import { SoportesInsignia, SoportesFiltroToggle } from '@/components/soportes/SoportesInsignia';
+import { SoportesPendientesInforme } from '@/components/soportes/SoportesPendientesInforme';
+import { BandejaSolicitudesPlan } from '@/components/solicitudes-de-plan';
+import { FichaDeportistaExtras } from '@/components/students/FichaDeportistaExtras';
+import { llaveSujeto, tipoSujetoDeAtleta } from '@/lib/api/soportes';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
 import { canManageCharges } from '@/lib/cobrosYPagos';
@@ -349,6 +355,9 @@ export default function SchoolStudentsManagementPage() {
 
   const { schoolId, schoolName, teams, branches, activeBranchId, activeBranchName, totalBranches, defaultMonthlyFee, schoolSettings, loading: schoolLoading } = useSchoolContext();
   const { prospectos: prospectosPrueba, cerrar: cerrarProspecto } = useProspectosClasePrueba(schoolId);
+  // Soportes (solo se ven si la escuela los tiene activos): insignia X/7 y filtro «Faltan soportes».
+  const soportes = useSoportesEstado(schoolId, canManageCharges(schoolRole));
+  const [soloFaltanSoportes, setSoloFaltanSoportes] = useState(false);
 
   // Estable mientras el alta está abierta: los modales lo aplican al abrir.
   const prefillProspecto = useMemo(() => prospectoEnAlta ? {
@@ -1388,6 +1397,9 @@ export default function SchoolStudentsManagementPage() {
   const openDebtOf = (studentId: string): AthleteOpenDebt | undefined => openDebtByAthlete?.get(studentId);
   const debtDetail = (d: AthleteOpenDebt) => d.items.map((i) => `${i.label} ${formatCurrency(i.amount)}`).join(' · ');
 
+  const soporteDe = (st: any) =>
+    soportes.activo ? soportes.indice.get(llaveSujeto(tipoSujetoDeAtleta(getAthleteType(st)), st.id)) : undefined;
+
   const filteredStudents = tabStudents.filter(student => {
     const q = normalizeText(searchQuery);
     if (q && !(
@@ -1409,16 +1421,23 @@ export default function SchoolStudentsManagementPage() {
 
     if (paymentFilter !== 'all' && getPaymentState(student, graceDays) !== paymentFilter) return false;
 
+    if (soloFaltanSoportes && soportes.activo) {
+      const d = soporteDe(student);
+      if (!d || d.complete) return false;
+    }
+
     return true;
   });
 
   const activeFilterCount =
-    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0);
+    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0) +
+    (soloFaltanSoportes && soportes.activo ? 1 : 0);
 
   const clearFilters = () => {
     setTeamFilter('all');
     setPlanFilter('all');
     setPaymentFilter('all');
+    setSoloFaltanSoportes(false);
   };
 
   // Si cambia la pestaña, un equipo/plan seleccionado puede no existir ahí:
@@ -1666,6 +1685,11 @@ export default function SchoolStudentsManagementPage() {
         />
       )}
 
+      {/* Informe «Soportes pendientes»: no pinta nada si la escuela no tiene soportes activos. */}
+      {schoolId && canManageCharges(schoolRole) && <SoportesPendientesInforme schoolId={schoolId} />}
+      {/* Retiros, pausas y reactivaciones pedidas por las familias (app y WhatsApp). Va con el mismo ajuste que la pausa. */}
+      {schoolId && canManageCharges(schoolRole) && pauseEnabled && <BandejaSolicitudesPlan schoolId={schoolId} />}
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="active">Activos</TabsTrigger>
@@ -1730,6 +1754,10 @@ export default function SchoolStudentsManagementPage() {
                 ))}
               </SelectContent>
             </Select>
+
+            {soportes.activo && soportes.estado && (
+              <SoportesFiltroToggle activo={soloFaltanSoportes} onChange={setSoloFaltanSoportes} faltan={soportes.estado.resumen.incompletos} />
+            )}
 
             {activeFilterCount > 0 && (
               <Button variant="ghost" size="sm" onClick={clearFilters} className="sm:self-center text-muted-foreground">
@@ -1814,6 +1842,7 @@ export default function SchoolStudentsManagementPage() {
                       <div className="flex items-center gap-1 flex-wrap">
                         <p className="font-semibold text-sm truncate">{student.full_name}</p>
                         <MedicalAlertBadge medicalInfo={student.medical_info} />
+                        <SoportesInsignia d={soporteDe(student)} />
                         {membresiasPorSujeto.get(student.id) && (
                           <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                         )}
@@ -1909,6 +1938,7 @@ export default function SchoolStudentsManagementPage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span>{student.full_name}</span>
                             <MedicalAlertBadge medicalInfo={student.medical_info} />
+                            <SoportesInsignia d={soporteDe(student)} />
                             {membresiasPorSujeto.get(student.id) && (
                               <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                             )}
@@ -2930,6 +2960,17 @@ export default function SchoolStudentsManagementPage() {
                       </div>
                     )}
                   </section>
+
+                  {/* Soportes y «referido por»: solo se pintan con la función activa en la escuela. */}
+                  {schoolId && (
+                    <FichaDeportistaExtras
+                      schoolId={schoolId}
+                      athleteId={s.id}
+                      athleteType={athleteType}
+                      enrollmentId={s.enrollment_id}
+                      puedeAdministrar={canManageCharges(schoolRole)}
+                    />
+                  )}
                 </div>
 
                 <DialogFooter className="flex-col-reverse sm:flex-row gap-2 mt-6">

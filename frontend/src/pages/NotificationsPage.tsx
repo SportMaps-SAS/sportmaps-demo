@@ -19,6 +19,7 @@ import {
   CheckCircle,
   AlertCircle,
   Info,
+  Gift,
   Trash2,
   Check,
   Filter,
@@ -60,7 +61,8 @@ export default function NotificationsPage() {
       success: CheckCircle,
       warning: AlertCircle,
       error: AlertCircle,
-      info: Info
+      info: Info,
+      referral_won: Gift
     };
     return icons[type] ?? Bell;
   };
@@ -70,7 +72,8 @@ export default function NotificationsPage() {
       success: 'text-green-600',
       warning: 'text-orange-500',
       error: 'text-red-600',
-      info: 'text-primary'
+      info: 'text-primary',
+      referral_won: 'text-primary'
     };
     return colors[type] ?? 'text-muted-foreground';
   };

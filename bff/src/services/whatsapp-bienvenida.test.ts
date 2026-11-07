@@ -208,7 +208,8 @@ describe('atenderDesconocido: bienvenida al saludo suelto', () => {
 
     it('una persona de la escuela acaba de escribirle → es suya, el bot calla', async () => {
         base({ filas: [{ wa_message_id: 'w1', direction: 'outbound', text_body: 'Hola, te cuento…', ai_generated: false, created_at: hace(30) }] });
-        expect(await atenderDesconocido(INTEGRATION, CONV, TEL, 'Hola')).toBe('silencio');
+        // Oleada 1: con la escuela en diálogo (72 h) el resultado es `escuela_atendiendo` (antes `silencio`): igual no sale nada.
+        expect(await atenderDesconocido(INTEGRATION, CONV, TEL, 'Hola')).toBe('escuela_atendiendo');
         expect(borradores()).toHaveLength(0);
     });
 

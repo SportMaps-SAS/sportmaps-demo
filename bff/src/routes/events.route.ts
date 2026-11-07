@@ -4,6 +4,7 @@ import { supabase } from '../config/supabase';
 import { todayInZone } from '../utils/businessDate';
 import { requireAuth, requireRole, AuthenticatedRequest } from '../middlewares/authMiddleware';
 import { userClient } from '../utils/userClient';
+import { chequearSoportesSujeto, mensajeFaltantes, type Sujeto } from '../services/soportes.service';
 import {
     LiveError, buildCategoryStandings, generateCategoryFixtures, loadEvent, performMatchAction, toMatchDto, loadMatches,
     invalidatePublicLive, validateHttpsUrl, validateImageUrl, cleanText, isMissingColumn,
@@ -1252,6 +1253,21 @@ router.post('/school-tournaments/:id/register-athlete', requireAuth, requireRole
 
         const parsed = RegisterAthleteSchema.safeParse(req.body);
         if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+
+        // Soportes obligatorios (D12, spec campanas-descuento… §6b): con school_settings.require_athlete_documents
+        // prendido (solo Monster) no se convoca a un torneo a quien le falten soportes. Apagado: no hace nada.
+        const sujetoSoportes: Sujeto = parsed.data.child_id
+            ? { tipo: 'child', id: parsed.data.child_id }
+            : { tipo: 'profile', id: parsed.data.athlete_user_id as string };
+        const soportes = await chequearSoportesSujeto(String(req.headers.authorization ?? ''), schoolId, sujetoSoportes);
+        if ('bloquear' in soportes && soportes.bloquear) {
+            return res.status(409).json({
+                error: `SOPORTES_INCOMPLETOS: ${mensajeFaltantes(soportes.faltan)}`,
+                codigo: 'SOPORTES_INCOMPLETOS',
+                faltan: soportes.faltan,
+            });
+        }
+        if ('error' in soportes && soportes.status === 403) return res.status(403).json({ error: 'forbidden' });
 
         // Con el cliente del usuario: la RPC valida auth.uid() contra la administración de la escuela.
         const client = userClient(req);

@@ -28,6 +28,7 @@ import { runPostTrainingReminders } from './post-training-reminders.job';
 import { runWhatsAppQueue } from './whatsapp-queue.job';
 import { runWhatsAppPaymentOutcome } from './whatsapp-payment-outcome.job';
 import { runReceiptReviewAlerts } from './receipt-review-alerts.job';
+import { runAcuerdosRecordatorios, correrMantenimientoAcuerdos } from './acuerdos-de-pago-recordatorios.job';
 import { runBienvenidaEscuelas } from './bienvenida-escuelas.job';
 import { runWhatsAppMantenimiento } from './whatsapp-mantenimiento.job';
 import { vencerComprobantesColgados } from './whatsapp-cola-vencimiento.job';
@@ -622,6 +623,36 @@ export function initMaintenanceJobs() {
     });
 
     console.log('[CRON] Avisos de comprobantes por validar registrados (cada 5 min).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Acuerdos de pago por plazos (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md §5).
+    // · Recordatorio de la cuota del día: cada hora; el job solo avisa entre las 07:00 y las 20:59 de
+    //   Colombia y reclama cada cuota una sola vez (`reminded_at`), así que los 3 BFF no repiten.
+    // · Mantenimiento diario: sincroniza los abonos y vence las cuotas sin pago. 06:30 UTC, ANTES de
+    //   'apply-late-fees-daily' (07:00 UTC, pg_cron), que además sincroniza por su cuenta.
+    // Ambos no hacen nada en escuelas sin `payment_agreements_enabled`. Kill-switch: DISABLE_ACUERDOS_CRON.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('5 * * * *', async () => {
+        if (process.env.DISABLE_ACUERDOS_CRON === 'true') return;
+        try {
+            const r = await runAcuerdosRecordatorios();
+            if (r.avisos > 0) console.log(`[CRON] Recordatorios de cuotas de acuerdos: ${r.avisos} aviso(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en recordatorios de acuerdos de pago:', err?.message || err);
+        }
+    });
+    cron.schedule('30 6 * * *', async () => {
+        if (process.env.DISABLE_ACUERDOS_CRON === 'true') return;
+        try {
+            await correrMantenimientoAcuerdos();
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en mantenimiento de acuerdos de pago:', err?.message || err);
+        }
+    });
+    console.log('[CRON] Acuerdos de pago: recordatorios cada hora y mantenimiento diario 06:30 UTC.');
+
 
     // ────────────────────────────────────────────────────────────────────────
     // Bienvenida a escuelas y entrenadores nuevos — cada 10 min.

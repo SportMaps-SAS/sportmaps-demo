@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 908,
-  "head": "20261106153223",
+  "count": 912,
+  "head": "20261106160004",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -911,6 +911,10 @@
     {"v":"20261106150242","file":"20261106150242_demo_enciende_partido_vivo.sql","sha256":"e4f1b31a080a8b13f87ba3792ec4bce1a3623f44a21a2964b2aca4df95592143","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261106152307","file":"20261106152307_reservas_m6_agenda_coach.sql","sha256":"1c0c5378bc1f89e0ac0bcde7a88228faea282f023ae39a041c71183ead2ae32e","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261106152913","file":"20261106152913_demo_futbol_enciende_partido_vivo.sql","sha256":"5687cd05e8017507798979c8d50e626d14d8d5366b890a7a57be7bd49b91fc9f","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261106153223","file":"20261106153223_guardian_doc_columns.sql","sha256":"0094f3c7fc35357e91298b2877335073eb66875b82134fa5e7ee0a6a0ef8b593","added":"2026-11-06","by":"Brayan Steven Lopez"}
+    {"v":"20261106153223","file":"20261106153223_guardian_doc_columns.sql","sha256":"0094f3c7fc35357e91298b2877335073eb66875b82134fa5e7ee0a6a0ef8b593","added":"2026-11-06","by":"Brayan Steven Lopez"},
+    {"v":"20261106160001","file":"20261106160001_referidos_campanas_y_motor.sql","sha256":"1f8593337c3f5b9743229e30304b3e32d34327b523573a9046e283ff4cb0acaf","added":"2026-11-07","by":"Brayan Steven Lopez"},
+    {"v":"20261106160002","file":"20261106160002_acuerdos_de_pago.sql","sha256":"99d7399e9b08f544b9420c0fe072ab14ff508ca3fa5548b63b8f36113ef17af0","added":"2026-11-07","by":"Brayan Steven Lopez"},
+    {"v":"20261106160003","file":"20261106160003_soportes_obligatorios.sql","sha256":"1fde56ce4dab2196a34b107d23f2e4475fae9c97bb9192d2652e0ff9f83df4b5","added":"2026-11-07","by":"Brayan Steven Lopez"},
+    {"v":"20261106160004","file":"20261106160004_retiro_y_pausa_por_canales.sql","sha256":"f99e4b33f140a8151c6835a270de9da50e293081744d8d95489ae6afa0104326","added":"2026-11-07","by":"Brayan Steven Lopez"}
   ]
 }

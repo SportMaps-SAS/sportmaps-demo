@@ -55,6 +55,7 @@ import {
 } from '../services/whatsapp-asistencia-staff.service';
 import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
 import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
+import { atenderAdjuntoEntrante } from '../services/whatsapp-bot-oleada1';
 
 /**
  * Corre en segundo plano lo que espera (la ráfaga, el acuse): el webhook
@@ -486,6 +487,19 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
         () => handleBotTurn(req, integration, conversationId, msg, optedOut));
 }
 
+/** Oleada 1: ¿el adjunto es un soporte de la ficha y el bot se hizo cargo? Nunca lanza (false = sigue como comprobante). */
+async function atenderSoporteDelAdjunto(
+    integration: WhatsAppIntegration, conversationId: string, msg: ParsedInboundMessage,
+): Promise<boolean> {
+    try {
+        return await atenderAdjuntoEntrante(
+            { integration, conversationId, contactWaId: msg.contactWaId, msg, recientes: () => mensajesRecientes(conversationId) },
+            { deliver, abrirEnBuzon, discreto: false });
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Punto de entrada del bot (WA2):
  *  - identificación OTP por email si el contacto no está identificado
@@ -520,6 +534,10 @@ async function handleBotTurn(
         // comprobante es una gestión sobre su propia plata que él inició, y
         // perderla en silencio es peor que responderle. El worker le agrega la
         // coletilla que le recuerda que tiene las notificaciones apagadas.
+        // OLEADA 1: en las escuelas que exigen soportes (hoy Monster), la foto o el PDF de quien tiene soportes
+        // por cargar se atiende como soporte de la ficha («¿de cuál soporte y de qué deportista?»). Con la función
+        // apagada, o si es un comprobante, devuelve false y el adjunto se encola como siempre.
+        if (await atenderSoporteDelAdjunto(integration, conversationId, msg)) return;
         const resultado = await encolarAdjunto(integration, msg, req.log).catch((err) => {
             req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: encolarAdjunto explotó');
             return 'error' as const;

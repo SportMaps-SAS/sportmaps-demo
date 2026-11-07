@@ -1,0 +1,1 @@
+export { BandejaSolicitudesPlan } from './BandejaSolicitudesPlan';

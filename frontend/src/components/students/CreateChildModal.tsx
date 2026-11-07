@@ -50,6 +50,7 @@ import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { PhoneInput } from '@/components/ui/phone-input';
 import { SiblingChildPicker, SiblingDiscountChip, type SiblingPreview } from '@/components/students/siblings';
+import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -119,6 +120,8 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
   const siblingsAllowed = canUseSiblings ?? canWaiveFees;
   const { toast } = useToast();
   const [submitting, setSubmitting] = useState(false);
+  // «¿Quién lo refirió?»: solo con la campaña activa; se registra tras crear la inscripción.
+  const referido = useReferidoAlta(schoolId);
   const [showMedical, setShowMedical] = useState(false);
 
   // Lookup data
@@ -264,7 +267,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
     setSendInviteWhatsapp(true);
   };
 
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => { referido.reiniciar(); reset(); onClose(); };
 
   // Abre precargado (prospecto de clase de prueba): solo lo que se sabe.
   useEffect(() => {
@@ -469,6 +472,10 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           ) as any,
         });
       }
+      if (result?.child_id && Number(result?.enrollments_created) > 0) {
+        await referido.registrarTras({ tipo: 'child', id: result.child_id, nombre: fullName.trim() });
+      }
+      referido.reiniciar();
       reset();
       onSuccess(result);
     } catch (e: any) {
@@ -909,6 +916,8 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           </Section>
         </div>
 
+        {referido.campo}
+
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={submitting}>
             Cancelar
@@ -922,6 +931,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           </Button>
         </DialogFooter>
       </DialogContent>
+      {referido.dialogo}
     </Dialog>
   );
 }
