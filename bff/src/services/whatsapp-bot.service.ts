@@ -115,6 +115,8 @@ import {
 } from './whatsapp-ajustes-escuela.service';
 import { mensajeSemanaDeCortesia } from './whatsapp-cortesia-semana.service';
 import { atenderTurnoVenta, esSi } from './whatsapp-venta-servicios.service';
+import { atenderPlanYPlazos } from './whatsapp-plan-y-plazos';
+import { FLUJO_PLAN, EN_TEXTO_CONFIRMAR } from './whatsapp-plan-comun';
 import { PASO_SEGUIMIENTO_20H } from './whatsapp-prospecto-seguimiento.service';
 import { textoDePreciosDeEscuela } from './whatsapp-precios.service';
 import { pidePrecio, preciosParaProspecto, responderClasesDePlan, preguntaPorClasesDePlan } from './whatsapp-precios.service';
@@ -153,6 +155,9 @@ import {
     type CtxRespuestaFormulario, type ResultadoFormulario,
 } from './whatsapp-formulario-servicio';
 import { hoyBogota } from './wa-cobro-desde-comprobante.service';
+import {
+    atenderOleada1Desconocido, atenderOleada1Familia, preguntarReferidoTrasTurno, type IoDelBot,
+} from './whatsapp-bot-oleada1';
 
 const OTP_TTL_MIN = 10;
 
@@ -164,6 +169,9 @@ const OTP_TTL_MIN = 10;
 export const SILENCIO_HUMANO_MIN = Number(process.env.WHATSAPP_SILENCIO_HUMANO_MIN) || 15;
 /** Minutos tras un mensaje de la escuela en los que un saludo suelto del contacto no recibe respuesta del bot. */
 const VENTANA_SALUDO_TRAS_HUMANO_MIN = 180;
+
+/** Lo que la oleada 1 (silencio, referidos, soportes) toma prestado del bot. */
+const ioOleada1 = (): IoDelBot => ({ deliver, abrirEnBuzon, discreto: discretoEnBot() });
 
 // ─── Contexto del turno (notas de voz) ───────────────────────────────────────
 //
@@ -512,6 +520,12 @@ async function cuerpoDelTurno(
         return;
     }
 
+    // 2.29. OLEADA 1: respuesta del flujo de soportes (foto/PDF → «¿de cuál soporte?») y «¿hay descuento por
+    //       referidos?» (solo la campaña activa). Sin flujo abierto ni campaña, devuelve false y sigue igual.
+    if (await atenderOleada1Familia({ integration, conversationId, contactWaId, text, botonId, recientes }, ioOleada1())) {
+        return;
+    }
+
     // 2.3. Factura electrónica: flujo determinista (sin modelo) que pide los
     //      datos uno por uno. Va ANTES de los botones porque, con un flujo
     //      abierto, «CC» o un número de cédula son la respuesta a la pregunta
@@ -570,6 +584,20 @@ async function cuerpoDelTurno(
     //       edades). El rango sale de grupos-por-edad.service.
     if (!botonId && preguntaGrupoPorEdad(text) && await grupoPorEdadEnBot(
         integration, conversationId, contactWaId, conv.parent_id, text, 'grupo_por_edad')) {
+        return;
+    }
+
+    // 2.38. Pagar por plazos y pausar/retirar/reactivar el plan (oleada 2). Continúa su paso
+    //       a paso o lo arranca; solo con la persona IDENTIFICADA y con la función prendida
+    //       en la escuela. Apagado = false y el turno sigue exactamente como antes.
+    if (conv.parent_id && await atenderPlanYPlazos(
+        { schoolId: integration.school_id, parentId: conv.parent_id, texto: text, botonId, recientes,
+            rafaga: textoDeRafaga(recientes, text, waMessageId), discreto: discretoEnBot() },
+        (texto, paso, estado, botones) => deliver(integration, conversationId, contactWaId, texto,
+            estado ? { step: paso, flujo: FLUJO_PLAN, paso_plan: estado.paso, datos_plan: estado.datos } : { step: paso },
+            botones?.length ? { botones, enTexto: EN_TEXTO_CONFIRMAR } : undefined),
+        (motivo, mensaje) => escalate(integration, conversationId, contactWaId, motivo, { texto: text, mensaje }),
+    )) {
         return;
     }
 
@@ -3349,6 +3377,7 @@ export type ResultadoDesconocido =
     | 'embudo' | 'embudo_acuse'
     | 'pago_mensualidad_aclaracion' | 'pago_mensualidad_club' | 'pago_mensualidad_inscribirme' | 'prospecto_afiliado'
     | ResultadoAnuncio
+    | 'referido' | 'referidos_info'
     | 'frenado' | 'silencio';
 
 /**
@@ -3430,6 +3459,10 @@ export async function atenderDesconocido(
     return conEscuela(integration.school_id, async () => {
         const r = await atenderDesconocidoEnEscuela(
             integration, conversationId, contactWaId, inboundText, botonId, rafaga, origen);
+        // Oleada 1: tras agendar la clase de prueba, UNA pregunta opcional «¿te refirió alguien?» (solo con campaña activa).
+        if (r !== 'silencio' && r !== 'frenado' && r !== 'escuela_atendiendo') {
+            await preguntarReferidoTrasTurno({ integration, conversationId, contactWaId }, ioOleada1()).catch(() => false);
+        }
         if (r !== 'silencio' && r !== 'frenado') return r;
         // Quien pasó por el embudo del interesado nunca queda sin nada: si lo de
         // arriba se calló (freno, modelo caído, «ya te mandé el comprobante»), se le
@@ -3472,6 +3505,13 @@ async function atenderDesconocidoEnEscuela(
             pasarCobroALaEscuela(integration, conversationId, contactWaId)).catch(() => false);
         if (resuelta) return 'pregunta_de_comprobante';
     }
+
+    // 0a-bis. OLEADA 1 (corrección A + referidos): el equipo ya está en diálogo con esta persona (72 h) → el bot
+    //         no le habla; respuesta a «¿te refirió alguien?»; «¿hay descuento por referidos?». Ver
+    //         whatsapp-bot-oleada1.ts. Sin campaña activa ni diálogo del equipo, devuelve null y todo sigue igual.
+    const oleada1 = await atenderOleada1Desconocido({ integration, conversationId, contactWaId, text, botonId,
+        recientes: () => mensajesRecientes(conversationId) }, ioOleada1());
+    if (oleada1) return oleada1;
 
     // 0a'. Reclamo por un pago («ya envié el comprobante», «me llegó un correo donde dice
     //      que debo»): a la escuela, sin datos de pago. Antes de los flujos de venta y de

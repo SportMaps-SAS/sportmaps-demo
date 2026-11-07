@@ -51,6 +51,7 @@ import {
 } from '@/components/students/AltaFirstChargeCard';
 import { useInsuranceActiveSince } from '@/hooks/useInsuranceActiveSince';
 import { PhoneInput } from '@/components/ui/phone-input';
+import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,8 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
   const { toast } = useToast();
   const { registrationZkPinEnabled } = useEntitlements();
   const [submitting, setSubmitting] = useState(false);
+  // «¿Quién lo refirió?»: solo con la campaña activa; se registra tras crear la inscripción.
+  const referido = useReferidoAlta(schoolId);
 
   // Lookup data
   const [teams, setTeams]       = useState<Team[]>([]);
@@ -280,7 +283,7 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
     setSendInviteEmail(true); setSendInviteWhatsapp(true);
   };
 
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => { referido.reiniciar(); reset(); onClose(); };
 
   // Abre precargado (prospecto de clase de prueba): solo lo que se sabe.
   useEffect(() => {
@@ -396,6 +399,10 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
         }, { 'x-school-id': schoolId });
 
         handlePostSuccess(result, uFullName.trim() || 'Atleta', uPhone);
+        if (Number((result as any)?.enrollments_created) > 0) {
+          await referido.registrarTras({ tipo: 'profile', id: foundProfile.id, nombre: uFullName.trim() || 'el atleta' });
+        }
+        referido.reiniciar();
         reset();
         onSuccess({ ...(result as any), user_id: (result as any)?.user_id ?? foundProfile.id });
       } else {
@@ -425,6 +432,10 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
         }, { 'x-school-id': schoolId });
 
         handlePostSuccess(result, uFullName, uPhone);
+        if ((result as any)?.unregistered_athlete_id && Number((result as any)?.enrollments_created) > 0) {
+          await referido.registrarTras({ tipo: 'unregistered', id: (result as any).unregistered_athlete_id, nombre: uFullName.trim() });
+        }
+        referido.reiniciar();
         reset();
         onSuccess(result);
       }
@@ -786,6 +797,8 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
           </Section>
         </div>
 
+        {referido.campo}
+
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={submitting}>
             Cancelar
@@ -801,6 +814,7 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
           </Button>
         </DialogFooter>
       </DialogContent>
+      {referido.dialogo}
     </Dialog>
   );
 }

@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { PhoneInput } from '@/components/ui/phone-input';
+import { PhoneInput, isValidPhone } from '@/components/ui/phone-input';
 import { Loader2, UserCog, AlertCircle, Calendar as CalendarIcon } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -32,8 +32,18 @@ interface EditClientModalProps {
     doc_type?: string;
     doc_number?: string;
     grade?: string;
+    /** Documento del acudiente (child/unregistered). */
+    guardian_doc_type?: string | null;
+    guardian_doc_number?: string | null;
+    /** Documento del perfil del adulto con cuenta: solo lectura. */
+    profile_doc_type?: string | null;
+    profile_doc_number?: string | null;
   };
 }
+
+/** Mismo formato que valida el BFF para el documento del acudiente. */
+export const GUARDIAN_DOC_REGEX = /^[A-Za-z0-9-]{4,20}$/;
+const GUARDIAN_DOC_TYPES = ['CC', 'CE', 'PP', 'NIT'];
 
 const BFF_URL = import.meta.env.VITE_BFF_URL || 'http://localhost:3000';
 
@@ -53,6 +63,8 @@ export function EditClientModal({
   const [docType, setDocType]         = useState('CC');
   const [docNumber, setDocNumber]     = useState('');
   const [grade, setGrade]             = useState('');
+  const [guardianDocType, setGuardianDocType]     = useState('CC');
+  const [guardianDocNumber, setGuardianDocNumber] = useState('');
 
   // Poblar con datos actuales cuando se abre
   useEffect(() => {
@@ -65,12 +77,29 @@ export function EditClientModal({
       setDocType(initialData.doc_type     || (clientType === 'child' ? 'TI' : 'CC'));
       setDocNumber(initialData.doc_number || '');
       setGrade(initialData.grade          || '');
+      setGuardianDocType(initialData.guardian_doc_type     || 'CC');
+      setGuardianDocNumber(initialData.guardian_doc_number || '');
     }
   }, [open, initialData, clientType]);
 
   const handleSave = async () => {
     if (!fullName.trim()) {
       toast({ title: 'El nombre es obligatorio', variant: 'destructive' });
+      return;
+    }
+
+    if (clientType !== 'child' && phone && !isValidPhone(phone)) {
+      toast({ title: 'Teléfono incompleto', description: 'Revisa el número de teléfono.', variant: 'destructive' });
+      return;
+    }
+
+    const guardianNumber = guardianDocNumber.trim();
+    if (clientType !== 'adult' && guardianNumber && !GUARDIAN_DOC_REGEX.test(guardianNumber)) {
+      toast({
+        title: 'Documento del acudiente inválido',
+        description: 'Usa de 4 a 20 caracteres: letras, números o guion.',
+        variant: 'destructive',
+      });
       return;
     }
 
@@ -97,7 +126,12 @@ export function EditClientModal({
         payload.gender        = gender || null;
       }
 
-      const res = await fetch(
+      if (clientType !== 'adult') {
+        payload.guardian_doc_type   = guardianNumber ? guardianDocType : null;
+        payload.guardian_doc_number = guardianNumber || null;
+      }
+
+      const putClient = (allowDuplicate: boolean) => fetch(
         `${BFF_URL}/api/v1/trainer/clients/${clientId}?type=${clientType}`,
         {
           method: 'PUT',
@@ -105,12 +139,27 @@ export function EditClientModal({
             'Content-Type': 'application/json',
             Authorization: `Bearer ${session?.access_token}`,
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(allowDuplicate ? { ...payload, allow_duplicate: true } : payload),
         }
       );
 
+      let res = await putClient(false);
+
+      // Mismo documento en otra persona: se avisa y quien edita decide.
+      if (res.status === 409) {
+        const dup = await res.json().catch(() => ({} as any));
+        if (dup?.code === 'DOC_DUPLICADO'
+          && window.confirm(`${dup.error || 'Ya existe otra persona con ese documento.'}
+
+¿Guardar de todos modos?`)) {
+          res = await putClient(true);
+        } else {
+          throw new Error(dup?.error || 'Error al guardar');
+        }
+      }
+
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({} as any));
         throw new Error(err.error || 'Error al guardar');
       }
 
@@ -186,6 +235,49 @@ export function EditClientModal({
                   placeholder="1020304050"
                 />
               </div>
+            </div>
+          )}
+
+          {/* Documento del acudiente — menores y no registrados */}
+          {clientType !== 'adult' && (
+            <div className="space-y-1.5">
+              <Label className="text-sm font-semibold">Documento del acudiente</Label>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Tipo Doc.</Label>
+                  <Select value={guardianDocType} onValueChange={setGuardianDocType}>
+                    <SelectTrigger aria-label="Tipo de documento del acudiente"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {GUARDIAN_DOC_TYPES.map(d => (
+                        <SelectItem key={d} value={d}>{d}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2 space-y-1.5">
+                  <Label>Número</Label>
+                  <Input
+                    aria-label="Número de documento del acudiente"
+                    value={guardianDocNumber}
+                    onChange={e => setGuardianDocNumber(e.target.value)}
+                    maxLength={20}
+                    placeholder="1020304050"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Documento del adulto con cuenta — solo lectura */}
+          {clientType === 'adult' && (initialData.profile_doc_number || initialData.doc_number) && (
+            <div className="space-y-1.5">
+              <Label>Documento</Label>
+              <Input
+                readOnly
+                disabled
+                value={`${initialData.profile_doc_type || initialData.doc_type || ''} ${initialData.profile_doc_number || initialData.doc_number || ''}`.trim()}
+              />
+              <p className="text-xs text-muted-foreground">Vinculado a su cuenta; no se edita aquí.</p>
             </div>
           )}
 

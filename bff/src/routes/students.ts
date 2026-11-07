@@ -794,7 +794,7 @@ router.put(
       // ── PASO 2.0: documento de identidad del menor (RC/TI/CC/CE/PP) ───────
       // Lo corrige la administración (antes solo se podía fijar al crear la ficha).
       // Un adulto con cuenta NO pasa por aquí: su documento es de su perfil global.
-      const docUpdate: { doc_type?: string; doc_number?: string } = {};
+      const docUpdate: { doc_type?: string; doc_number?: string; guardian_doc_type?: string; guardian_doc_number?: string } = {};
       if (profile && athlete_type !== 'adult') {
         const rawType = typeof profile.doc_type === 'string' ? profile.doc_type.trim().toUpperCase() : '';
         const rawNumber = typeof profile.doc_number === 'string' ? profile.doc_number.trim() : '';
@@ -802,6 +802,25 @@ router.put(
           return res.status(400).json({ error: 'Tipo de documento inválido (RC, TI, CC, CE o PP).' });
         }
         if (rawType) docUpdate.doc_type = rawType;
+        // El frontend los manda dentro de `profile`; se acepta también en la raíz del body.
+        const gSrcType = profile.guardian_doc_type !== undefined ? profile.guardian_doc_type : req.body.guardian_doc_type;
+        const gSrcNumber = profile.guardian_doc_number !== undefined ? profile.guardian_doc_number : req.body.guardian_doc_number;
+        const rawGType = typeof gSrcType === 'string' ? gSrcType.trim().toUpperCase() : '';
+        const rawGNumber = typeof gSrcNumber === 'string' ? gSrcNumber.trim() : '';
+        // null explícito = la escuela borró el documento del acudiente.
+        const clearGuardianDoc = gSrcNumber === null;
+        if (rawGType && !['CC', 'CE', 'PP', 'NIT'].includes(rawGType)) {
+          return res.status(400).json({ error: 'Tipo de documento del acudiente inválido (CC, CE, PP o NIT).' });
+        }
+        if (rawGNumber && !/^[A-Za-z0-9-]{4,20}$/.test(rawGNumber)) {
+          return res.status(400).json({ error: 'El número de documento del acudiente debe tener entre 4 y 20 letras o dígitos.' });
+        }
+        if (rawGType) docUpdate.guardian_doc_type = rawGType;
+        if (rawGNumber) docUpdate.guardian_doc_number = rawGNumber;
+        if (clearGuardianDoc) {
+          (docUpdate as Record<string, unknown>).guardian_doc_type = null;
+          (docUpdate as Record<string, unknown>).guardian_doc_number = null;
+        }
         if (rawNumber) {
           if (!/^[A-Za-z0-9-]{4,20}$/.test(rawNumber)) {
             return res.status(400).json({ error: 'El número de documento debe tener entre 4 y 20 letras o dígitos.' });

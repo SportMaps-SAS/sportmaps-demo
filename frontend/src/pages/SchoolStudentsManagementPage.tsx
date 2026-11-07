@@ -53,6 +53,12 @@ import { EnrollmentFeesSection, NO_FEES_MARKED, cobrarInscripcionSeguro, type Fe
 import { ZkPinField } from '@/components/students/ZkPinField';
 import { CreateAdultAthleteModal } from '@/components/students/CreateAdultAthleteModal';
 import { PorAsignarSection } from '@/components/school-join/PorAsignarSection';
+import { useSoportesEstado } from '@/components/soportes/useSoportesEstado';
+import { SoportesInsignia, SoportesFiltroToggle } from '@/components/soportes/SoportesInsignia';
+import { SoportesPendientesInforme } from '@/components/soportes/SoportesPendientesInforme';
+import { BandejaSolicitudesPlan } from '@/components/solicitudes-de-plan';
+import { FichaDeportistaExtras } from '@/components/students/FichaDeportistaExtras';
+import { llaveSujeto, tipoSujetoDeAtleta } from '@/lib/api/soportes';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
 import { canManageCharges } from '@/lib/cobrosYPagos';
@@ -117,6 +123,9 @@ const studentSchema = z.object({
   // Documento del menor (RC/TI/CC/CE/PP): la administración puede corregirlo.
   doc_type:         z.string().optional(),
   doc_number:       z.string().max(20).optional(),
+  // Documento del acudiente (CC/CE/PP/NIT), solo fichas de menor / sin cuenta.
+  guardian_doc_type:   z.string().optional(),
+  guardian_doc_number: z.string().max(20).optional(),
   // ID del torniquete (solo escuelas con registrationZkPinEnabled): dígitos, vacío = no tocar.
   zk_pin:           z.string().regex(/^\d{0,8}$/, 'Solo números (hasta 8 dígitos)').optional(),
 });
@@ -346,6 +355,9 @@ export default function SchoolStudentsManagementPage() {
 
   const { schoolId, schoolName, teams, branches, activeBranchId, activeBranchName, totalBranches, defaultMonthlyFee, schoolSettings, loading: schoolLoading } = useSchoolContext();
   const { prospectos: prospectosPrueba, cerrar: cerrarProspecto } = useProspectosClasePrueba(schoolId);
+  // Soportes (solo se ven si la escuela los tiene activos): insignia X/7 y filtro «Faltan soportes».
+  const soportes = useSoportesEstado(schoolId, canManageCharges(schoolRole));
+  const [soloFaltanSoportes, setSoloFaltanSoportes] = useState(false);
 
   // Estable mientras el alta está abierta: los modales lo aplican al abrir.
   const prefillProspecto = useMemo(() => prospectoEnAlta ? {
@@ -851,6 +863,12 @@ export default function SchoolStudentsManagementPage() {
     mutationFn: async (data: StudentFormData & { plan_change_charge?: PlanChangeChargeMode }) => {
       if (!editingStudent || !schoolId) return [] as string[];
 
+      const guardianDocNumber = (data.guardian_doc_number || '').trim();
+      const sendsGuardianDoc = editingAthleteType === 'child' || editingAthleteType === 'unregistered';
+      if (sendsGuardianDoc && guardianDocNumber && !/^[A-Za-z0-9-]{4,20}$/.test(guardianDocNumber)) {
+        throw new Error('Documento del acudiente inválido: usa de 4 a 20 caracteres (letras, números o guion).');
+      }
+
       const { bffClient } = await import('@/lib/api/bffClient');
       const putStudent = (allowDuplicate: boolean) => bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
         athlete_type: editingAthleteType,
@@ -871,6 +889,10 @@ export default function SchoolStudentsManagementPage() {
           doc_number:    data.doc_number         || null,
           parent_email:  data.parent_email       || null,
           parent_phone:  data.parent_phone       || null,
+          ...(sendsGuardianDoc ? {
+            guardian_doc_type:   guardianDocNumber ? (data.guardian_doc_type || 'CC') : null,
+            guardian_doc_number: guardianDocNumber || null,
+          } : {}),
         },
         enrollment: {
           team_id:          data.team_id            || null,
@@ -1020,6 +1042,16 @@ export default function SchoolStudentsManagementPage() {
     setFeesMarked(NO_FEES_MARKED);
     let extraFields = { tshirt_size: '', blood_type: '', eps_name: '' };
     let docFields = { doc_type: '', doc_number: '' };
+    let guardianDoc = { guardian_doc_type: 'CC', guardian_doc_number: '' };
+    if (athleteType === 'child' || athleteType === 'unregistered') {
+      // Lectura aparte y tolerante: si la columna aún no existe no se rompe el resto de la ficha.
+      try {
+        const { data } = await (supabase as any)
+          .from(athleteType === 'child' ? 'children' : 'unregistered_athletes')
+          .select('guardian_doc_type, guardian_doc_number').eq('id', student.id).maybeSingle();
+        if (data) guardianDoc = { guardian_doc_type: data.guardian_doc_type || 'CC', guardian_doc_number: data.guardian_doc_number || '' };
+      } catch { /* sin dato: queda vacío */ }
+    }
     if (athleteType === 'child') {
       const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name, doc_type, doc_number').eq('id', student.id).maybeSingle();
       if (data) {
@@ -1066,6 +1098,8 @@ export default function SchoolStudentsManagementPage() {
       dorsal:           (student as any).dorsal || '',
       doc_type:         docFields.doc_type,
       doc_number:       docFields.doc_number,
+      guardian_doc_type:   guardianDoc.guardian_doc_type,
+      guardian_doc_number: guardianDoc.guardian_doc_number,
       zk_pin:           zkPinNow != null ? String(zkPinNow) : '',
     });
     setDialogOpen(true);
@@ -1363,6 +1397,9 @@ export default function SchoolStudentsManagementPage() {
   const openDebtOf = (studentId: string): AthleteOpenDebt | undefined => openDebtByAthlete?.get(studentId);
   const debtDetail = (d: AthleteOpenDebt) => d.items.map((i) => `${i.label} ${formatCurrency(i.amount)}`).join(' · ');
 
+  const soporteDe = (st: any) =>
+    soportes.activo ? soportes.indice.get(llaveSujeto(tipoSujetoDeAtleta(getAthleteType(st)), st.id)) : undefined;
+
   const filteredStudents = tabStudents.filter(student => {
     const q = normalizeText(searchQuery);
     if (q && !(
@@ -1384,16 +1421,23 @@ export default function SchoolStudentsManagementPage() {
 
     if (paymentFilter !== 'all' && getPaymentState(student, graceDays) !== paymentFilter) return false;
 
+    if (soloFaltanSoportes && soportes.activo) {
+      const d = soporteDe(student);
+      if (!d || d.complete) return false;
+    }
+
     return true;
   });
 
   const activeFilterCount =
-    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0);
+    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0) +
+    (soloFaltanSoportes && soportes.activo ? 1 : 0);
 
   const clearFilters = () => {
     setTeamFilter('all');
     setPlanFilter('all');
     setPaymentFilter('all');
+    setSoloFaltanSoportes(false);
   };
 
   // Si cambia la pestaña, un equipo/plan seleccionado puede no existir ahí:
@@ -1641,6 +1685,11 @@ export default function SchoolStudentsManagementPage() {
         />
       )}
 
+      {/* Informe «Soportes pendientes»: no pinta nada si la escuela no tiene soportes activos. */}
+      {schoolId && canManageCharges(schoolRole) && <SoportesPendientesInforme schoolId={schoolId} />}
+      {/* Retiros, pausas y reactivaciones pedidas por las familias (app y WhatsApp). Va con el mismo ajuste que la pausa. */}
+      {schoolId && canManageCharges(schoolRole) && pauseEnabled && <BandejaSolicitudesPlan schoolId={schoolId} />}
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="active">Activos</TabsTrigger>
@@ -1705,6 +1754,10 @@ export default function SchoolStudentsManagementPage() {
                 ))}
               </SelectContent>
             </Select>
+
+            {soportes.activo && soportes.estado && (
+              <SoportesFiltroToggle activo={soloFaltanSoportes} onChange={setSoloFaltanSoportes} faltan={soportes.estado.resumen.incompletos} />
+            )}
 
             {activeFilterCount > 0 && (
               <Button variant="ghost" size="sm" onClick={clearFilters} className="sm:self-center text-muted-foreground">
@@ -1789,6 +1842,7 @@ export default function SchoolStudentsManagementPage() {
                       <div className="flex items-center gap-1 flex-wrap">
                         <p className="font-semibold text-sm truncate">{student.full_name}</p>
                         <MedicalAlertBadge medicalInfo={student.medical_info} />
+                        <SoportesInsignia d={soporteDe(student)} />
                         {membresiasPorSujeto.get(student.id) && (
                           <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                         )}
@@ -1884,6 +1938,7 @@ export default function SchoolStudentsManagementPage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span>{student.full_name}</span>
                             <MedicalAlertBadge medicalInfo={student.medical_info} />
+                            <SoportesInsignia d={soporteDe(student)} />
                             {membresiasPorSujeto.get(student.id) && (
                               <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                             )}
@@ -2186,6 +2241,28 @@ export default function SchoolStudentsManagementPage() {
                         {...form.register('parent_phone')}
                       />
                     </div>
+                    {editingStudent && (editingAthleteType === 'child' || editingAthleteType === 'unregistered') && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_type">Tipo de documento del acudiente</Label>
+                          <Select
+                            value={form.watch('guardian_doc_type') || 'CC'}
+                            onValueChange={(val) => form.setValue('guardian_doc_type', val, { shouldDirty: true })}
+                          >
+                            <SelectTrigger id="guardian_doc_type"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {['CC', 'CE', 'PP', 'NIT'].map(d => (
+                                <SelectItem key={d} value={d}>{d}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_number">Número de documento del acudiente</Label>
+                          <Input id="guardian_doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('guardian_doc_number')} />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -2883,6 +2960,17 @@ export default function SchoolStudentsManagementPage() {
                       </div>
                     )}
                   </section>
+
+                  {/* Soportes y «referido por»: solo se pintan con la función activa en la escuela. */}
+                  {schoolId && (
+                    <FichaDeportistaExtras
+                      schoolId={schoolId}
+                      athleteId={s.id}
+                      athleteType={athleteType}
+                      enrollmentId={s.enrollment_id}
+                      puedeAdministrar={canManageCharges(schoolRole)}
+                    />
+                  )}
                 </div>
 
                 <DialogFooter className="flex-col-reverse sm:flex-row gap-2 mt-6">

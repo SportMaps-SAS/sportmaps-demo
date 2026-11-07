@@ -210,20 +210,25 @@ router.get('/clients/:clientId', async (req: Request, res: Response) => {
     // Resolve profile/child/plan separately
     const [profileRes, planRes] = await Promise.all([
       enrollment?.user_id
-        ? supabase.from('profiles').select('full_name, email, phone, avatar_url, date_of_birth, gender').eq('id', enrollment.user_id).maybeSingle()
+        ? supabase.from('profiles').select('full_name, email, phone, avatar_url, date_of_birth, gender, document_type, document_number').eq('id', enrollment.user_id).maybeSingle()
         : enrollment?.child_id
-          ? supabase.from('children').select('full_name, date_of_birth, avatar_url, gender, doc_type, doc_number, grade').eq('id', enrollment.child_id).maybeSingle()
+          ? supabase.from('children').select('full_name, date_of_birth, avatar_url, gender, doc_type, doc_number, grade, guardian_doc_type, guardian_doc_number').eq('id', enrollment.child_id).maybeSingle()
           : enrollment?.unregistered_athlete_id
-            ? supabase.from('unregistered_athletes').select('full_name, email, phone, date_of_birth, gender, doc_type, doc_number').eq('id', enrollment.unregistered_athlete_id).maybeSingle()
+            ? supabase.from('unregistered_athletes').select('full_name, email, phone, date_of_birth, gender, doc_type, doc_number, guardian_doc_type, guardian_doc_number').eq('id', enrollment.unregistered_athlete_id).maybeSingle()
             : Promise.resolve({ data: null }),
       enrollment?.offering_plan_id
         ? supabase.from('offering_plans').select('name, duration_days, price, max_sessions, metadata, currency').eq('id', enrollment.offering_plan_id).maybeSingle()
         : Promise.resolve({ data: null }),
     ]);
 
+    // Adulto con cuenta: documento del perfil global, SOLO lectura (profile_doc_*).
+    const profileData: any = profileRes.data;
+    const profilesOut = type === 'adult' && profileData
+      ? (({ document_type, document_number, ...rest }: any) => ({ ...rest, profile_doc_type: document_type ?? null, profile_doc_number: document_number ?? null }))(profileData)
+      : profileRes.data;
     const assembledEnrollment = {
       ...enrollment,
-      profiles: type === 'adult' ? profileRes.data : type === 'unregistered' ? profileRes.data : null,
+      profiles: type === 'adult' ? profilesOut : type === 'unregistered' ? profileRes.data : null,
       children: type === 'child' ? profileRes.data : null, // profileRes holds child if it's child type
       offering_plans: planRes.data
     };
@@ -285,15 +290,11 @@ router.put('/clients/:clientId', async (req: Request, res: Response) => {
       if (phone !== undefined) updateData.phone    = phone?.trim() || null;
       if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth || null;
       if (gender !== undefined) updateData.gender  = gender || null;
-      if (doc_type)      updateData.doc_type       = doc_type;
-      if (doc_number !== undefined) updateData.doc_number = doc_number?.trim() || null;
     } else if (type === 'child') {
       table = 'children';
       if (full_name)     updateData.full_name      = full_name.trim();
       if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth || null;
       if (gender !== undefined) updateData.gender  = gender || null;
-      if (doc_type)      updateData.doc_type       = doc_type;
-      if (doc_number !== undefined) updateData.doc_number = doc_number?.trim() || null;
       if (grade !== undefined)    updateData.grade = grade?.trim() || null;
     } else if (type === 'adult') {
       // profiles: solo campos seguros (no email — eso es de auth)
@@ -303,6 +304,46 @@ router.put('/clients/:clientId', async (req: Request, res: Response) => {
       if (date_of_birth !== undefined) updateData.date_of_birth = date_of_birth || null;
       if (gender !== undefined) updateData.gender  = gender || null;
     }
+
+      // Documento del menor / ficha sin cuenta (RC/TI/CC/CE/PP). Un adulto con cuenta
+      // NO se edita aquí: su documento es de su perfil global (solo lectura en el GET).
+      if (type !== 'adult') {
+        const rawType = typeof doc_type === 'string' ? doc_type.trim().toUpperCase() : '';
+        const rawNumber = typeof doc_number === 'string' ? doc_number.trim() : '';
+        if (rawType && !['RC', 'TI', 'CC', 'CE', 'PP'].includes(rawType)) {
+          return res.status(400).json({ error: 'Tipo de documento inválido (RC, TI, CC, CE o PP).' });
+        }
+        if (rawNumber && !/^[A-Za-z0-9-]{4,20}$/.test(rawNumber)) {
+          return res.status(400).json({ error: 'El número de documento debe tener entre 4 y 20 letras o dígitos.' });
+        }
+        if (rawNumber && !req.body.allow_duplicate) {
+          const [kids, unreg] = await Promise.all([
+            supabase.from('children').select('id, full_name').eq('school_id', schoolId).eq('doc_number', rawNumber).neq('id', clientId).limit(1),
+            supabase.from('unregistered_athletes').select('id, full_name').eq('school_id', schoolId).eq('doc_number', rawNumber).neq('id', clientId).limit(1),
+          ]);
+          const dup = (kids.data?.[0] ?? unreg.data?.[0]) as { id: string; full_name: string } | undefined;
+          if (dup) {
+            return res.status(409).json({
+              error: `Ya existe otro deportista con el documento ${rawNumber} en esta escuela: "${dup.full_name}". Si es un error de digitación corrígelo; si son personas distintas confirma para guardar igual.`,
+              code: 'DOC_DUPLICADO',
+              duplicate: dup,
+            });
+          }
+        }
+        const rawGType = typeof req.body.guardian_doc_type === 'string' ? req.body.guardian_doc_type.trim().toUpperCase() : '';
+        const rawGNumber = typeof req.body.guardian_doc_number === 'string' ? req.body.guardian_doc_number.trim() : '';
+        if (rawGType && !['CC', 'CE', 'PP', 'NIT'].includes(rawGType)) {
+          return res.status(400).json({ error: 'Tipo de documento del acudiente inválido (CC, CE, PP o NIT).' });
+        }
+        if (rawGNumber && !/^[A-Za-z0-9-]{4,20}$/.test(rawGNumber)) {
+          return res.status(400).json({ error: 'El número de documento del acudiente debe tener entre 4 y 20 letras o dígitos.' });
+        }
+        if (rawType) updateData.doc_type = rawType;
+        if (doc_number !== undefined && !rawNumber) updateData.doc_number = null;
+        if (rawNumber) updateData.doc_number = rawNumber;
+        if (rawGType) updateData.guardian_doc_type = rawGType;
+        if (rawGNumber) updateData.guardian_doc_number = rawGNumber;
+      }
 
     if (Object.keys(updateData).length === 0) {
       return res.status(400).json({ error: 'No se enviaron campos a actualizar.' });

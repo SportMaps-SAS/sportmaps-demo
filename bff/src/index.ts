@@ -69,6 +69,14 @@ import whatsappBuzonRouter from './routes/whatsapp-buzon.routes';
 import whatsappCampanasRouter from './routes/whatsapp-campanas.routes';
 // Anuncios de Meta con clic a WhatsApp: embudo por anuncio y destino (docs/specs/whatsapp-anuncios-atribucion.md).
 import whatsappAnunciosRouter from './routes/whatsapp-anuncios.routes';
+// Campañas de descuento por referidos, pago por plazos, retiro/pausa por canales y soportes obligatorios
+// (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md). Cada una detrás de su ajuste por escuela.
+import referidosRoutes from './routes/referidos.routes';
+import acuerdosDePagoRouter from './routes/acuerdos-de-pago.routes';
+import retiroYPausaRouter from './routes/retiro-y-pausa.routes';
+import soportesRouter from './routes/soportes.routes';
+import { iniciarReferidosCron } from './jobs/referidos.job';
+import { iniciarSoportesRecordatoriosCron } from './jobs/soportes-recordatorios.job';
 import publicBookingRouter from './routes/public-booking.routes';
 import cobroEnlacePublicoRouter from './routes/cobro-enlace-publico.routes';
 import storeGuestRouter from './routes/store-guest.routes';
@@ -435,6 +443,10 @@ app.use('/api/v1/reservations-admin', generalLimiter, reservationsAdminRouter);
 app.use('/api/v1/reservations/batch', generalLimiter, reservationsBatchRouter);
 app.use('/api/v1/reservations', generalLimiter, reservationsCheckoutRouter);
 app.use('/api/v1/reservations', generalLimiter, reservationsRouter);
+app.use('/api/v1/referidos', generalLimiter, referidosRoutes);
+app.use('/api/v1/payment-agreements', generalLimiter, acuerdosDePagoRouter);
+app.use('/api/v1/plan-requests', generalLimiter, retiroYPausaRouter);
+app.use('/api/v1/soportes', generalLimiter, soportesRouter);
 app.use('/api/v1/public/reservations', publicReservationsRouter);
 // Glosas: montado ANTES de /api/v1/payments para que la ruta más específica gane.
 app.use('/api/v1/payments/glosas', paymentLimiter, glosasRouter);
@@ -608,6 +620,8 @@ const httpServer = app.listen(PORT, () => {
         initMaintenanceJobs();
         iniciarPlanPorAsistenciaCron();
         iniciarRecordatoriosTorneoCron();
+        iniciarReferidosCron();
+        iniciarSoportesRecordatoriosCron();
     } else {
         console.log('   Crons APAGADOS: este BFF no corre en Render (CRONS_LOCALES=true para probarlos).');
     }

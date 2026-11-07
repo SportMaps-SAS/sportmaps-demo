@@ -22,6 +22,8 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { getUserFriendlyError } from '@/lib/error-translator';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { ReferidosPanel } from '@/components/referidos/ReferidosPanel';
+import { AjustesAcuerdos, BandejaAcuerdos } from '@/components/acuerdos-de-pago';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useOcultarFabSoporte } from '@/lib/supportFab';
 import { FileUpload } from '@/components/common/FileUpload';
@@ -2749,6 +2751,18 @@ export default function PaymentsAutomationPage() {
 
                 </CardContent>
               </Card>
+
+              {/* Descuento por referidos: solo aparece si la escuela ya tiene campaña
+                  (o si quien mira es administración de plataforma y puede crearla). */}
+              {schoolId && canManageCharges(currentUserRole) && (
+                <>
+                  <ReferidosPanel schoolId={schoolId} puedeCrear={esPlatformAdmin} />
+                  {/* Pago por plazos: ajustes (visibles solo para el administrador de plataforma: prenden la función
+                      por escuela) y bandeja de acuerdos (solo con la función prendida). */}
+                  {esPlatformAdmin && <AjustesAcuerdos schoolId={schoolId} />}
+                  <BandejaAcuerdos schoolId={schoolId} />
+                </>
+              )}
 
               {/* Catálogos vendibles (20260908152538) — el toggle lo prende SOLO
                   SportMaps (panel interno); si está activo, la escuela administra

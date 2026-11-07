@@ -74,6 +74,18 @@ export function countryForPhone(value: string): PhoneCountry | undefined {
   return best;
 }
 
+/** E.164: «+» y entre 8 y 15 dígitos en total (indicativo incluido). */
+export function isValidPhone(value: string | null | undefined): boolean {
+  return /^\+\d{8,15}$/.test((value ?? "").trim());
+}
+
+/** Hay dígitos nacionales pero el total no llega a E.164 (<8 o >15). Vacío no es error. */
+function isIncompletePhone(value: string, dial: string): boolean {
+  const national = value.startsWith(dial) ? value.slice(dial.length) : value;
+  if (!/\d/.test(national)) return false;
+  return !isValidPhone(value);
+}
+
 interface PhoneInputProps {
   value: string;
   onChange: (value: string) => void;
@@ -81,9 +93,11 @@ interface PhoneInputProps {
   className?: string;
   disabled?: boolean;
   id?: string;
+  /** Muestra borde y mensaje «Número incompleto» (por defecto sí). */
+  showValidation?: boolean;
 }
 
-export function PhoneInput({ value, onChange, placeholder, className, disabled, id }: PhoneInputProps) {
+export function PhoneInput({ value, onChange, placeholder, className, disabled, id, showValidation = true }: PhoneInputProps) {
   const [open, setOpen] = React.useState(false);
 
   // El país elegido se recuerda por ISO: +1 sirve para varios países y +7 para dos.
@@ -114,8 +128,11 @@ export function PhoneInput({ value, onChange, placeholder, className, disabled, 
     onChange(selectedCountry.value + cleanNumber);
   };
 
+  const incomplete = showValidation && isIncompletePhone(value, selectedCountry.value);
+
   return (
-    <div className={cn("flex gap-0 group h-11 bg-background/50 border border-border/40 rounded-xl overflow-hidden focus-within:border-primary/50 transition-colors", className)}>
+    <div>
+    <div className={cn("flex gap-0 group h-11 bg-background/50 border border-border/40 rounded-xl overflow-hidden focus-within:border-primary/50 transition-colors", incomplete && "border-destructive focus-within:border-destructive", className)}>
       <Popover open={open} onOpenChange={(o) => { if (!disabled) setOpen(o); }}>
         <PopoverTrigger asChild>
           <Button
@@ -165,8 +182,13 @@ export function PhoneInput({ value, onChange, placeholder, className, disabled, 
         onChange={(e) => handleNumberChange(e.target.value)}
         placeholder={placeholder || "Número"}
         disabled={disabled}
+        aria-invalid={incomplete || undefined}
         className="flex-1 h-full border-0 bg-transparent rounded-none focus-visible:ring-0 focus-visible:ring-offset-0 px-4 text-base font-medium"
       />
+    </div>
+    {incomplete && (
+      <p role="alert" className="mt-1 text-xs text-destructive">Número incompleto</p>
+    )}
     </div>
   );
 }
