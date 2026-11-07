@@ -3,6 +3,7 @@
 **Fecha:** 2026-10-06. Todos los números de la sección 1 se midieron en vivo ese día (SQL contra la base, logs de Supabase, advisors, repo).
 **Complementa** a [`plan-escalabilidad-infraestructura.md`](plan-escalabilidad-infraestructura.md) (2026-09-06) — aquel recomendaba pasar a Pro; el 2026-10-04 se decidió **seguir en Free** y este plan es el cómo.
 **Estado:** propuesta. Nada de esto está aplicado.
+**Actualización 2026-11-07:** sección 11, plan de rendimiento con línea base medida (red Oregon→São Paulo, p95 del BFF, `pg_stat_statements`, Lighthouse).
 
 ---
 
@@ -443,6 +444,135 @@ Pasar a Pro **en cuanto ocurra cualquiera** de estos:
 4. ¿Abrir cuenta Cloudflare con tarjeta (R2) y mover el DNS?
 5. ¿Borrar el servicio `sportmaps-demo` (Python) de Render?
 6. Vercel Hobby vs uso comercial: ¿se revisa ya o se deja para F8?
+
+---
+
+## 11. Plan de rendimiento (2026-11-07)
+
+Nace de un plan genérico de 4 semanas (medir → base → backend → frontend → verificar) contrastado con el repo y con la base viva. Lo que ya estaba hecho o no aplica se sacó (11.4); lo que es peligroso aquí se corrigió (11.5). **Cuando un punto coincide con F3 o F5 de este documento, manda la fase de arriba**; esta sección la adelanta y le agrega números.
+
+### 11.1 Línea base medida el 2026-11-07
+
+Datos crudos y scripts para repetir la medición: `C:\tmp\perf-baseline-2026-11-07\` (fuera del repo).
+
+**Red — el hallazgo principal.** El BFF corre en Render **Oregon**; Supabase está en **São Paulo** (`aws-1-sa-east-1`).
+
+| Tramo | p50 | mín | Cómo |
+|---|---|---|---|
+| Render (Oregon) → Supabase, 1 fila por REST | **218 ms** | 194 ms | one-off job en `sportmaps-bff-dev`, 20 llamadas con keep-alive |
+| Render (Oregon) → Supabase, `/auth/v1/health` | 232 ms | 197 ms | ídem |
+| Colombia → Supabase | 167 ms | 157 ms | desde la máquina de desarrollo |
+| Colombia → BFF prod | 171 ms | 149 ms | ídem |
+
+Cada consulta **en serie** dentro de un handler cuesta ~220 ms de red aunque la base responda en 1 ms. Ejemplo: `/me/entitlements` tarda p50 **1.579 ms** en el servidor, y la consulta (`v_school_entitlements`) gasta 7–18 ms de base; `platform_admins` y `school_members` < 1 ms. El resto son viajes: `getUser` contra GoTrue + membresía + la consulta. La caché de auth (`bff/src/utils/authCache.ts`) dura 60 s, así que una carga de página separada más de un minuto de la anterior probablemente paga todo de nuevo (hipótesis: falta medir la tasa de aciertos).
+
+**BFF prod — logs de `pino-http` en Render, 72 h (4→7 nov), 19.291 peticiones, 0 errores 5xx.** Tiempo medido dentro del servidor (no incluye el tramo navegador → BFF).
+
+| Endpoint (los más usados por personas) | n | p50 | p95 |
+|---|---|---|---|
+| `POST /devices/register` | 828 | 706 | 1.095 |
+| `GET /events/my-open-tournaments` | 602 | 726 | 1.559 |
+| `GET /tournament-live/me/today` | 594 | 486 | 1.270 |
+| `GET /me/entitlements` | 492 | 1.579 | 2.146 |
+| `GET /school/context` | 454 | 746 | 1.329 |
+| `GET /marketplace/school-store/:id` | 302 | 1.193 | 1.555 |
+| `GET /attendance/session/:id` | 195 | 881 | 1.334 |
+| `GET /autopay/mine` | 159 | 1.210 | 2.108 |
+| `GET /school/performance/roster` | 118 | 1.792 | 2.369 |
+| `GET /school/reports` | 102 | 1.761 | 2.629 |
+
+Peores p95: `POST /payments/extract-receipt` 7,6 s (OCR), media de WhatsApp 4,6 s, `GET /attendance/roster/team/:id` 2,9 s. **Ninguno de los 10 más usados cumple p95 < 500 ms.** (El webhook de WhatsApp, 9.587 peticiones, responde en 1 ms: se excluye.)
+
+**Base — `pg_stat_statements`.** Ojo: **no se ha reiniciado desde el 2026-02-25**, así que acumula ocho meses y mezcla consultas ya arregladas. Se guardó una foto por `queryid` (`pgss-2026-11-07.json`) para medir la próxima semana **por diferencia**, sin reiniciar.
+
+| Rol | % del tiempo total | Qué es |
+|---|---|---|
+| `supabase_admin` | 43,6 % | interno (Realtime): ignorar |
+| `authenticated` | 21,8 % | la app desde el navegador |
+| `service_role` | 19,7 % | el BFF y sus jobs |
+| `authenticator` | 6,9 % | recarga de esquema de PostgREST: 10.466 recargas de ~1 s cada una |
+| `postgres` | 6,4 % | Studio/CLI: **3,29 M bloques temporales (~25 GB)** — el Disk IO |
+
+Consultas de la app que más pesan:
+- `school_athletes`: entre 567 y 1.096 ms de media según la variante; máximo 12 s.
+- `storage.search` (listar archivos de Storage desde el cliente): **3,5 s de media**, máximo 25 s, 584 llamadas.
+- `children` por `parent_id`, con conteo: 158 ms de media en 13.784 llamadas, para una búsqueda trivial (costo de RLS).
+- `UPDATE payments` desde el cliente: 530–690 ms de media.
+- `get_onboarding_status`: 41.688 llamadas a 48 ms. Se puede cachear por sesión, como ya decía F3.5.
+- Jobs: `auto_close_stale_hour_bank_visits` 246 k llamadas, sondeo de `notification_deliveries` 322 k, `UPDATE turnstile_devices.last_seen_at` 1,3 M y `bridge_heartbeats` 321 k. Todo esto es F3.
+
+**Frontend prod (`app.sportmaps.co`, cuenta demo `gerencia@demo.sportmaps.co`).** La escuela demo es chica: en escuelas grandes las listas pesan más.
+
+| Escenario | Resultado |
+|---|---|
+| Lighthouse móvil `/login`, 2 corridas | puntaje **52–56**, FCP 4,3 s, **LCP 5,7–5,8 s**, TBT 490–610 ms, 752 KiB |
+| Bloquean el render (Lighthouse) | `checkout.wompi.co/widget.js` ~1,1 s · Google Fonts (5 pesos de Poppins) ~1 s · CSS 0,5 s |
+| JS sin usar en la entrada | 170 de 258 KiB de `index-*.js` |
+| Escritorio sin throttle: clic «Entrar» → dashboard listo | 5,9 s · 43 llamadas a la API + ~110 chunks |
+| Móvil (Pixel 5, 4G lento, CPU ×4): clic «Entrar» → dashboard | 10,6 s |
+| `/dashboard` con caché caliente (escritorio) | listo 4,0 s · LCP 2,1 s · 43 llamadas a la API · 122 peticiones de chunks |
+| `/students` con caché caliente (escritorio) | **LCP 7,1 s**: `school_athletes?select=*` sola tarda 2,6 s; 37 llamadas (10 al BFF) |
+| `/payments` con caché caliente (escritorio) | listo 1,6 s · 13 llamadas |
+| Navegador → Supabase por consulta simple | p50 ~220–245 ms |
+
+### 11.2 Prioridades, por impacto medido
+
+**R1 — Viajes BFF ↔ base (la palanca más grande del BFF).**
+1. **Menos viajes en serie, sin cambiar de región:**
+   - verificar el JWT localmente: si el proyecto usa llaves de firma asimétricas, `getClaims()` valida con JWKS sin secreto (revisar en el dashboard de Supabase);
+   - membresía + entitlements en una sola RPC;
+   - `Promise.all` donde los `await` son independientes;
+   - medir la tasa de aciertos de `authCache`.
+   Empezar por los 10 endpoints de la tabla.
+2. **Región:** Render no tiene Sudamérica; Virginia es lo más cercano a São Paulo (estimado ~120 ms por viaje contra los 218 medidos, **sin medir**). Antes de decidir, medir con el mismo job en un servicio temporal en Virginia. Mover implica servicio nuevo (la región no se cambia en uno existente), mover `bffprod.sportmaps.co` y revisar listas de IP de salida en proveedores. **Desde Oregon, ningún endpoint con 2 o más consultas en serie puede cumplir p95 < 500 ms.**
+
+**R2 — Base (adelanta F5).**
+1. RLS envuelta por grupos: `children`, `enrollments`, `payments`, `school_members`, `attendance_records`. Mismo método de F5: generada desde `pg_policies` vivo, forma `= ANY ((SELECT f())::uuid[])` para helpers `uuid[]`, `lock_timeout` corto, hora valle, una sola sesión, `gen types` al final, `seguridad:invariantes` después.
+2. `/students`: dejar de pedir `school_athletes?select=*`; usar RPC paginada con los campos que la tabla muestra.
+3. Encontrar quién llama `storage.search` (3,5 s) y reemplazarlo por rutas guardadas en columnas.
+4. `UPDATE payments` desde el cliente (~600 ms): revisar triggers y policies; si es el flujo de aprobar o registrar pago, que pase por una RPC.
+5. Índices: **solo** los que pida un `EXPLAIN` hecho como `authenticated` (con `set_config('request.jwt.claims', …)`). Las tablas caben en RAM: un índice ahorra CPU, no IO, y ya hay 135 sin uso.
+
+**R3 — Frontend.**
+1. Cargar `widget.js` de Wompi solo al abrir el checkout (hoy bloquea todas las páginas, login incluido).
+2. Fuentes: menos pesos de Poppins, o servirlas desde el propio dominio con `preload`.
+3. Dashboard: 43 llamadas y 122 chunks. Consolidar los KPIs en una RPC; quitar las lecturas repetidas (p. ej. `profiles` se pide dos veces); los dos `HEAD children` (~650 ms cada uno) se van con R2.1; rastrear qué arrastra al dashboard los chunks del asistente de onboarding, `colombian-banks` y `store` (pendiente desde agosto).
+4. Sacar de `index-*.js` lo que no usa el login (170 KiB).
+5. Debounce de 300 ms en los buscadores que consultan por tecla (hoy solo 4 archivos usan debounce).
+6. Skeletons y UI optimista: después, y **nunca** optimista en pagos ni cobros.
+
+**R4 — Trabajo de fondo (= F3).** Sondeos por eventos. `extract-receipt` (7,6 s): evaluar responder al instante y procesar en la cola, si el flujo del acudiente lo permite (decisión de producto).
+
+### 11.3 Verificación
+
+- Repetir con los mismos scripts: logs de Render (p50/p95 por endpoint), diferencia de `pg_stat_statements` contra la foto del 11-07, Lighthouse móvil y el recorrido con la cuenta demo.
+- **Prueba de carga: solo contra `supabase start` local + BFF local + pasarelas en sandbox** (ver 11.5). Antes de simularlo, sacar el pico real de los datos (pagos y comprobantes por hora) en vez de suponer «el día 5».
+- Regresión de pagos, RLS (`seguridad:invariantes` + conteo por rol) y conciliación.
+
+**Criterio de éxito.** p95 < 500 ms en los 10 endpoints de 11.1 (no alcanzable desde Oregon con 2+ viajes en serie: ver R1.2), LCP < 2,5 s en móvil (hoy 5,7 s en el login), cero errores en el pico simulado.
+
+### 11.4 Ya hecho o no aplica (se sacó del plan original)
+
+| Ítem | Realidad |
+|---|---|
+| Code splitting con `React.lazy` | Ya: 225 rutas lazy en `App.tsx`. Lo pendiente es R3.3. |
+| React Query | Ya: 247 archivos. |
+| Pool con Supavisor | El BFF va por REST, no usa `pg` directo (y conectar directo a Postgres ya se descartó). |
+| Idempotency keys en pagos | Ya existe `requireIdempotencyKey`; solo falta auditar que cubra todos los endpoints de pago. |
+| Outbox | Ya: notificaciones, Wompi, Mercado Pago. |
+| Tracing con Sentry | No hace falta: los logs de `pino-http` en Render ya dan p50/p95 por endpoint. Sentry sigue solo con errores. |
+| Diferir GTM | No hay GTM; el tercero que pesa es Wompi (R3.1). |
+| Avatares y documentos en WebP | Ya se comprimen al subir desde el 2026-10-04. |
+| Streaming de Mapi | Mapi no está construido; va en su spec. |
+| Redis | Solo si una medición muestra lecturas repetidas caras que no resuelva una caché en memoria. |
+
+### 11.5 Correcciones obligatorias al plan original
+
+1. **Prueba de carga nunca contra un ambiente actual.** Una sola Supabase para dev, stg y prod (caída de 14 h el 2026-10-14 por Disk IO); las credenciales de Mercado Pago de dev son de producción; el OCR gasta IA; la facturación es real.
+2. **Los comprobantes no se recomprimen ni se pasan a WebP.** El OCR necesita la resolución completa y la deduplicación compara sha256. Solo miniaturas con lazy loading en la vista.
+3. **`EXPLAIN ANALYZE` como `authenticated`**, nunca como `postgres` en el SQL Editor: la misma consulta dio 1,4 ms sin RLS y 555 ms con RLS.
+4. En `pg_stat_statements`, ignorar `realtime.list_changes` y lo que corre como `postgres` o `supabase_admin`.
+5. Medir con la cuenta demo, no con la sesión de un cliente, y separar el tráfico de QA y demo (fue el 75 % de los logins de octubre).
 
 ---
 
