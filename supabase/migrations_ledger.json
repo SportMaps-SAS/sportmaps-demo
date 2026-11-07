@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 908,
-  "head": "20261106153223",
+  "count": 906,
+  "head": "20261106152307",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -909,8 +909,6 @@
     {"v":"20261106001001","file":"20261106001001_partido_vivo_agenda_create_update_match.sql","sha256":"962ca4f1e3dcc69ea35cdb29c38aec5a4a581ccc0b9327881cdcb0d7370dd7a1","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261106115639","file":"20261106115639_whatsapp_anuncio_regla_texto.sql","sha256":"8151005b987da296590f08c7582315d095b71412d72840b4d2da23a1b4d9cc9d","added":"2026-11-06","by":"Brayan Steven Lopez"},
     {"v":"20261106150242","file":"20261106150242_demo_enciende_partido_vivo.sql","sha256":"e4f1b31a080a8b13f87ba3792ec4bce1a3623f44a21a2964b2aca4df95592143","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261106152307","file":"20261106152307_reservas_m6_agenda_coach.sql","sha256":"1c0c5378bc1f89e0ac0bcde7a88228faea282f023ae39a041c71183ead2ae32e","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261106152913","file":"20261106152913_demo_futbol_enciende_partido_vivo.sql","sha256":"5687cd05e8017507798979c8d50e626d14d8d5366b890a7a57be7bd49b91fc9f","added":"2026-11-06","by":"Brayan Steven Lopez"},
-    {"v":"20261106153223","file":"20261106153223_guardian_doc_columns.sql","sha256":"0094f3c7fc35357e91298b2877335073eb66875b82134fa5e7ee0a6a0ef8b593","added":"2026-11-06","by":"Brayan Steven Lopez"}
+    {"v":"20261106152307","file":"20261106152307_reservas_m6_agenda_coach.sql","sha256":"1c0c5378bc1f89e0ac0bcde7a88228faea282f023ae39a041c71183ead2ae32e","added":"2026-11-06","by":"Brayan Steven Lopez"}
   ]
 }
