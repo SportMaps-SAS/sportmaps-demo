@@ -47,11 +47,11 @@ describe('agruparPorMes', () => {
     const [m] = agruparPorMes([cobro({ period_year: null, period_month: null, due_date: '2026-03-15' })], HOY);
     expect(m.titulo).toBe('Marzo de 2026');
   });
-  it('primer cobro sin recargo (Dreamers): vencimiento en el mes siguiente al periodo agrupa por el vencimiento', () => {
-    // Alta el 31/oct con corte día 1: el trigger de BD deja period_month=10
-    // (mes de alta) pero mueve due_date a 2026-11-01. Agrupar por el periodo
-    // mostraría "Octubre" con un cobro que recién vence en noviembre.
-    const [m] = agruparPorMes([cobro({ id: 'martin', period_year: 2026, period_month: 10, due_date: '2026-11-01', concept: 'Plan PGR8x2 — Mensualidad completa, vence el 01/11 — Martín' })], HOY);
+  it('primer cobro sin recargo (Dreamers): agrupa por el periodo aunque venza el mes siguiente', () => {
+    // Alta el 5/nov con corte día 1: periodo 11, vence el 01/12. Es la
+    // mensualidad de NOVIEMBRE; agrupar por el vencimiento la mostraba en
+    // «Diciembre» (heurística de 469b9eaf, retirada).
+    const [m] = agruparPorMes([cobro({ id: 'amira', period_year: 2026, period_month: 11, due_date: '2026-12-01', concept: 'Plan PGP4x1 — Mensualidad completa, vence el 01/12 — Amira' })], HOY);
     expect(m.titulo).toBe('Noviembre de 2026');
   });
 });

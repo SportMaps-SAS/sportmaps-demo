@@ -85,22 +85,11 @@ export interface MesCuenta {
 const PRIORIDAD: string[] = ['Vencido', 'Rechazado', 'No pasó', 'Por pagar', 'Abono parcial', 'Necesita aclaración', 'En revisión', 'Pagado'];
 
 function mesDe(c: CobroCuenta): { y: number; m: number } | null {
-  if (c.period_year && c.period_month) {
-    // «Primer cobro sin recargo» (Dreamers, 20261011101750): el trigger de BD
-    // mueve el vencimiento al corte del mes siguiente para no cobrar mora en
-    // el mes de alta, pero deja el periodo en el mes de alta a propósito (lo
-    // usan el dedup y la exoneración de mora). Agrupar por ese periodo pone un
-    // cobro que vence en noviembre bajo "Octubre" — se ve como deuda atrasada
-    // sin estarlo. Si el vencimiento cae en un mes posterior al periodo, se
-    // agrupa por el mes del vencimiento; period_year/period_month en BD no se tocan.
-    if (c.due_date) {
-      const d = parseDia(c.due_date);
-      const dy = d.getFullYear();
-      const dm = d.getMonth() + 1;
-      if (dy * 12 + dm > c.period_year * 12 + c.period_month) return { y: dy, m: dm };
-    }
-    return { y: c.period_year, m: c.period_month };
-  }
+  // El mes es el PERIODO del cobro, nunca el del vencimiento. En Dreamers el
+  // primer cobro vence en el corte del mes siguiente (20261011101750): un alta
+  // del 5-nov vence el 01/12 y sigue siendo de noviembre. Si un periodo quedó
+  // mal (altas del 29–31 oct), se corrige el dato (20261107104128), no la etiqueta.
+  if (c.period_year && c.period_month) return { y: c.period_year, m: c.period_month };
   const f = c.due_date || c.payment_date || c.created_at;
   if (!f) return null;
   const d = parseDia(f);
