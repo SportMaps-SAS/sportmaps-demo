@@ -117,15 +117,15 @@ const studentSchema = z.object({
   // Documento del menor (RC/TI/CC/CE/PP): la administración puede corregirlo.
   doc_type:         z.string().optional(),
   doc_number:       z.string().max(20).optional(),
+  // Documento del acudiente (CC/CE/PP/NIT), solo fichas de menor / sin cuenta.
+  guardian_doc_type:   z.string().optional(),
+  guardian_doc_number: z.string().max(20).optional(),
   // ID del torniquete (solo escuelas con registrationZkPinEnabled): dígitos, vacío = no tocar.
   zk_pin:           z.string().regex(/^\d{0,8}$/, 'Solo números (hasta 8 dígitos)').optional(),
 });
 
 /** ID del lector asociado a un deportista (zk_user_mappings; solo lo lee la administración). */
 async function fetchZkPin(
-  // Documento del acudiente (CC/CE/PP/NIT), solo fichas de menor / sin cuenta.
-  guardian_doc_type:   z.string().optional(),
-  guardian_doc_number: z.string().max(20).optional(),
   schoolId: string,
   athleteId: string,
   athleteType: 'child' | 'adult' | 'unregistered',
@@ -854,6 +854,12 @@ export default function SchoolStudentsManagementPage() {
     mutationFn: async (data: StudentFormData & { plan_change_charge?: PlanChangeChargeMode }) => {
       if (!editingStudent || !schoolId) return [] as string[];
 
+      const guardianDocNumber = (data.guardian_doc_number || '').trim();
+      const sendsGuardianDoc = editingAthleteType === 'child' || editingAthleteType === 'unregistered';
+      if (sendsGuardianDoc && guardianDocNumber && !/^[A-Za-z0-9-]{4,20}$/.test(guardianDocNumber)) {
+        throw new Error('Documento del acudiente inválido: usa de 4 a 20 caracteres (letras, números o guion).');
+      }
+
       const { bffClient } = await import('@/lib/api/bffClient');
       const putStudent = (allowDuplicate: boolean) => bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
         athlete_type: editingAthleteType,
@@ -863,12 +869,6 @@ export default function SchoolStudentsManagementPage() {
           ? { zk_pin: Number(data.zk_pin) }
           : {}),
         profile: {
-      const guardianDocNumber = (data.guardian_doc_number || '').trim();
-      const sendsGuardianDoc = editingAthleteType === 'child' || editingAthleteType === 'unregistered';
-      if (sendsGuardianDoc && guardianDocNumber && !/^[A-Za-z0-9-]{4,20}$/.test(guardianDocNumber)) {
-        throw new Error('Documento del acudiente inválido: usa de 4 a 20 caracteres (letras, números o guion).');
-      }
-
           full_name:     data.full_name,
           date_of_birth: data.date_of_birth     || null,
           medical_info:  data.medical_info       || null,
@@ -880,6 +880,10 @@ export default function SchoolStudentsManagementPage() {
           doc_number:    data.doc_number         || null,
           parent_email:  data.parent_email       || null,
           parent_phone:  data.parent_phone       || null,
+          ...(sendsGuardianDoc ? {
+            guardian_doc_type:   guardianDocNumber ? (data.guardian_doc_type || 'CC') : null,
+            guardian_doc_number: guardianDocNumber || null,
+          } : {}),
         },
         enrollment: {
           team_id:          data.team_id            || null,
@@ -889,10 +893,6 @@ export default function SchoolStudentsManagementPage() {
           // Campo vacío en la cuota de equipo = "equipo sin cobro" → 0 explícito.
           // Con null el backend no tocaba nada y la vista volvía a heredar
           // teams.price_monthly, así que el valor reaparecía tras guardar.
-          ...(sendsGuardianDoc ? {
-            guardian_doc_type:   guardianDocNumber ? (data.guardian_doc_type || 'CC') : null,
-            guardian_doc_number: guardianDocNumber || null,
-          } : {}),
           team_monthly_fee: data.team_monthly_fee   ?? 0,
           // En el plan, vacío = usar el precio del plan (no forzar 0).
           plan_monthly_fee: data.plan_monthly_fee   ?? null,
@@ -1033,15 +1033,6 @@ export default function SchoolStudentsManagementPage() {
     setFeesMarked(NO_FEES_MARKED);
     let extraFields = { tshirt_size: '', blood_type: '', eps_name: '' };
     let docFields = { doc_type: '', doc_number: '' };
-    if (athleteType === 'child') {
-      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name, doc_type, doc_number').eq('id', student.id).maybeSingle();
-      if (data) {
-        extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
-        docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
-      }
-    } else if (athleteType === 'unregistered') {
-      const { data } = await (supabase as any).from('unregistered_athletes').select('doc_type, doc_number').eq('id', student.id).maybeSingle();
-      if (data) docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
     let guardianDoc = { guardian_doc_type: 'CC', guardian_doc_number: '' };
     if (athleteType === 'child' || athleteType === 'unregistered') {
       // Lectura aparte y tolerante: si la columna aún no existe no se rompe el resto de la ficha.
@@ -1052,6 +1043,15 @@ export default function SchoolStudentsManagementPage() {
         if (data) guardianDoc = { guardian_doc_type: data.guardian_doc_type || 'CC', guardian_doc_number: data.guardian_doc_number || '' };
       } catch { /* sin dato: queda vacío */ }
     }
+    if (athleteType === 'child') {
+      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name, doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) {
+        extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
+        docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
+      }
+    } else if (athleteType === 'unregistered') {
+      const { data } = await (supabase as any).from('unregistered_athletes').select('doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
     }
     // ID del torniquete: lo lee solo la administración (RLS); un coach lo ve vacío.
     let zkPinNow: number | null = null;
@@ -1089,6 +1089,8 @@ export default function SchoolStudentsManagementPage() {
       dorsal:           (student as any).dorsal || '',
       doc_type:         docFields.doc_type,
       doc_number:       docFields.doc_number,
+      guardian_doc_type:   guardianDoc.guardian_doc_type,
+      guardian_doc_number: guardianDoc.guardian_doc_number,
       zk_pin:           zkPinNow != null ? String(zkPinNow) : '',
     });
     setDialogOpen(true);
@@ -1098,8 +1100,6 @@ export default function SchoolStudentsManagementPage() {
     mutationFn: async (studentIds: string[]) => {
       const selectedStudents = students.filter(s => studentIds.includes(s.id));
       const results = { created: 0, failed: 0, skipped: 0, sent: 0, sendFailed: 0, aborted: false, message: '' };
-      guardian_doc_type:   guardianDoc.guardian_doc_type,
-      guardian_doc_number: guardianDoc.guardian_doc_number,
       const inviteIds: string[] = [];
 
       // 1. Crear/refrescar las invitaciones (sin mandar correo todavía)
@@ -2211,6 +2211,28 @@ export default function SchoolStudentsManagementPage() {
                         {...form.register('parent_phone')}
                       />
                     </div>
+                    {editingStudent && (editingAthleteType === 'child' || editingAthleteType === 'unregistered') && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_type">Tipo de documento del acudiente</Label>
+                          <Select
+                            value={form.watch('guardian_doc_type') || 'CC'}
+                            onValueChange={(val) => form.setValue('guardian_doc_type', val, { shouldDirty: true })}
+                          >
+                            <SelectTrigger id="guardian_doc_type"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {['CC', 'CE', 'PP', 'NIT'].map(d => (
+                                <SelectItem key={d} value={d}>{d}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_number">Número de documento del acudiente</Label>
+                          <Input id="guardian_doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('guardian_doc_number')} />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -2241,28 +2263,6 @@ export default function SchoolStudentsManagementPage() {
                         const t = teams.find(t => t.id === v);
                         // Con plan activo el equipo no cobra (plan manda); sin
                         // plan, la cuota es el precio del equipo (0 si no tiene).
-                    {editingStudent && (editingAthleteType === 'child' || editingAthleteType === 'unregistered') && (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor="guardian_doc_type">Tipo de documento del acudiente</Label>
-                          <Select
-                            value={form.watch('guardian_doc_type') || 'CC'}
-                            onValueChange={(val) => form.setValue('guardian_doc_type', val, { shouldDirty: true })}
-                          >
-                            <SelectTrigger id="guardian_doc_type"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {['CC', 'CE', 'PP', 'NIT'].map(d => (
-                                <SelectItem key={d} value={d}>{d}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="guardian_doc_number">Número de documento del acudiente</Label>
-                          <Input id="guardian_doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('guardian_doc_number')} />
-                        </div>
-                      </>
-                    )}
                         form.setValue('team_monthly_fee' as any,
                           form.getValues('offering_plan_id') ? 0 : (t?.monthly_fee ?? 0));
                       }}
