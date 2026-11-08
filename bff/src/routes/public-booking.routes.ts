@@ -3,6 +3,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import crypto from 'crypto';
 import { supabase } from '../config/supabase';
 import { emailClient } from '../utils/emailClient';
+import { clientIp } from '../utils/clientIp';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { listAvailableSessions, bookSession, cancelSessionBooking } from './session-bookings';
 
@@ -11,7 +12,7 @@ const router = Router();
 // ── Rate limiting propio de este router ────────────────────────────────────
 const otpStartLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false,
-  keyGenerator: (req) => `otp-start-${ipKeyGenerator(req.ip ?? '')}`,
+  keyGenerator: (req) => `otp-start-${ipKeyGenerator(clientIp(req))}`,
   message: { error: 'Demasiados intentos. Espera unos minutos.' },
 });
 
@@ -39,6 +40,36 @@ function generateCode(): string {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Gate único del autoservicio por /agendar-clase/:slug: la escuela debe tener
+// la clase de prueba habilitada Y el autoservicio encendido. Sin fila = cerrado.
+const LINK_DISABLED_BODY = {
+  error: 'Esta escuela no tiene activo el agendamiento por este link.',
+  reason: 'link_disabled',
+} as const;
+
+type TrialSettings = { enabled?: boolean | null; self_service_enabled?: boolean | null } | null | undefined;
+
+function isTrialLinkEnabled(settings: TrialSettings): boolean {
+  return !!(settings?.enabled && settings?.self_service_enabled);
+}
+
+// Sin fila o id inválido = cerrado. Un error de la consulta se lanza (500 en
+// la ruta): no se disfraza de "link apagado".
+async function isTrialLinkOpen(schoolId: string | null | undefined): Promise<boolean> {
+  if (!schoolId || !UUID_RE.test(schoolId)) return false;
+  const { data, error } = await supabase
+    .from('school_trial_class_settings')
+    .select('enabled, self_service_enabled')
+    .eq('school_id', schoolId)
+    .maybeSingle();
+  if (error) throw error;
+  return isTrialLinkEnabled(data);
+}
+
+function sendIdentityError(res: Response, failed: { status: number; error: string; reason?: string }) {
+  return res.status(failed.status).json({ error: failed.error, reason: failed.reason });
+}
 
 function todayStr(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
@@ -81,7 +112,7 @@ router.get('/schools/:slug', async (req: Request, res: Response) => {
       .maybeSingle();
 
     let trialCategories: any[] = [];
-    if (trialSettings?.enabled && trialSettings?.self_service_enabled) {
+    if (isTrialLinkEnabled(trialSettings)) {
       const { data: categories } = await supabase
         .from('trial_class_categories')
         .select('id, name, description, price, allow_repeat, repeat_price')
@@ -97,6 +128,7 @@ router.get('/schools/:slug', async (req: Request, res: Response) => {
       courtesy_available: courtesy?.enabled ?? false,
       trial_classes_available: trialCategories.length > 0,
       trial_categories: trialCategories,
+      trial_link_enabled: isTrialLinkEnabled(trialSettings),
     });
   } catch (err: any) {
     req.log?.error({ err }, 'public-booking schools/:slug error');
@@ -372,6 +404,89 @@ async function resolveByToken(token: string) {
   return { verif };
 }
 
+const FICHA_INACTIVE_BODY = {
+  error: 'Esta ficha ya no está activa en la escuela. Escríbele a la escuela.',
+  reason: 'ficha_inactive',
+} as const;
+const MINOR_BODY = {
+  error: 'Esta ficha es de un menor de edad. Pídele a la escuela que invite a su acudiente para crear la cuenta.',
+  reason: 'minor_requires_guardian_invite',
+} as const;
+const REGISTER_FAILED_BODY = {
+  error: 'No pudimos crear tu cuenta. Intenta de nuevo en unos minutos o escríbele a la escuela.',
+  reason: 'register_failed',
+} as const;
+
+const ACCOUNT_NO_LINK_BODY = {
+  error: 'Tu cuenta se creó, pero no pudimos darte acceso directo. Inicia sesión con "olvidé mi contraseña" usando tu correo.',
+  reason: 'account_created_no_link',
+} as const;
+
+type FichaMinorInfo = { id: string; date_of_birth?: string | null };
+
+// Decisión de producto (SEG-31 C1): una ficha SIN fecha de nacimiento se trata
+// SIEMPRE como de menor para «Crear cuenta» y para la copia al acudiente: no
+// hay forma de probar que es adulto, y es la opción más segura (en vivo solo 7
+// de 89 fichas alcanzables no tienen fecha, ninguna con datos de acudiente).
+// Con fecha, manda la regla por edad del helper SQL (fecha de Bogotá, 18 años).
+// Si la RPC falla, LANZA: la ruta responde 500 (falla cerrada).
+async function isMinorFicha(ficha: FichaMinorInfo, email: string): Promise<boolean> {
+  if (!ficha.date_of_birth) return true;
+  const { data, error } = await supabase.rpc('_invitacion_ficha_es_de_acudiente', {
+    p_unregistered_athlete_id: ficha.id,
+    p_email: email,
+  });
+  if (error) throw error;
+  return data === true;
+}
+
+// Crea el usuario de auth y fija el rol del profile. Si algo falla despues de
+// crear el usuario, lo deshace (mismo criterio que la migracion fallida).
+// Devuelve el id del usuario o null.
+async function createAthleteAccount(
+  req: Request, email: string, ficha: { id: string; full_name: string },
+): Promise<string | null> {
+  // El correo ya quedo probado con el OTP: email_confirm:true. role en el
+  // metadata hace que handle_new_user() ponga needs_role_selection=false.
+  const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    user_metadata: { full_name: ficha.full_name, role: 'athlete' },
+  });
+  if (createErr || !created?.user) {
+    req.log?.error({ err: createErr }, 'register-unregistered: fallo creando el usuario');
+    return null;
+  }
+  const userId = created.user.id;
+  const { error: profileErr } = await supabase.from('profiles')
+    .update({ role: 'athlete', needs_role_selection: false }).eq('id', userId);
+  if (profileErr) {
+    req.log?.error({ err: profileErr, userId }, 'register-unregistered: fallo fijando el rol — se deshace la cuenta');
+    await rollbackAccount(req, userId, ficha.id);
+    return null;
+  }
+  return userId;
+}
+
+// Deshace una cuenta recien creada: primero profiles (profiles_id_fkey ->
+// auth.users no tiene ON DELETE CASCADE) y luego auth.users. Los pedidos de
+// tienda de invitado no hay que deshacerlos: trg_store_link_guest_orders_on_confirm
+// es AFTER UPDATE OF email_confirmed_at, y createUser con email_confirm:true
+// hace un INSERT ya confirmado, asi que el trigger no corre y no vincula nada
+// a este user_id (generateLink tampoco toca email_confirmed_at). Si algun paso
+// falla, se deja rastro del huerfano para limpieza manual.
+async function rollbackAccount(req: Request, userId: string, unregisteredId: string): Promise<void> {
+  try {
+    const { error: delProfileErr } = await supabase.from('profiles').delete().eq('id', userId);
+    if (delProfileErr) throw delProfileErr;
+    const { error: delUserErr } = await supabase.auth.admin.deleteUser(userId);
+    if (delUserErr) throw delUserErr;
+  } catch (err) {
+    req.log?.error({ err, user_id: userId, unregistered_id: unregisteredId },
+      'register-unregistered: rollback fallido — usuario huerfano, limpiar a mano');
+  }
+}
+
 // ── POST /register-unregistered ─────────────────────────────────────────────
 // El escenario "enrolled_unregistered" (la escuela lo tiene en
 // unregistered_athletes, con o sin un enrollment real detrás, pero nunca
@@ -390,6 +505,7 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
     const resolved = await resolveByToken(booking_token);
     if ('error' in resolved) return res.status(resolved.status!).json({ error: resolved.error });
     const { verif } = resolved;
+    if (!(await isTrialLinkOpen(verif.school_id))) return res.status(422).json(LINK_DISABLED_BODY);
 
     if (verif.resolved_kind !== 'enrolled_unregistered' || !verif.resolved_unregistered_id) {
       return res.status(400).json({ error: 'Este link no corresponde a una ficha ya inscrita en la escuela.' });
@@ -397,7 +513,7 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
 
     const { data: unreg } = await supabase
       .from('unregistered_athletes')
-      .select('id, full_name, email, linked_profile_id')
+      .select('id, full_name, email, linked_profile_id, is_active, date_of_birth, guardian_full_name, guardian_email')
       .eq('id', verif.resolved_unregistered_id)
       .maybeSingle();
 
@@ -408,45 +524,28 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
         reason: 'already_linked',
       });
     }
+    if (unreg.is_active === false) return res.status(400).json(FICHA_INACTIVE_BODY);
 
-    // El correo ya quedó probado con el código OTP que llegó a esta bandeja
-    // — email_confirm:true, no hace falta un segundo correo de confirmación
-    // además del magic link de más abajo.
-    const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-      email: verif.resolved_email!,
-      email_confirm: true,
-      // role acá es lo que hace que handle_new_user() ponga
-      // needs_role_selection=false al insertar el profile — sin esto (como
-      // en el signup de Google sin rol) ProtectedRoute lo manda siempre a
-      // /onboarding/role, pisando el redirectTo del magic link de abajo.
-      user_metadata: { full_name: unreg.full_name, role: 'athlete' },
-    });
-    if (createErr || !created?.user) {
-      req.log?.error({ err: createErr }, 'register-unregistered: fallo creando el usuario');
-      return res.status(500).json({ error: 'No se pudo crear la cuenta.' });
-    }
+    // Menor de edad: la cuenta la crea su acudiente por invitación, no este link.
+    if (await isMinorFicha(unreg, verif.resolved_email!)) return res.status(409).json(MINOR_BODY);
 
-    // Defensa adicional por si el trigger cambia de comportamiento: no
-    // depender solo del metadata de arriba para que el usuario no quede
-    // atrapado en la selección de rol.
-    await supabase.from('profiles').update({ role: 'athlete', needs_role_selection: false }).eq('id', created.user.id);
+    const userId = await createAthleteAccount(req, verif.resolved_email!, unreg);
+    if (!userId) return res.status(500).json(REGISTER_FAILED_BODY);
 
-    // Migra TODO lo que colgaba de la ficha — enrollments (con su plan real,
-    // banco de horas incluido), asistencia, pagos, reservas, torniquete —
-    // conservando el historial en vez de arrancar de cero. Ver comentario de
+    // Migra TODO lo que colgaba de la ficha (enrollments con su plan real,
+    // banco de horas incluido, asistencia, pagos, reservas, torniquete)
+    // conservando el historial en vez de arrancar de cero. Ver
     // 20260909071118_accept_invitation_pro_migrar_ficha_antes_de_inscribir.sql.
     const { error: migrateErr } = await supabase.rpc('migrate_unregistered_athlete_to_profile', {
       p_unregistered_id: unreg.id,
-      p_new_user_id: created.user.id,
+      p_new_user_id: userId,
       p_new_child_id: null,
     });
     if (migrateErr) {
-      // La cuenta ya quedó creada — no la dejamos a medias devolviendo un
-      // error genérico: el atleta puede entrar igual, solo que alguien va a
-      // tener que migrar la ficha a mano después. Se loguea para que quede
-      // rastro de auditoría, no se corta el flujo.
-      req.log?.error({ err: migrateErr, unregisteredId: unreg.id, userId: created.user.id },
-        'register-unregistered: fallo migrando la ficha — cuenta creada igual');
+      req.log?.error({ err: migrateErr, unregisteredId: unreg.id, userId },
+        'register-unregistered: fallo migrando la ficha — se deshace la cuenta');
+      await rollbackAccount(req, userId, unreg.id);
+      return res.status(500).json(REGISTER_FAILED_BODY);
     }
 
     const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({
@@ -456,9 +555,7 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
     });
     if (linkErr || !linkData) {
       req.log?.error({ linkErr }, 'register-unregistered: fallo generando el magic link');
-      return res.status(500).json({
-        error: 'Tu cuenta se creó, pero no pudimos darte acceso directo. Inicia sesión con "olvidé mi contraseña" usando tu correo.',
-      });
+      return res.status(500).json(ACCOUNT_NO_LINK_BODY);
     }
 
     await supabase.from('public_booking_verifications')
@@ -468,7 +565,7 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
     return res.json({ success: true, magic_link: linkData.properties?.action_link });
   } catch (err: any) {
     req.log?.error({ err }, 'public-booking register-unregistered error');
-    return res.status(500).json({ error: 'Error interno del servidor.' });
+    return res.status(500).json(REGISTER_FAILED_BODY);
   }
 });
 
@@ -482,12 +579,15 @@ router.post('/register-unregistered', async (req: Request, res: Response) => {
 // /athlete/book-session, incluida la extensión de bloques y el banco de
 // horas), solo que la identidad viene del booking_token en vez de un JWT.
 async function resolveUnregisteredIdentity(token: string): Promise<
-  | { ok: true; unregisteredAthleteId: string; email: string; fullName: string | null }
-  | { ok: false; status: number; error: string }
+  | { ok: true; unregisteredAthleteId: string; email: string; fullName: string | null; schoolId: string }
+  | { ok: false; status: number; error: string; reason?: string }
 > {
   const resolved = await resolveByToken(token);
   if ('error' in resolved) return { ok: false, status: resolved.status!, error: resolved.error! };
   const { verif } = resolved;
+  if (!(await isTrialLinkOpen(verif.school_id))) {
+    return { ok: false, status: 422, ...LINK_DISABLED_BODY };
+  }
   if (verif.resolved_kind !== 'enrolled_unregistered' || !verif.resolved_unregistered_id) {
     return { ok: false, status: 400, error: 'Este link no corresponde a una ficha ya inscrita en la escuela.' };
   }
@@ -496,7 +596,65 @@ async function resolveUnregisteredIdentity(token: string): Promise<
     unregisteredAthleteId: verif.resolved_unregistered_id,
     email: verif.resolved_email,
     fullName: verif.full_name ?? null,
+    schoolId: verif.school_id,
   };
+}
+
+const normEmail = (e: string | null | undefined) => (e ?? '').trim().toLowerCase();
+
+type BookedWho = { unregisteredAthleteId: string; email: string; fullName: string | null; schoolId: string };
+
+// D2: copia al acudiente SOLO si la ficha es de menor (misma regla que
+// «Crear cuenta»; hay adultos con guardian_email como contacto de emergencia).
+// Best-effort: la reserva ya quedó creada, nada de esto la tumba.
+async function sendGuardianCopy(
+  req: Request, who: BookedWho, dateLabel: string, timeLabel: string,
+): Promise<void> {
+  try {
+    const { data: ficha, error } = await supabase
+      .from('unregistered_athletes')
+      .select('id, guardian_email, date_of_birth')
+      .eq('id', who.unregisteredAthleteId)
+      .maybeSingle();
+    if (error) {
+      req.log?.error({ err: error, unregistered_id: who.unregisteredAthleteId },
+        'book-for-enrollment: fallo leyendo la ficha para la copia al acudiente');
+      return;
+    }
+    const guardian = normEmail(ficha?.guardian_email);
+    if (!ficha || !guardian || guardian === normEmail(who.email)) return;
+    if (!(await isMinorFicha(ficha, who.email))) return;
+    const { subject, html } = await BrandedEmailTemplates.enrollmentClassBooked({
+      recipientName: 'familia', forName: who.fullName ?? '', dateLabel, timeLabel, schoolId: who.schoolId,
+    });
+    const sent = await emailClient.send({ to: guardian, subject, html });
+    if (!sent?.success) {
+      req.log?.error({ unregistered_id: who.unregisteredAthleteId }, 'book-for-enrollment: la copia al acudiente no se envió');
+    }
+  } catch (err) {
+    req.log?.error({ err, unregistered_id: who.unregisteredAthleteId },
+      'book-for-enrollment: fallo enviando la copia al acudiente');
+  }
+}
+
+// Correo al titular (best-effort). Devuelve si se envió.
+async function sendOwnerBookedEmail(
+  req: Request, who: BookedWho, dateLabel: string, timeLabel: string,
+): Promise<boolean> {
+  try {
+    const { subject, html } = await BrandedEmailTemplates.enrollmentClassBooked({
+      recipientName: who.fullName ?? '', dateLabel, timeLabel, schoolId: who.schoolId,
+    });
+    const sent = await emailClient.send({ to: who.email, subject, html });
+    if (!sent?.success) {
+      req.log?.error({ unregistered_id: who.unregisteredAthleteId }, 'book-for-enrollment: el correo al titular no se envió');
+    }
+    return !!sent?.success;
+  } catch (err) {
+    req.log?.error({ err, unregistered_id: who.unregisteredAthleteId },
+      'book-for-enrollment: fallo enviando correo de confirmación');
+    return false;
+  }
 }
 
 // ── GET /available-for-enrollment?token= ────────────────────────────────────
@@ -506,7 +664,7 @@ router.get('/available-for-enrollment', async (req: Request, res: Response) => {
     if (!token) return res.status(400).json({ error: 'token es requerido.' });
 
     const resolved = await resolveUnregisteredIdentity(token);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    if (!resolved.ok) return sendIdentityError(res, resolved);
 
     const result = await listAvailableSessions({ unregisteredAthleteId: resolved.unregisteredAthleteId });
     return res.json(result);
@@ -527,7 +685,7 @@ router.post('/book-for-enrollment', async (req: Request, res: Response) => {
     }
 
     const resolved = await resolveUnregisteredIdentity(booking_token);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    if (!resolved.ok) return sendIdentityError(res, resolved);
 
     await bookSession(
       req, res,
@@ -548,17 +706,14 @@ router.post('/book-for-enrollment', async (req: Request, res: Response) => {
             day: '2-digit', month: 'long', year: 'numeric',
           });
           const timeLabel = sess.start_time.slice(0, 5);
-          const sendResult = await emailClient.send({
-            to: resolved.email,
-            subject: 'Tu clase quedó agendada',
-            html: `<p>Hola ${resolved.fullName ?? ''},</p><p>Tu clase quedó agendada para el <strong>${dateLabel}</strong> a las <strong>${timeLabel}</strong>.</p>`,
-            text: `Tu clase quedó agendada para el ${dateLabel} a las ${timeLabel}.`,
-          });
-          return { email_sent: !!sendResult.success };
+          const emailSent = await sendOwnerBookedEmail(req, resolved, dateLabel, timeLabel);
+          await sendGuardianCopy(req, resolved, dateLabel, timeLabel);
+          return { email_sent: emailSent };
         } catch (emailErr) {
-          req.log?.error({ err: emailErr }, 'book-for-enrollment: fallo enviando correo de confirmación');
+          req.log?.error({ err: emailErr }, 'book-for-enrollment: fallo preparando el correo de confirmación');
         }
       },
+      true, // ruta sin sesión: no exponer la fila completa de session_bookings
     );
   } catch (err: any) {
     req.log?.error({ err }, 'public-booking book-for-enrollment error');
@@ -577,7 +732,7 @@ router.get('/my-bookings-for-enrollment', async (req: Request, res: Response) =>
     if (!token) return res.status(400).json({ error: 'token es requerido.' });
 
     const resolved = await resolveUnregisteredIdentity(token);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    if (!resolved.ok) return sendIdentityError(res, resolved);
 
     const today = todayStr();
     const { data, error } = await supabase
@@ -610,7 +765,7 @@ router.post('/cancel-for-enrollment', async (req: Request, res: Response) => {
     }
 
     const resolved = await resolveUnregisteredIdentity(booking_token);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    if (!resolved.ok) return sendIdentityError(res, resolved);
 
     const handled = await cancelSessionBooking(req, res, { unregisteredAthleteId: resolved.unregisteredAthleteId }, booking_id);
     if (!handled) return res.status(404).json({ error: 'Reserva no encontrada' });
@@ -634,7 +789,7 @@ router.get('/hour-bank-balance-for-enrollment', async (req: Request, res: Respon
     }
 
     const resolved = await resolveUnregisteredIdentity(token);
-    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    if (!resolved.ok) return sendIdentityError(res, resolved);
 
     const { data: enrollment } = await supabase
       .from('enrollments')
@@ -988,6 +1143,10 @@ router.post('/trial-start-verification', otpStartLimiter, async (req: Request, r
     const cleanEmail = email.trim().toLowerCase();
     if (!EMAIL_RE.test(cleanEmail)) return res.status(400).json({ error: 'Correo inválido.' });
 
+    // Primero el gate: con la escuela apagada la respuesta es idéntica para
+    // cualquier correo (no revela cuentas ni fichas) y no se crea nada.
+    if (!(await isTrialLinkOpen(school_id))) return res.status(422).json(LINK_DISABLED_BODY);
+
     const windowStart = new Date(Date.now() - OTP_EMAIL_WINDOW_MIN * 60_000).toISOString();
     const { count: recentCount } = await supabase
       .from('public_booking_verifications')
@@ -1132,6 +1291,7 @@ router.get('/trial-slots', async (req: Request, res: Response) => {
 
     const resolved = await resolveByToken(token);
     if ('error' in resolved) return res.status(resolved.status!).json({ error: resolved.error });
+    if (!(await isTrialLinkOpen(resolved.verif.school_id))) return res.status(422).json(LINK_DISABLED_BODY);
 
     const { data, error } = await supabase.rpc('trial_class_public_get_slots', {
       p_school_id: resolved.verif.school_id,
@@ -1166,6 +1326,7 @@ router.post('/trial-confirm', async (req: Request, res: Response) => {
     const resolved = await resolveByToken(token);
     if ('error' in resolved) return res.status(resolved.status!).json({ error: resolved.error });
     const { verif } = resolved;
+    if (!(await isTrialLinkOpen(verif.school_id))) return res.status(422).json(LINK_DISABLED_BODY);
 
     if (verif.booking_token_used_at) {
       return res.status(400).json({ error: 'Este token ya fue usado para agendar. Verifícate de nuevo.' });

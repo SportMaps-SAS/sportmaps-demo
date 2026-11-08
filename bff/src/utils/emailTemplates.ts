@@ -884,6 +884,43 @@ export const BrandedEmailTemplates = {
             }),
         };
     },
+
+    /**
+     * Clase agendada sin cuenta (POST /book-for-enrollment). Al titular
+     * (sin forName) o, como copia, al acudiente (forName = nombre de la ficha).
+     */
+    enrollmentClassBooked: async (params: {
+        recipientName: string;
+        forName?: string;
+        dateLabel: string;
+        timeLabel: string;
+        schoolId: string | null;
+    }): Promise<{ subject: string; html: string }> => {
+        const branding = await resolveSchoolBranding(params.schoolId);
+        const intro = params.forName
+            ? `La clase de <strong>${escapeHtml(params.forName)}</strong> quedó agendada en <strong>${branding.schoolName}</strong>:`
+            : `Tu clase quedó agendada en <strong>${branding.schoolName}</strong>:`;
+
+        return {
+            subject: params.forName ? 'Clase agendada' : 'Tu clase quedó agendada',
+            html: buildBrandedEmail({
+                branding,
+                title: 'Clase agendada',
+                greeting: `Hola ${escapeHtml(params.recipientName)},`,
+                bodyHtml: `
+                    <p>${intro}</p>
+                    <table cellpadding="0" cellspacing="0" border="0" width="100%"
+                           style="background-color: #f3f4f6; border-radius: 8px; margin: 16px 0;">
+                        <tr><td style="padding: 16px;">
+                            <p style="margin: 4px 0;"><strong>Fecha:</strong> ${escapeHtml(params.dateLabel)}</p>
+                            <p style="margin: 4px 0;"><strong>Hora:</strong> ${escapeHtml(params.timeLabel)}</p>
+                        </td></tr>
+                    </table>
+                `,
+                closingHtml: '¡Te esperamos!',
+            }),
+        };
+    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

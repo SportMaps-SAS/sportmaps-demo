@@ -228,19 +228,35 @@ function identityValue(identity: AthleteIdentity): string {
   return (identity.childId ?? identity.unregisteredAthleteId ?? identity.userId)!;
 }
 
+export interface CreditPrecheck { error: string; reason: string }
+
+export interface EnrollmentOwnership {
+  valid: boolean;
+  schoolId?: string;
+  expiresAt?: string | null;
+  sessionsUsed?: number;
+  secondarySessionsUsed?: number;
+  plan?: {
+    max_sessions: number | null;
+    max_secondary_sessions: number | null;
+    included_minutes_per_period: number | null;
+  } | null;
+}
+
 /**
- * Verifica que un enrollment pertenece a la identidad que agenda.
+ * Carga la inscripción para agendar y verifica que pertenece a la identidad.
  * Para adulto: enrollment.user_id === userId
  * Para hijo:   enrollment.child_id === childId (y childId ya fue validado contra parent)
  * Para ficha sin cuenta: enrollment.unregistered_athlete_id === unregisteredAthleteId
  */
-async function validateEnrollmentOwnership(
+async function loadEnrollmentForBooking(
   enrollmentId: string,
   identity: AthleteIdentity
-): Promise<{ valid: boolean; schoolId?: string }> {
+): Promise<EnrollmentOwnership> {
   const { data: enrollment, error } = await supabase
     .from('enrollments')
-    .select('id, user_id, child_id, unregistered_athlete_id, school_id, status')
+    .select(`id, user_id, child_id, unregistered_athlete_id, school_id, status, expires_at, sessions_used, secondary_sessions_used,
+      offering_plans!enrollments_offering_plan_id_fkey(max_sessions, max_secondary_sessions, included_minutes_per_period)`)
     .eq('id', enrollmentId)
     .maybeSingle();
 
@@ -249,8 +265,169 @@ async function validateEnrollmentOwnership(
   }
 
   const belongs = (enrollment as any)[identityColumn(identity)] === identityValue(identity);
+  const rawPlan = (enrollment as any).offering_plans;
+  const plan = Array.isArray(rawPlan) ? (rawPlan[0] ?? null) : (rawPlan ?? null);
 
-  return { valid: belongs, schoolId: enrollment.school_id };
+  return {
+    valid: belongs,
+    schoolId: enrollment.school_id,
+    expiresAt: (enrollment as any).expires_at ?? null,
+    sessionsUsed: (enrollment as any).sessions_used ?? 0,
+    secondarySessionsUsed: (enrollment as any).secondary_sessions_used ?? 0,
+    plan,
+  };
+}
+
+// Fecha de vencimiento (solo día) en Bogotá. expires_at puede ser date o timestamptz.
+function expiryDayInBogota(expiresAt: string | null | undefined): string | null {
+  if (!expiresAt) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(expiresAt)) return expiresAt;
+  const d = new Date(expiresAt);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+// 'YYYY-MM-DD' -> 'DD/MM/YYYY' (mismo formato que el mensaje de la RPC).
+function formatDayDDMMYYYY(day: string | null): string {
+  if (!day) return '';
+  const [y, m, d] = day.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// Vencido = la fecha de vencimiento (Bogotá) es anterior a hoy (Bogotá).
+function isPlanExpired(expiresAt: string | null | undefined): boolean {
+  const day = expiryDayInBogota(expiresAt);
+  return day !== null && day < todayInBogota();
+}
+
+const BOOKING_RPC_DEFAULTS: Record<string, { status: number; error: string }> = {
+  enrollment_not_active: { status: 422, error: 'Tu inscripción no está activa.' },
+  plan_expired: { status: 422, error: 'Tu plan venció.' },
+  no_credits: { status: 422, error: 'Ya no tienes clases disponibles en tu plan.' },
+  invalid_identity: { status: 422, error: 'Identidad inválida.' },
+  session_not_found: { status: 404, error: 'Clase no encontrada.' },
+  hour_bank_reservation_mismatch: {
+    status: 409, error: 'No pudimos reservar tus horas. Intenta de nuevo.',
+  },
+  hour_bank_reservation_required: {
+    status: 409, error: 'No pudimos reservar tus horas. Intenta de nuevo.',
+  },
+};
+
+// Prefijos cuyo texto posterior es útil para el usuario (trae la fecha, el tope…).
+const FORWARD_TEXT_PREFIXES = new Set(['enrollment_not_active', 'plan_expired', 'no_credits']);
+
+type RpcTranslation = { status: number; body: Record<string, any> };
+
+// Errores sin prefijo: mensajes de triggers / índices únicos de session_bookings.
+function translateUnprefixedBookingError(msg: string, code?: string): RpcTranslation {
+  if (msg.startsWith('Sesión llena')) {
+    return { status: 409, body: { error: msg, reason: 'capacity_full' } };
+  }
+  if (msg.includes('No se puede reservar en una sesión ya finalizada')) {
+    return { status: 409, body: { error: msg, reason: 'session_finalized' } };
+  }
+  if (code === '23505') {
+    return {
+      status: 409,
+      body: { error: 'Ya tienes una reserva activa para esta clase.', reason: 'already_booked' },
+    };
+  }
+  if (msg.startsWith('El plan ha expirado')) {
+    return { status: 422, body: { error: msg, reason: 'plan_expired' } };
+  }
+  return { status: 409, body: { error: msg } };
+}
+
+// Traduce SIEMPRE el error de book_session_with_credit (prefijos de la RPC,
+// triggers e índices únicos). Lo desconocido sale como 409 { error: message }.
+export function translateBookingRpcError(
+  message: string | undefined,
+  code?: string,
+): RpcTranslation {
+  const msg = message ?? '';
+  if (msg.startsWith('enrollment_unauthorized:')) {
+    return { status: 403, body: { error: 'enrollment_unauthorized' } };
+  }
+  for (const reason of Object.keys(BOOKING_RPC_DEFAULTS)) {
+    if (!msg.startsWith(`${reason}:`)) continue;
+    const def = BOOKING_RPC_DEFAULTS[reason];
+    const detail = msg.slice(reason.length + 1).trim();
+    const error = detail && FORWARD_TEXT_PREFIXES.has(reason) ? detail : def.error;
+    return { status: def.status, body: { error, reason } };
+  }
+  return translateUnprefixedBookingError(msg, code);
+}
+
+// Prechequeo NO autoritativo (la RPC book_session_with_credit decide): corta
+// antes de que la rama avail_ estire attendance_sessions.
+export function precheckEnrollmentCredit(
+  own: EnrollmentOwnership, isSecondary: boolean,
+): CreditPrecheck | null {
+  if (isPlanExpired(own.expiresAt)) {
+    const day = formatDayDDMMYYYY(expiryDayInBogota(own.expiresAt));
+    return { error: `Tu plan venció el ${day}.`, reason: 'plan_expired' };
+  }
+  const plan = own.plan;
+  if (!plan || plan.included_minutes_per_period != null) return null; // plan de horas: sin cupos
+  const max = isSecondary ? plan.max_secondary_sessions : plan.max_sessions;
+  const used = isSecondary ? (own.secondarySessionsUsed ?? 0) : (own.sessionsUsed ?? 0);
+  if (max != null && used >= max) {
+    return { error: `Ya usaste las ${max} clases de tu plan.`, reason: 'no_credits' };
+  }
+  return null;
+}
+
+export interface CancelBookingResult {
+  cancelled?: boolean;
+  credit_returned?: boolean;
+  session_id?: string;
+  hour_bank?: boolean;
+  reason?: string;
+}
+
+// ¿Faltó devolver un crédito que sí correspondía? Banco de horas y planes de
+// horas sin reserva (hours_plan_without_reservation) no devuelven cupo: es lo esperado.
+export function shouldLogMissingCredit(out: CancelBookingResult, bookingHadHourBank: boolean): boolean {
+  if (out.credit_returned) return false;
+  if (out.reason === 'no_credit_enrollment') return true; // reserva sin inscripción de crédito: hay que revisarla
+  if (out.hour_bank || bookingHadHourBank) return false;
+  return out.reason !== 'hours_plan_without_reservation';
+}
+
+const CANCEL_REFUSAL_MESSAGES: Record<string, string> = {
+  session_in_the_past: 'Esta clase ya pasó y no se puede cancelar.',
+  attendance_recorded: 'Ya se registró tu asistencia a esta clase y no se puede cancelar.',
+};
+
+// Cuerpo del 400 cuando la RPC no canceló. Con reason conocido lleva mensaje
+// claro; si no (ya cancelada / no confirmada) usa el error de la ruta.
+export function cancelRefusalBody(out: CancelBookingResult, fallbackError: string): Record<string, string> {
+  const known = out.reason ? CANCEL_REFUSAL_MESSAGES[out.reason] : undefined;
+  if (known && out.reason) return { error: known, reason: out.reason };
+  return { error: fallbackError };
+}
+
+// Cancelación atómica (UPDATE condicional + reembolso) con la identidad DUEÑA
+// de la reserva. El staff que cancela en nombre del atleta pasa la identidad
+// de la propia fila, no la suya.
+async function cancelBookingViaRpc(bookingId: string, identity: AthleteIdentity): Promise<CancelBookingResult> {
+  const { data, error } = await supabase.rpc('cancel_session_booking_with_credit', {
+    p_booking_id: bookingId,
+    p_user_id: identity.userId ?? null,
+    p_child_id: identity.childId ?? null,
+    p_unregistered_athlete_id: identity.unregisteredAthleteId ?? null,
+  });
+  if (error) throw error;
+  return (data ?? {}) as CancelBookingResult;
+}
+
+type BookingOwnerRow = { user_id?: string | null; child_id?: string | null; unregistered_athlete_id?: string | null };
+
+function identityOfBookingRow(b: BookingOwnerRow): AthleteIdentity {
+  if (b.child_id) return { childId: b.child_id };
+  if (b.unregistered_athlete_id) return { unregisteredAthleteId: b.unregistered_athlete_id };
+  return { userId: b.user_id ?? undefined };
 }
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
@@ -313,92 +490,73 @@ router.get('/:id/availability', requireAuth, async (req: Request, res: Response)
   }
 });
 
+// Quién usa POST /:id/book (revisado en frontend): useBookingMutations
+// (hooks/useSessionBookings.ts) lo llama desde AddDropInModal (STAFF agrega un
+// drop-in con la inscripción de otra persona) y desde CalendarSessionSlot
+// (atleta/padre para sí o su hijo). Por eso la autorización es doble:
+//  · staff (owner/admin/school_admin/coach): la sesión debe ser de req.schoolId;
+//  · cualquier otro: la identidad debe ser el propio caller o un hijo suyo.
+// En ambos casos la inscripción debe pertenecer a esa identidad y a la escuela
+// de la sesión; la reserva y el crédito van por bookSession
+// (book_session_with_credit), nunca INSERT + move_session_credit sueltos.
+const SESSION_BOOK_STAFF_ROLES = ['owner', 'admin', 'school_admin', 'coach'];
+
+async function authorizeSessionBook(
+  req: Request, sessionId: string,
+  who: { enrollment_id: string; user_id?: string; child_id?: string },
+): Promise<{ ok: true; identity: AthleteIdentity; isStaff: boolean } | { ok: false; status: number; error: string }> {
+  const callerId = req.user.id;
+  const isStaff = SESSION_BOOK_STAFF_ROLES.includes(req.role as string);
+  const identity: AthleteIdentity = who.child_id ? { childId: who.child_id } : { userId: who.user_id };
+
+  if (!isStaff) {
+    const own = who.child_id
+      ? await validateChildAccess(who.child_id, callerId)
+      : who.user_id === callerId;
+    if (!own) return { ok: false, status: 403, error: 'unauthorized' };
+  }
+
+  const { data: sess } = await supabase
+    .from('attendance_sessions').select('school_id').eq('id', sessionId).maybeSingle();
+  if (!sess) return { ok: false, status: 404, error: 'not_found' };
+  if (isStaff && (!req.schoolId || sess.school_id !== req.schoolId)) {
+    return { ok: false, status: 403, error: 'unauthorized' };
+  }
+
+  const enr = await loadEnrollmentForBooking(who.enrollment_id, identity);
+  if (!enr.valid || enr.schoolId !== sess.school_id) {
+    return { ok: false, status: 403, error: 'enrollment_unauthorized' };
+  }
+  return { ok: true, identity, isStaff };
+}
+
 router.post('/:id/book', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { id: sessionId } = req.params;
-    const { schoolId } = req;
+    const sessionId = String(req.params.id);
     const parsed = BookSessionSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
 
     const { enrollment_id, user_id, child_id, is_secondary, booking_type } = parsed.data;
 
-    // Días permitidos del plan (D9, utils/planDayRules.ts): 422 ANTES de
-    // mover saldo o crear nada. NULL en el plan = sin restricción (hoy).
-    {
-      const { data: sessForDay } = await supabase
-        .from('attendance_sessions')
-        .select('session_date')
-        .eq('id', sessionId)
-        .maybeSingle();
-      if (sessForDay?.session_date) {
-        const { allowed, allowedDays } = await isDateAllowedForEnrollment(enrollment_id, sessForDay.session_date);
-        if (!allowed) return res.status(422).json(dayNotAllowedBody(allowedDays!));
-      }
-    }
+    const auth = await authorizeSessionBook(req, sessionId, { enrollment_id, user_id, child_id });
+    if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
 
-    // Banco de horas (docs/specs/dreamers-banco-de-horas-torniquete.md): si la
-    // inscripción tiene un plan por horas, la reserva mueve reserve_hour_bank
-    // en vez de move_session_credit — un solo saldo, sin importar is_secondary
-    // (el banco es una sola bolsa de minutos, no cuenta primaria/secundaria
-    // por separado como sí hace el sistema viejo).
-    const { data: enrollmentPlan } = await supabase
-      .from('enrollments')
-      .select('id, offering_plans(included_minutes_per_period)')
-      .eq('id', enrollment_id)
-      .maybeSingle();
-    const isHoursPlan = (enrollmentPlan as any)?.offering_plans?.included_minutes_per_period != null;
+    // El staff no recibe la notificación «tu reserva está confirmada» del atleta.
+    const actingUserId = auth.isStaff ? undefined : req.user.id;
 
-    let hourBankReservationId: string | null = null;
-    if (isHoursPlan) {
-      const { data: session } = await supabase
-        .from('attendance_sessions')
-        .select('session_date')
-        .eq('id', sessionId)
-        .maybeSingle();
-      const reservationDate = session?.session_date
-        || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+    // booking_type (drop_in / walk_in) no es parte del contrato de la RPC: se
+    // persiste aparte, acotado a la fila recién creada, solo si no es el default.
+    const persistBookingType = async (booking: any) => {
+      if (booking_type === 'reservation' || !booking?.id) return;
+      await supabase.from('session_bookings').update({ booking_type }).eq('id', booking.id);
+      booking.booking_type = booking_type;
+    };
 
-      const { data: reserveResult } = await supabase.rpc('reserve_hour_bank', {
-        p_enrollment_id: enrollment_id, p_reservation_date: reservationDate, p_created_by: req.user.id,
-      });
-      const r = reserveResult as any;
-      if (!r?.reserved) {
-        // D-2: sin saldo, la reserva se bloquea ANTES de crear el booking —
-        // el 422 lleva available_minutes para que el frontend muestre el
-        // saldo real, no un genérico "no se pudo reservar".
-        return res.status(422).json(r);
-      }
-      hourBankReservationId = r.reservation_id;
-    }
-
-    const { data, error } = await supabase.from('session_bookings').insert({
-      school_id: schoolId, session_id: sessionId, enrollment_id,
-      user_id: user_id || null, child_id: child_id || null,
-      is_secondary, booking_type, status: 'confirmed',
-      hour_bank_reservation_id: hourBankReservationId,
-    }).select().single();
-
-    if (error) {
-      // El insert del booking falló (ej. choque de horario) DESPUÉS de haber
-      // reservado el saldo de horas — liberar para no dejarlo fantasma.
-      if (hourBankReservationId) {
-        await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: hourBankReservationId });
-      }
-      return res.status(409).json({ error: error.message });
-    }
-
-    // El saldo del sistema VIEJO se mueve SOLO por el RPC. El read-modify-write
-    // que había acá (leer sessions_used, sumar 1 en Node, escribir) hacía que
-    // dos reservas simultáneas del mismo atleta consumieran una sola clase:
-    // las dos leían el mismo valor. El RPC toma SELECT … FOR UPDATE sobre la
-    // inscripción. No se llama si ya se movió el banco de horas arriba.
-    if (!isHoursPlan) {
-      await supabase.rpc('move_session_credit', {
-        p_enrollment_id: enrollment_id, p_delta: 1, p_is_secondary: !!is_secondary,
-      });
-    }
-
-    res.status(201).json({ booking: data });
+    await bookSession(
+      req, res, auth.identity,
+      { session_id: sessionId, enrollment_id, is_secondary },
+      actingUserId, persistBookingType,
+    );
   } catch (err: any) {
     req.log?.error({ err }, 'session-bookings unhandled error');
     res.status(500).json({ error: 'Error interno del servidor.' });
@@ -457,33 +615,35 @@ router.delete('/bookings/:id', requireAuth, async (req: Request, res: Response) 
     const userId = req.user.id;
     const { data: b, error } = await supabase
       .from('session_bookings')
-      .select('id, user_id, child_id, status, session_id, enrollment_id, is_secondary, hour_bank_reservation_id')
+      .select('id, school_id, user_id, child_id, unregistered_athlete_id, status')
       .eq('id', id).single();
 
     if (error || !b) return res.status(404).json({ error: 'Reserva no encontrada' });
     if (b.status !== 'confirmed') return res.status(400).json({ error: 'Solo reservas confirmadas' });
 
-    if (b.user_id !== userId && !['owner', 'admin', 'school_admin'].includes(req.role)) {
+    if (b.user_id !== userId) {
       let isParent = false;
       if (b.child_id) {
         const { data: child } = await supabase.from('children').select('parent_id').eq('id', b.child_id).single();
         isParent = child?.parent_id === userId;
       }
-      if (!isParent) return res.status(403).json({ error: 'Sin permiso' });
+      if (!isParent) {
+        // Staff: solo reservas de SU escuela (req.schoolId viene de la sesión).
+        const isStaff = ['owner', 'admin', 'school_admin'].includes(req.role);
+        if (!isStaff || !req.schoolId || b.school_id !== req.schoolId) {
+          return res.status(403).json({ error: 'Sin permiso' });
+        }
+      }
     }
 
-    await supabase.from('session_bookings')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
-      .eq('id', id);
-
-    // Banco de horas si esta reserva se hizo por esa vía; si no, el sistema
-    // viejo — nunca los dos (ver hour_bank_reservation_id en la migración).
-    if (b.hour_bank_reservation_id) {
-      await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: b.hour_bank_reservation_id });
-    } else {
-      await supabase.rpc('move_session_credit', {
-        p_enrollment_id: b.enrollment_id, p_delta: -1, p_is_secondary: !!b.is_secondary,
-      });
+    // El staff cancela en nombre del dueño: se pasa la identidad de la fila,
+    // no la del caller. La RPC hace el UPDATE condicional y el reembolso.
+    // Limitación conocida: el contrato de la RPC no recibe el motivo, así que una
+    // cancelación hecha por staff queda con cancelled_reason 'Cancelado por el atleta'.
+    const out = await cancelBookingViaRpc(String(id), identityOfBookingRow(b));
+    if (!out.cancelled) return res.status(400).json(cancelRefusalBody(out, 'Solo reservas confirmadas'));
+    if (shouldLogMissingCredit(out, false)) {
+      req.log?.error({ booking_id: id, reason: out.reason }, 'cancel-booking: el crédito no se devolvió');
     }
 
     res.json({ success: true });
@@ -526,7 +686,7 @@ export async function listAvailableSessions(identity: AthleteIdentity) {
   {
     // ── Fetch enrollments separados por tipo ──────────────────────────────
     let q = supabase.from('enrollments').select(`
-      id, school_id, team_id, offering_plan_id, offering_id, sessions_used, scheduling_team_id,
+      id, school_id, team_id, offering_plan_id, offering_id, sessions_used, scheduling_team_id, expires_at,
       offering_plans!enrollments_offering_plan_id_fkey(max_sessions, offering_id, included_minutes_per_period, session_block_minutes)
     `).eq('status', 'active').eq(identityColumn(identity), identityValue(identity));
 
@@ -1226,8 +1386,18 @@ export async function listAvailableSessions(identity: AthleteIdentity) {
     const dayOk = (enrollmentId: string | null | undefined, date: string) =>
       !enrollmentId || isDayAllowed(allowedDaysByEnrollment[enrollmentId], date);
 
+    // Inscripciones vencidas (fecha Bogotá): sus sesiones se listan pero con
+    // booking_status 'plan_expired' (no se eliminan; la reserva igual se rechaza).
+    const expiredEnrollmentIds = new Set(
+      enrs.filter((e: any) => isPlanExpired(e.expires_at)).map((e: any) => e.id),
+    );
+    const markExpired = (s: any) =>
+      expiredEnrollmentIds.has(s.enrollment_id) && s.booking_status !== 'already_booked'
+        ? { ...s, booking_status: 'plan_expired' }
+        : s;
+
     return {
-      sessions: sessions.filter((s: any) => dayOk(s.enrollment_id, s.session_date)),
+      sessions: sessions.filter((s: any) => dayOk(s.enrollment_id, s.session_date)).map(markExpired),
       flexible_hour_grid: flexibleHourGrid.filter((g: any) => dayOk(g.enrollment_id, g.session_date)),
       allowed_days_by_enrollment: allowedDaysByEnrollment,
       no_schedule_reason_by_enrollment: noScheduleReasonByEnrollment,
@@ -1265,16 +1435,24 @@ export async function bookSession(
   // Hook opcional post-éxito (ej. correo de confirmación para quien agenda
   // sin cuenta) — corre ANTES de responder, y lo que devuelva se mezcla en
   // el body de la respuesta (ej. { email_sent: true }).
-  postSuccess?: (booking: any) => Promise<Record<string, any> | void>
+  postSuccess?: (booking: any) => Promise<Record<string, any> | void>,
+  // Ruta pública sin sesión: responde solo { id, session_id, status } de la fila.
+  minimalBookingResponse = false,
 ) {
   {
     const { session_id, enrollment_id, is_secondary, duration_minutes } = bookParams;
 
     // ── 2. Validar que el enrollment pertenece al atleta ──────────────────
-    const { valid: enrollmentValid, schoolId: enrollmentSchoolId } =
-      await validateEnrollmentOwnership(enrollment_id, identity);
+    const ownership = await loadEnrollmentForBooking(enrollment_id, identity);
+    const { valid: enrollmentValid, schoolId: enrollmentSchoolId } = ownership;
     if (!enrollmentValid)
       return res.status(403).json({ error: 'enrollment_unauthorized' });
+
+    // ── 2a. Vencimiento y cupo (prechequeo NO autoritativo) ───────────────
+    // La RPC book_session_with_credit decide; esto corta temprano, sin mutar
+    // nada (la rama avail_ estira attendance_sessions más abajo).
+    const creditBlock = precheckEnrollmentCredit(ownership, !!is_secondary);
+    if (creditBlock) return res.status(422).json(creditBlock);
 
     // ── 2b. Días permitidos del plan (D9, utils/planDayRules.ts) ──────────
     // Va ANTES del paso 3 porque la rama avail_ puede materializar/estirar
@@ -1753,11 +1931,16 @@ export async function bookSession(
     // ── 3c. Banco de horas — mismo criterio que el resto de las vías de
     // reserva: si la inscripción tiene included_minutes_per_period, se
     // reserva ANTES de insertar el booking (D-2, bloquea sin crear nada).
-    const { data: enrollmentPlan } = await supabase
+    const { data: enrollmentPlan, error: planErr } = await supabase
       .from('enrollments')
       .select('id, offering_plans(included_minutes_per_period)')
       .eq('id', enrollment_id)
       .maybeSingle();
+    // Sin saber si es plan de horas no se puede decidir cómo cobrar: falla cerrado.
+    if (planErr) {
+      req.log?.error({ err: planErr, enrollment_id }, 'book-session: fallo leyendo el plan de la inscripción');
+      return res.status(500).json({ error: 'Error interno del servidor.' });
+    }
     const isHoursPlan = (enrollmentPlan as any)?.offering_plans?.included_minutes_per_period != null;
 
     let hourBankReservationId: string | null = null;
@@ -1799,37 +1982,29 @@ export async function bookSession(
       hourBankReservationId = r.reservation_id;
     }
 
-    // ── 4. Insertar booking ───────────────────────────────────────────────
-    // CHECK chk_booking_identity en session_bookings: si unregistered_athlete_id
-    // va seteado, enrollment_id/user_id/child_id deben ser NULL — son modos
-    // mutuamente excluyentes (mismo criterio que ya documentaba trial_class_public_create
-    // en 20260827184021_clases_de_prueba_agenda.sql). El enrollment sigue
-    // resuelto arriba para validar ownership/banco de horas — solo se omite acá.
-    const { data: b, error } = await supabase.from('session_bookings').insert({
-      school_id: s.school_id,
-      session_id: actualSessionId,
-      enrollment_id: identity.unregisteredAthleteId ? null : enrollment_id,
-      is_secondary: !!is_secondary,
-      user_id: identity.userId ?? null,
-      child_id: identity.childId ?? null,
-      unregistered_athlete_id: identity.unregisteredAthleteId ?? null,
-      status: 'confirmed',
-      hour_bank_reservation_id: hourBankReservationId,
-    }).select().single();
+    // ── 4. Insertar la reserva y consumir el crédito (una sola transacción) ─
+    // book_session_with_credit valida identidad, vencimiento y cupo, inserta
+    // la reserva con credit_enrollment_id y, si no es plan de horas, consume
+    // el crédito con move_session_credit. Para fichas sin cuenta la RPC deja
+    // enrollment_id en NULL (CHECK chk_booking_identity: identidades
+    // mutuamente excluyentes) y guarda el vínculo en credit_enrollment_id.
+    const { data: b, error } = await supabase.rpc('book_session_with_credit', {
+      p_school_id: s.school_id,
+      p_session_id: actualSessionId,
+      p_enrollment_id: enrollment_id,
+      p_user_id: identity.userId ?? null,
+      p_child_id: identity.childId ?? null,
+      p_unregistered_athlete_id: identity.unregisteredAthleteId ?? null,
+      p_is_secondary: !!is_secondary,
+      p_hour_bank_reservation_id: hourBankReservationId,
+    });
 
     if (error) {
       if (hourBankReservationId) {
         await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: hourBankReservationId });
       }
-      return res.status(409).json({ error: error.message });
-    }
-
-    // ── 5. Consumir la clase (atómico, ver move_session_credit) — solo el
-    // sistema viejo, si no se movió el banco de horas arriba. ─────────────
-    if (!isHoursPlan) {
-      await supabase.rpc('move_session_credit', {
-        p_enrollment_id: enrollment_id, p_delta: 1, p_is_secondary: !!is_secondary,
-      });
+      const translated = translateBookingRpcError(error.message, (error as any).code);
+      return res.status(translated.status).json(translated.body);
     }
 
     if (actingUserId) {
@@ -1854,7 +2029,10 @@ export async function bookSession(
       }
     }
 
-    res.status(201).json({ booking: b, ...extra });
+    const bookingOut = minimalBookingResponse
+      ? { id: b?.id, session_id: b?.session_id, status: b?.status }
+      : b;
+    res.status(201).json({ booking: bookingOut, ...extra });
   }
 }
 
@@ -2083,21 +2261,14 @@ export async function cancelSessionBooking(
         }
       }
 
-      const { error: updateError } = await supabase
-        .from('session_bookings')
-        .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_reason: 'Cancelado por el atleta' })
-        .eq('id', bookingId);
-
-      if (updateError) throw updateError;
-
-      // Reembolso de crédito — banco de horas si esta reserva se hizo por
-      // esa vía, si no el sistema viejo (nunca los dos).
-      if (booking.hour_bank_reservation_id) {
-        await supabase.rpc('cancel_hour_bank_reservation', { p_reservation_id: booking.hour_bank_reservation_id });
-      } else {
-        await supabase.rpc('move_session_credit', {
-          p_enrollment_id: booking.enrollment_id, p_delta: -1, p_is_secondary: !!booking.is_secondary,
-        });
+      // UPDATE condicional + reembolso del crédito en una sola transacción.
+      const cancelOut = await cancelBookingViaRpc(bookingId, identity);
+      if (!cancelOut.cancelled) {
+        res.status(400).json(cancelRefusalBody(cancelOut, 'Ya cancelada'));
+        return true;
+      }
+      if (shouldLogMissingCredit(cancelOut, !!booking.hour_bank_reservation_id)) {
+        req.log?.error({ booking_id: bookingId, reason: cancelOut.reason }, 'cancel-booking: el crédito no se devolvió');
       }
 
       // Piloto "agendamiento flexible de banco de horas": si esta sesión se
@@ -2161,6 +2332,10 @@ router.delete('/athlete/cancel-booking', requireAuth, async (req: Request, res: 
     const { booking_id, child_id } = req.query as { booking_id: string; child_id?: string };
     const userId = req.user?.id;
 
+    // child_id viene del query: sin esto un padre cancelaba reservas de hijos ajenos.
+    if (child_id && !(await validateChildAccess(child_id, userId)))
+      return res.status(403).json({ error: 'unauthorized' });
+
     const handled = await cancelSessionBooking(req, res, child_id ? { childId: child_id } : { userId }, booking_id);
     if (handled) return;
 
@@ -2215,7 +2390,7 @@ router.delete('/athlete/:id/cancel', requireAuth, async (req: Request, res: Resp
     // ── 2. Fetch booking ──────────────────────────────────────────────────
     const { data: b } = await supabase
       .from('session_bookings')
-      .select(`id, user_id, child_id, session_id, enrollment_id, is_secondary, status,
+      .select(`id, user_id, child_id, unregistered_athlete_id, session_id, status,
         attendance_sessions ( session_date, start_time, facility_id, facilities ( min_cancellation_hours ) )`)
       .eq('id', id)
       .maybeSingle();
@@ -2258,14 +2433,12 @@ router.delete('/athlete/:id/cancel', requireAuth, async (req: Request, res: Resp
     if (!bookingBelongsToUser)
       return res.status(403).json({ error: 'unauthorized' });
 
-    // ── 4. Cancelar y decrementar ─────────────────────────────────────────
-    await supabase.from('session_bookings')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
-      .eq('id', id);
-
-    await supabase.rpc('move_session_credit', {
-      p_enrollment_id: b.enrollment_id, p_delta: -1, p_is_secondary: !!b.is_secondary,
-    });
+    // ── 4. Cancelar y devolver el crédito (atómico, idempotente) ──────────
+    const out = await cancelBookingViaRpc(String(id), child_id ? { childId: child_id as string } : { userId });
+    if (!out.cancelled) return res.status(400).json(cancelRefusalBody(out, 'already_cancelled'));
+    if (shouldLogMissingCredit(out, false)) {
+      req.log?.error({ booking_id: id, reason: out.reason }, 'cancel-booking: el crédito no se devolvió');
+    }
 
     res.json({ success: true });
   } catch (err: any) {
@@ -2397,7 +2570,7 @@ router.post('/athlete/book-secondary', requireAuth, async (req: Request, res: Re
 
     // ── 2. Validar que el enrollment pertenece al atleta ──────────────────
     const { valid: enrollmentValid, schoolId: enrollmentSchoolId } =
-      await validateEnrollmentOwnership(enrollment_id, child_id ? { childId: child_id } : { userId });
+      await loadEnrollmentForBooking(enrollment_id, child_id ? { childId: child_id } : { userId });
     if (!enrollmentValid || !enrollmentSchoolId)
       return res.status(403).json({ error: 'enrollment_unauthorized' });
 
@@ -2792,4 +2965,4 @@ router.get('/extend-horizon', requireAuth, async (req: Request, res: Response) =
 
 // Las rutas legacy de PT (GET /athlete/pt-availability, POST /athlete/book-pt-session, DELETE /athlete/cancel-pt-session) fueron eliminadas por ser código muerto. El frontend ahora llama a las rutas correspondientes en training.ts.
 
-export default router;
+export default router;

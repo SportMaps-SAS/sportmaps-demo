@@ -204,27 +204,23 @@ describe('reservas en día no permitido', () => {
         expect(res.statusCode).not.toBe(422);
     });
 
-    it('POST /:id/book: 422 antes de mover saldo', async () => {
+    it('POST /:id/book: 422 antes de mover saldo (la inscripción debe ser de la identidad y la escuela)', async () => {
         const handler = routeHandler(sessionBookingsRouter, 'post', '/:id/book');
-        const res = fakeRes();
-        await handler({
-            params: { id: 'sess-tue' }, schoolId: SCHOOL, user: { id: 'staff' },
-            body: { enrollment_id: '11111111-1111-4111-8111-111111111111', user_id: '22222222-2222-4222-8222-222222222222' },
-        }, res);
-        // enrollment del body no está en el mock → plan NULL → no es 422 por día
-        expect(res.body?.reason).not.toBe('day_not_allowed');
+        const ENR = '11111111-1111-4111-8111-111111111111';
+        const USR = '22222222-2222-4222-8222-222222222222';
+        const body = { enrollment_id: ENR, user_id: USR };
+        const reqBase = { params: { id: 'sess-tue' }, schoolId: SCHOOL, role: 'admin', user: { id: 'staff' }, body };
 
-        db.tables.enrollments.push({ id: '11111111-1111-4111-8111-111111111111', school_id: SCHOOL, status: 'active', offering_plan_id: PLAN_MWF });
+        // Inscripción que no existe: 403 (SEG-31 R3), nada se mueve.
+        const res = fakeRes();
+        await handler(reqBase, res);
+        expect(res.statusCode).toBe(403);
+        expect(db.rpcCalls).toHaveLength(0);
+
+        db.tables.enrollments.push({ id: ENR, user_id: USR, child_id: null, unregistered_athlete_id: null, school_id: SCHOOL, status: 'active', offering_plan_id: PLAN_MWF });
         clearPlanDayRulesCache();
-        // La primera (plan NULL) sí reservó como hoy: consumió la clase.
-        expect(db.rpcCalls.map((c) => c.fn)).toEqual(['move_session_credit']);
-        db.rpcCalls = [];
-        db.inserted = [];
         const res2 = fakeRes();
-        await handler({
-            params: { id: 'sess-tue' }, schoolId: SCHOOL, user: { id: 'staff' },
-            body: { enrollment_id: '11111111-1111-4111-8111-111111111111', user_id: '22222222-2222-4222-8222-222222222222' },
-        }, res2);
+        await handler(reqBase, res2);
         expect(res2.statusCode).toBe(422);
         expect(res2.body.reason).toBe('day_not_allowed');
         expect(db.rpcCalls).toHaveLength(0);

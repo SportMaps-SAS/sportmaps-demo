@@ -87,8 +87,9 @@ export type RosterBilling = 'staff' | 'al_dia' | 'mora' | 'sin_inscripcion' | nu
 export interface RosterRow {
     pin: number;
     reader_name: string;
-    has_face: boolean;
-    has_fingerprint: boolean;
+    /** null = «no se pudo leer» (pyzk no ve rostros): no es lo mismo que «no tiene». */
+    has_face: boolean | null;
+    has_fingerprint: boolean | null;
     has_password: boolean;
     athlete: { id: string; type: AthleteRef['type'] | 'staff'; name: string } | null;
     billing: RosterBilling;
@@ -106,6 +107,89 @@ export interface RosterResult {
 }
 
 const STAFF_ROLES = ['owner', 'admin', 'school_admin', 'coach', 'staff'];
+
+/** true si alguno la tiene; false si alguno la leyó y no está; null si ninguno la leyó. */
+export function mergeTri(a: boolean | null | undefined, b: boolean | null | undefined): boolean | null {
+    if (a === true || b === true) return true;
+    if (a === false || b === false) return false;
+    return null;
+}
+
+// ─── Sincronización desde el bridge (la «foto» del lector) ───────────────────
+
+export interface RosterUserInput {
+    pin: number;
+    name: string;
+    has_password: boolean;
+    has_fingerprint: boolean | null;
+    has_face: boolean | null;
+    privilege: number;
+}
+
+export const ROSTER_MAX_USERS = 5000;
+
+/**
+ * Valida y limpia lo que manda el bridge. Descarta (y cuenta) lo inválido en vez de fallar todo el
+ * lote: un usuario raro del lector no debe impedir que se sincronicen los otros 600.
+ */
+export function normalizeRosterUsers(raw: unknown): { users: RosterUserInput[]; descartados: number } {
+    if (!Array.isArray(raw)) return { users: [], descartados: 0 };
+    const byPin = new Map<number, RosterUserInput>();
+    let descartados = 0;
+    for (const r of raw.slice(0, ROSTER_MAX_USERS) as any[]) {
+        const pin = Number(r?.pin);
+        if (!Number.isInteger(pin) || pin < 1 || pin > 99_999_999) { descartados++; continue; }
+        const tri = (v: unknown): boolean | null => (v === true ? true : v === false ? false : null);
+        byPin.set(pin, {
+            pin,
+            name: String(r?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+            has_password: r?.has_password === true,
+            has_fingerprint: tri(r?.has_fingerprint),
+            has_face: tri(r?.has_face),
+            privilege: Number.isInteger(Number(r?.privilege)) ? Number(r.privilege) : 0,
+        });
+    }
+    if (raw.length > ROSTER_MAX_USERS) descartados += raw.length - ROSTER_MAX_USERS;
+    return { users: [...byPin.values()], descartados };
+}
+
+/**
+ * Reemplaza la foto de UN lector: inserta/actualiza lo recibido con la misma marca de tiempo y borra
+ * lo que quedó con una marca anterior (usuarios que ya no están en el lector). Nunca toca las filas
+ * simuladas ni las de otro lector.
+ */
+export async function replaceDeviceRoster(
+    schoolId: string,
+    deviceSerial: string,
+    users: RosterUserInput[],
+): Promise<{ guardados: number; eliminados: number }> {
+    const syncedAt = new Date().toISOString();
+    const CHUNK = 500;
+    for (let i = 0; i < users.length; i += CHUNK) {
+        const rows = users.slice(i, i + CHUNK).map(u => ({
+            school_id: schoolId,
+            device_serial: deviceSerial,
+            zk_pin: u.pin,
+            reader_name: u.name,
+            has_face: u.has_face,
+            has_fingerprint: u.has_fingerprint,
+            has_password: u.has_password,
+            privilege: u.privilege,
+            is_simulated: false,
+            synced_at: syncedAt,
+        }));
+        const { error } = await supabase.from('access_device_users')
+            .upsert(rows, { onConflict: 'school_id,device_serial,zk_pin' });
+        if (error) throw new Error(error.message);
+    }
+    const { data: gone, error: delErr } = await supabase.from('access_device_users')
+        .delete()
+        .eq('school_id', schoolId).eq('device_serial', deviceSerial).eq('is_simulated', false)
+        .lt('synced_at', syncedAt)
+        .select('zk_pin');
+    if (delErr) throw new Error(delErr.message);
+    return { guardados: users.length, eliminados: (gone ?? []).length };
+}
 
 export async function isRosterEnabled(schoolId: string): Promise<boolean> {
     const { data, error } = await supabase
@@ -141,16 +225,17 @@ export async function getAccessRoster(
         if (r.error) throw new Error(r.error.message);
     }
 
-    // Un PIN puede estar en varios lectores: se funde en una fila (credenciales con OR).
-    const byPin = new Map<number, { reader_name: string; has_face: boolean; has_fingerprint: boolean; has_password: boolean }>();
+    // Un PIN puede estar en varios lectores: se funde en una fila. Credenciales con lógica de
+    // tres valores: true si alguno la tiene; false si alguno la leyó y no está; null si ninguno la leyó.
+    const byPin = new Map<number, { reader_name: string; has_face: boolean | null; has_fingerprint: boolean | null; has_password: boolean }>();
     let simulated = false;
     let syncedAt: string | null = null;
     for (const u of (rosterQ.data ?? []) as any[]) {
         const prev = byPin.get(u.zk_pin);
         byPin.set(u.zk_pin, {
             reader_name: prev?.reader_name || u.reader_name || '',
-            has_face: !!prev?.has_face || !!u.has_face,
-            has_fingerprint: !!prev?.has_fingerprint || !!u.has_fingerprint,
+            has_face: mergeTri(prev?.has_face, u.has_face),
+            has_fingerprint: mergeTri(prev?.has_fingerprint, u.has_fingerprint),
             has_password: !!prev?.has_password || !!u.has_password,
         });
         if (u.is_simulated) simulated = true;

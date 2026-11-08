@@ -57,3 +57,44 @@ describe('pickSuggestion', () => {
         expect(pickSuggestion('Valeria M.', athletes)).toBeNull();
     });
 });
+
+import { mergeTri, normalizeRosterUsers } from './accessRoster.service';
+
+describe('mergeTri (credenciales de varios lectores)', () => {
+    it('true si alguno la tiene', () => {
+        expect(mergeTri(true, false)).toBe(true);
+        expect(mergeTri(null, true)).toBe(true);
+    });
+    it('false solo si alguno la leyó y no está', () => {
+        expect(mergeTri(false, null)).toBe(false);
+        expect(mergeTri(undefined, false)).toBe(false);
+    });
+    it('null si ninguno la leyó (no es lo mismo que «no tiene»)', () => {
+        expect(mergeTri(null, null)).toBeNull();
+        expect(mergeTri(undefined, undefined)).toBeNull();
+    });
+});
+
+describe('normalizeRosterUsers (lo que manda el bridge)', () => {
+    it('limpia nombres, deja el rostro en null si no se leyó y deduplica por PIN', () => {
+        const { users, descartados } = normalizeRosterUsers([
+            { pin: '12', name: '  Bella   ', has_password: true, has_fingerprint: true, privilege: 0 },
+            { pin: 12, name: 'Bella dup', has_password: false },
+        ]);
+        expect(descartados).toBe(0);
+        expect(users).toHaveLength(1);
+        expect(users[0]).toMatchObject({ pin: 12, name: 'Bella dup', has_face: null, has_fingerprint: null, has_password: false });
+    });
+    it('descarta lo inválido sin tumbar el lote y lo cuenta', () => {
+        const { users, descartados } = normalizeRosterUsers([
+            { pin: 0, name: 'cero' }, { pin: -3, name: 'neg' }, { pin: 1.5, name: 'frac' }, { pin: 'abc' },
+            { pin: 100000000, name: 'enorme' }, { pin: 78, name: 'Silvana' },
+        ]);
+        expect(users.map(u => u.pin)).toEqual([78]);
+        expect(descartados).toBe(5);
+    });
+    it('no admite una lista que no sea arreglo y recorta nombres largos', () => {
+        expect(normalizeRosterUsers('x').users).toEqual([]);
+        expect(normalizeRosterUsers([{ pin: 5, name: 'a'.repeat(300) }]).users[0].name).toHaveLength(120);
+    });
+});
