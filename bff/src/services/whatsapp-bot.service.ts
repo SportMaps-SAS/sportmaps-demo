@@ -158,6 +158,13 @@ import { hoyBogota } from './wa-cobro-desde-comprobante.service';
 import {
     atenderOleada1Desconocido, atenderOleada1Familia, preguntarReferidoTrasTurno, type IoDelBot,
 } from './whatsapp-bot-oleada1';
+import { contextoDeVenta, mensajesParaVenta } from './whatsapp-venta-contexto.db';
+import { pideElClub, type VentaActiva } from './whatsapp-venta-contexto';
+import {
+    atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes, ventaDeFamilia,
+    type CtxVentaServicio, type ResultadoVenta,
+} from './whatsapp-venta-servicio';
+import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
 
 const OTP_TTL_MIN = 10;
 
@@ -212,6 +219,14 @@ interface EscuelaDelTurno {
     discreto: boolean | null;
     /** El embudo ya dijo «no es mío» en este turno: no se vuelve a leer su estado. */
     embudoProbado?: boolean;
+    /**
+     * Venta de un servicio (frente A): la venta de cada conversación, leída UNA vez
+     * por turno (catálogo + mensajes de 7 días + lead), y el servicio que se está
+     * vendiendo en este turno (la presentación va sin la clase de prueba).
+     */
+    ventas?: Map<string, Promise<VentaDelTurno | null>>;
+    serviciosVigentes?: Promise<ItemConFicha[]>;
+    ventaServicio?: ItemConFicha | null;
 }
 const escuelaDelTurno = new AsyncLocalStorage<EscuelaDelTurno>();
 
@@ -557,6 +572,15 @@ async function cuerpoDelTurno(
             await marcarAbiertaSinAviso(conversationId);
             return;
         }
+    }
+
+    // 2.345. VENTA DE UN SERVICIO de una familia del club (frente A): el afiliado que
+    //        compra la clínica también está en una venta. Solo si la conversación está
+    //        EN la venta o nombra el servicio; su mensualidad, sus comprobantes y lo de
+    //        su cuenta siguen como hoy. Antes de la cortesía, los grupos por edad, los
+    //        precios del club, las ventas carril B y el modelo.
+    if (await atenderVentaDeFamilia({ integration, conversationId, contactWaId, text, botonId, recientes, waMessageId })) {
+        return;
     }
 
     // 2.35. «Clase de cortesía tienen», «¿puedo ir a probar?»: flujo
@@ -1046,8 +1070,11 @@ async function comprobanteEnColaDe(integration: WhatsAppIntegration, contactWaId
 
 /** El `responder` de la pregunta «¿a cuál cobro?»: pasa los botones a `deliver`. */
 function responderDeCobro(integration: WhatsAppIntegration, conversationId: string, contactWaId: string) {
-    return (texto: string, paso: string, botones?: BotonInteractivo[]) =>
-        deliver(integration, conversationId, contactWaId, texto, { step: paso },
+    // `payload` (frente C, 2026-11-08): la venta de un servicio marca el saliente con
+    // `venta_servicio_id`; sin pasarlo, la confirmación tras «nombre de quien asiste»
+    // salía sin la marca y la venta dejaba de reconocerse.
+    return (texto: string, paso: string, botones?: BotonInteractivo[], _linea?: unknown, payload?: Record<string, unknown>) =>
+        deliver(integration, conversationId, contactWaId, texto, { ...(payload ?? {}), step: paso },
             botones?.length ? { botones } : undefined);
 }
 
@@ -2512,7 +2539,8 @@ function ctxAnuncio(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string, recientes: FilaReciente[],
 ): CtxAnuncio {
     const schoolId = integration.school_id;
-    const saludo = async () => saludoDePresentacion(conversationId, await nombreDeEscuela(schoolId));
+    const saludo = async (servicio?: ItemConFicha) =>
+        saludoDePresentacion(conversationId, await nombreDeEscuela(schoolId), Date.now(), { servicio: servicio ?? null });
     return {
         schoolId,
         recientes: async () => recientes,
@@ -2546,8 +2574,8 @@ function ctxAnuncio(
         avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle }),
         iniciarEmbudo: async () => iniciarEmbudoEnBot(integration, conversationId, contactWaId,
             { saludo: await saludo(), step: PASO_DESCONOCIDO_ESCOLAR }),
-        ofrecerFormulario: ({ item, sinCuentas }) =>
-            mandarFormularioDeServicio(integration, conversationId, contactWaId, item, { sinCuentas }),
+        ofrecerFormulario: ({ item, sinCuentas, datosDePagoEnviados }) =>
+            mandarFormularioDeServicio(integration, conversationId, contactWaId, item, { sinCuentas, datosDePagoEnviados }),
     };
 }
 
@@ -2561,6 +2589,10 @@ function ctxAnuncio(
 // `seguirPorChatTrasFormularioFallido` manda el respaldo por chat.
 
 let flowServicioDelRepo: Record<string, any> | null | undefined;
+
+/** Respaldo del formulario cuando todavía no salieron las cuentas (la ficha ya no las pega). */
+export const TEXTO_RESPALDO_FORMULARIO_SIN_DATOS =
+    'No pude abrirte el formulario en este WhatsApp 🙏 Sigamos por aquí: si quieres separar tu cupo, respóndeme y te paso los datos de pago.';
 
 /** Los datos inyectados caben en el JSON del repo (si el archivo no está en el despliegue, no se valida). */
 function datosDelFormularioValidos(data: Record<string, unknown>): boolean {
@@ -2581,7 +2613,7 @@ function datosDelFormularioValidos(data: Record<string, unknown>): boolean {
  */
 export async function mandarFormularioDeServicio(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string, item: ItemConFicha,
-    o: { sinCuentas: boolean; reenvio?: boolean },
+    o: { sinCuentas: boolean; reenvio?: boolean; datosDePagoEnviados?: boolean },
 ): Promise<boolean> {
     try {
         const listo = await formularioDisponible(integration, FORMULARIO_SERVICIO);
@@ -2598,7 +2630,11 @@ export async function mandarFormularioDeServicio(
             console.warn('[whatsapp-bot] sin WHATSAPP_FLOW_TOKEN_SECRET (>= 16 caracteres): no se manda el formulario');
             return false;
         }
-        const respaldo = textoRespaldoFormulario(!o.sinCuentas);
+        // La ficha ya no trae las cuentas pegadas (frente A): si todavía no se le
+        // mandaron (no pidió el pago), el respaldo no dice «con los datos que te envié».
+        const respaldo = !o.sinCuentas && o.datosDePagoEnviados === false
+            ? TEXTO_RESPALDO_FORMULARIO_SIN_DATOS
+            : textoRespaldoFormulario(!o.sinCuentas);
         await deliver(integration, conversationId, contactWaId, armado.cuerpo, {
             step: PASO_FORMULARIO_ENVIADO, intencion: 'anuncio', repetible: true,
             formulario: {
@@ -2748,7 +2784,7 @@ export async function seguirPorChatTrasFormularioFallido(
  */
 async function atenderAnuncioEnBot(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
-    text: string, botonId: string | null, fase: 'anuncio' | 'texto',
+    text: string, botonId: string | null, fase: 'anuncio' | 'texto' | 'todo',
     /** Las dos fases del mismo turno leen los mensajes UNA vez (entre una y otra no sale nada). */
     cache: { recientes?: FilaReciente[] } = {},
 ): Promise<ResultadoAnuncio | null> {
@@ -2763,6 +2799,188 @@ async function atenderAnuncioEnBot(
     } catch (e: any) {
         console.warn('[whatsapp-bot] destino por anuncio falló', { conversationId, err: e?.message });
         return null;
+    }
+}
+
+// ─── Venta de un servicio (frente A, docs/specs/whatsapp-ventas-de-servicio-blindaje.md) ───
+//
+// Monster 2026-11-08, Clínica de Armadores y Atacantes: ~130 interesados, 1 venta.
+// Quien estaba comprando la clínica recibía la bienvenida del embudo («Elige la
+// sede»), las 5 preguntas y la clase de prueba; a Nicolás se la agendaron y
+// cobraron después de pagar la clínica; dos dudas seguidas antes de pagar
+// (conversación 932fcd83) quedaron sin NADA del bot. Con la venta activa
+// (`ventaActiva`), lo atiende `atenderVentaDeServicio` ANTES de anuncio, embudo,
+// bienvenida, puerta, cortesía, seguimiento del embudo, precios del club, ventas
+// carril B e IA de prospecto. Antes de la venta siguen: la pregunta de un
+// comprobante abierta, el silencio con el equipo en diálogo y las bajas.
+
+interface VentaDelTurno {
+    venta: VentaActiva;
+    /** Los mensajes de 7 días (columnas mínimas) con que se decidió. */
+    mensajes: FilaReciente[];
+}
+
+/** El catálogo vigente de la escuela, leído una vez por turno. Nunca lanza. */
+function serviciosDelTurno(schoolId: string): Promise<ItemConFicha[]> {
+    const s = escuelaDelTurno.getStore();
+    if (s && s.schoolId === schoolId) return s.serviciosVigentes ??= serviciosDeAnuncio(schoolId).catch(() => []);
+    return serviciosDeAnuncio(schoolId).catch(() => []);
+}
+
+/**
+ * La venta activa de la conversación (desconocido): catálogo vigente + mensajes de
+ * 7 días + servicio del lead, leídos UNA vez por turno (regla de Disk IO: sin
+ * servicios vigentes no se leen los mensajes). null = sin venta. Nunca lanza.
+ */
+function ventaDelTurno(integration: WhatsAppIntegration, conversationId: string, contactWaId: string): Promise<VentaDelTurno | null> {
+    const s = escuelaDelTurno.getStore();
+    const previa = s?.ventas?.get(conversationId);
+    if (previa) return previa;
+    const leida = (async (): Promise<VentaDelTurno | null> => {
+        try {
+            const items = await serviciosDelTurno(integration.school_id);
+            if (!items.length) return null;
+            const mensajes = await mensajesParaVenta(conversationId);
+            const { venta } = await contextoDeVenta(integration.school_id, conversationId, contactWaId, { items, mensajes });
+            return venta ? { venta, mensajes } : null;
+        } catch {
+            return null;
+        }
+    })();
+    if (s) (s.ventas ??= new Map()).set(conversationId, leida);
+    return leida;
+}
+
+/** El servicio que se vende en este turno: la presentación va sin la clase de prueba. */
+function marcarVentaEnElTurno(item: ItemConFicha | null): void {
+    const s = escuelaDelTurno.getStore();
+    if (s) s.ventaServicio = item;
+}
+
+/** Lo de la base para `atenderVentaDeServicio`. `familia`: número de una familia del club (afiliado, sin lead). */
+function ctxVentaServicio(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, recientes: FilaReciente[],
+    o: { familia: boolean; waMessageId?: string | null },
+): CtxVentaServicio {
+    const schoolId = integration.school_id;
+    const momentoDe = (f: FilaReciente) => new Date(f.wa_timestamp || f.created_at || 0).getTime();
+    // Un aviso a la escuela por hora como mucho: lo demás queda en el buzón (y pendiente en el payload).
+    const avisadoHaceRato = recientes.some((f) => f.direction === 'outbound' && f.payload?.pendiente_escuela
+        && momentoDe(f) >= Date.now() - 3600_000);
+    return {
+        schoolId,
+        conversationId,
+        recientes,
+        afiliado: async () => o.familia || (await esAfiliado(schoolId, contactWaId)).afiliado,
+        cuentas: async (motivo) => (await mediosDePago(schoolId, { categoria: motivo })).cuentas
+            .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular })),
+        guardarLead: async (servicio) => {
+            // Familias: no son prospectos. Número de pruebas y batería: no se escribe.
+            if (o.familia || enSimulacion()) return null;
+            const r = await registrarLeadDeProspecto({
+                schoolId, conversationId, contactWaId,
+                nombre: await nombreDelContacto(conversationId),
+                textos: await entrantesDeTexto(conversationId, DIAS_MARCA_PROSPECTO),
+                estado: 'respondido', servicio,
+            });
+            return r?.leadId ?? null;
+        },
+        registrarEsperado: async (e) => {
+            const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
+            return registrarConceptoEsperado(schoolId, contactWaId, { motivo: e.motivo, leadId: e.leadId, venceEn: e.venceEn });
+        },
+        responderPregunta: (p) => responderPreguntaDeServicio(p),
+        enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto, contexto),
+        avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId,
+            avisadoHaceRato ? undefined : { motivo: 'puerta_otro', detalle }),
+        comprobanteEnCurso: async () => adjuntoEnLaRafaga(recientes, o.waMessageId ?? null)
+            || comprobanteEnColaDe(integration, contactWaId),
+    };
+}
+
+/**
+ * Venta de un servicio de un número SIN ficha. null = no hay venta (o pidió el club
+ * de forma explícita): sigue el bot de siempre. Nunca lanza.
+ */
+async function atenderVentaDelDesconocido(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, rafaga: string | null,
+): Promise<ResultadoDesconocido | null> {
+    if (botonId || !text) return null;
+    // «Es posible agendar una clase de prueba?»: sale de la venta (el bot de siempre).
+    if (pideElClub(text) || pideElClub(rafaga)) return null;
+    try {
+        const v = await ventaDelTurno(integration, conversationId, contactWaId);
+        if (!v) return null;
+        const recientes = await mensajesRecientes(conversationId);
+        // La escuela está escribiendo: la conversación es suya (modo discreto: 12 h).
+        if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+            await marcarAbiertaSinAviso(conversationId);
+            return 'escuela_atendiendo';
+        }
+        marcarVentaEnElTurno(v.venta.item);
+        // Primer contacto con el servicio (lo nombró, nadie le mandó nada todavía): la
+        // ficha del destino por anuncio, y el pago aparte si lo pidió.
+        if (!fichaDeVentaEnviada(v.mensajes, v.venta.item)) {
+            const porFicha = await atenderAnuncioEnBot(integration, conversationId, contactWaId, text, botonId, 'todo', { recientes });
+            if (porFicha) return porFicha;
+        }
+        const r = await atenderVentaDeServicio(
+            ctxVentaServicio(integration, conversationId, contactWaId, recientes, { familia: false }), v.venta, text);
+        if (!r) {
+            marcarVentaEnElTurno(null);
+            return null;
+        }
+        console.info('[whatsapp-bot] venta de un servicio', { conversationId, servicio: v.venta.item.id, origen: v.venta.origen, r });
+        return r;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] venta de un servicio falló; sigue el bot de siempre', { conversationId, err: e?.message });
+        marcarVentaEnElTurno(null);
+        return null;
+    }
+}
+
+/**
+ * Venta de un servicio de una FAMILIA del club (el afiliado que compra la clínica).
+ * Solo cuando la conversación está EN la venta (lo último que salió es de ella) o el
+ * mensaje nombra el servicio; lo de su cuenta (mensualidad, comprobantes, «ya pagué»
+ * sin nombrar el servicio, retiros, urgencias, «quiero hablar con alguien») sigue
+ * como hoy. true = lo atendió la venta. Nunca lanza.
+ */
+async function atenderVentaDeFamilia(t: {
+    integration: WhatsAppIntegration; conversationId: string; contactWaId: string;
+    text: string; botonId: string | null; recientes: FilaReciente[]; waMessageId: string;
+}): Promise<boolean> {
+    const { integration, conversationId, contactWaId, text, botonId, recientes } = t;
+    if (botonId || !text) return false;
+    try {
+        const rafaga = textoDeRafaga(recientes, text, t.waMessageId);
+        if (pideElClub(text) || pideElClub(rafaga) || esSolicitudDeRetiro(rafaga) || incidenciaUrgente(rafaga)) return false;
+        // Sin señal de venta en las 24 h ni un evento nombrado, ni se lee el catálogo.
+        if (!posibleVentaEnRecientes(recientes, rafaga)) return false;
+        const items = await serviciosDelTurno(integration.school_id);
+        // Con las 24 h del turno alcanza: la familia sigue en la venta solo si lo último
+        // que salió es de ella, o si nombra el servicio ahora (`ventaDeFamilia`).
+        const venta = ventaDeFamilia(recientes, items, text, rafaga);
+        if (!venta) return false;
+        if (pideALaPersona(rafaga, await vocativosDeEscuela(integration.school_id))?.tipo === 'escalar') return false;
+        // La pregunta de un comprobante abierta la contesta 2.5.
+        if (await hayPreguntaDeCobroAbierta(integration, contactWaId)
+            || await respondeResumenDeMotivos(integration, contactWaId, text, botonId)) return false;
+        marcarVentaEnElTurno(venta.item);
+        const r = await atenderVentaDeServicio(
+            ctxVentaServicio(integration, conversationId, contactWaId, recientes, { familia: true, waMessageId: t.waMessageId }),
+            venta, text);
+        if (!r) {
+            marcarVentaEnElTurno(null);
+            return false;
+        }
+        console.info('[whatsapp-bot] venta de un servicio (familia)', { conversationId, servicio: venta.item.id, r });
+        return true;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] venta de un servicio (familia) falló; sigue el turno', { conversationId, err: e?.message });
+        marcarVentaEnElTurno(null);
+        return false;
     }
 }
 
@@ -3377,6 +3595,7 @@ export type ResultadoDesconocido =
     | 'embudo' | 'embudo_acuse'
     | 'pago_mensualidad_aclaracion' | 'pago_mensualidad_club' | 'pago_mensualidad_inscribirme' | 'prospecto_afiliado'
     | ResultadoAnuncio
+    | ResultadoVenta
     | 'referido' | 'referidos_info'
     | 'frenado' | 'silencio';
 
@@ -3459,6 +3678,8 @@ export async function atenderDesconocido(
     return conEscuela(integration.school_id, async () => {
         const r = await atenderDesconocidoEnEscuela(
             integration, conversationId, contactWaId, inboundText, botonId, rafaga, origen);
+        // En la venta de un servicio no se pregunta nada del club ni se acusa como embudo.
+        if (String(r).startsWith('venta_')) return r;
         // Oleada 1: tras agendar la clase de prueba, UNA pregunta opcional «¿te refirió alguien?» (solo con campaña activa).
         if (r !== 'silencio' && r !== 'frenado' && r !== 'escuela_atendiendo') {
             await preguntarReferidoTrasTurno({ integration, conversationId, contactWaId }, ioOleada1()).catch(() => false);
@@ -3512,6 +3733,14 @@ async function atenderDesconocidoEnEscuela(
     const oleada1 = await atenderOleada1Desconocido({ integration, conversationId, contactWaId, text, botonId,
         recientes: () => mensajesRecientes(conversationId) }, ioOleada1());
     if (oleada1) return oleada1;
+
+    // 0a-ter. VENTA DE UN SERVICIO (frente A, Monster 2026-11-08): con la venta activa
+    //         (ficha del bot, campaña, texto pegado por la escuela, servicio nombrado o
+    //         lead de un servicio, 7 días), todo lo atiende la venta: «Hola», «Ok», «.»
+    //         o «ese día tenemos torneo» ya no reciben la bienvenida con sedes ni la
+    //         clase de prueba. Sale de la venta solo si pide el club de forma explícita.
+    const enVenta = await atenderVentaDelDesconocido(integration, conversationId, contactWaId, text, botonId, rafaga);
+    if (enVenta) return enVenta;
 
     // 0a'. Reclamo por un pago («ya envié el comprobante», «me llegó un correo donde dice
     //      que debo»): a la escuela, sin datos de pago. Antes de los flujos de venta y de
@@ -3835,6 +4064,21 @@ async function atenderDesconocidoEnEscuela(
     // Una presentación cada 24 h por conversación (`saludoDePresentacion`).
     const saludo = await saludoDePresentacion(conversationId, escuela);
     const S = saludo ? `${saludo}\n\n` : '';
+
+    // Venta activa (frente C, caso fe695949: «ya tengo el cupo de mi hijo / ya envié el
+    // comprobante» tras la campaña de la clínica): nunca «no reconozco este número» ni
+    // el pedido del correo. Normalmente la venta ya contestó arriba (0a-ter); esto
+    // cubre lo que llegue hasta acá con la venta abierta.
+    if (tema === 'pagos' && !botonId && !pideElClub(text)) {
+        const v = await ventaDelTurno(integration, conversationId, contactWaId);
+        if (v) {
+            marcarVentaEnElTurno(v.venta.item);
+            const r = await atenderVentaDeServicio(ctxVentaServicio(integration, conversationId, contactWaId,
+                await mensajesRecientes(conversationId), { familia: false }), v.venta, text);
+            if (r) return r;
+            marcarVentaEnElTurno(null);
+        }
+    }
 
     // Pagos Y precio: «¿qué precio tiene la mensualidad?». Puede ser una
     // familia desde otro celular o un prospecto, y no hay forma de saberlo sin
@@ -5777,7 +6021,7 @@ export async function deliver(
     const deLaEscuela = (context as any)?.texto_de_la_escuela === true;
     let texto = deLaEscuela
         ? aFormatoWhatsApp(conEncabezado)
-        : recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado)));
+        : sinPuntuacionHuerfana(recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado))));
     if (!PASOS_DE_CONSENTIMIENTO.includes(String((context as any)?.step ?? ''))
         && await estaDadoDeBaja(integration.id, contactWaId)) {
         texto += AVISO_DADO_DE_BAJA;
@@ -5919,6 +6163,24 @@ export async function deliver(
 }
 
 /**
+ * La puntuación que queda colgando cuando un filtro quita algo de una frase
+ * (Monster 2026-11-07 15:41, conversación 932fcd83: el modelo escribió «¡Qué
+ * emoción, 🏐!», el filtro de emojis de deporte quitó el balón y salió «¡Qué
+ * emoción, !»; lo mismo con un nombre vacío o un emoji recortado por el tope de
+ * 3). «, !» → «!», «, ,» → «,», «( )» y «¡ !» vacíos fuera, sin espacio antes
+ * de la coma o el cierre. No toca enlaces ni montos. Pura.
+ */
+export function sinPuntuacionHuerfana(texto: string): string {
+    return texto
+        .replace(/[ \t]*,[ \t]*(?=[!?.:;)])/g, '')     // «emoción, !» → «emoción!»
+        .replace(/,[ \t]*,/g, ',')                      // «hola, , Ana» → «hola, Ana»
+        .replace(/¡[ \t]*!|¿[ \t]*\?|\([ \t]*\)/g, '') // signos o paréntesis vacíos
+        .replace(/[ \t]+([,!?])(?=\s|$)/g, '$1')        // «emoción !» → «emoción!»
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/[ \t]+$/gm, '');
+}
+
+/**
  * ¿El bot ya mandó ESTE texto en la conversación en los últimos
  * VENTANA_ANTIREPETICION_MIN? Nunca lanza: ante un error de lectura se habla
  * (callar una respuesta es peor que repetirla).
@@ -5980,8 +6242,12 @@ export const presentacionDelAsistente = (escuela: string) =>
 // Sin emoji: el tope de 3 por mensaje (`recortarEmojis`) se los quitaba al cuerpo.
 export const AVISO_PRIVACIDAD_DESCONOCIDO =
     'Política de datos: https://app.sportmaps.co/politica-de-privacidad';
-export const presentacionLarga = (escuela: string, clase = TEXTOS_POR_DEFECTO.nombre) =>
-    `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
+export const presentacionLarga = (escuela: string, clase = TEXTOS_POR_DEFECTO.nombre, servicio?: { name: string } | null) =>
+    // En la venta de un servicio (frente A, Monster 2026-11-08) la presentación no
+    // ofrece la clase de prueba: «una venta de servicio es solo una venta».
+    servicio
+        ? `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con la información y el cupo ${deLaDelServicio(servicio, { negrita: true })}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`
+        : `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
 
 /**
  * ¿El texto ya es una presentación del asistente? Cuenta la de antes del
@@ -6009,7 +6275,11 @@ export const VENTANA_PRESENTACION_H = 24;
  * borrador (los turnos de una ráfaga ya van agrupados). Nunca lanza: ante un
  * error de lectura se presenta (callarlo sería peor que repetirlo).
  */
-export async function saludoDePresentacion(conversationId: string, escuela: string, ahora = Date.now()): Promise<string> {
+export async function saludoDePresentacion(
+    conversationId: string, escuela: string, ahora = Date.now(),
+    /** La venta de un servicio: la presentación va sin la clase de prueba (si no, la del turno). */
+    o: { servicio?: { name: string } | null } = {},
+): Promise<string> {
     try {
         const desde = new Date(ahora - VENTANA_PRESENTACION_H * 3600_000).toISOString();
         const [enviados, borradores] = await Promise.all([
@@ -6029,6 +6299,8 @@ export async function saludoDePresentacion(conversationId: string, escuela: stri
     } catch { /* se presenta */ }
     // Nombre de la clase de la escuela del turno (B3); fuera de un turno, el de siempre.
     const s = escuelaDelTurno.getStore();
+    const servicio = o.servicio ?? s?.ventaServicio ?? null;
+    if (servicio) return presentacionLarga(escuela, undefined, servicio);
     return presentacionLarga(escuela, s ? (await textosClase(s.schoolId)).nombre : TEXTOS_POR_DEFECTO.nombre);
 }
 

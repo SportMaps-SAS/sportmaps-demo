@@ -92,7 +92,76 @@ export interface DepsSeguimiento20h {
     reclamar: (lead: LeadCandidato, iso: string) => Promise<boolean>;
     soltar: (lead: LeadCandidato) => Promise<void>;
     redactar: (integ: WhatsAppIntegration, conversationId: string, recientes: FilaReciente[]) => Promise<string | null>;
-    enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string) => Promise<void>;
+    /** `extra` va al payload del saliente (la marca de la venta de un servicio). */
+    enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, extra?: Record<string, unknown>) => Promise<void>;
+    /**
+     * ¿El lead o la conversación están en la VENTA de un servicio? Entonces el
+     * seguimiento es determinista y solo del servicio (sin IA ni clase de prueba).
+     * null = no es una venta (lo redacta el modelo como siempre); `texto: null` =
+     * venta sin nada que recordar (ya mandó el comprobante).
+     */
+    ventaDelLead: (lead: LeadCandidato, conv: ConversacionDelLead, recientes: FilaReciente[], ahora: Date)
+        => Promise<SeguimientoDeVenta | null>;
+}
+
+export interface SeguimientoDeVenta { itemId: string; texto: string | null }
+
+const PALABRA_DE_EVENTO = /cl[ií]nica|torneo|campeonato|vacacional|vacaciones|campamento|copa\b/i;
+
+/**
+ * ¿Puede ser la venta de un servicio? El lead guardó un servicio, un saliente trae
+ * la marca (venta, ficha, campaña), la escuela pegó un texto largo o el interesado
+ * nombró un evento. Si no, ni se lee el catálogo. Pura.
+ */
+export function pareceVentaDeServicio(lead: Pick<LeadCandidato, 'sourceDetail'>, recientes: FilaReciente[]): boolean {
+    if (lead.sourceDetail?.servicio_interes?.id) return true;
+    return recientes.some((f) => {
+        const p = f.payload ?? {};
+        if (f.direction === 'outbound') {
+            // `venta_servicio_id` = MARCA_VENTA (literal: este job no carga el catálogo si no hace falta).
+            return Boolean(p.venta_servicio_id || p.servicio_id || p.destino_anuncio || p.campana_id
+                || p.step === 'campana_respuesta_si' || (f.ai_generated === false && String(f.text_body ?? '').length >= 60));
+        }
+        return f.direction === 'inbound' && PALABRA_DE_EVENTO.test(String(f.text_body ?? ''));
+    });
+}
+
+/**
+ * El seguimiento de una venta: el servicio del lead (`source_detail.servicio_interes`)
+ * o el de la conversación (`ventaActiva` sobre las 24 h), con el precio de hoy y la
+ * fecha correcta del tramo. Monster 2026-11-08: el seguimiento redactado por la IA
+ * le ofrecía la clase de prueba ($15.000) a interesados de la clínica y decía
+ * «la preventa va hasta el 9 de noviembre» (era hasta el 10). Nunca lanza.
+ */
+export async function seguimientoDeVentaDelLead(
+    lead: LeadCandidato, conv: ConversacionDelLead, recientes: FilaReciente[], ahora: Date,
+): Promise<SeguimientoDeVenta | null> {
+    // Filtro gratis (sin leer el catálogo): ni el lead ni las 24 h tienen señal de venta.
+    if (!pareceVentaDeServicio(lead, recientes)) return null;
+    try {
+        const { serviciosDeAnuncio } = await import('./whatsapp-anuncio-destino');
+        const { ventaActiva } = await import('./whatsapp-venta-contexto');
+        const { textoSeguimientoDeVenta, tienePrecioDeAfiliado } = await import('./whatsapp-venta-servicio');
+        const { hoyBogota } = await import('./wa-cobro-desde-comprobante.service');
+        const items = await serviciosDeAnuncio(lead.schoolId, ahora.getTime());
+        if (!items.length) return null;
+        const servicioDelLead = lead.sourceDetail?.servicio_interes?.id;
+        const venta = ventaActiva(recientes, items, {
+            ahora: ahora.getTime(), leadServicioId: typeof servicioDelLead === 'string' ? servicioDelLead : null,
+        });
+        if (!venta) return null;
+        let afiliado = false;
+        if (tienePrecioDeAfiliado(venta.item)) {
+            const { esAfiliado } = await import('./wa-afiliado.service');
+            afiliado = (await esAfiliado(lead.schoolId, conv.contactWaId)).afiliado;
+        }
+        return {
+            itemId: venta.item.id,
+            texto: textoSeguimientoDeVenta(venta.item, { recientes, afiliado, hoy: hoyBogota(ahora.getTime()), ahora: ahora.getTime() }),
+        };
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -173,10 +242,11 @@ const DEPS: DepsSeguimiento20h = {
         await supabase.from('school_signup_leads').update({ source_detail: { ...lead.sourceDetail } }).eq('id', lead.id);
     },
     redactar: redactarSeguimiento20h,
-    async enviar(integ, conversationId, waId, texto) {
+    async enviar(integ, conversationId, waId, texto, extra) {
         const { deliver } = await import('./whatsapp-bot.service');
-        await deliver(integ, conversationId, waId, texto, { step: PASO_SEGUIMIENTO_20H });
+        await deliver(integ, conversationId, waId, texto, { ...(extra ?? {}), step: PASO_SEGUIMIENTO_20H });
     },
+    ventaDelLead: seguimientoDeVentaDelLead,
 };
 
 export interface ResumenSeguimiento20h { candidatos: number; enviados: number; omitidos: number; fallidos: number }
@@ -204,6 +274,16 @@ export async function runSeguimientoProspectos20h(
             const integ = await d.integracion(conv.integrationId);
             if (!integ) { r.omitidos++; continue; }
             if (!(await d.reclamar(lead, ahora.toISOString()))) { r.omitidos++; continue; }
+            // Venta de un servicio: el texto del servicio, determinista y una vez (la marca
+            // del lead ya quedó puesta). Nunca la clase de prueba ni una fecha inventada.
+            const venta = await d.ventaDelLead(lead, conv, recientes, ahora).catch(() => null);
+            if (venta) {
+                if (!venta.texto) { r.omitidos++; continue; }
+                const { MARCA_VENTA } = await import('./whatsapp-venta-contexto');
+                await d.enviar(integ, conv.id, conv.contactWaId, venta.texto, { [MARCA_VENTA]: venta.itemId, seguimiento_de_venta: true });
+                r.enviados++;
+                continue;
+            }
             const texto = await d.redactar(integ, conv.id, recientes);
             // Sin ficha, sin texto o el modelo dijo NADA: la marca queda puesta
             // (no se vuelve a intentar con ese interesado).

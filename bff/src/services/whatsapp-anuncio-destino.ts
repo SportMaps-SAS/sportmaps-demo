@@ -41,10 +41,13 @@ import { esMigracionPendiente, type TipoServicio } from './ventas-servicios.serv
 import {
     cop, cuandoEs, numeroElegido, pideOQuiereServicio, tokensDistintivos,
 } from './whatsapp-venta-servicios.service';
-import { comoPagar, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
+import type { CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import {
     abonoMinimo, hoyBogota, opcionesDelItem, precioVigente, tramosPorFecha, type ItemDeServicio,
 } from './wa-cobro-desde-comprobante.service';
+// Ciclo a propósito (venta-servicio usa el precio de acá): solo se usan dentro de funciones.
+import { MARCA_VENTA } from './whatsapp-venta-contexto';
+import { PASO_VENTA, pideDatosDePago, textoDePagoDeServicio } from './whatsapp-venta-servicio';
 
 // ─── El anuncio (referral de Meta) ──────────────────────────────────────────
 
@@ -555,21 +558,30 @@ export function lineasDeValor(p: PrecioDeServicio): string[] {
     return lineas;
 }
 
+/** El cierre de la ficha cuando NO pidió el pago: el próximo paso, sin la cuenta pegada. */
+export const CTA_FICHA_DE_SERVICIO = 'Si quieres separar tu cupo, respóndeme y te paso los datos de pago 🙌';
+export const SIN_CUENTAS_FICHA = 'La escuela te escribe por aquí con los datos de pago para separar tu cupo.';
+
 /**
- * La ficha del servicio: nombre, la descripción que escribió la escuela, cuándo,
- * el valor de hoy y cómo pagar. Todo sale de la base; nunca dice «gratis». Pura.
+ * La ficha del servicio: nombre, la descripción que escribió la escuela, cuándo y
+ * el valor de hoy. Todo sale de la base; nunca dice «gratis». Pura.
+ *
+ * SIN el bloque de pago pegado (decisión del usuario 2026-11-08, Monster: quien
+ * preguntaba «¿cuánto y cómo aparto?» recibía 2.581 caracteres con la cuenta al
+ * final y no la veía): las cuentas van en un mensaje APARTE y solo si las pide
+ * (`textoDePagoDeServicio`). Sin pedirlas, la ficha cierra con el próximo paso
+ * («respóndeme y te paso los datos de pago»); `o.pidePago` = el pago sale
+ * después, así que no lleva ese cierre.
  */
-export function textoFichaDeServicio(item: ItemConFicha, precio: PrecioDeServicio, cuentas: CuentaDePagoEmbudo[]): string {
+export function textoFichaDeServicio(
+    item: ItemConFicha, precio: PrecioDeServicio, cuentas: CuentaDePagoEmbudo[], o: { pidePago?: boolean } = {},
+): string {
     const cuando = cuandoEs({ iniciaEn: item.starts_at ?? null, terminaEn: item.ends_at ?? null });
-    const como = cuentas.length ? comoPagar(cuentas) : null;
-    const pago = como
-        ? `Para pagar o separar tu cupo, transfiere ${como}${como.endsWith('\n') ? '\n' : ' '}` +
-            'y envíame aquí mismo la foto o el PDF del comprobante 📸'
-        : 'La escuela te escribe por aquí con los datos de pago para separar tu cupo.';
+    const cierre = o.pidePago ? null : cuentas.length ? CTA_FICHA_DE_SERVICIO : SIN_CUENTAS_FICHA;
     // Si la escuela pegó en la descripción el TEXTO COMPLETO de su anuncio (≥ 700
     // caracteres: Monster, clínica 11-05) se manda tal cual, sin título ni líneas
-    // de valor repetidas, y solo se le agrega cómo pagar. Su texto ya trae fecha,
-    // precio y qué incluye; la versión recortada fue lo que la escuela rechazó.
+    // de valor repetidas. Su texto ya trae fecha, precio y qué incluye; la versión
+    // recortada fue lo que la escuela rechazó.
     const completo = String(item.description ?? '').trim();
     if (completo.length >= TEXTO_COMPLETO_MIN) {
         const cuerpo = completo.length > TEXTO_COMPLETO_MAX
@@ -579,12 +591,12 @@ export function textoFichaDeServicio(item: ItemConFicha, precio: PrecioDeServici
         // familia del club (el bot lo sabe por el número).
         const lineaAfiliado = precio.deAfiliado && precio.hoy !== null
             ? `Como afiliado del club, tu valor es *${cop(precio.hoy)}*.` : null;
-        return [cuerpo, lineaAfiliado, pago].filter(Boolean).join('\n\n');
+        return [cuerpo, lineaAfiliado, cierre].filter(Boolean).join('\n\n');
     }
     return [
         [`*${item.name}*`, descripcion(item.description)].filter(Boolean).join('\n'),
         [cuando ? `Cuándo: ${cuando}` : null, ...lineasDeValor(precio)].filter(Boolean).join('\n'),
-        pago,
+        cierre,
     ].filter(Boolean).join('\n\n');
 }
 
@@ -634,8 +646,11 @@ export interface CtxAnuncio {
     afiliado: () => Promise<boolean>;
     /** Cuentas de la escuela para ese motivo (las restringidas a otra cosa no salen). */
     cuentas: (motivo: Motivo) => Promise<CuentaDePagoEmbudo[]>;
-    /** La presentación (una vez cada 24 h) o ''. */
-    saludo: () => Promise<string>;
+    /**
+     * La presentación (una vez cada 24 h) o ''. Con `servicio` (la ficha de una
+     * venta), sin la clase de prueba: «te ayudo con la información y el cupo de…».
+     */
+    saludo: (servicio?: ItemConFicha) => Promise<string>;
     /** ¿Ya se le contestó lo escolar (freno de 30 días)? */
     yaContestado: () => Promise<boolean>;
     /** Crea o actualiza el lead. Devuelve el id (null en simulación o si falla). */
@@ -653,7 +668,11 @@ export interface CtxAnuncio {
      * inscripción si la escuela lo tiene PUBLICADO, prendido y sano. true = salió (o
      * se intentó: si no abre, el respaldo sigue por chat). Sin esto, el chat de hoy.
      */
-    ofrecerFormulario?: (p: { item: ItemConFicha; sinCuentas: boolean; leadId: string | null }) => Promise<boolean>;
+    ofrecerFormulario?: (p: {
+        item: ItemConFicha; sinCuentas: boolean; leadId: string | null;
+        /** Las cuentas ya salieron (pidió el pago): el respaldo del formulario puede decir «con los datos que te envié». */
+        datosDePagoEnviados?: boolean;
+    }) => Promise<boolean>;
     ahora?: () => Date;
 }
 
@@ -735,7 +754,7 @@ export async function atenderDestinoDeAnuncio(
         const pedazo = preguntaDetalleDeEvento(msg) ? fragmentoQueResponde(decision.item.description, msg) : null;
         if (!pedazo) return null;
         await ctx.enviar('Sobre *' + decision.item.name + '*:\n' + pedazo,
-            { ...base, servicio_id: decision.item.id, respuesta_de_detalle: true });
+            { ...base, servicio_id: decision.item.id, [MARCA_VENTA]: decision.item.id, respuesta_de_detalle: true });
         return 'anuncio_servicio';
     }
     const afiliado = await afiliadoSiHaceFalta(ctx, decision.destino === 'servicio' ? [decision.item] : decision.items);
@@ -754,9 +773,9 @@ export async function atenderDestinoDeAnuncio(
     if (precio.hoy === null && !precio.opciones.length) {
         const persona = { destino: 'persona' as const, motivo: 'sin_precio' as const, item };
         await ctx.guardarLead({ estado: 'nuevo', servicio: servicioDelLead(item), anuncio });
-        const saludo = await ctx.saludo();
+        const saludo = await ctx.saludo(item);
         await ctx.enviar(`${saludo ? `${saludo}\n\n` : ''}${textoAPersona(persona)}`,
-            { ...base, [MARCA_DESTINO]: 'persona', motivo_destino: 'sin_precio', servicio_id: item.id });
+            { ...base, [MARCA_DESTINO]: 'persona', motivo_destino: 'sin_precio', servicio_id: item.id, [MARCA_VENTA]: item.id });
         await ctx.avisarEscuela(detalleParaLaEscuela(referral, msg, `pregunta por «${item.name}», que no tiene precio cargado`));
         return 'anuncio_persona';
     }
@@ -765,24 +784,43 @@ export async function atenderDestinoDeAnuncio(
     // El lead primero: el esperado queda a su nombre y la cola lo encuentra por él.
     const leadId = await ctx.guardarLead({ estado: 'respondido', servicio: servicioDelLead(item), anuncio });
     const registrado = await ctx.registrarEsperado({ motivo, leadId }).catch(() => false);
-    const saludo = await ctx.saludo();
-    await ctx.enviar(`${saludo ? `${saludo}\n\n` : ''}${textoFichaDeServicio(item, precio, cuentas)}`, {
+    const saludo = await ctx.saludo(item);
+    // «¿Cuánto cuesta la clínica? ¿Cómo aparto mi cupo?» (el texto prellenado del
+    // anuncio): la ficha y DESPUÉS el pago en un mensaje aparte, corto y claro.
+    const pidePago = pideDatosDePago(msg);
+    await ctx.enviar(`${saludo ? `${saludo}\n\n` : ''}${textoFichaDeServicio(item, precio, cuentas, { pidePago })}`, {
         ...base,
         servicio_id: item.id,
+        [MARCA_VENTA]: item.id,
         precio_hoy: precio.hoy,
         ...(precio.abono !== null ? { abono: precio.abono } : {}),
         ...(precio.deAfiliado ? { afiliado: true } : {}),
         motivo_esperado: { motivo, monto: null, registrado },
         ...(cuentas.length ? {} : { sin_cuentas: true }),
     });
+    if (pidePago) {
+        await ctx.enviar(textoDePagoDeServicio(item, precio, cuentas), {
+            [MARCA_VENTA]: item.id,
+            ...(anuncio ? { anuncio } : {}),
+            step: PASO_VENTA.PAGO,
+            repetible: true,
+            datos_de_pago: cuentas.length > 0,
+            precio_hoy: precio.hoy,
+            ...(precio.abono !== null ? { abono: precio.abono } : {}),
+            ...(precio.deAfiliado ? { afiliado: true } : {}),
+            ...(cuentas.length ? {} : { sin_cuentas: true }),
+        });
+    }
     if (!cuentas.length) {
         await ctx.avisarEscuela(detalleParaLaEscuela(referral, msg,
             `pidió «${item.name}» y la escuela no tiene cuentas de pago cargadas: escríbele con los datos de pago`));
     }
-    // El formulario va DESPUÉS de la ficha: si no abre o lo cierran, la ficha ya
-    // tiene el valor y cómo pagar (nunca un callejón). Solo un precio (sin opciones).
+    // El formulario va DESPUÉS de la ficha (y del pago, si lo pidió): si no abre o lo
+    // cierran, la ficha ya dice el valor y cómo seguir (nunca un callejón). Solo un
+    // precio (sin opciones).
     if (ctx.ofrecerFormulario && !precio.opciones.length && precio.hoy !== null) {
-        await ctx.ofrecerFormulario({ item, sinCuentas: !cuentas.length, leadId }).catch(() => false);
+        await ctx.ofrecerFormulario({ item, sinCuentas: !cuentas.length, leadId, datosDePagoEnviados: pidePago && cuentas.length > 0 })
+            .catch(() => false);
     }
     return 'anuncio_servicio';
 }
