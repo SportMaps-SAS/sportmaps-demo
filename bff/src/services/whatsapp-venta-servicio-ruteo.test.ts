@@ -207,6 +207,20 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         for (const s of [...a.salidas, ...b.salidas]) expect(s.texto).not.toMatch(PROHIBIDO);
     });
 
+    it('fe695949: tras la PLANTILLA de la campaña, «ya envié el comprobante» nunca recibe «No reconozco este número»', async () => {
+        h.state.filas = [sal(60, '¡Hola familia! 🏐 Te recordamos la *Clínica de Armadores y Atacantes* de Monster´s Volley con ⭐ Jorge Mesa: 21 y 22 de noviembre. ¿Te enviamos toda la información y cómo reservar tu cupo?',
+            { type: 'template', ai_generated: false, payload: { step: 'campana', campana_id: 'camp-1', automatico: 'true' } })];
+        const a = await turno('Hola buena tarde, ya tengo el cupo de mi hijo');
+        expect(String(a.resultado)).toMatch(/^venta_/);
+        const b = await turno('Ya envié el comprobante tambien');
+        expect(b.resultado).toBe('venta_ya_pago');
+        for (const s of [...a.salidas, ...b.salidas]) {
+            expect(s.texto).not.toMatch(/no reconozco este n[uú]mero|correo electr[oó]nico/i);
+            expect(s.texto).not.toMatch(PROHIBIDO);
+        }
+        expect(b.salidas.map((s) => s.texto).join('\n')).toContain('nombre completo de quien asiste');
+    });
+
     it('venta + «Es posible agendar una clase de prueba?» → sale de la venta (flujo normal)', async () => {
         h.state.filas = [respuestaCampana(60)];
         const { resultado, salidas } = await turno('Es posible agendar una clase de prueba?');

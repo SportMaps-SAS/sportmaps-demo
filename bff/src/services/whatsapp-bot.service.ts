@@ -1070,8 +1070,11 @@ async function comprobanteEnColaDe(integration: WhatsAppIntegration, contactWaId
 
 /** El `responder` de la pregunta «¿a cuál cobro?»: pasa los botones a `deliver`. */
 function responderDeCobro(integration: WhatsAppIntegration, conversationId: string, contactWaId: string) {
-    return (texto: string, paso: string, botones?: BotonInteractivo[]) =>
-        deliver(integration, conversationId, contactWaId, texto, { step: paso },
+    // `payload` (frente C, 2026-11-08): la venta de un servicio marca el saliente con
+    // `venta_servicio_id`; sin pasarlo, la confirmación tras «nombre de quien asiste»
+    // salía sin la marca y la venta dejaba de reconocerse.
+    return (texto: string, paso: string, botones?: BotonInteractivo[], _linea?: unknown, payload?: Record<string, unknown>) =>
+        deliver(integration, conversationId, contactWaId, texto, { ...(payload ?? {}), step: paso },
             botones?.length ? { botones } : undefined);
 }
 
@@ -4061,6 +4064,21 @@ async function atenderDesconocidoEnEscuela(
     // Una presentación cada 24 h por conversación (`saludoDePresentacion`).
     const saludo = await saludoDePresentacion(conversationId, escuela);
     const S = saludo ? `${saludo}\n\n` : '';
+
+    // Venta activa (frente C, caso fe695949: «ya tengo el cupo de mi hijo / ya envié el
+    // comprobante» tras la campaña de la clínica): nunca «no reconozco este número» ni
+    // el pedido del correo. Normalmente la venta ya contestó arriba (0a-ter); esto
+    // cubre lo que llegue hasta acá con la venta abierta.
+    if (tema === 'pagos' && !botonId && !pideElClub(text)) {
+        const v = await ventaDelTurno(integration, conversationId, contactWaId);
+        if (v) {
+            marcarVentaEnElTurno(v.venta.item);
+            const r = await atenderVentaDeServicio(ctxVentaServicio(integration, conversationId, contactWaId,
+                await mensajesRecientes(conversationId), { familia: false }), v.venta, text);
+            if (r) return r;
+            marcarVentaEnElTurno(null);
+        }
+    }
 
     // Pagos Y precio: «¿qué precio tiene la mensualidad?». Puede ser una
     // familia desde otro celular o un prospecto, y no hay forma de saberlo sin
