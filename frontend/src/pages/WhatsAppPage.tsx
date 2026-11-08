@@ -29,6 +29,7 @@ import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/
 import { Campanas } from '@/components/whatsapp/Campanas';
 import { Anuncios } from '@/components/whatsapp/Anuncios';
 import { CoherenciaFicha } from '@/components/whatsapp/CoherenciaFicha';
+import { SeguimientoConversaciones } from '@/components/whatsapp/SeguimientoConversaciones';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -42,6 +43,7 @@ import {
     MessageSquare, RefreshCw, AlertTriangle, Clock, FileText, Inbox, Settings, Plus, Loader2, Power, BarChart3, CalendarCheck,
     Megaphone,
     Target,
+    ListChecks,
 } from 'lucide-react';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
@@ -423,6 +425,9 @@ export default function WhatsAppPage() {
                         <Inbox className="h-4 w-4 mr-1" /> Bandeja
                         {pendientesBandeja > 0 && <Badge variant="secondary" className="ml-2">{pendientesBandeja}</Badge>}
                     </TabsTrigger>
+                    <TabsTrigger value="seguimiento" className="h-full">
+                        <ListChecks className="h-4 w-4 mr-1" /> Seguimiento
+                    </TabsTrigger>
                     <TabsTrigger value="cortesias" className="h-full">
                         <CalendarCheck className="h-4 w-4 mr-1" /> Clases de cortesía
                     </TabsTrigger>
@@ -543,6 +548,11 @@ export default function WhatsAppPage() {
                 {/* ── Anuncios: qué pasa después del clic en un anuncio con botón de WhatsApp ── */}
                 <TabsContent value="anuncios">
                     {schoolId && <Anuncios schoolId={schoolId} />}
+                </TabsContent>
+
+                {/* ── Seguimiento: quién escribió, si respondió la escuela o el bot, quién espera ── */}
+                <TabsContent value="seguimiento">
+                    {schoolId && <SeguimientoConversaciones schoolId={schoolId} onAbrirConversacion={verChat} />}
                 </TabsContent>
 
                 {/* ── Bandeja ── */}
