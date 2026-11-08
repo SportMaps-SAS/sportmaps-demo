@@ -11,6 +11,7 @@ import { useToast } from '@/hooks/use-toast';
 import { adjustmentLabel, formatPesos, isMensualidad } from '@/lib/cobrosYPagos';
 import { todayColombia } from '@/lib/dateUtils';
 import { juntarPorAtleta } from '@/lib/pagosRecibidosOrden';
+import { TipoDeCobroBadge } from '@/components/payments/TipoDeCobroBadge';
 import {
     chargeBatchesApi,
     toChargeBatchError,
@@ -336,7 +337,11 @@ export function OperacionesTab({ canManage }: { canManage: boolean }) {
                                     {!d ? <p className="text-xs text-muted-foreground flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Cargando…</p> : juntarPorAtleta(d.rows, (r) => r.athlete_name).map((r) => (
                                         <div key={r.payment_id} className="text-xs space-y-1 border-b last:border-0 pb-1.5">
                                             <div className="flex flex-wrap justify-between gap-2">
-                                                <span>{r.athlete_name ? <><b>{r.athlete_name}</b> · </> : null}{r.concept}</span>
+                                                <span className="inline-flex flex-wrap items-center gap-1.5 min-w-0">
+                                                    {/* Qué es el cobro (Mensualidad, Clínica, Torneo…); el concepto va al lado. */}
+                                                    <TipoDeCobroBadge payment={r} conServicio={false} />
+                                                    <span>{r.athlete_name ? <><b>{r.athlete_name}</b> · </> : null}{r.concept}</span>
+                                                </span>
                                                 <span className="tabular-nums">{formatPesos(r.amount)} · {ROW_STATUS[r.status] ?? r.status}</span>
                                             </div>
                                             {[...(r.adjustments ?? []), ...(batchAdj[b.id] ?? []).filter((x) => x.payment_id === r.payment_id).map(reportToTag)]

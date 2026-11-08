@@ -10,7 +10,7 @@
  *   npm run qa:embudo -- --escuela monsters-volley-club --variante sin-valor,sin-cuentas
  *   npm run qa:embudo -- --escuela monsters-volley-club --anios 2009,2012 --transcripcion embudo.md
  *
- * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones (varias con coma; sin --solo
+ * Opciones: --solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones|ventas (varias con coma; sin --solo
  * corren todos) · --variante <nombre>[,<nombre>] (implica --solo variantes) ·
  * --paralelo N (conversaciones a la vez, 3 por defecto, máx. 8) · --anios ·
  * --transcripcion <archivo.md> · --verbose (deja ver los logs del bot).
@@ -67,6 +67,14 @@
  *   · Conversaciones (casos reales de producción, Monster 2026-11-05): mensajes personales a
  *     alguien de la escuela («Hola Pipe») sin aviso de registro, disputas de pago sin datos
  *     de pago, «este numero?» tras los datos de pago, y «el campamento del 21 de nov… edades».
+ *   · Ventas de servicio (plan docs/specs/whatsapp-ventas-de-servicio-blindaje.md, frente F):
+ *     para cada servicio vigente, el anuncio con el prellenado «¿Cuánto cuesta…? ¿Como aparto mi
+ *     cupo?» (ficha + pago APARTE), «más información» (ficha sin pago), el «Sí» de la campaña,
+ *     «Hola/Ok/./gracias/otra fecha» a mitad de la venta, las preguntas de detalle, la clase de
+ *     prueba pedida, «ya pagué», el afiliado y el reloj fijo en el borde de cada tramo. Nunca
+ *     sedes, clase de prueba sin pedirla, las preguntas del embudo, otro servicio ni el correo;
+ *     ningún monto fuera del catálogo/planes ni fecha de tramo mal. Reloj fijo, alias en memoria
+ *     y el turno de campaña salen de scripts/qa-replay-ventas.ts (ver ahí por qué).
  *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
  *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
  *     sin reglas de cancha sin resolver, títulos dentro del límite de WhatsApp,
@@ -109,6 +117,16 @@ import {
     payloadDeFormulario, ENV_SECRETO_TOKEN,
 } from '../src/services/whatsapp-flows.service';
 import { FORMULARIO_SERVICIO, PANTALLA_INICIAL_SERVICIO, CTA_FORMULARIO_SERVICIO } from '../src/services/whatsapp-formulario-servicio';
+import { eventosNombrados } from '../src/services/whatsapp-anuncio-destino';
+import { itemNombradoEn } from '../src/services/whatsapp-venta-contexto';
+import { tokensDistintivos } from '../src/services/whatsapp-venta-servicios.service';
+import { mediosDePago } from '../src/services/whatsapp-medios-de-pago.service';
+import type { CuentaDePagoEmbudo } from '../src/services/whatsapp-embudo-prospecto';
+import {
+    instalarReloj, instalarAliasesVirtuales, conReloj, instanteBogota, turnoDeCampanaSimulado, violacionesDeVenta,
+    montosPermitidos, mencionaMonto, precioEsperadoQa, abonoEsperadoQa, siguienteTramoQa, opcionesQa, tramosQa,
+    diaLegibleQa, ymdBogota, CONFIRMA_ESCUELA, montosDeEscuela, type ContextoVenta,
+} from './qa-replay-ventas';
 
 // ─── Argumentos ──────────────────────────────────────────────────────────────
 
@@ -116,8 +134,8 @@ function arg(nombre: string): string | null {
     const i = process.argv.indexOf(`--${nombre}`);
     return i >= 0 ? (process.argv[i + 1] ?? null) : null;
 }
-type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows' | 'pagos' | 'conversaciones';
-const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows', 'pagos', 'conversaciones'];
+type Bloque = 'matriz' | 'guiones' | 'despues' | 'variantes' | 'anuncios' | 'flows' | 'pagos' | 'conversaciones' | 'ventas';
+const BLOQUES: Bloque[] = ['matriz', 'guiones', 'despues', 'variantes', 'anuncios', 'flows', 'pagos', 'conversaciones', 'ventas'];
 const ESCUELA = arg('escuela');
 const VARIANTES_PEDIDAS = arg('variante')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
 const SOLO_CRUDO = arg('solo')?.split(',').map((s) => s.trim()).filter(Boolean) ?? null;
@@ -132,6 +150,11 @@ const MAX_TURNOS = 16;
 
 // Los logs del bot ([llm] uso, avisos del cortafuegos…) tapan el resumen: se callan.
 const log = console.log.bind(console);
+// Reloj por conversación (bloque ventas: borde de tramo) y alias `x:payload->>x` en las
+// tablas virtuales (la lectura de la venta activa los usa). Fuera de `conReloj` el reloj es
+// el real; el alias solo AGREGA claves. Detalle en scripts/qa-replay-ventas.ts.
+instalarReloj();
+instalarAliasesVirtuales();
 if (!VERBOSE) {
     const nada = () => undefined;
     console.log = nada; console.info = nada; console.warn = nada; console.error = nada; console.debug = nada;
@@ -212,7 +235,10 @@ async function cargarEscuela(clave: string): Promise<Escuela> {
         supabase.from('school_trial_slots').select('id, team_id, slot_date, start_time, max_capacity, reserved_count, is_open')
             .eq('school_id', id).eq('is_open', true).gte('slot_date', hoyBogota()).limit(2000),
     ]);
-    if (!embudoActivo(aj)) throw new Error('Esta escuela no tiene el embudo del interesado (wa_preguntas_prospecto).');
+    // Las ventas de servicio no dependen del embudo: `--solo ventas` corre en cualquier escuela.
+    if (!embudoActivo(aj) && !(SOLO.length === 1 && SOLO[0] === 'ventas')) {
+        throw new Error('Esta escuela no tiene el embudo del interesado (wa_preguntas_prospecto).');
+    }
     return armarEscuela(id, (data as any).name, aj, clase, rangos, (slots.data ?? []) as Fila[]);
 }
 
@@ -2432,6 +2458,430 @@ async function correrFlows(e: Escuela): Promise<Resultado[]> {
     return rs;
 }
 
+// ─── Ventas de servicio (plan whatsapp-ventas-de-servicio-blindaje, frente F) ─
+
+/**
+ * Para CADA servicio vigente de la escuela (`serviciosDeAnuncio`), todo lo que el bot
+ * mandaría en una venta, contra las reglas del plan (§2). Se escribió contra el
+ * comportamiento ESPERADO tras los frentes A/B/C: en develop del 2026-11-08 varios
+ * casos fallan a propósito (eso prueba que la batería detecta las fallas reales F1–F6).
+ *
+ *  · Anuncio con el prellenado «¿Cuánto cuesta…? ¿Como aparto mi cupo?» → la ficha y,
+ *    APARTE, el mensaje de pago: precio de HOY por tramo (con la fecha del siguiente),
+ *    abono, cuentas con titular y «envía el comprobante con el nombre completo de quien
+ *    asiste» (corto: ≤ 1.200 caracteres). La ficha va SIN el bloque de pago pegado.
+ *  · «Quiero más información» → la ficha SIN datos de pago.
+ *  · Afiliado (anuncio y familia del club) → su valor de afiliado en el mensaje de pago.
+ *  · El «Sí» de la campaña → el texto de la escuela + el pago aparte. Corre por
+ *    `atenderRespuestaDeCampana` como el webhook (turnoDeCampanaSimulado), con la
+ *    campaña y sus envíos en tablas virtuales.
+ *  · A mitad de la venta (tras la ficha o tras el «Sí»): «Hola», «Ok», «.», «gracias»,
+ *    «ese día tenemos torneo, ¿hay otra fecha?» → nunca sedes, clase de prueba, las
+ *    preguntas del embudo, otro servicio ni «escríbeme tu correo».
+ *  · Preguntas de detalle → el dato que la escuela configuró o «te lo confirma la
+ *    escuela» con aviso al buzón; nunca un dato inventado.
+ *  · «Es posible agendar una clase de prueba?» → sale de la venta (el club, permitido).
+ *  · «ya te mando el comprobante» → «con el nombre completo de quien asiste».
+ *  · Reloj fijo el día ANTES y el día DEL cambio de cada tramo de precio (Monster:
+ *    10-nov $300.000 / 11-nov $350.000; nunca «9 de noviembre»).
+ *  · Verificador global en TODO mensaje: ningún monto fuera del catálogo/planes y
+ *    ninguna fecha de tramo equivocada.
+ */
+
+const TABLAS_CAMPANA = ['whatsapp_campanas', 'whatsapp_campana_envios'];
+const PRELLENADO = (it: ItemConFicha) => `¿Cuánto cuesta ${eventoDe(it)}? ¿Como aparto mi cupo?`;
+const MAS_INFO = 'Quiero más información';
+const AFILIADO_SI = { wa_es_afiliado: () => ({ afiliado: true }) };
+
+interface CtxVentas {
+    e: Escuela;
+    items: ItemConFicha[];
+    /** Por id de ítem: las cuentas que el bot daría para ese motivo. */
+    cuentas: Map<string, CuentaDePagoEmbudo[]>;
+    permitidos: Set<number>;
+    integracionId: string;
+    /** Por id de ítem: el texto que la escuela aprobó para el «Sí» de su campaña. */
+    respuestaSi: Map<string, string>;
+}
+
+function eventoDe(it: ItemConFicha): string {
+    const ev = eventosNombrados([it.name, String(it.kind ?? '')])[0];
+    return ev === 'clinica' ? 'la clínica' : ev === 'campamento' ? 'el campamento' : ev === 'vacacional' ? 'el vacacional'
+        : ev === 'torneo' ? 'el torneo' : `«${it.name}»`;
+}
+
+const planoQa = (t: string | null | undefined) => normalizar(t).replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const cortoQa = (t: string, n = 90) => t.replace(/\s+/g, ' ').trim().slice(0, n);
+const juntarDigitos = (t: string) => t.replace(/(\d)[\s.-]+(?=\d)/g, '$1');
+
+/** ¿El texto trae el cuerpo de la ficha (la descripción que escribió la escuela)? */
+function traeDescripcion(texto: string, it: ItemConFicha): boolean {
+    const d = planoQa(it.description);
+    const t = planoQa(texto);
+    if (d.length < 60) return t.includes(planoQa(it.name)) && t.length > planoQa(it.name).length + 20;
+    const medio = Math.floor(d.length / 2);
+    return [d.slice(0, 45), d.slice(medio, medio + 45)].some((x) => t.includes(x));
+}
+
+/** ¿El texto trae alguna de las cuentas de pago (número o llave)? */
+function traeCuenta(texto: string, cuentas: CuentaDePagoEmbudo[]): boolean {
+    const t = juntarDigitos(texto);
+    const tp = planoQa(texto);
+    return cuentas.some((c) => {
+        const dig = String(c.numero ?? '').replace(/\D/g, '');
+        return dig.length >= 6 ? t.includes(dig) : !!planoQa(c.numero) && tp.includes(planoQa(c.numero));
+    });
+}
+
+/** El mensaje de pago de un turno: trae una cuenta (o, sin cuentas, habla del comprobante) y NO es la ficha. */
+function mensajeDePago(salidas: SalidaSimulada[], it: ItemConFicha, cuentas: CuentaDePagoEmbudo[]): SalidaSimulada | null {
+    return [...salidas].reverse().find((s) => !traeDescripcion(s.texto, it)
+        && (traeCuenta(s.texto, cuentas) || (!cuentas.length && /comprobante|datos de pago/i.test(s.texto)))) ?? null;
+}
+
+const esFichaDe = (s: SalidaSimulada, it: ItemConFicha) => traeDescripcion(s.texto, it) || s.texto.includes(`*${it.name}*`);
+
+function nombraServicio(texto: string, it: ItemConFicha): boolean {
+    const t = ` ${planoQa(texto)} `;
+    if (tokensDistintivos(it.name).some((k) => t.includes(` ${k} `))) return true;
+    const propios = eventosNombrados([it.name, String(it.kind ?? '')]);
+    return eventosNombrados([texto]).some((e) => propios.includes(e));
+}
+
+function contextoDeVenta(cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean; enVenta?: boolean } = {}): ContextoVenta {
+    return {
+        items: cv.items, item: it, permitidos: cv.permitidos,
+        preguntasEmbudo: cv.e.preguntas.map((p) => ultimaLinea(p.texto)).filter((s) => s.length >= 12),
+        enVenta: o.enVenta ?? true, pidioClub: !!o.pidioClub, revisarMontos: true,
+    };
+}
+
+/** Lo prohibido en el último turno (las reglas de la venta). */
+function revisarTurnoVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean } = {}): void {
+    for (const s of paraLaFamilia(c.turnos.at(-1)?.salidas ?? [])) {
+        for (const v of violacionesDeVenta(s, contextoDeVenta(cv, it, o))) r.fallas.push(`[${v.codigo}] ${v.detalle}`);
+    }
+}
+
+/** Verificador global: montos y fechas de tramo en TODO lo propio de la conversación. */
+function revisarGlobalVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha): void {
+    for (const t of c.turnos.slice(c.heredados)) {
+        if (t.sistema) continue;
+        for (const s of paraLaFamilia(t.salidas)) {
+            for (const v of violacionesDeVenta(s, contextoDeVenta(cv, it, { enVenta: false }))) r.fallas.push(`[${v.codigo}] ${v.detalle}`);
+        }
+    }
+}
+
+/**
+ * El turno pidió precio o cómo apartar: la ficha (si salió) va SIN datos de pago y el
+ * mensaje de pago sale APARTE con lo de ese día.
+ */
+function revisarPagoAparte(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha, o: { hoy: string; afiliado?: boolean }): void {
+    const salidas = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+    if (!salidas.length) return; // el silencio lo anota `cerrar`
+    const cuentas = cv.cuentas.get(it.id) ?? [];
+    const afiliado = !!o.afiliado;
+    for (const f of salidas.filter((s) => esFichaDe(s, it))) {
+        debe(r, !traeCuenta(f.texto, cuentas), 'la ficha trae el bloque de pago pegado (el pago va en un mensaje aparte)');
+    }
+    const pago = mensajeDePago(salidas, it, cuentas);
+    debe(r, !!pago, 'pidió el precio / cómo apartar y no salió el mensaje de pago APARTE (precio de hoy, abono, cuenta y titular)');
+    if (!pago) return;
+    const ops = opcionesQa(it);
+    const precio = precioEsperadoQa(it, o.hoy, afiliado);
+    if (ops.length) {
+        for (const op of ops) {
+            const valor = afiliado && op.precioAfiliado ? op.precioAfiliado : op.precio;
+            if (valor) debe(r, mencionaMonto(pago.texto, valor), `el mensaje de pago no dice el valor de «${op.etiqueta}» (${formatoPesos(valor)})`);
+        }
+    } else if (precio) {
+        debe(r, mencionaMonto(pago.texto, precio), `el mensaje de pago no dice el precio de ${afiliado ? 'afiliado' : 'hoy'} (${formatoPesos(precio)}, ${o.hoy})`);
+        const abono = abonoEsperadoQa(it, precio);
+        if (abono) debe(r, mencionaMonto(pago.texto, abono), `el mensaje de pago no dice el abono mínimo (${formatoPesos(abono)})`);
+        const sig = siguienteTramoQa(it, o.hoy, afiliado);
+        if (sig) {
+            const t = normalizar(pago.texto);
+            debe(r, t.includes(diaLegibleQa(sig.desde, 1)) || t.includes(diaLegibleQa(sig.desde)),
+                `no dice hasta cuándo va ese precio (hasta el ${diaLegibleQa(sig.desde, 1)}; desde el ${diaLegibleQa(sig.desde)}, ${formatoPesos(sig.precio)})`);
+        } else {
+            // Ya pasó el cambio de precio: el valor viejo no puede salir como el de hoy.
+            const viejos = [Number(it.price), ...tramosQa(it).filter((x) => x.desde <= o.hoy).map((x) => x.precio)]
+                .filter((n) => n > 0 && n !== precio && n !== abono);
+            for (const v of [...new Set(viejos)]) if (!afiliado) debe(r, !mencionaMonto(pago.texto, v), `el ${o.hoy} el mensaje de pago todavía dice ${formatoPesos(v)} (el precio de hoy es ${formatoPesos(precio)})`);
+        }
+    }
+    for (const n of [...new Set(cuentas.map((x) => String(x.numero ?? '')))]) {
+        debe(r, traeCuenta(pago.texto, cuentas.filter((x) => x.numero === n)), `el mensaje de pago no trae la cuenta ${n}`);
+    }
+    const titular = cuentas.find((x) => x.titular)?.titular;
+    if (titular) debe(r, planoQa(pago.texto).includes(planoQa(titular)), `el mensaje de pago no dice el titular (${titular})`);
+    debe(r, /comprobante/i.test(pago.texto), 'el mensaje de pago no pide el comprobante');
+    debe(r, /nombre completo/i.test(pago.texto), 'el mensaje de pago no pide el nombre completo de quien asiste');
+    debe(r, pago.texto.length <= 1200, `el mensaje de pago tiene ${pago.texto.length} caracteres (corto y claro: ≤ 1.200)`);
+}
+
+function sembrarCampana(c: Conversacion, cv: CtxVentas, it: ItemConFicha): string {
+    const id = randomUUID();
+    c.sembrar('whatsapp_campanas', [{
+        id, school_id: cv.e.id, integration_id: cv.integracionId, nombre: `Campaña QA — ${it.name}`,
+        respuesta_si: cv.respuestaSi.get(it.id) ?? null, estado: 'enviada',
+    }]);
+    c.sembrar('whatsapp_campana_envios', []);
+    const texto = `¡Hola! 🏐 Te recordamos ${eventoDe(it)}: *${it.name}*. ¿Quieres que te enviemos la información?`;
+    const payload = { step: 'campana', campana_id: id, plantilla: 'qa_campana', automatico: true };
+    const momento = new Date(Date.now() - 120_000).toISOString();
+    (c.sesion.estado.tablas!.whatsapp_messages ??= []).push({
+        id: randomUUID(), conversation_id: conversacionDePrueba(c.sesion), integration_id: cv.integracionId,
+        direction: 'outbound', type: 'template', text_body: texto, payload, ai_generated: false,
+        wa_message_id: `qa-${randomUUID()}`, from_wa_id: null, to_wa_id: c.contacto(), wa_timestamp: momento, created_at: momento, status: 'sent',
+    });
+    c.turnos.push({
+        entrada: 'plantilla de la campaña (sembrada)', botonId: null, salidas: [{ texto, step: 'campana', botones: [], payload } as SalidaSimulada],
+        bloqueadas: [], nota: null, fase: c.fase, sistema: true,
+    });
+    return id;
+}
+
+/** El botón «Sí» de la plantilla (`smc:<id>:si`), por el servicio de la campaña como el webhook. */
+async function tocarSiDeCampana(c: Conversacion, campanaId: string): Promise<SalidaSimulada[]> {
+    const botonId = `smc:${campanaId}:si`;
+    const t = await turnoDeCampanaSimulado(c.sesion, { waMessageId: `qa-${randomUUID()}`, textBody: 'Sí, envíame la info', botonId });
+    if (!t) return c.decir('Sí, envíame la info', botonId);
+    c.turnos.push({ entrada: 'Sí, envíame la info ⟵ botón de la campaña', botonId, salidas: t.salidas, bloqueadas: t.bloqueadas, nota: t.nota, fase: c.fase });
+    return paraLaFamilia(t.salidas);
+}
+
+const anuncioDe = (it: ItemConFicha) => anuncio(`qa-ad-venta-${it.id.slice(0, 8)}`, it.name, 'Separa tu cupo.');
+
+/** Las preguntas de detalle y con qué se reconoce que contestó con el dato (null = no está en los datos). */
+function preguntasDeDetalle(it: ItemConFicha, cuentas: CuentaDePagoEmbudo[]): { texto: string; dato: ((t: string) => boolean) | null }[] {
+    const desc = String(it.description ?? '');
+    const edad = /(\d{1,2})\s*a[ñn]os/i.exec(desc)?.[1];
+    const titular = cuentas.find((c) => c.titular)?.titular ?? null;
+    const llave = cuentas.some((c) => /llave|bre-?b/i.test(c.tipo));
+    const dia = Number(ymdBogota(it.ends_at ?? it.starts_at ?? new Date().toISOString()).slice(8, 10));
+    const precio = precioEsperadoQa(it, hoyBogota(), false);
+    return [
+        { texto: '¿incluye grupo femenino?', dato: /mujer|femenin|niñas/i.test(desc) ? (t) => /mujer|femenin|niñas/i.test(t) : null },
+        { texto: '¿el valor incluye los dos días?', dato: (t) => /(los|las|ambos|ambas|dos|2) (d[ií]as|jornadas)/i.test(t) || mencionaMonto(t, precio) },
+        { texto: 'mi hija tiene 12 años', dato: edad ? (t) => new RegExp(`\\b${edad}\\b`).test(t) : null },
+        { texto: '¿quién es el titular de la cuenta?', dato: titular ? (t) => planoQa(t).includes(planoQa(titular)) : null },
+        { texto: '¿puedo pagar por llave?', dato: llave ? (t) => /llave|bre-?b/i.test(t) && traeCuenta(t, cuentas) : (t) => traeCuenta(t, cuentas) },
+        { texto: '¿con el pago ya tengo el cupo?', dato: (t) => /escuela[^.\n]{0,60}(valida|confirma|verifica)|(valida|confirma|verifica)[^.\n]{0,60}escuela/i.test(t) },
+        { texto: `¿puedo ir solo el ${dia}?`, dato: null },
+        { texto: '¿puedo entrar con acompañante?', dato: null },
+    ];
+}
+
+/** Una conversación del bloque (nueva, o bifurcada de una base), con su reloj si se pide. */
+async function correrVenta(
+    titulo: string, cv: CtxVentas, it: ItemConFicha, correr: (c: Conversacion, r: Resultado) => Promise<void>,
+    o: { reloj?: number; base?: Conversacion | null; familia?: boolean } = {},
+): Promise<Resultado> {
+    const ejecutar = async () => {
+        const c = o.base ? o.base.bifurcar(titulo) : new Conversacion(titulo, cv.e.id, nuevoN());
+        if (o.familia) { c.sesion.rol = 'papa'; c.sesion.parent_id = randomUUID(); }
+        const r = nuevoResultado(titulo, c, 'ventas');
+        r.desenlace = 'respuesta';
+        await protegido(r, () => correr(c, r));
+        revisarGlobalVenta(c, r, cv, it);
+        cerrar(r, cv.e, null);
+        progreso(r);
+        return r;
+    };
+    return o.reloj ? conReloj(o.reloj, ejecutar) : ejecutar();
+}
+
+async function correrVentas(e: Escuela): Promise<Resultado[]> {
+    const items = await serviciosDeAnuncio(e.id);
+    if (!items.length) {
+        const c = new Conversacion('la escuela no tiene servicios vigentes en el catálogo', e.id, nuevoN());
+        const r = nuevoResultado(c.titulo, c, 'ventas');
+        noAplica(r, 'sin servicios vigentes (school_tournament_items activos, sin evento, sin terminar)');
+        process.stdout.write('\n');
+        return [r];
+    }
+    const [integ, clase, extras, campanas] = await Promise.all([
+        integracionParaSimular(e.id),
+        ajustesClasePrueba(e.id),
+        montosDeEscuela(e.id),
+        supabase.from('whatsapp_campanas').select('respuesta_si').eq('school_id', e.id).limit(30),
+    ]);
+    const cuentas = new Map<string, CuentaDePagoEmbudo[]>();
+    for (const it of items) {
+        const motivo = MOTIVOS_DE_ITEM.includes(String(it.kind)) ? String(it.kind) : 'otro';
+        cuentas.set(it.id, (await mediosDePago(e.id, { categoria: motivo as any })).cuentas);
+    }
+    // El «Sí» de la campaña: el texto real de la escuela que nombra ese servicio (el más largo); si no hay, su descripción.
+    const respuestaSi = new Map<string, string>();
+    for (const it of items) {
+        const reales = ((campanas.data ?? []) as any[]).map((x) => String(x.respuesta_si ?? '').trim())
+            .filter((t) => t.length >= 60 && itemNombradoEn(t, items)?.id === it.id).sort((a, b) => b.length - a.length);
+        respuestaSi.set(it.id, reales[0] ?? (String(it.description ?? '').trim() || `*${it.name}*`));
+    }
+    const cv: CtxVentas = {
+        e, items, cuentas, integracionId: integ.id, respuestaSi,
+        permitidos: montosPermitidos(items, [clase?.precio, e.precio, ...extras]),
+    };
+    const hoy = hoyBogota();
+
+    return conTablasVirtuales(TABLAS_CAMPANA, async () => {
+        const rs: Resultado[] = [];
+        const bases = new Map<string, { ficha: Conversacion | null; campana: Conversacion | null }>();
+
+        // ── Fase 1: lo que arranca de cero (y deja las bases para bifurcar) ──
+        type Tarea = () => Promise<Resultado>;
+        const fase1: Tarea[] = [];
+        for (const it of items) {
+            const base = { ficha: null as Conversacion | null, campana: null as Conversacion | null };
+            bases.set(it.id, base);
+            const tieneAfiliado = Number(it.precio_afiliado) > 0 || opcionesQa(it).some((x) => x.precioAfiliado);
+            fase1.push(() => correrVenta(`[${it.name}] anuncio + «${PRELLENADO(it)}» → ficha y pago APARTE`, cv, it, async (c, r) => {
+                await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it) });
+                debe(r, paraLaFamilia(c.turnos.at(-1)!.salidas).some((s) => esFichaDe(s, it)), 'no mandó la ficha del servicio');
+                revisarPagoAparte(c, r, cv, it, { hoy });
+                revisarTurnoVenta(c, r, cv, it);
+            }));
+            fase1.push(() => correrVenta(`[${it.name}] anuncio + «${MAS_INFO}» → la ficha SIN bloque de pago`, cv, it, async (c, r) => {
+                await c.decir(MAS_INFO, null, { referral: anuncioDe(it) });
+                const fam = paraLaFamilia(c.turnos.at(-1)!.salidas);
+                debe(r, fam.some((s) => esFichaDe(s, it)), 'no mandó la ficha del servicio');
+                debe(r, !fam.some((s) => traeCuenta(s.texto, cv.cuentas.get(it.id) ?? [])),
+                    'a «más información» le mandó los datos de pago (la ficha va SIN el bloque de pago; el pago, cuando lo pidan)');
+                revisarTurnoVenta(c, r, cv, it);
+                base.ficha = c;
+            }));
+            if (tieneAfiliado) {
+                fase1.push(() => correrVenta(`[${it.name}] afiliado: anuncio + prellenado → pago aparte con su valor de afiliado`, cv, it, async (c, r) => {
+                    await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it), rpc: AFILIADO_SI });
+                    revisarPagoAparte(c, r, cv, it, { hoy, afiliado: true });
+                    revisarTurnoVenta(c, r, cv, it);
+                }));
+                fase1.push(() => correrVenta(`[${it.name}] FAMILIA del club: «${PRELLENADO(it)}» → pago aparte con su valor de afiliado`, cv, it, async (c, r) => {
+                    await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it), rpc: AFILIADO_SI });
+                    revisarPagoAparte(c, r, cv, it, { hoy, afiliado: true });
+                    revisarTurnoVenta(c, r, cv, it);
+                }, { familia: true }));
+            }
+            fase1.push(() => correrVenta(`[${it.name}] campaña: «Sí, envíame la info» → el texto de la escuela + el pago aparte`, cv, it, async (c, r) => {
+                const id = sembrarCampana(c, cv, it);
+                await tocarSiDeCampana(c, id);
+                const fam = paraLaFamilia(c.turnos.at(-1)!.salidas);
+                const textoEscuela = planoQa(cv.respuestaSi.get(it.id)).slice(0, 60);
+                debe(r, fam.some((s) => planoQa(s.texto).includes(textoEscuela)), 'no mandó el texto que la escuela aprobó para el «Sí»');
+                revisarPagoAparte(c, r, cv, it, { hoy });
+                revisarTurnoVenta(c, r, cv, it);
+                base.campana = c;
+            }));
+            // Reloj fijo: el día antes y el día del cambio de cada tramo (si el servicio todavía no empezó ese día).
+            for (const t of tramosQa(it)) {
+                const antes = masDias(t.desde, -1);
+                const inicio = it.starts_at ? ymdBogota(it.starts_at) : null;
+                for (const dia of [antes, t.desde]) {
+                    if (inicio && dia >= inicio) continue;
+                    fase1.push(() => correrVenta(`[${it.name}] reloj ${dia}: prellenado → ${formatoPesos(precioEsperadoQa(it, dia, false) ?? 0)} y las fechas del tramo`, cv, it, async (c, r) => {
+                        await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it) });
+                        revisarPagoAparte(c, r, cv, it, { hoy: dia });
+                        revisarTurnoVenta(c, r, cv, it);
+                    }, { reloj: instanteBogota(dia, '10:00') }));
+                }
+            }
+        }
+        const r1 = await enParalelo(fase1, (f) => f());
+        rs.push(...r1);
+
+        // ── Fase 2: a mitad de la venta (bifurcadas de la ficha y del «Sí») ──
+        const fase2: Tarea[] = [];
+        for (const it of items) {
+            const base = bases.get(it.id)!;
+            const cuentasIt = cv.cuentas.get(it.id) ?? [];
+            const ruido: { texto: string; revisar: (c: Conversacion, r: Resultado) => void; silencioOk?: boolean }[] = [
+                {
+                    texto: 'Hola',
+                    revisar: (c, r) => {
+                        debe(r, c.hablo(), 'a «Hola» a mitad de la venta no le contestó nada');
+                        if (c.hablo()) debe(r, nombraServicio(c.ultimoTexto(), it), `a «Hola» no le habló de ${eventoDe(it)}: «${cortoQa(c.ultimoTexto())}»`);
+                    },
+                },
+                {
+                    texto: 'Ok', silencioOk: true,
+                    revisar: (c, r) => { if (c.hablo()) debe(r, !paraLaFamilia(c.turnos.at(-1)!.salidas).some((s) => esFichaDe(s, it)), 'a «Ok» le repitió la ficha (bucle)'); },
+                },
+                {
+                    texto: '.', silencioOk: true,
+                    revisar: (c, r) => { if (c.hablo()) debe(r, !paraLaFamilia(c.turnos.at(-1)!.salidas).some((s) => esFichaDe(s, it)), 'a «.» le repitió la ficha (bucle)'); },
+                },
+                {
+                    texto: 'gracias', silencioOk: true,
+                    revisar: (c, r) => {
+                        if (c.hablo()) debe(r, c.ultimoTexto().length <= 400 && !traeCuenta(c.ultimoTexto(), cuentasIt), `a «gracias» le contestó más que un cierre: «${cortoQa(c.ultimoTexto())}»`);
+                    },
+                },
+                {
+                    texto: 'ese día tenemos torneo, ¿hay otra fecha?',
+                    revisar: (c, r) => {
+                        debe(r, c.hablo(), 'a «¿hay otra fecha?» no le contestó nada');
+                        debe(r, (c.turnos.at(-1)?.salidas ?? []).some(esNotaDelSimulador), 'no le pasó «¿hay otra fecha?» a la escuela (buzón)');
+                    },
+                },
+            ];
+            for (const [origen, b] of [['tras la ficha', base.ficha], ['tras el «Sí» de la campaña', base.campana]] as const) {
+                for (const x of ruido) {
+                    // Tras el «Sí», con «Hola» y «Ok» basta (el resto ya lo cubre la ficha).
+                    if (origen !== 'tras la ficha' && !['Hola', 'Ok'].includes(x.texto)) continue;
+                    fase2.push(() => correrVenta(`[${it.name}] ${origen}: «${x.texto}» → nada del club ni del embudo`, cv, it, async (c, r) => {
+                        if (!b) { r.avisos.push('la base de la venta no se armó (ver su guion)'); }
+                        await c.decir(x.texto, null, { silencioOk: x.silencioOk });
+                        revisarTurnoVenta(c, r, cv, it);
+                        x.revisar(c, r);
+                    }, { base: b }));
+                }
+            }
+            for (const q of preguntasDeDetalle(it, cuentasIt)) {
+                fase2.push(() => correrVenta(`[${it.name}] detalle: «${q.texto}» → el dato o «te lo confirma la escuela»`, cv, it, async (c, r) => {
+                    await c.decir(q.texto);
+                    revisarTurnoVenta(c, r, cv, it);
+                    if (!c.hablo()) return; // el silencio lo anota `cerrar`
+                    const t = c.ultimoTexto();
+                    const conDato = q.dato ? q.dato(t) : false;
+                    const confirma = CONFIRMA_ESCUELA.test(t);
+                    debe(r, conDato || confirma, q.dato
+                        ? `no dio el dato que la escuela configuró ni «te lo confirma la escuela»: «${cortoQa(t)}»`
+                        : `no está en los datos y no dijo «te lo confirma la escuela»: «${cortoQa(t)}»`);
+                    if (confirma && !conDato) {
+                        debe(r, (c.turnos.at(-1)?.salidas ?? []).some(esNotaDelSimulador), 'dijo que la escuela lo confirma pero no le pasó la pregunta (buzón)');
+                    }
+                }, { base: base.ficha }));
+            }
+            fase2.push(() => correrVenta(`[${it.name}] «Es posible agendar una clase de prueba?» → sale de la venta (el club, permitido)`, cv, it, async (c, r) => {
+                await c.decir('Es posible agendar una clase de prueba?');
+                revisarTurnoVenta(c, r, cv, it, { pidioClub: true });
+                debe(r, c.hablo(), 'a la clase de prueba pedida no le contestó nada');
+                const fam = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+                const club = fam.some((s) => /clase/i.test(s.texto) || (s.opciones ?? []).some((o) => o.id.startsWith(BOTON_EMBUDO.SEDE))
+                    || (cv.e.preguntas[0] && preguntoClave(s.texto, cv.e, cv.e.preguntas[0].clave)));
+                debe(r, club, 'no salió de la venta hacia la clase de prueba que pidió');
+                debe(r, !fam.some((s) => esFichaDe(s, it)), 'le repitió la ficha del servicio en vez de atender la clase de prueba');
+            }, { base: base.ficha }));
+            fase2.push(() => correrVenta(`[${it.name}] «ya te mando el comprobante» → con el nombre completo de quien asiste`, cv, it, async (c, r) => {
+                await c.decir('ya te mando el comprobante');
+                revisarTurnoVenta(c, r, cv, it);
+                debe(r, c.hablo(), 'a «ya te mando el comprobante» no le contestó nada');
+                if (c.hablo()) debe(r, /nombre completo/i.test(c.ultimoTexto()), `no le pidió el nombre completo de quien asiste: «${cortoQa(c.ultimoTexto())}»`);
+            }, { base: base.ficha }));
+            fase2.push(() => correrVenta(`[${it.name}] tras la ficha: «¿Cuánto es y cómo pago?» → el pago aparte`, cv, it, async (c, r) => {
+                await c.decir('¿Cuánto es y cómo pago?');
+                revisarPagoAparte(c, r, cv, it, { hoy });
+                revisarTurnoVenta(c, r, cv, it);
+            }, { base: base.ficha }));
+        }
+        rs.push(...await enParalelo(fase2, (f) => f()));
+        process.stdout.write('\n');
+        return rs;
+    });
+}
+
 // ─── Reporte ─────────────────────────────────────────────────────────────────
 
 const esBien = (r: Resultado) => !r.fallas.length && !r.esperadas.length;
@@ -2483,7 +2933,7 @@ function imprimirFallas(rs: Resultado[]): void {
 
 (async () => {
     if (!ESCUELA || (SOLO_CRUDO && SOLO.length !== SOLO_CRUDO.length)) {
-        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones[,…]] [--variante <nombre>[,…]] '
+        log('Uso: npm run qa:embudo -- --escuela <uuid|slug> [--solo matriz|guiones|despues|variantes|anuncios|flows|pagos|conversaciones|ventas[,…]] [--variante <nombre>[,…]] '
             + '[--paralelo N] [--anios 2009,2012] [--transcripcion archivo.md] [--verbose]');
         log(`Variantes: ${VARIANTES.map((v) => v.nombre).join(', ')}`);
         process.exit(2);
@@ -2508,6 +2958,7 @@ function imprimirFallas(rs: Resultado[]): void {
         if (b === 'flows') rs = await correrFlows(escuela);
         if (b === 'pagos') rs = await correrPagos(escuela);
         if (b === 'conversaciones') rs = await correrConversaciones(escuela);
+        if (b === 'ventas') rs = await correrVentas(escuela);
         if (b === 'variantes') {
             const v = await correrVariantes(escuela);
             rs = v.resultados;
