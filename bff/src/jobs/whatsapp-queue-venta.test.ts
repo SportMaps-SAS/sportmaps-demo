@@ -512,7 +512,7 @@ describe('(a) Nicolás, Clínica de armadores (ficha pegada por la escuela 4 dí
         // 12:12 — la MISMA foto otra vez.
         enHora('2026-11-08T12:12:20-05:00');
         await procesar(foto('f2', A, '2026-11-08T12:12:10-05:00'), OCR_A, A);
-        expect(textosEnviados().slice(1)).toEqual(['Ese comprobante ya lo tenemos ✅']);
+        expect(textosEnviados().slice(1)).toEqual(['Ese comprobante ya lo teníamos ✅']);
         expect(fila('f2')).toMatchObject({ status: 'ignored', result_type: 'none', result_ref_id: pagos()[0].id });
         expect(fila('f2').error_message).toMatch(/^venta_comprobante_repetido: misma imagen/);
 
@@ -529,7 +529,7 @@ describe('(a) Nicolás, Clínica de armadores (ficha pegada por la escuela 4 dí
         expect(fila('f3').error_message).toContain('asiste: Nicolás Cubides Ávila');
 
         // 12:19 — la foto de $15.000 otra vez (sigue en la bandeja) → repetida, sin mensaje nuevo
-        // (el mismo «ya lo tenemos» salió hace menos de 10 min: no se repite).
+        // (el mismo «ya lo teníamos» salió hace menos de 10 min: no se repite).
         enHora('2026-11-08T12:20:00-05:00');
         await procesar(foto('f4', B, '2026-11-08T12:19:56-05:00'), OCR_B, B);
         expect(fila('f4').error_message).toMatch(/^venta_comprobante_repetido: misma imagen que la fila f3/);
@@ -543,7 +543,7 @@ describe('(a) Nicolás, Clínica de armadores (ficha pegada por la escuela 4 dí
         expect(crearLlamadas()).toHaveLength(1);
         expect(pagos().map((p) => p.payment_category)).toEqual(['clase_extra']);
         expect(textosEnviados().every((t) => !/deportista|correo|Elige la sede/i.test(t))).toBe(true);
-        expect(textosEnviados().filter((t) => t === 'Ese comprobante ya lo tenemos ✅')).toHaveLength(2);
+        expect(textosEnviados().filter((t) => t === 'Ese comprobante ya lo teníamos ✅')).toHaveLength(2);
         // Todo lo que salió de la cola en la venta lleva la marca del servicio.
         expect(salientes().every((m) => m.payload?.venta_servicio_id === CLINICA_ID)).toBe(true);
     });
@@ -633,7 +633,9 @@ describe('(b) abono de $150.000 → cobro parcial; el saldo de $150.000 va al MI
         expect(pagos()).toHaveLength(1);
         expect(pago).toMatchObject({ status: 'awaiting_approval', ocr_amount: 150000, ocr_reference: 'SA2' });
         expect(fila('f2')).toMatchObject({ status: 'done', result_type: 'payment_receipt', result_ref_id: pago.id });
-        expect(fila('f2').error_message).toMatch(/^saldo_en_revision: Clínica de armadores y atacantes — saldo de \$150\.000/);
+        expect(fila('f2').error_message).toMatch(/^saldo_de_abono: Clínica de armadores y atacantes — saldo de \$150\.000/);
+        // El saldo pasa por la evaluación de siempre (como el saldo por el enlace /p/:token).
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pago.id, undefined);
         expect(textosEnviados()[1]).toBe('Recibí el saldo de *$150.000* para la *Clínica de armadores y atacantes* a nombre de '
             + '*Sara Gómez*: con esto completas *$300.000*. La escuela lo valida y te confirma el cupo por aquí.');
     });
@@ -752,11 +754,11 @@ describe('(e) monto que no es del servicio y (f) comprobante repetido', () => {
         expect(fila('f1').error_message).toMatch(/^venta_destino_no_confirmado: comprobante de \$300\.000 para Clínica de armadores y atacantes a un destino sin leer/);
     });
 
-    it('(f) misma referencia del banco que un cobro ya pagado (otra captura del mismo pago) → «ya lo tenemos», sin cobro', async () => {
+    it('(f) misma referencia del banco que un cobro ya pagado (otra captura del mismo pago) → «ya lo teníamos», sin cobro', async () => {
         h.tabla('payments').push({ id: 'pay-viejo', school_id: ESCUELA, ocr_reference: 'REF-UNICA', receipt_image_sha256: 'otro', status: 'paid', amount: 300000 });
         enHora('2026-11-08T09:00:00-05:00');
         await procesar(foto('f1', 'captura2', '2026-11-08T08:59:00-05:00'), comprobante(300000, { reference: 'REF-UNICA' }), 'captura2');
-        expect(textosEnviados()).toEqual(['Ese comprobante ya lo tenemos ✅']);
+        expect(textosEnviados()).toEqual(['Ese comprobante ya lo teníamos ✅']);
         expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'none', result_ref_id: 'pay-viejo' });
         expect(fila('f1').error_message).toMatch(/^venta_comprobante_repetido: misma referencia/);
         expect(crearLlamadas()).toHaveLength(0);
@@ -770,12 +772,12 @@ describe('(e) monto que no es del servicio y (f) comprobante repetido', () => {
         expect(textosEnviados()).toEqual([TEXTO_PREGUNTA]);
     });
 
-    it('(f) la misma foto mientras la primera espera el nombre → «ya lo tenemos», y la respuesta crea UN cobro', async () => {
+    it('(f) la misma foto mientras la primera espera el nombre → «ya lo teníamos», y la respuesta crea UN cobro', async () => {
         enHora('2026-11-08T09:00:00-05:00');
         await procesar(foto('f1', 'X', '2026-11-08T08:59:00-05:00'), comprobante(300000, { reference: 'X1' }), 'X');
         enHora('2026-11-08T09:01:00-05:00');
         await procesar(foto('f2', 'X', '2026-11-08T09:00:30-05:00'), comprobante(300000, { reference: 'X1' }), 'X');
-        expect(textosEnviados()).toEqual([TEXTO_PREGUNTA, 'Ese comprobante ya lo tenemos ✅']);
+        expect(textosEnviados()).toEqual([TEXTO_PREGUNTA, 'Ese comprobante ya lo teníamos ✅']);
         expect(fila('f2').error_message).toMatch(/^venta_comprobante_repetido: misma imagen que la fila f1/);
         enHora('2026-11-08T09:02:00-05:00');
         const bot = responderDelBot();

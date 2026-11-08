@@ -144,7 +144,8 @@ vi.mock('../services/whatsapp.service', async (original) => {
 });
 vi.mock('../services/ocr.service', () => ({ extractReceipt: vi.fn(async () => h.ocr) }));
 vi.mock('../services/enrollment-ocr.service', () => ({ extractEnrollmentForm: vi.fn(async () => null) }));
-vi.mock('../services/whatsapp-atencion.service', () => ({ debeAtender: vi.fn(async () => h.atencion) }));
+// Lo demás de whatsapp-atencion de verdad: el registro del lead (frente C crea el prospecto con el nombre de quien asiste) lo usa.
+vi.mock('../services/whatsapp-atencion.service', async (original) => ({ ...(await original<any>()), debeAtender: vi.fn(async () => h.atencion) }));
 vi.mock('../services/whatsapp-optin.service', () => ({ estaDadoDeBaja: vi.fn(async () => false), AVISO_DADO_DE_BAJA: '' }));
 vi.mock('../services/receipt-context.service', () => ({
     buildVerdictContext: vi.fn(async () => ({ registeredAccounts: [NEQUI], restrictedAccounts: [], cuentasFueraDeSportmaps: [] })),

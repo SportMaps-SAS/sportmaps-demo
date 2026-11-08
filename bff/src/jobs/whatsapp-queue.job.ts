@@ -1745,11 +1745,14 @@ export function textoVentaRecibida(e: {
     const valor = e.monto ? ` de *${pesos(e.monto)}*` : '';
     const para = paraElServicio(e.servicio);
     const aNombre = e.nombre ? ` a nombre de *${e.nombre}*` : '';
+    if (e.aprobado && e.saldo) {
+        return `¡Listo! ✅ Quedó registrado el saldo${valor} ${para}${aNombre}: completaste *${pesos(e.saldo.total)}*. Tu cupo está confirmado.`;
+    }
     if (e.aprobado) return `¡Listo! ✅ Quedó registrado tu pago${valor} ${para}${aNombre}. Tu cupo está confirmado.`;
     const cierre = 'La escuela lo valida y te confirma el cupo por aquí.';
     if (e.abono) {
-        return `Recibí tu abono${valor} ${para}${aNombre}. Quedan *${pesos(e.abono.queda)}* para completar `
-            + `*${pesos(e.abono.total)}*. ${cierre}`;
+        const queda = e.abono.queda > 0 ? ` Quedan *${pesos(e.abono.queda)}* para completar *${pesos(e.abono.total)}*.` : '';
+        return `Recibí tu abono${valor} ${para}${aNombre}.${queda} ${cierre}`;
     }
     if (e.saldo) return `Recibí el saldo${valor} ${para}${aNombre}: con esto completas *${pesos(e.saldo.total)}*. ${cierre}`;
     return `Recibí tu comprobante${valor} ${para}${aNombre}. ${cierre}`;
@@ -1938,10 +1941,11 @@ async function ejecutarVenta(plan: PlanDeVenta, d: MontoDeVenta): Promise<void> 
             await crearCobroDeVenta(plan, d.precio);
             return;
         case 'saldo':
-            // El abono ya está aprobado: el saldo va al MISMO cobro (estados 'partial'), en revisión.
+            // El abono ya está aprobado: el saldo va al MISMO cobro (estados 'partial') y pasa por
+            // la evaluación de siempre, igual que el saldo por el enlace /p/:token (esperado = saldo).
             await aplicarComprobante(contextoDeVentaParaAplicar(v), comoPago(d.previo), [], {
-                esperado: d.saldo, estados: ['partial'], soloRevision: true,
-                motivo: `saldo_en_revision: ${servicio} — saldo de ${pesos(d.saldo)} del cobro de ${pesos(d.previo.amount)} (${nombre})`,
+                esperado: d.saldo, estados: ['partial'],
+                motivo: `saldo_de_abono: ${servicio} — saldo de ${pesos(d.saldo)} del cobro de ${pesos(d.previo.amount)} (${nombre})`,
                 linea: { monto, motivo: servicio, atleta: nombre, paymentId: d.previo.id, nuevo: false },
                 alAplicar: alAplicarVenta(servicio, { monto, nombre, saldo: { total: d.previo.amount } }),
             });

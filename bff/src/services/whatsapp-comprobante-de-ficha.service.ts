@@ -242,7 +242,8 @@ export function textoDeEleccion(botonId: string | null | undefined, texto: strin
 // ─── (e) Venta de un servicio: el nombre de quien asiste ─────────────────────
 
 export const PASO_PREGUNTA_ASISTENTE = 'ask_asistente_servicio';
-export const TEXTO_VENTA_REPETIDO = 'Ese comprobante ya lo tenemos ✅';
+/** Plan §4.C: «ya lo teníamos», sin cobro nuevo. */
+export const TEXTO_VENTA_REPETIDO = 'Ese comprobante ya lo teníamos ✅';
 
 /** Primera palabra del servicio → artículo. «Clínica…» → la; «Torneo…» → el; si no se sabe, ninguno. */
 const FEMENINOS = new Set(['clinica', 'copa', 'jornada', 'semana', 'clase', 'salida', 'excursion', 'escuela', 'liga',
@@ -364,9 +365,11 @@ export function nombreDeAsistenteEnTextos(
     }
     const textos = pie;
     const delServicio = new Set(normalizarFrase(servicio).split(' ').filter((w) => w.length >= 3));
+    // Lo que va antes del nombre en un pie: «Comprobante clínica — Laura Gómez», «Abono clínica Laura…».
     const ruido = (w: string) => {
         const n = plano1(w).replace(/[^a-z0-9]/g, '');
-        return delServicio.has(n) || CONECTORES.has(n) || /^(pago|abono|saldo|cupo|inscripcion|clinica|torneo|campamento|vacacional)$/.test(n);
+        return !n || delServicio.has(n) || CONECTORES.has(n)
+            || /^(pagos?|abonos?|saldo|cupos?|inscripcion|clinica|torneo|campamento|vacacional|comprobantes?|soportes?|transferencia|consignacion|envio|adjunto|aqui|va|mira)$/.test(n);
     };
     for (const crudo of textos) {
         const texto = String(crudo ?? '').trim();
