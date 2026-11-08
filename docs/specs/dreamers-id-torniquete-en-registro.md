@@ -87,4 +87,28 @@ nombre, paginación. Asociar usa `POST /access/assign-user` (que ahora valida qu
 - **Pendiente para Dreamers:** que el bridge envíe los usuarios del lector (pyzk `get_users` ya los lista; falta el comando de
   sincronización y el endpoint de ingesta autenticado) y encender el flag. Después: F2 (Vencidos con borrar/restaurar), F3
   (ficha), F4 (ajustes).
+### 7.1 Paso a Dreamers (2026-11-07) — construido, SIN activar
+
+Validado en Academia Superior (2026-11-07, con sesión de `cgonzalez`): menú, diálogo, búsqueda, asociar a mano, confirmar
+una sugerencia (`POST /access/assign-user` 200) y limpieza. Ajustes que salieron: el diálogo se desbordaba en celular
+(`min-w-0`), la búsqueda de candidatos llega precargada con el primer nombre del lector y cada candidato muestra
+plan / estado de cobro / edad / fecha de alta (los tres «Julian Gomez» siguen idénticos: son duplicados reales del
+2026-07-31 en los datos, se resuelven fusionándolos, no en pantalla).
+
+**Cómo llegan los datos reales:** `scripts/dreamers-bridge/sincronizar_usuarios_lector.py` (SOLO LECTURA en los lectores)
+lee por pyzk PIN, nombre, clave y, opcional, huella, y hace `POST /bridge/device-users` con `X-Bridge-Api-Key`. El BFF
+valida que el serial sea de la escuela, **reemplaza la foto de ese lector** (upsert + borra lo que ya no está) y nunca
+vacía la foto con una lista vacía. **Rostro: pyzk no lo lee → viaja `null` («sin leer»), la pantalla lo muestra «—» y no
+«no tiene».** Por defecto el script NO envía (modo de prueba): se pasa `--enviar`.
+
+**Pendiente antes de activarlo en Dreamers (todo requiere decisión o acceso):**
+1. **Decisión del owner:** la tabla guarda los nombres de los ~600 usuarios del lector (muchos menores) como una foto
+   que se reemplaza en cada actualización. Alternativa: no guardarlos y solo mostrarlos en memoria (más trabajo).
+2. Aplicar la migración `20261107180500` (columnas `has_face`/`has_fingerprint` pasan a admitir NULL). Sin ella el envío
+   de Dreamers falla por `NOT NULL`.
+3. Encender `school_settings.access_roster_enabled` para Dreamers.
+4. Desplegar BFF + frontend en el entorno al que apunta el bridge (`bffdev`).
+5. En la PC: parar el bridge, correr el script en prueba, luego `--enviar`, y volver a arrancar el bridge.
+6. Después (no hecho): botón «Actualizar desde el lector» que dispare la sincronización por el WebSocket del bridge, y
+   las fases F2–F4 del bloqueo.
 

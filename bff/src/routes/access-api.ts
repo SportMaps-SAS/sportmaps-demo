@@ -490,28 +490,63 @@ router.get('/members', requireAuth, requireRole('owner', 'admin', 'school_admin'
     }
 
     // Atletas sin login (la mayoría en tu caso)
-    let uaq = supabase.from('unregistered_athletes').select('id, full_name').eq('school_id', schoolId);
+    let uaq = supabase.from('unregistered_athletes').select('id, full_name, date_of_birth, created_at').eq('school_id', schoolId);
     if (mappedUaIds.size > 0) {
       uaq = uaq.not('id', 'in', `(${Array.from(mappedUaIds).join(',')})`);
     }
     if (q) uaq = uaq.ilike('full_name', `%${q}%`);
     const { data: uas } = await uaq.limit(50);
     const unregistered = (uas || [])
-      .map((u: any) => ({ unregistered_athlete_id: u.id, full_name: u.full_name, role: null, type: 'unregistered' }));
+      .map((u: any) => ({ unregistered_athlete_id: u.id, full_name: u.full_name, role: null, type: 'unregistered', _dob: u.date_of_birth ?? null, _alta: u.created_at ?? null }));
 
     // Alumnos enrolados por el flujo normal de la escuela (sin login propio,
     // asociados a un parent_id) — hasta 2026-09-15 esta tabla nunca se
     // consultaba acá, así que ningún children podía vincularse a un PIN.
-    let cq = supabase.from('children').select('id, full_name').eq('school_id', schoolId).eq('is_active', true);
+    let cq = supabase.from('children').select('id, full_name, date_of_birth, created_at').eq('school_id', schoolId).eq('is_active', true);
     if (mappedChildIds.size > 0) {
       cq = cq.not('id', 'in', `(${Array.from(mappedChildIds).join(',')})`);
     }
     if (q) cq = cq.ilike('full_name', `%${q}%`);
     const { data: kids } = await cq.limit(50);
     const children = (kids || [])
-      .map((c: any) => ({ child_id: c.id, full_name: c.full_name, role: null, type: 'child' }));
+      .map((c: any) => ({ child_id: c.id, full_name: c.full_name, role: null, type: 'child', _dob: c.date_of_birth ?? null, _alta: c.created_at ?? null }));
 
-    return res.json({ members: [...registered, ...unregistered, ...children] });
+    // Detalle para distinguir homónimos al asociar un PIN: plan, estado de cobro y fecha de
+    // nacimiento. Dos lecturas de toda la escuela (inscripciones activas y mensualidades
+    // vencidas), no una por persona.
+    const [enrQ, payQ] = await Promise.all([
+      supabase.from('enrollments')
+        .select('child_id, user_id, unregistered_athlete_id, offering_plans(name)')
+        .eq('school_id', schoolId).eq('status', 'active'),
+      supabase.from('payments')
+        .select('child_id, user_id, unregistered_athlete_id')
+        .eq('school_id', schoolId).eq('status', 'overdue').or(FILTRO_SOLO_MENSUALIDAD),
+    ]);
+    const detailOk = !enrQ.error && !payQ.error;
+    const enrolledKeys = new Set<string>();
+    const planByKey = new Map<string, string>();
+    ((enrQ.data ?? []) as any[]).forEach(e => {
+      const k = athleteKey(e);
+      if (!k) return;
+      enrolledKeys.add(k);
+      const plan = Array.isArray(e.offering_plans) ? e.offering_plans[0]?.name : e.offering_plans?.name;
+      if (plan && !planByKey.has(k)) planByKey.set(k, plan);
+    });
+    const overdueKeys = new Set(((payQ.data ?? []) as any[]).map(p => athleteKey(p)).filter(Boolean) as string[]);
+    const withDetail = (key: string, dob: string | null, alta: string | null) => ({
+      plan: planByKey.get(key) ?? null,
+      billing: !detailOk ? null : overdueKeys.has(key) ? 'mora' : enrolledKeys.has(key) ? 'al_dia' : 'sin_inscripcion',
+      date_of_birth: dob,
+      created_at: alta,
+    });
+
+    // Primero los deportistas (menores y sin cuenta): es a quienes casi siempre se asocia un PIN.
+    const out = [
+      ...children.map(({ _dob, _alta, ...c }) => ({ ...c, detail: withDetail(`c:${c.child_id}`, _dob, _alta) })),
+      ...unregistered.map(({ _dob, _alta, ...u }) => ({ ...u, detail: withDetail(`a:${u.unregistered_athlete_id}`, _dob, _alta) })),
+      ...registered.map((r: any) => ({ ...r, detail: withDetail(`u:${r.user_id}`, null, null) })),
+    ];
+    return res.json({ members: out });
   } catch (err: any) {
     return res.status(500).json({ error: 'Error al listar miembros' });
   }

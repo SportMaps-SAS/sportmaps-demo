@@ -78,7 +78,7 @@ function HistoryPanel({ enrollmentId }: { enrollmentId: string }) {
   );
 }
 
-export function HourBankBalanceCard({ enrollmentId, showHistory = false, fetcher }: {
+export function HourBankBalanceCard({ enrollmentId, showHistory = false, fetcher, retry }: {
   enrollmentId: string;
   showHistory?: boolean;
   // Quien agenda sin cuenta desde el link público no tiene sesión de Supabase
@@ -86,6 +86,10 @@ export function HourBankBalanceCard({ enrollmentId, showHistory = false, fetcher
   // reemplaza SOLO cómo se trae el dato; el resto de la tarjeta (formato,
   // colores, barra de progreso) es idéntico en los dos casos.
   fetcher?: () => Promise<HourBankBalance>;
+  // Opcional: política de reintento propia de la consulta. Sin ella se usa el
+  // default del QueryClient (comportamiento anterior intacto). El link público
+  // la usa para no reintentar cuando la escuela apagó el link (422).
+  retry?: (failureCount: number, error: unknown) => boolean;
 }) {
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -94,6 +98,7 @@ export function HourBankBalanceCard({ enrollmentId, showHistory = false, fetcher
     queryFn: fetcher ?? (() => bffClient.get<HourBankBalance>(`/api/v1/access/hour-bank-balance/${enrollmentId}`)),
     enabled: !!enrollmentId,
     staleTime: 60_000,
+    ...(retry ? { retry } : {}),
   });
 
   if (isLoading) {

@@ -199,7 +199,7 @@ export const pollsController = {
   confirmAttendance: async (req: Request, res: Response) => {
     try {
       const { pollId } = req.params;
-      const { session_id, user_id, enrollment_id, guest_name, guest_phone, poll_token }: ConfirmAttendanceBody = req.body;
+      const { session_id, user_id, guest_name, guest_phone, poll_token }: ConfirmAttendanceBody = req.body;
 
       if (!session_id || (!user_id && !guest_name)) {
         return res.status(400).json({ error: 'Datos insuficientes para confirmar' });
@@ -322,7 +322,10 @@ export const pollsController = {
 
       if (finalUserId) bookingData.user_id = finalUserId;
       if (finalUnregisteredId) bookingData.unregistered_athlete_id = finalUnregisteredId;
-      if (enrollment_id) bookingData.enrollment_id = enrollment_id;
+      // NO se guarda enrollment_id del body: nadie lo valida contra el usuario ni la
+      // escuela de la sesión, y una reserva de encuesta no consume crédito. Sin él
+      // siguen cumpliéndose check_hybrid_booking / chk_booking_identity (user_id
+      // o unregistered_athlete_id, nunca ambos).
 
       console.log('[confirmAttendance] Inserting booking:', JSON.stringify(bookingData));
 

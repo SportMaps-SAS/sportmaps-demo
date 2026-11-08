@@ -42,6 +42,13 @@ describe('plantillas de reservas escapan texto del usuario', () => {
             const { html } = await BrandedEmailTemplates.publicBookingConfirmation({ recipientName: p, facilityName: p, dateLabel: p, timeLabel: p, schoolId: 's' });
             noRaw(html);
         });
+        it(`clase agendada sin cuenta (titular y copia): ${p}`, async () => {
+            const own = await BrandedEmailTemplates.enrollmentClassBooked({ recipientName: p, dateLabel: p, timeLabel: p, schoolId: 's' });
+            const copy = await BrandedEmailTemplates.enrollmentClassBooked({ recipientName: p, forName: p, dateLabel: p, timeLabel: p, schoolId: 's' });
+            noRaw(own.html);
+            noRaw(copy.html);
+            expect(copy.html).toContain('&lt;');
+        });
     }
     it('un nombre normal con tilde y ampersand se ve bien (escapado una vez al menos)', async () => {
         const { html } = await BrandedEmailTemplates.reservationCancelled({ recipientName: 'Ñandú & Cía', facilityName: 'Cancha 1', dateLabel: '6 de noviembre', timeLabel: '18:00', cancelReason: 'Lluvia', schoolId: 's' });

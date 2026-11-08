@@ -161,6 +161,7 @@ import athleteChargesRouter from './routes/athlete-charges.routes';
 import { requireStoreEnabled } from './services/store-flag.service';
 import { storeRateLimit } from './middlewares/storeRateLimit';
 import { redactSecretsInUrl } from './utils/redactUrl';
+import { publicBookingRateKey } from './utils/clientIp';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -380,6 +381,7 @@ app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImpo
 // Link público de agendamiento de instalaciones — sin requireAuth, rate-limit propio
 const publicBookingLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false,
+    keyGenerator: publicBookingRateKey,
     message: { error: 'Demasiadas peticiones. Intenta de nuevo en unos minutos.' },
 });
 app.use('/api/v1/public/booking', publicBookingLimiter, publicBookingRouter);

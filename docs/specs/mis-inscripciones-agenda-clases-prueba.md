@@ -3,6 +3,11 @@
 **Producto:** SportMaps · **Versión:** v1 · **Fecha:** 2026-08-29
 **Estado:** decisiones de producto **resueltas** en conversación (§3) · diseño técnico (§4) **aprobado** · **Fases 1-3 (backend, BFF, frontend) aplicadas y probadas en vivo el 2026-08-29** contra `luebjarufsiadojhvxgi`, sin commitear todavía. Fase 4 (QA) la corre el usuario.
 
+> **Corrección 2026-11-07 (`SEG-31`):** la revisión del 2026-11-06 encontró que el camino sin
+> cuenta de abajo no valida vencimiento ni cupos al agendar, no devuelve el cupo al cancelar en
+> planes por cupos, crea cuenta `athlete` también para menores y no respeta
+> `self_service_enabled`. Ver [link-agendamiento-correcciones-alta.md](link-agendamiento-correcciones-alta.md).
+
 **Ampliación 2026-09-15/17 — banco de horas real desde el link, con y sin cuenta:** el
 escenario `enrolled_unregistered` (ficha con enrollment real en la escuela, sin cuenta) hoy
 siempre caía a "clase de prueba" — sin forma de tocar su plan/banco de horas real sin

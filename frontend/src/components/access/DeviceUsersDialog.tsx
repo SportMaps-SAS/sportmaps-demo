@@ -18,8 +18,9 @@ type Filter = 'all' | 'sin' | 'aso' | 'mora';
 interface RosterRow {
   pin: number;
   reader_name: string;
-  has_face: boolean;
-  has_fingerprint: boolean;
+  /** null = no se pudo leer del lector (distinto de «no tiene»). */
+  has_face: boolean | null;
+  has_fingerprint: boolean | null;
   has_password: boolean;
   athlete: { id: string; type: AthleteType | 'staff'; name: string } | null;
   billing: Billing;
@@ -42,6 +43,52 @@ interface MemberOption {
   user_id?: string;
   full_name: string;
   type: 'child' | 'unregistered' | 'registered';
+  role?: string | null;
+  /** Para distinguir homónimos: plan, estado de cobro y fecha de nacimiento. */
+  detail?: {
+    plan: string | null;
+    billing: 'al_dia' | 'mora' | 'sin_inscripcion' | null;
+    date_of_birth: string | null;
+    created_at?: string | null;
+  };
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  owner: 'Dueño', admin: 'Admin', school_admin: 'Admin', coach: 'Entrenador', staff: 'Staff',
+  athlete: 'Deportista', parent: 'Acudiente',
+};
+
+function ageFrom(dob: string | null | undefined): number | null {
+  if (!dob) return null;
+  const d = new Date(`${dob}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const now = new Date();
+  let age = now.getFullYear() - d.getFullYear();
+  if (now.getMonth() < d.getMonth() || (now.getMonth() === d.getMonth() && now.getDate() < d.getDate())) age -= 1;
+  return age >= 0 && age < 120 ? age : null;
+}
+
+/** Línea de apoyo bajo el nombre: «Menor · 9 años · plan PGP8x1 · al día». */
+function candidateLine(c: MemberOption): { text: string; mora: boolean } {
+  const kind = c.type === 'child' ? 'Menor'
+    : c.type === 'unregistered' ? 'Sin cuenta'
+    : (c.role && ROLE_LABELS[c.role]) || 'Con cuenta';
+  const parts = [kind];
+  const age = ageFrom(c.detail?.date_of_birth);
+  if (age !== null) parts.push(`${age} años`);
+  if (c.detail?.plan) parts.push(`plan ${c.detail.plan}`);
+  const billing = c.detail?.billing;
+  if (billing === 'mora') parts.push('en mora');
+  else if (billing === 'al_dia') parts.push('al día');
+  else if (billing === 'sin_inscripcion') parts.push('sin inscripción activa');
+  // La fecha de alta separa a los homónimos que comparten plan y no tienen fecha de nacimiento.
+  if (c.detail?.created_at) {
+    const alta = new Date(c.detail.created_at);
+    if (!Number.isNaN(alta.getTime())) {
+      parts.push(`alta ${alta.toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: '2-digit' })}`);
+    }
+  }
+  return { text: parts.join(' · '), mora: billing === 'mora' };
 }
 
 const PAGE_SIZE = 25;
@@ -73,14 +120,28 @@ function BillingBadge({ billing }: { billing: Billing }) {
 }
 
 function Credentials({ row }: { row: RosterRow }) {
-  const item = (on: boolean, label: string, Icon: typeof Fingerprint) => (
-    <Icon
-      className={`h-4 w-4 ${on ? 'text-foreground' : 'text-muted-foreground/30'}`}
-      aria-label={`${label}: ${on ? 'registrada' : 'no registrada'}`}
-    >
-      <title>{label}: {on ? 'registrada' : 'no registrada'}</title>
-    </Icon>
-  );
+  // null = el lector no entregó ese dato (p. ej. el rostro con pyzk): se muestra «—», no como «no tiene».
+  const item = (on: boolean | null, label: string, Icon: typeof Fingerprint) => {
+    if (on === null) {
+      return (
+        <span
+          className="flex h-4 w-4 items-center justify-center text-xs text-muted-foreground/60"
+          title={`${label}: sin leer`}
+          aria-label={`${label}: sin leer`}
+        >
+          —
+        </span>
+      );
+    }
+    return (
+      <Icon
+        className={`h-4 w-4 ${on ? 'text-foreground' : 'text-muted-foreground/30'}`}
+        aria-label={`${label}: ${on ? 'registrada' : 'no registrada'}`}
+      >
+        <title>{label}: {on ? 'registrada' : 'no registrada'}</title>
+      </Icon>
+    );
+  };
   return (
     <div className="flex items-center gap-2">
       {item(row.has_fingerprint, 'Huella', Fingerprint)}
@@ -88,6 +149,11 @@ function Credentials({ row }: { row: RosterRow }) {
       {item(row.has_password, 'Clave', KeyRound)}
     </div>
   );
+}
+
+/** Primer nombre del lector («AtheneaCardona» → «Athenea»): precarga la búsqueda de candidatos. */
+function firstNameOf(readerName: string): string {
+  return (readerName || '').replace(/([a-z])([A-Z])/g, '$1 $2').trim().split(/\s+/)[0] ?? '';
 }
 
 function minutesAgo(iso: string | null): string {
@@ -190,7 +256,8 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
             <DialogDescription>
               Usuarios cargados en el lector, para asociarlos a deportistas de SportMaps.
               {data && ` Actualizado ${minutesAgo(data.synced_at)}.`}
-              {' '}Los nombres se leen del lector solo para sugerir; la asociación la confirmas tú.
+              {' '}Los nombres vienen de la última lectura del lector (se reemplazan en cada actualización) y
+              solo sirven para sugerir; la asociación la confirmas tú.
             </DialogDescription>
           </DialogHeader>
 
@@ -240,7 +307,9 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
             </div>
           </div>
 
-          <div className="rounded-lg border">
+          {/* min-w-0: sin esto la tabla (más ancha que el celular) estira todo el diálogo en vez de
+              desplazarse dentro de su propio contenedor. */}
+          <div className="min-w-0 rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -270,9 +339,9 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
                 {data?.rows.map(row => (
                   <TableRow key={row.pin}>
                     <TableCell className="font-mono text-sm">{row.pin}</TableCell>
-                    <TableCell className="max-w-[180px] truncate">{row.reader_name || '—'}</TableCell>
+                    <TableCell className="max-w-44 truncate">{row.reader_name || '—'}</TableCell>
                     <TableCell><Credentials row={row} /></TableCell>
-                    <TableCell className="max-w-[220px] truncate">
+                    <TableCell className="max-w-56 truncate">
                       {row.athlete
                         ? row.athlete.name
                         : row.suggestion
@@ -293,7 +362,7 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
                         </Button>
                       )}
                       {!row.athlete && !row.suggestion && (
-                        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => { setCandQ(''); setAssignRow(row); }}>
+                        <Button size="sm" variant="outline" className="h-7 gap-1" onClick={() => { setCandQ(firstNameOf(row.reader_name)); setAssignRow(row); }}>
                           <Link2 className="h-3.5 w-3.5" /> Asociar
                         </Button>
                       )}
@@ -301,7 +370,7 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
                         <button
                           type="button"
                           className="ml-2 text-xs text-muted-foreground underline"
-                          onClick={() => { setCandQ(''); setAssignRow(row); }}
+                          onClick={() => { setCandQ(firstNameOf(row.reader_name)); setAssignRow(row); }}
                         >
                           Otro
                         </button>
@@ -326,7 +395,7 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Credenciales: huella, rostro y clave. Lo atenuado no está registrado en el lector. Asociar no envía nada al lector.
+            Credenciales: huella, rostro y clave. Lo atenuado no está registrado en el lector y «—» significa que no se pudo leer. Asociar no envía nada al lector.
           </p>
         </DialogContent>
       </Dialog>
@@ -361,9 +430,11 @@ export function DeviceUsersDialog({ open, onClose }: Props) {
                     ...(c.child_id ? { child_id: c.child_id } : c.unregistered_athlete_id ? { unregistered_athlete_id: c.unregistered_athlete_id } : { user_id: c.user_id }),
                   }, c.full_name)}
                 >
-                  <span>{c.full_name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {c.type === 'child' ? 'Menor' : c.type === 'unregistered' ? 'Sin cuenta' : 'Con cuenta'}
+                  <span className="min-w-0">
+                    <span className="block truncate">{c.full_name}</span>
+                    <span className={`block truncate text-xs ${candidateLine(c).mora ? 'text-red-600' : 'text-muted-foreground'}`}>
+                      {candidateLine(c).text}
+                    </span>
                   </span>
                 </button>
               );

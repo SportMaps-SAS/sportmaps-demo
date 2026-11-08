@@ -23,15 +23,14 @@
  */
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import { clientIp } from '../utils/clientIp';
 
 export const STORE_READ_LIMIT_PER_MIN = 120;
 export const STORE_WRITE_LIMIT_PER_MIN = 20;
 
 /** IP del cliente detrás de Cloudflare → Render (mismo criterio que access-adms.ts). */
 export function storeClientIp(req: Pick<Request, 'headers' | 'ip'> & { socket?: { remoteAddress?: string } }): string {
-    const raw = req.headers['cf-connecting-ip'] ?? req.headers['true-client-ip'];
-    const cf = (Array.isArray(raw) ? raw[0] : raw) ?? '';
-    return (cf || req.ip || req.socket?.remoteAddress || '').trim();
+    return clientIp(req);
 }
 
 /** ¿La request solo lee? (GET/HEAD, o la cotización del carrito, que es POST pero no escribe). */
