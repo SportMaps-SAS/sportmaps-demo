@@ -77,17 +77,21 @@ export function articuloDelServicio(item: Pick<ItemConFicha, 'name'>): 'la' | 'e
     return '';
 }
 
-/** «de la *Clínica…*» / «del *Torneo…*» / «de *Copa…*». Pura. */
-export function deLaDelServicio(item: Pick<ItemConFicha, 'name'>): string {
+/**
+ * «de la Clínica…» / «del Torneo…» / «de Copa…». El nombre va SIN negrita salvo que
+ * se pida: `*nombre*` es el título de la ficha, y el mensaje de pago o la línea del
+ * saludo con ese título se leían como la ficha repetida (batería del frente F). Pura.
+ */
+export function deLaDelServicio(item: Pick<ItemConFicha, 'name'>, o: { negrita?: boolean } = {}): string {
     const a = articuloDelServicio(item);
-    const n = `*${item.name.trim()}*`;
+    const n = o.negrita ? `*${item.name.trim()}*` : item.name.trim();
     return a === 'la' ? `de la ${n}` : a === 'el' ? `del ${n}` : `de ${n}`;
 }
 
-/** «en la *Clínica…*» / «en el *Torneo…*» / «en *Copa…*». Pura. */
-export function enElServicio(item: Pick<ItemConFicha, 'name'>): string {
+/** «en la Clínica…» / «en el Torneo…» / «en Copa…» (sin negrita salvo que se pida). Pura. */
+export function enElServicio(item: Pick<ItemConFicha, 'name'>, o: { negrita?: boolean } = {}): string {
     const a = articuloDelServicio(item);
-    const n = `*${item.name.trim()}*`;
+    const n = o.negrita ? `*${item.name.trim()}*` : item.name.trim();
     return a ? `en ${a} ${n}` : `en ${n}`;
 }
 

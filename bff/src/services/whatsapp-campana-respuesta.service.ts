@@ -288,9 +288,8 @@ async function atenderBoton(
     // venta (frente A, Monster 2026-11-08).
     const item = await servicioDeLaCampana(integration.school_id, campana);
     const marca = item ? { [MARCA_VENTA]: item.id } : undefined;
-    let salioLaRespuesta = false;
     if (campana.respuesta_si?.trim()) {
-        salioLaRespuesta = await enviarDirecto({
+        await enviarDirecto({
             integration, conversationId, contactWaId: msg.contactWaId, texto: campana.respuesta_si.trim(),
             step: PASO_RESPUESTA_SI, campanaId: campana.id, extra: marca,
         });
@@ -317,7 +316,9 @@ async function atenderBoton(
     // cupo?»: el «Sí» YA pide cómo reservar. Monster 2026-11-07: tras el texto de la
     // escuela («responde este mensaje y te enviamos los datos de pago») 10 de 12
     // nunca volvieron. Después del texto sale el valor y las cuentas, APARTE.
-    if (item && (salioLaRespuesta || !campana.respuesta_si?.trim())) {
+    // Sale aunque el envío del texto haya fallado en Meta (`enviarDirecto` vuelve a
+    // mirar si la conversación está tomada o si la escuela está escribiendo).
+    if (item) {
         await enviarPagoDeServicio(ctxPagoDeCampana({
             integration, conversationId, contactWaId: msg.contactWaId, campanaId: campana.id,
             leadId: lead?.leadId ?? null,

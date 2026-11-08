@@ -6228,7 +6228,7 @@ export const presentacionLarga = (escuela: string, clase = TEXTOS_POR_DEFECTO.no
     // En la venta de un servicio (frente A, Monster 2026-11-08) la presentación no
     // ofrece la clase de prueba: «una venta de servicio es solo una venta».
     servicio
-        ? `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con la información y el cupo ${deLaDelServicio(servicio)}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`
+        ? `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con la información y el cupo ${deLaDelServicio(servicio, { negrita: true })}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`
         : `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
 
 /**

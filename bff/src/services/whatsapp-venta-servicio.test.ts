@@ -138,7 +138,7 @@ describe('textoDePagoDeServicio', () => {
     it('el 10-nov (último día de preventa): $300.000 hasta el martes 10; desde el 11, $350.000; abono, cuenta con titular y cierre', () => {
         const t = textoDePagoDeServicio(CLINICA, null, CUENTAS, { hoy: '2026-11-10' });
         expect(t).toBe([
-            'Para separar tu cupo en la *Clínica de armadores y atacantes*:',
+            'Para separar tu cupo en la Clínica de armadores y atacantes:',
             'Valor hoy: *$300.000* (hasta el martes 10 de noviembre; desde el 11, *$350.000*).\n' +
                 'Puedes separar el cupo con un abono mínimo de *$150.000* (50 %).',
             'Transfiere por Nequi o Daviplata al número 3194505150 (a nombre de Iván Sossa).',
@@ -174,11 +174,13 @@ describe('textoDePagoDeServicio', () => {
         expect(varias).toContain('Transfiere a una de estas cuentas:\n• Nequi: 3194505150 (a nombre de Iván Sossa)\n• Bancolombia ahorros: 123-456789-01 (a nombre de Monster Volley SAS)');
     });
 
-    it('cualquier servicio: el artículo sale del nombre («en el *Torneo…*»)', () => {
-        expect(enElServicio(TORNEO)).toBe('en el *Torneo Relámpago Sub-14*');
-        expect(deLaDelServicio(CLINICA)).toBe('de la *Clínica de armadores y atacantes*');
-        expect(deLaDelServicio({ name: 'Copa Relámpago' })).toBe('de la *Copa Relámpago*');
-        expect(deLaDelServicio({ name: 'Monster Camp' })).toBe('de *Monster Camp*');
+    it('cualquier servicio: el artículo sale del nombre («en el Torneo…»); sin negrita: «*nombre*» es el título de la ficha', () => {
+        expect(enElServicio(TORNEO)).toBe('en el Torneo Relámpago Sub-14');
+        expect(enElServicio(TORNEO, { negrita: true })).toBe('en el *Torneo Relámpago Sub-14*');
+        expect(deLaDelServicio(CLINICA)).toBe('de la Clínica de armadores y atacantes');
+        expect(deLaDelServicio(CLINICA, { negrita: true })).toBe('de la *Clínica de armadores y atacantes*');
+        expect(deLaDelServicio({ name: 'Copa Relámpago' })).toBe('de la Copa Relámpago');
+        expect(deLaDelServicio({ name: 'Monster Camp' })).toBe('de Monster Camp');
         expect(textoDePagoDeServicio(TORNEO, null, CUENTAS, { hoy: '2026-11-08' })).toContain('Valor hoy: *$80.000*.');
     });
 });
@@ -191,7 +193,7 @@ describe('caso 1: «Hola», «Ok», «.» y «ese día tenemos torneo» a mitad 
         expect(await atenderVentaDeServicio(ctx, VENTA, 'Hola')).toBe('venta_saludo');
         expect(reg.enviados).toHaveLength(1);
         expect(reg.enviados[0].texto).toBe(lineaDeSaludoDeVenta(CLINICA));
-        expect(reg.enviados[0].texto).toBe('¿Te ayudo con algo de la *Clínica de armadores y atacantes*? Si quieres separar tu cupo, te paso los datos.');
+        expect(reg.enviados[0].texto).toBe('¿Te ayudo con algo de la Clínica de armadores y atacantes? Si quieres separar tu cupo, te paso los datos.');
         expect(reg.enviados[0].contexto).toMatchObject({ step: PASO_VENTA.SALUDO });
         sinProhibidas(reg);
     });
@@ -272,7 +274,7 @@ describe('caso 2: Nicolás pagó la clínica; tras «No encontré» escribió «
 describe('caso 3: el seguimiento de 20 h de un interesado de la clínica', () => {
     it('determinista, con la fecha correcta del tramo; sin IA, sin clase de prueba, sin «9 de noviembre»', () => {
         const t = textoSeguimientoDeVenta(CLINICA, { recientes: [], afiliado: false, hoy: '2026-11-08', ahora: AHORA.getTime() })!;
-        expect(t).toContain('¿Pudiste revisar la información de la *Clínica de armadores y atacantes*?');
+        expect(t).toContain('¿Pudiste revisar la información de la Clínica de armadores y atacantes?');
         expect(t).toContain('El valor hoy es *$300.000* hasta el martes 10 de noviembre; desde el 11, *$350.000*.');
         expect(t).toContain('te paso los datos de pago');
         expect(t).not.toMatch(SALIDA_PROHIBIDA);
@@ -281,7 +283,7 @@ describe('caso 3: el seguimiento de 20 h de un interesado de la clínica', () =>
     it('si ya recibió los datos de pago, recuerda el comprobante; si ya lo mandó, no hay seguimiento', () => {
         const conDatos = [sal(20 * 60, 'Para separar tu cupo…', { payload: { step: PASO_VENTA.PAGO, [MARCA_VENTA]: CLINICA.id } })];
         expect(textoSeguimientoDeVenta(CLINICA, { recientes: conDatos, afiliado: false, hoy: '2026-11-08', ahora: AHORA.getTime() }))
-            .toContain('¿Pudiste hacer el pago de la *Clínica de armadores y atacantes*?');
+            .toContain('¿Pudiste hacer el pago de la Clínica de armadores y atacantes?');
         const conComprobante = [...conDatos, ent(19 * 60, '', { type: 'image' })];
         expect(textoSeguimientoDeVenta(CLINICA, { recientes: conComprobante, afiliado: false, hoy: '2026-11-08', ahora: AHORA.getTime() })).toBeNull();
     });
