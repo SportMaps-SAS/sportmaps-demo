@@ -200,7 +200,9 @@ vi.mock('../services/receipt-approval.service', () => ({
     evaluatePaymentReceipt: (...a: any[]) => evaluatePaymentReceiptMock(...a),
     redRejectionMessage: vi.fn(() => ''),
 }));
-vi.mock('../services/whatsapp-venta-servicios.service', () => ({
+vi.mock('../services/whatsapp-venta-servicios.service', async () => ({
+    // Lo puro de verdad (la venta de un servicio lo usa para leer la conversación).
+    ...(await vi.importActual<any>('../services/whatsapp-venta-servicios.service')),
     ventaAbiertaDeContacto: vi.fn(() => Promise.resolve(null)),
     decidirComprobanteDeVenta: vi.fn(() => ({ tipo: 'seguir' })),
 }));
@@ -507,6 +509,9 @@ describe('prospecto con motivo esperado: clase de prueba de $15.000 (Monster)', 
 
 // La ficha de la clínica por anuncio (whatsapp-anuncio-destino, 2026-11-04) deja el
 // esperado SIN monto: vale cualquier precio vigente de la clínica (completo o abono).
+// Desde el 2026-11-08 (frente C) el esperado de un servicio es una VENTA: el lead
+// tiene que tener el nombre de quien asiste (acá, registro completo) o se pregunta,
+// y un monto que no es del servicio va a la escuela como `venta_monto_no_cuadra`.
 describe('prospecto con esperado SIN monto (la clínica por anuncio): completo o abono, se aplica solo', () => {
     const CLINICA = {
         id: 'srv-clinica', name: 'Clínica de armadores y atacantes', kind: 'clase_extra', price: 300000, active: true,
@@ -521,6 +526,7 @@ describe('prospecto con esperado SIN monto (la clínica por anuncio): completo o
         prospecto();
         state.servicios = [CLINICA];
         state.esperados = [ESPERADO_CLINICA()];
+        state.leads = [{ id: 'lead-1', full_name: 'Mariana Ruiz', status: 'contacted', source_detail: { registro_completo_at: '2026-11-01T10:00:00Z' } }];
     });
 
     it.each([[150000, 'el abono del 50 %'], [300000, 'el valor completo']])('$%i (%s) → cobro de la clínica a nombre del lead, con el esperado', async (monto) => {
@@ -529,15 +535,19 @@ describe('prospecto con esperado SIN monto (la clínica por anuncio): completo o
         expect(crearLlamadas()).toEqual([expect.objectContaining({
             p_categoria: 'clase_extra', p_monto: monto, p_fuente: 'tournament_item', p_fuente_id: 'srv-clinica',
             p_signup_lead_id: 'lead-1', p_concepto_esperado_id: 'e3',
+            p_concepto: 'Clínica de armadores y atacantes — Mariana Ruiz',
         })]);
         expect(bot.abrirConsultaParaLaEscuela).not.toHaveBeenCalled();
+        // Saliente de la venta: con la marca del servicio.
+        expect(registrados[0].p_payload).toMatchObject({ step: 'venta_comprobante_recibido', venta_servicio_id: 'srv-clinica' });
     });
 
-    it('un monto que no es ningún precio de la clínica → a la escuela, sin crear nada', async () => {
-        extractReceiptMock.mockResolvedValue(comprobante(200000));
+    it('un monto que no es ningún precio ni un abono válido de la clínica → a la escuela, sin crear nada', async () => {
+        extractReceiptMock.mockResolvedValue(comprobante(100000));
         await runWhatsAppQueue();
         expect(crearLlamadas()).toHaveLength(0);
-        expect(cierre().error_message).toMatch(/^motivo_esperado_no_coincide \(monto\): se esperaba clase extra por \$300\.000 y llegó \$200\.000/);
+        expect(cierre().error_message).toMatch(/^venta_monto_no_cuadra: comprobante de \$100\.000 para Clínica de armadores y atacantes; el valor de hoy es \$300\.000 \(abono mínimo \$150\.000\)/);
+        expect(enviados()).toEqual(['Recibí tu comprobante de *$100.000* 📄 No coincide con el valor de la *Clínica de armadores y atacantes* (*$300.000* o el abono de *$150.000*); la escuela lo revisa y te confirma por aquí.']);
     });
 });
 

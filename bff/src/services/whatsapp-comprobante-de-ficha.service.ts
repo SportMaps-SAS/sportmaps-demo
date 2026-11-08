@@ -16,6 +16,13 @@
  *      o la referencia del banco), «Este pago ya estaba registrado ✅».
  *
  * Nunca se adivina: un nombre con dos candidatos no se aplica a ninguno.
+ *
+ *  (e) (2026-11-08) En la VENTA de un servicio (clínica, torneo, vacacional) el
+ *      comprobante no es de un deportista del club: se pregunta UNA vez el
+ *      nombre completo de quien asiste («¿Cuál es el nombre completo de quien
+ *      asiste a la Clínica…?») y con la respuesta se crea el cobro del servicio.
+ *      Nunca «¿De qué deportista?» contra el padrón. Ver whatsapp-queue.job
+ *      (`atenderComprobanteDeVenta`).
  */
 
 import { supabase } from '../config/supabase';
@@ -25,6 +32,7 @@ import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.s
 import type { BotonInteractivo } from './whatsapp.service';
 import { categoriaDelCobro, etiquetaCortaDelCobro } from './tipo-de-cobro';
 import { deportistaElegidoPorBoton } from './whatsapp-comprobante-guiado.service';
+import { normalizarFrase } from './whatsapp-reglas-turno';
 
 /** Las fichas de una familia en `payments` cuando no hay `parent_id`. */
 export interface LlavesDeFicha { childIds: string[]; unregisteredIds: string[] }
@@ -229,6 +237,173 @@ export function botonesDeCobros(opciones: PagoPendiente[]): BotonInteractivo[] {
 export function textoDeEleccion(botonId: string | null | undefined, texto: string): string {
     const m = String(botonId ?? '').match(/^sm_cobro_(\d{1,2})$/);
     return m ? m[1] : texto;
+}
+
+// ─── (e) Venta de un servicio: el nombre de quien asiste ─────────────────────
+
+export const PASO_PREGUNTA_ASISTENTE = 'ask_asistente_servicio';
+export const TEXTO_VENTA_REPETIDO = 'Ese comprobante ya lo tenemos ✅';
+
+/** Primera palabra del servicio → artículo. «Clínica…» → la; «Torneo…» → el; si no se sabe, ninguno. */
+const FEMENINOS = new Set(['clinica', 'copa', 'jornada', 'semana', 'clase', 'salida', 'excursion', 'escuela', 'liga',
+    'competencia', 'convivencia', 'gira', 'temporada', 'capacitacion', 'charla', 'practica', 'carrera', 'maraton',
+    'olimpiada', 'valida', 'feria', 'muestra', 'actividad', 'experiencia']);
+const MASCULINOS = new Set(['torneo', 'campamento', 'vacacional', 'curso', 'viaje', 'festival', 'partido', 'evento',
+    'taller', 'encuentro', 'entrenamiento', 'seminario', 'cuadrangular', 'triangular', 'intercambio', 'campeonato',
+    'clinic', 'camp', 'programa', 'plan', 'paseo', 'reto', 'desafio']);
+
+function articuloDe(servicio: string): 'la' | 'el' | null {
+    const primera = normalizarFrase(servicio).split(' ')[0] ?? '';
+    if (FEMENINOS.has(primera)) return 'la';
+    if (MASCULINOS.has(primera)) return 'el';
+    return null;
+}
+
+/** «para la *Clínica…*», «para el *Torneo…*», «para *Copa Relámpago*». Pura. */
+export function paraElServicio(servicio: string): string {
+    const art = articuloDe(servicio);
+    return `para ${art ? `${art} ` : ''}*${servicio.trim()}*`;
+}
+
+/** «a la *Clínica…*», «al *Torneo…*», «a *X*». Pura. */
+export function aElServicio(servicio: string): string {
+    const art = articuloDe(servicio);
+    return `${art === 'el' ? 'al' : art === 'la' ? 'a la' : 'a'} *${servicio.trim()}*`;
+}
+
+/** «Recibí tu comprobante de *$300.000* 📄 ¿Cuál es el nombre completo de quien asiste a la *Clínica…*?» Pura. */
+export function preguntaAsistenteDeServicio(monto: number | null, servicio: string): string {
+    return `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} 📄 ` +
+        `¿Cuál es el nombre completo de quien asiste ${aElServicio(servicio)}?`;
+}
+
+/** Partículas que van DENTRO de un nombre («María de los Ángeles», «Van der Berg»). */
+const CONECTORES = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'do', 'dos', 'van', 'von', 'der', 'san', 'santa']);
+
+/**
+ * Palabras que nunca son parte de un nombre (normalizadas): saludos, cortesías,
+ * preguntas, pagos, servicios, días, meses, posiciones de juego. Cortan el nombre.
+ */
+const NO_NOMBRE = new Set(('hola buenas buenos buen dia dias tardes tarde noches noche gracias muchas mil ok okey oki ' +
+    'listo lista dale perfecto perfecta vale claro si no ya que como cuando donde cual cuanto cuantos cuanta ' +
+    'quien porque por para con sin aqui aca alli ahi esto este esta ese esa eso estos estas envio envie envia mando ' +
+    'mande adjunto adjunta pago pague pagado pagada pagamos pagar abono abone saldo cupo cupos comprobante soporte ' +
+    'transferencia consignacion nequi daviplata bancolombia davivienda clinica torneo campamento vacacional clase ' +
+    'inscripcion valor precio cuenta quedo atento atenta favor porfa porfavor confirmar confirmo confirmas mi mis tu tus ' +
+    'su sus hijo hija hijos hijas nino nina el lo le les me te se un una unos unas al es son soy estoy tengo tiene ' +
+    'tienen fue era hay va voy sera puede puedo quiero queria gustaria necesito saber info informacion horario hora ' +
+    'fecha lunes martes miercoles jueves viernes sabado domingo enero febrero marzo abril mayo junio julio agosto ' +
+    'septiembre setiembre octubre noviembre diciembre opuesto opuesta armador armadora atacante central libero punta ' +
+    'receptor receptora posicion ano anos edad nacido nacida nacimiento categoria sede asiste asistira participa ' +
+    'nombre nombres apellido apellidos completo completa llama llamo jugador jugadora deportista participante alumno ' +
+    'alumna listos ninguno nada otro otra tambien igual entonces pero ademas todo bien mal super genial excelente ' +
+    'disculpa disculpe perdon senor senora don dona profe profesor profesora entrenador pregunta preguntar pregunto ' +
+    'consulta duda club equipo escuela torneos clinicas oye aun todavia voley voleibol futbol playa piso partido ' +
+    'partidos entreno entrenos entrenamiento entrenamientos grupo femenino masculino mixto trayectoria').split(' '));
+
+/** Prefijos con los que se contesta el nombre: «Se llama…», «Es para mi hijo…», «Nombre: …». */
+const PREFIJO_NOMBRE = /^(?:(?:hola|bueno|buenas(?: tardes| noches| dias)?|buen dia|buenos dias)\b[\s,.!:;-]*|(?:el )?nombre(?: completo)?(?: es| de)?\s*:?\s+|se llama\s+|me llamo\s+|mi (?:hijo|hija|nino|nina|sobrino|sobrina|nieto|nieta)(?: se llama| es)?\s+|es para\s+|es\s+|soy\s+|para\s+|a nombre de\s+|asiste\s+|(?:el|la) (?:jugador|jugadora|deportista|participante)(?: es)?\s*:?\s+)/i;
+
+const plano1 = (w: string) => w.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+const capital = (w: string) => w.charAt(0).toLocaleUpperCase('es-CO') + w.slice(1).toLocaleLowerCase('es-CO');
+
+/**
+ * El nombre de una persona al COMIENZO del texto, o null. Pura.
+ * Toma palabras de letras desde el principio hasta un número, un signo de
+ * pregunta o una palabra que no es de nombre («Nicolás Cubides Ávila 18 de
+ * Diciembre del 2006 Opuesto» → «Nicolás Cubides Ávila»). Exige al menos DOS
+ * palabras de nombre (se pidió el nombre completo). `entero`: además, el texto
+ * entero tiene que ser el nombre (para un pie o un texto suelto, sin pregunta).
+ */
+export function nombreDeAsistente(texto: string | null | undefined, o: { entero?: boolean } = {}): string | null {
+    let t = String(texto ?? '').replace(/[\u200b-\u200d\ufeff]/g, '').trim();
+    if (!t || t.length > 160 || t.includes('?') || t.includes('¿')) return null;
+    for (let i = 0; i < 4; i++) {
+        const sin = t.replace(PREFIJO_NOMBRE, '').trim();
+        if (sin === t) break;
+        t = sin;
+    }
+    const tokens = t.split(/[\s,;:.!()"“”/]+/).filter(Boolean);
+    const nombre: string[] = [];
+    let i = 0;
+    for (; i < tokens.length; i++) {
+        const w = tokens[i];
+        if (!/^[\p{L}][\p{L}'’-]*$/u.test(w)) break;
+        const n = plano1(w).replace(/[’']/g, '');
+        if (NO_NOMBRE.has(n)) break;
+        if (CONECTORES.has(n) && !nombre.length) break;
+        nombre.push(w);
+    }
+    while (nombre.length && CONECTORES.has(plano1(nombre[nombre.length - 1]))) nombre.pop();
+    const palabras = nombre.filter((w) => !CONECTORES.has(plano1(w)));
+    if (palabras.length < 2 || palabras.length > 6 || palabras.some((w) => w.length < 2)) return null;
+    if (o.entero && i < tokens.length) return null;
+    return nombre.map((w) => (CONECTORES.has(plano1(w)) ? plano1(w) : capital(w))).join(' ').slice(0, 80);
+}
+
+/** Marcas con las que se dice el nombre de quien asiste en un pie o en la descripción del pago. */
+const MARCA_DE_NOMBRE = /\b(?:a nombre de|nombre(?: completo)?(?: es)?\s*:|se llama|asiste|participante\s*:|jugador(?:a)?\s*:|deportista\s*:|alumn[oa]\s*:)\s+(.+)$/i;
+
+/**
+ * El nombre de quien asiste si ya viene con el archivo. Nunca el titular de la
+ * cuenta que pagó (`originName`): suele ser el papá. Pura.
+ *  · `pie` (el pie de la foto y la descripción del pago que leyó el OCR): con
+ *    una marca («a nombre de…», «se llama…», «participante: …») o un texto que
+ *    es SOLO un nombre («Nicolás Cubides Ávila»), quitando antes las palabras
+ *    del pago y del servicio («Clínica Nicolás Cubides»);
+ *  · `chat` (lo que escribió alrededor): SOLO con una marca. Un texto suelto
+ *    del chat puede ser cualquier cosa («Club y torneos», un botón del embudo).
+ */
+export function nombreDeAsistenteEnTextos(
+    pie: (string | null | undefined)[], servicio: string, chat: (string | null | undefined)[] = [],
+): string | null {
+    for (const crudo of chat) {
+        const m = String(crudo ?? '').trim().match(MARCA_DE_NOMBRE);
+        const n = m ? nombreDeAsistente(m[1]) : null;
+        if (n) return n;
+    }
+    const textos = pie;
+    const delServicio = new Set(normalizarFrase(servicio).split(' ').filter((w) => w.length >= 3));
+    const ruido = (w: string) => {
+        const n = plano1(w).replace(/[^a-z0-9]/g, '');
+        return delServicio.has(n) || CONECTORES.has(n) || /^(pago|abono|saldo|cupo|inscripcion|clinica|torneo|campamento|vacacional)$/.test(n);
+    };
+    for (const crudo of textos) {
+        const texto = String(crudo ?? '').trim();
+        if (!texto) continue;
+        const m = texto.match(MARCA_DE_NOMBRE);
+        if (m) {
+            const n = nombreDeAsistente(m[1]);
+            if (n) return n;
+        }
+        // «Soy Juan…» / «me llamo…» es quien ESCRIBE (suele ser el papá), no quien asiste.
+        if (/^(?:hola[\s,.!]*)?(?:soy|me llamo)\b/i.test(texto)) continue;
+        const palabras = texto.split(/\s+/);
+        let k = 0;
+        while (k < palabras.length && ruido(palabras[k])) k++;
+        const n = nombreDeAsistente(palabras.slice(k).join(' '), { entero: true });
+        if (n) return n;
+    }
+    return null;
+}
+
+/**
+ * La respuesta a «¿Cuál es el nombre completo de quien asiste…?»: si trae un
+ * nombre, la cola crea el cobro del servicio a ese nombre (`aplicarComprobanteDeVenta`).
+ * Si no es un nombre (una pregunta sobre el servicio, «ok»), NO consume el turno:
+ * lo atiende el bot y la pregunta sigue abierta (a las 24 h va al buzón). No se
+ * repregunta: la pregunta va UNA vez.
+ */
+export async function resolverRespuestaDeAsistente(
+    fila: { id: string; school_id: string },
+    texto: string,
+    responder: (texto: string, paso: string, botones?: BotonInteractivo[], linea?: unknown, payload?: Record<string, unknown>) => Promise<unknown>,
+): Promise<boolean> {
+    const nombre = nombreDeAsistente(texto);
+    if (!nombre) return false;
+    const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
+    await aplicarComprobanteDeVenta(fila.id, nombre, responder);
+    return true;
 }
 
 // ─── La respuesta a «¿De qué deportista es este pago?» ──────────────────────
