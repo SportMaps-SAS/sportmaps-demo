@@ -43,7 +43,7 @@ import { MARCA_VENTA, itemNombradoEn, pideElClub, ventaActiva, type VentaActiva 
 import {
     diaLegible, motivoDeServicio, precioDelServicio, type ItemConFicha, type PrecioDeServicio,
 } from './whatsapp-anuncio-destino';
-import { comoPagar, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
+import { comoPagar, estadoDeSalientes, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { cop } from './whatsapp-venta-servicios.service';
 import { hoyBogota, opcionesDelItem } from './wa-cobro-desde-comprobante.service';
 import type { Motivo } from './motivos-de-cobro';
@@ -373,6 +373,38 @@ export function comprobanteRecibido(recientes: FilaReciente[], minutos: number, 
 export function ventaEnCurso(recientes: FilaReciente[], item: ItemConFicha, ahora = Date.now()): boolean {
     const ultimo = [...recientes].filter((f) => f.direction === 'outbound').sort((a, b) => momento(b) - momento(a))[0];
     return Boolean(ultimo && ventaActiva([ultimo], [item], { ahora })?.item.id === item.id);
+}
+
+/**
+ * ¿El embudo del CLUB (clase de prueba) está en curso, con una pregunta suya
+ * pendiente? Mismo criterio que `leerEstadoDeEmbudoDeSupabase` (el estado del
+ * último saliente del embudo, 24 h, cortado por un saliente humano o de otro
+ * flujo), sobre los mensajes que el turno ya leyó. Con la clase ya agendada no
+ * hay pregunta pendiente. Pura.
+ */
+export function embudoDelClubEnCurso(recientes: FilaReciente[], ahora = Date.now()): boolean {
+    const desde = ahora - 24 * 3600_000;
+    const salientes = [...recientes]
+        .filter((f) => f.direction === 'outbound' && momento(f) >= desde)
+        .sort((a, b) => momento(b) - momento(a))
+        .map((f) => ({ payload: f.payload ?? null, humano: f.ai_generated === false }));
+    const estado = estadoDeSalientes(salientes);
+    return Boolean(estado && estado.paso !== 'agendada');
+}
+
+/**
+ * Con el embudo del club EN CURSO (la persona lo abrió y tiene una pregunta
+ * pendiente), la venta solo atiende lo que es de ella: un mensaje que nombra el
+ * servicio, o el pedido de pagar justo después de un mensaje de la venta. Lo
+ * demás («Mariana Gómez Ruiz», una fecha, un botón) lo contesta el embudo
+ * (Monster, batería del 2026-11-08: la venta se comía el nombre del deportista).
+ * true = la venta cede al embudo. Pura.
+ */
+export function ventaCedeAlEmbudo(recientes: FilaReciente[], item: ItemConFicha, texto: string, ahora = Date.now()): boolean {
+    if (!embudoDelClubEnCurso(recientes, ahora)) return false;
+    if (itemNombradoEn(texto, [item])) return false;
+    if (intencionEnVenta(texto) === 'pago' && ventaEnCurso(recientes, item, ahora)) return false;
+    return true;
 }
 
 /**

@@ -1735,7 +1735,10 @@ function revisarFicha(c: Conversacion, e: Escuela, r: Resultado, it: ItemConFich
     if (!textoCompleto && hoy && it.allow_installments === true && pct >= 1 && pct < 100) {
         debe(r, s.texto.includes(formatoPesos(Math.ceil((hoy * pct) / 100))), `no dice el abono mínimo (${pct} %)`);
     }
-    debe(r, /comprobante|datos de pago/i.test(s.texto), 'no le dice cómo pagar ni que la escuela le manda los datos de pago');
+    // Regla de la venta (frente A, 2026-11-08): si pidió el precio o cómo apartar, el pago va en un
+    // mensaje APARTE del mismo turno (la ficha no lo trae pegado): se busca en cualquier saliente del turno.
+    debe(r, paraLaFamilia(t.salidas).some((x) => /comprobante|datos de pago/i.test(x.texto)),
+        'no le dice cómo pagar ni que la escuela le manda los datos de pago');
     debe(r, !paraLaFamilia(t.salidas).some((x) => (x.opciones ?? []).some((op) => op.id.startsWith('sm_em_'))) && p.flujo !== 'embudo',
         'mostró el embudo de la clase de prueba (sedes o preguntas)');
     debe(r, !e.preguntas.length || !preguntoClave(s.texto, e, e.preguntas[0].clave), 'hizo la primera pregunta del embudo');

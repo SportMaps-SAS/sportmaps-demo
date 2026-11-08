@@ -77,8 +77,14 @@ vi.mock('./whatsapp-atencion.service', async () => {
 });
 vi.mock('./whatsapp-ajustes-escuela.service', async () => {
     const real = await vi.importActual<typeof import('./whatsapp-ajustes-escuela.service')>('./whatsapp-ajustes-escuela.service');
-    // Monster: con embudo del interesado (sedes + 5 preguntas) y sin modo discreto.
-    const ajustes = { ...real.AJUSTES_POR_DEFECTO, preguntasProspecto: [{ clave: 'nombre', texto: '¿Nombre?' }] as any, modoDiscreto: 'no' as const };
+    // Monster: con embudo del interesado (preguntas) y sin modo discreto.
+    const ajustes = {
+        ...real.AJUSTES_POR_DEFECTO, modoDiscreto: 'no' as const,
+        preguntasProspecto: [
+            { clave: 'nombre', texto: '1️⃣ ¿Cuál es el *nombre completo* del deportista?', tipo: 'texto' },
+            { clave: 'fecha_nacimiento', texto: '2️⃣ ¿Cuál es su *fecha de nacimiento*? (día/mes/año)', tipo: 'fecha' },
+        ] as any,
+    };
     return { ...real, ajustesWhatsAppDeEscuela: vi.fn(async () => ajustes), modoDiscretoEfectivo: vi.fn(async () => false) };
 });
 vi.mock('./llm.service', () => ({ chatWithTools: vi.fn() }));
@@ -112,7 +118,9 @@ vi.mock('./wa-concepto-esperado.service', () => ({ registrarConceptoEsperado: vi
 import { atenderDesconocido, deliver, simularEnvios, sinPuntuacionHuerfana, _olvidarPresentaciones } from './whatsapp-bot.service';
 import { sinEmojisDeDeporte } from './whatsapp-salida-segura';
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
-import { PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_OTRA_FECHA, lineaDeSaludoDeVenta } from './whatsapp-venta-servicio';
+import {
+    PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_OTRA_FECHA, embudoDelClubEnCurso, lineaDeSaludoDeVenta, ventaCedeAlEmbudo,
+} from './whatsapp-venta-servicio';
 
 const INTEG = { id: 'int-monster', school_id: 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c' } as any;
 const TEL = '573165395912';
@@ -219,6 +227,52 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
             expect(s.texto).not.toMatch(PROHIBIDO);
         }
         expect(b.salidas.map((s) => s.texto).join('\n')).toContain('nombre completo de quien asiste');
+    });
+
+    // Los dos sentidos de la convivencia venta ↔ embudo del club (batería completa, 2026-11-08).
+    const fichaMarcada = (min: number) => sal(min, FICHA, { payload: { destino_anuncio: 'servicio', servicio_id: CLINICA.id, [MARCA_VENTA]: CLINICA.id } });
+    const pagoMarcado = (min: number) => sal(min, 'Para separar tu cupo en la Clínica de armadores y atacantes: …',
+        { payload: { step: PASO_VENTA.PAGO, [MARCA_VENTA]: CLINICA.id } });
+
+    it('venta pura: «Mariana Gómez Ruiz» después de la ficha de la clínica NO abre el embudo (lo atiende la venta)', async () => {
+        h.state.filas = [pagoMarcado(1), fichaMarcada(1), ent(2, '¿Cuánto cuesta la clínica? ¿Cómo aparto mi cupo?')];
+        const { resultado, salidas } = await turno('Mariana Gómez Ruiz');
+        expect(String(resultado)).toMatch(/^venta_/);
+        for (const s of salidas) {
+            expect(String(s.step ?? '')).not.toMatch(/^embudo_|desconocido_tema_escolar/);
+            expect(s.texto).not.toMatch(PROHIBIDO);
+        }
+    });
+
+    it('embudo del club EN CURSO: la clínica se contesta, y «Mariana Gómez Ruiz» lo atiende el embudo (no la venta)', async () => {
+        const preguntaNombre = sal(5, '¡Genial, ⚫ Sede Suba! 🙌\n\n1️⃣ ¿Cuál es el *nombre completo* del deportista?', {
+            payload: { step: 'embudo_pregunta', flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0, respuestas: {}, branchId: 'b-suba', sedeTitulo: '⚫ Sede Suba' } },
+        });
+        h.state.filas = [ent(6, '⚫ Sede Suba', { type: 'interactive' }), preguntaNombre];
+        // 1) Pregunta por la clínica a mitad del embudo: la venta la contesta (ficha y pago aparte).
+        const a = await turno('¿cuánto vale la clínica?');
+        expect(String(a.resultado)).toMatch(/^anuncio_servicio|^venta_/);
+        expect(a.salidas.some((s) => s.payload?.[MARCA_VENTA] === CLINICA.id)).toBe(true);
+        // La simulación no guarda lo que salió: se siembra (la ficha y el pago, sin estado del embudo).
+        h.state.filas.unshift(pagoMarcado(0.5), fichaMarcada(0.5));
+        // 2) Contesta la pregunta del embudo: va al embudo, que sigue con la siguiente pregunta.
+        const b = await turno('Mariana Gómez Ruiz');
+        expect(String(b.resultado)).not.toMatch(/^venta_/);
+        for (const s of b.salidas) expect(s.payload?.[MARCA_VENTA]).toBeUndefined();
+        expect(b.salidas.some((s) => String(s.step ?? '').startsWith('embudo_'))).toBe(true);
+    });
+
+    it('embudo en curso: «¿cómo pago?» justo después del pago de la clínica sigue siendo de la venta', () => {
+        const preguntaNombre = sal(5, '1️⃣ ¿nombre?', { payload: { flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0 }, step: 'embudo_pregunta' } });
+        const r = [pagoMarcado(1), fichaMarcada(1), preguntaNombre] as any[];
+        expect(embudoDelClubEnCurso(r)).toBe(true);
+        expect(ventaCedeAlEmbudo(r, CLINICA as any, 'Mariana Gómez Ruiz')).toBe(true);
+        expect(ventaCedeAlEmbudo(r, CLINICA as any, '¿y la clínica es para niñas?')).toBe(false);
+        expect(ventaCedeAlEmbudo(r, CLINICA as any, '¿cómo pago?')).toBe(false);
+        // Sin embudo (o con la clase ya agendada), la venta no cede.
+        expect(ventaCedeAlEmbudo([pagoMarcado(1), fichaMarcada(1)] as any[], CLINICA as any, 'Mariana Gómez Ruiz')).toBe(false);
+        const agendada = sal(5, 'Agendada', { payload: { flujo: 'embudo', paso_embudo: 'agendada', datos_embudo: {}, step: 'embudo_agendada' } });
+        expect(embudoDelClubEnCurso([pagoMarcado(1), agendada] as any[])).toBe(false);
     });
 
     it('venta + «Es posible agendar una clase de prueba?» → sale de la venta (flujo normal)', async () => {

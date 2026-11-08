@@ -161,7 +161,8 @@ import {
 import { contextoDeVenta, mensajesParaVenta } from './whatsapp-venta-contexto.db';
 import { pideElClub, type VentaActiva } from './whatsapp-venta-contexto';
 import {
-    atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes, ventaDeFamilia,
+    atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes, ventaCedeAlEmbudo, ventaDeFamilia,
+    textoDePagoDeServicio, tienePrecioDeAfiliado,
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
 import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
@@ -2590,9 +2591,27 @@ function ctxAnuncio(
 
 let flowServicioDelRepo: Record<string, any> | null | undefined;
 
-/** Respaldo del formulario cuando todavía no salieron las cuentas (la ficha ya no las pega). */
-export const TEXTO_RESPALDO_FORMULARIO_SIN_DATOS =
-    'No pude abrirte el formulario en este WhatsApp 🙏 Sigamos por aquí: si quieres separar tu cupo, respóndeme y te paso los datos de pago.';
+/** Encabezado del respaldo del formulario cuando por chat sale el mensaje de pago. */
+export const ENCABEZADO_RESPALDO_CON_PAGO = 'No pude abrirte el formulario en este WhatsApp 🙏 Sigamos por aquí.';
+
+/**
+ * El respaldo por chat del formulario cuando todavía no salieron las cuentas (la
+ * ficha ya no las pega): el mensaje de pago del servicio (`textoDePagoDeServicio`,
+ * con el valor de afiliado si el número lo es). Sin cuentas o ante un error, el de
+ * siempre («la escuela te escribe»). Nunca lanza.
+ */
+async function respaldoConPago(integration: WhatsAppIntegration, contactWaId: string, item: ItemConFicha): Promise<string> {
+    try {
+        const schoolId = integration.school_id;
+        const cuentas = (await mediosDePago(schoolId, { categoria: motivoDeServicio(item) })).cuentas
+            .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular }));
+        if (!cuentas.length) return textoRespaldoFormulario(false);
+        const afiliado = tienePrecioDeAfiliado(item) ? (await esAfiliado(schoolId, contactWaId)).afiliado : false;
+        return `${ENCABEZADO_RESPALDO_CON_PAGO}\n\n${textoDePagoDeServicio(item, null, cuentas, { afiliado, hoy: hoyBogota(Date.now()) })}`;
+    } catch {
+        return textoRespaldoFormulario(true);
+    }
+}
 
 /** Los datos inyectados caben en el JSON del repo (si el archivo no está en el despliegue, no se valida). */
 function datosDelFormularioValidos(data: Record<string, unknown>): boolean {
@@ -2630,11 +2649,11 @@ export async function mandarFormularioDeServicio(
             console.warn('[whatsapp-bot] sin WHATSAPP_FLOW_TOKEN_SECRET (>= 16 caracteres): no se manda el formulario');
             return false;
         }
-        // La ficha ya no trae las cuentas pegadas (frente A): si todavía no se le
-        // mandaron (no pidió el pago), el respaldo no dice «con los datos que te envié».
-        const respaldo = !o.sinCuentas && o.datosDePagoEnviados === false
-            ? TEXTO_RESPALDO_FORMULARIO_SIN_DATOS
-            : textoRespaldoFormulario(!o.sinCuentas);
+        // La ficha ya no trae las cuentas pegadas (frente A): si el formulario no abre y
+        // todavía no se le mandó el pago, el respaldo por chat ES el mensaje de pago.
+        const respaldo = o.sinCuentas || o.datosDePagoEnviados === true
+            ? textoRespaldoFormulario(!o.sinCuentas)
+            : await respaldoConPago(integration, contactWaId, item);
         await deliver(integration, conversationId, contactWaId, armado.cuerpo, {
             step: PASO_FORMULARIO_ENVIADO, intencion: 'anuncio', repetible: true,
             formulario: {
@@ -2918,6 +2937,10 @@ async function atenderVentaDelDesconocido(
             await marcarAbiertaSinAviso(conversationId);
             return 'escuela_atendiendo';
         }
+        // El embudo del club en curso (la persona lo abrió y tiene una pregunta pendiente):
+        // la venta solo contesta lo suyo (nombra el servicio o pide pagarlo tras la venta);
+        // «Mariana Gómez Ruiz», una fecha o un botón los atiende el embudo.
+        if (ventaCedeAlEmbudo(recientes, v.venta.item, text)) return null;
         marcarVentaEnElTurno(v.venta.item);
         // Primer contacto con el servicio (lo nombró, nadie le mandó nada todavía): la
         // ficha del destino por anuncio, y el pago aparte si lo pidió.
@@ -4071,10 +4094,11 @@ async function atenderDesconocidoEnEscuela(
     // cubre lo que llegue hasta acá con la venta abierta.
     if (tema === 'pagos' && !botonId && !pideElClub(text)) {
         const v = await ventaDelTurno(integration, conversationId, contactWaId);
-        if (v) {
+        const recientesVenta = v ? await mensajesRecientes(conversationId) : [];
+        if (v && !ventaCedeAlEmbudo(recientesVenta, v.venta.item, text)) {
             marcarVentaEnElTurno(v.venta.item);
             const r = await atenderVentaDeServicio(ctxVentaServicio(integration, conversationId, contactWaId,
-                await mensajesRecientes(conversationId), { familia: false }), v.venta, text);
+                recientesVenta, { familia: false }), v.venta, text);
             if (r) return r;
             marcarVentaEnElTurno(null);
         }
