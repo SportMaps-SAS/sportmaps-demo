@@ -27,8 +27,11 @@
  *      Fotos, audios y formularios no se reproducen (se cuentan).
  *   3. Revisa TODO lo que el bot mandaría con las reglas prohibidas de la venta:
  *      menú de sedes, «clase de prueba» sin que la pidieran, las preguntas del
- *      embudo, otro servicio, pedir el correo, una fecha de tramo equivocada
- *      («9 de noviembre» en Monster) y montos fuera del catálogo/planes.
+ *      embudo, otro servicio, pedir el correo, montos y fechas de precio que no
+ *      están en los datos (el MISMO verificador de producción del frente B:
+ *      `verificarSalida` con `catalogoParaProspecto`, que admite el texto libre de
+ *      la escuela salvo las líneas que contradicen el catálogo) y, como guarda, la
+ *      fecha del error conocido («9 de noviembre» en Monster).
  *      Las reglas de la venta valen desde que la conversación entra en un
  *      servicio y hasta que la persona pide el club de forma explícita
  *      (`pideElClub`); fechas y montos, siempre. A una familia identificada el bot
@@ -70,8 +73,16 @@ import { atenderRespuestaDeCampana } from '../src/services/whatsapp-campana-resp
 import { serviciosDeAnuncio, eventosNombrados, type ItemConFicha } from '../src/services/whatsapp-anuncio-destino';
 import { itemNombradoEn, pideElClub } from '../src/services/whatsapp-venta-contexto';
 import { tokensDistintivos } from '../src/services/whatsapp-venta-servicios.service';
-import { ajustesWhatsAppDeEscuela, ajustesClasePrueba } from '../src/services/whatsapp-ajustes-escuela.service';
+import { ajustesWhatsAppDeEscuela, textoDeEscuela } from '../src/services/whatsapp-ajustes-escuela.service';
 import { normalizar } from '../src/services/whatsapp-clase-cortesia.service';
+// La regla de montos y fechas de precio es la de producción (frente B): mismas funciones.
+import { catalogoParaProspecto, fichaDeProspectos } from '../src/services/whatsapp-prospecto-ia.service';
+import {
+    extraerMontos, permitidosDelCatalogo, unirPermitidos, verificarSalida, type Permitidos,
+} from '../src/services/whatsapp-verificador-montos';
+import { preciosParaProspecto } from '../src/services/whatsapp-precios.service';
+import { infoDeEscuela, fallbackInfoEscuela } from '../src/services/whatsapp-info-escuela.service';
+import { textosClaseDeEscuela } from '../src/services/textos-clase-prueba';
 
 // ─── Reloj fijo (por conversación) ───────────────────────────────────────────
 //
@@ -207,67 +218,40 @@ export function siguienteTramoQa(it: ItemConFicha, hoy: string, afiliado: boolea
 }
 
 /**
- * Los montos que puede decir el bot: precios del catálogo (lista, tramos, afiliado,
- * opciones), abono y saldo de cada uno, y los extras (clase de prueba, planes).
+ * Lo que el bot puede decir en montos y fechas de precio, con la MISMA regla que
+ * producción (frente B, regla 4): `catalogoParaProspecto` del asistente de
+ * prospectos con los mismos insumos que le pasa el bot (ficha de prospectos,
+ * precios de los planes si la escuela los responde, grupos, atención presencial y
+ * textos de la clase de prueba). Es decir: el catálogo vigente, el texto libre de
+ * la escuela SIN las líneas que contradicen el catálogo (`permitidosDeTextoLibre`
+ * / `auditarFichaContraCatalogo`), las descripciones, los planes y la clase de
+ * prueba; las cuentas no cuentan como montos. Para una familia del club se suma
+ * el precio de afiliado del catálogo (como `permitidosDeServicio` con afiliado).
+ * Una lectura por fuente, una vez por corrida.
  */
-export function montosPermitidos(items: ItemConFicha[], extras: (number | string | null | undefined)[] = []): Set<number> {
-    const s = new Set<number>();
-    const agregar = (v: unknown) => { const n = Math.round(Number(v)); if (Number.isFinite(n) && n > 0) s.add(n); };
-    for (const it of items) {
-        const precios = [it.price, it.precio_afiliado, ...tramosQa(it).map((t) => t.precio),
-            ...opcionesQa(it).flatMap((o) => [o.precio, o.precioAfiliado])]
-            .map(Number).filter((n) => Number.isFinite(n) && n > 0);
-        precios.forEach(agregar);
-        const pct = Number(it.abono_minimo_pct);
-        if (it.allow_installments === true && pct >= 1 && pct < 100) {
-            for (const p of precios) { const a = Math.ceil((p * pct) / 100); agregar(a); agregar(p - a); }
-        }
-    }
-    extras.forEach(agregar);
-    return s;
-}
+export interface PermitidosDeVenta { prospecto: Permitidos; afiliado: Permitidos }
 
-/**
- * Los montos CONFIGURADOS de la escuela fuera del catálogo: planes (mensualidad e
- * inscripción) y artículos (precio y por talla). Dos lecturas acotadas. Lo que solo
- * está en un texto libre (la ficha de prospectos) NO cuenta: regla 4 del plan.
- */
-export async function montosDeEscuela(schoolId: string): Promise<number[]> {
-    const [planes, articulos] = await Promise.all([
-        supabase.from('offering_plans').select('price, registration_fee').eq('school_id', schoolId).eq('is_active', true).limit(50),
-        supabase.from('school_merchandise_items').select('price, price_by_size').eq('school_id', schoolId).eq('active', true).limit(50),
+export async function permitidosDeEscuela(schoolId: string, hoy: string): Promise<PermitidosDeVenta> {
+    const aj = await ajustesWhatsAppDeEscuela(schoolId);
+    const [ficha, precios, info, atencion, textos, items] = await Promise.all([
+        fichaDeProspectos(schoolId),
+        preciosParaProspecto(schoolId, aj.responderPrecios).catch(() => null),
+        infoDeEscuela(schoolId).catch(() => null),
+        textoDeEscuela(schoolId, 'wa_atencion_presencial'),
+        textosClaseDeEscuela(schoolId),
+        serviciosDeAnuncio(schoolId),
     ]);
-    return [
-        ...((planes.data ?? []) as any[]).flatMap((p) => [p.price, p.registration_fee]),
-        ...((articulos.data ?? []) as any[]).flatMap((a) => [a.price, ...Object.values(a.price_by_size && typeof a.price_by_size === 'object' ? a.price_by_size : {})]),
-    ].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+    const { permitidos } = await catalogoParaProspecto(schoolId, ficha ?? '',
+        { precios, grupos: info ? fallbackInfoEscuela(info) : null, atencion, textos }, hoy);
+    return { prospecto: permitidos, afiliado: unirPermitidos(permitidos, permitidosDelCatalogo(items, { afiliado: true })) };
 }
 
-/** Los montos en pesos de un texto: «$300.000», «300.000», «$ 57000», «300 mil». Solo ≥ $1.000. */
-export function montosEn(texto: string | null | undefined): number[] {
-    const t = String(texto ?? '');
-    const salida: number[] = [];
-    const tomados: [number, number][] = [];
-    const libre = (i: number, j: number) => !tomados.some(([a, b]) => i < b && j > a);
-    for (const m of t.matchAll(/\$\s?(\d{1,3}(?:[.,]\d{3})+|\d{4,})/g)) {
-        salida.push(Number(m[1].replace(/\D/g, '')));
-        tomados.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
-    }
-    for (const m of t.matchAll(/(\d{1,3}(?:\.\d{3})+)(?![\d.,]*\d)/g)) {
-        const i = m.index ?? 0;
-        if (i > 0 && /[\d.,]/.test(t[i - 1])) continue;
-        if (libre(i, i + m[0].length)) { salida.push(Number(m[1].replace(/\D/g, ''))); tomados.push([i, i + m[0].length]); }
-    }
-    for (const m of t.matchAll(/(?<![\d.,])(\d{1,3})\s?mil\b/gi)) {
-        const i = m.index ?? 0;
-        if (libre(i, i + m[0].length)) salida.push(Number(m[1]) * 1000);
-    }
-    return salida.filter((n) => n >= 1000);
-}
-
-/** ¿El texto menciona ese monto (en cualquier formato)? */
+/** ¿El texto menciona ese monto (en cualquier formato)? Con el extractor de producción. */
 export const mencionaMonto = (texto: string | null | undefined, n: number | null | undefined) =>
-    n != null && montosEn(texto).includes(Math.round(n));
+    n != null && extraerMontos(texto).some((m) => m.valor === Math.round(n));
+
+/** Los montos permitidos, legibles (encabezado del reporte). */
+export const montosLegibles = (p: Permitidos) => [...p.montos].sort((a, b) => a - b).map((n) => `$${n.toLocaleString('es-CO')}`).join(' ');
 
 // ─── Lo que NUNCA puede salir en una venta ───────────────────────────────────
 
@@ -291,7 +275,10 @@ export interface ContextoVenta {
     items: ItemConFicha[];
     /** El servicio que se está vendiendo (null = no se sabe: no se revisa «otro servicio»). */
     item: ItemConFicha | null;
-    permitidos: Set<number>;
+    /** Montos y cortes de precio permitidos (`permitidosDeEscuela`: la regla de producción). */
+    permitidos: Permitidos;
+    /** 'YYYY-MM-DD' (Bogotá) del mensaje: año y mes para las fechas sin año del verificador. */
+    hoy: string;
     /** Última línea de cada pregunta del embudo de la escuela («las 5 preguntas»). */
     preguntasEmbudo: string[];
     /** false = solo fechas y montos (fuera de la venta). */
@@ -318,29 +305,25 @@ function otroServicioEn(texto: string, c: ContextoVenta): ItemConFicha | null {
     return null;
 }
 
-/** Fechas de precio: «hasta el D de M» junto a un precio debe ser el día antes de un tramo (o inicio/fin del servicio). */
-function fechasDeTramoMal(texto: string, items: ItemConFicha[]): string[] {
+/**
+ * GUARDA del caso real (Monster, F4): la ficha libre decía «preventa hasta el 9» y el
+ * tramo cambia el 11. El día ANTERIOR al último día de preventa («9 de noviembre»)
+ * nunca puede salir, aunque la ficha lo diga. Se suma al verificador de producción.
+ */
+function fechaDelErrorConocido(texto: string, items: ItemConFicha[]): string[] {
     const t = normalizar(texto);
-    const fallas: string[] = [];
     const permitidas = new Set<string>();
     const prohibidas = new Set<string>();
     for (const it of items) {
         for (const tr of tramosQa(it)) {
             permitidas.add(diaLegibleQa(tr.desde, 1));
             permitidas.add(diaLegibleQa(tr.desde));
-            // El error real de Monster: la ficha libre decía «preventa hasta el 9» y el tramo cambia el 11.
             prohibidas.add(diaLegibleQa(tr.desde, 2));
         }
         for (const iso of [it.starts_at, it.ends_at]) if (iso) permitidas.add(diaLegibleQa(ymdBogota(iso)));
     }
-    for (const p of prohibidas) if (!permitidas.has(p) && new RegExp(`\\b${p}\\b`).test(t)) fallas.push(`dice «${p}» (la fecha del tramo está mal)`);
-    for (const m of t.matchAll(/hasta (?:el )?(\d{1,2}) de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)/g)) {
-        const cerca = t.slice(Math.max(0, (m.index ?? 0) - 90), (m.index ?? 0) + 90);
-        if (!/valor|precio|preventa|\$|pesos|inversion/.test(cerca)) continue;
-        const fecha = `${Number(m[1])} de ${m[2]}`;
-        if (!permitidas.has(fecha) && !fallas.some((f) => f.includes(fecha))) fallas.push(`precio «hasta el ${fecha}» que no es la fecha de ningún tramo`);
-    }
-    return fallas;
+    return [...prohibidas].filter((p) => !permitidas.has(p) && new RegExp(`\\b${p}\\b`).test(t))
+        .map((p) => `dice «${p}» (la fecha del tramo está mal: error conocido de la ficha libre)`);
 }
 
 /** Lo prohibido en UN mensaje del bot. */
@@ -362,11 +345,19 @@ export function violacionesDeVenta(s: Pick<SalidaSimulada, 'texto' | 'step' | 'o
         if (otro) v.push({ codigo: 'otro_servicio', detalle: `metió «${otro.name}» en la venta de «${c.item!.name}»` });
         if (RE_CORREO.test(texto)) v.push({ codigo: 'pide_correo', detalle: `pide el correo en una venta: «${corto(texto.slice(Math.max(0, texto.search(RE_CORREO) - 30)))}»` });
     }
-    for (const f of fechasDeTramoMal(texto, c.items)) v.push({ codigo: 'fecha_tramo', detalle: f });
-    if (c.revisarMontos) {
-        const fuera = [...new Set(montosEn(texto).filter((n) => !c.permitidos.has(n)))];
-        if (fuera.length) {
-            v.push({ codigo: 'monto_fuera', detalle: `monto(s) que no están en el catálogo ni en los planes: ${fuera.map((n) => `$${n.toLocaleString('es-CO')}`).join(', ')}` });
+    for (const f of fechaDelErrorConocido(texto, c.items)) v.push({ codigo: 'fecha_tramo', detalle: f });
+    // Montos y fechas de precio: el MISMO verificador que producción (whatsapp-verificador-montos).
+    const r = verificarSalida(texto, c.permitidos, { hoy: c.hoy });
+    if (!r.ok) {
+        const montos = r.violaciones.filter((x) => x.tipo === 'monto');
+        const fechas = r.violaciones.filter((x): x is Extract<typeof x, { tipo: 'fecha_de_precio' }> => x.tipo === 'fecha_de_precio');
+        if (montos.length && c.revisarMontos) {
+            v.push({ codigo: 'monto_fuera', detalle: `monto(s) que no están en los datos de la escuela: ${[...new Set(montos.map((x) => x.texto))].join(', ')}` });
+        }
+        for (const f of fechas) {
+            if (!v.some((x) => x.codigo === 'fecha_tramo' && x.detalle.includes(f.texto))) {
+                v.push({ codigo: 'fecha_tramo', detalle: `fecha de precio «${f.texto}» que no coincide con los tramos de los datos` });
+            }
         }
     }
     return v;
@@ -572,7 +563,8 @@ const MARCADO_VENTA = (p: any) => !!(p && (p.venta_servicio_id || p.servicio_id 
 
 async function reproducir(
     conv: { id: string; contact_wa_id: string; parent_id: string | null },
-    filas: FilaReal[], schoolId: string, base: Omit<ContextoVenta, 'item' | 'enVenta' | 'pidioClub' | 'revisarMontos'>,
+    filas: FilaReal[], schoolId: string,
+    base: Pick<ContextoVenta, 'items' | 'preguntasEmbudo'> & { permitidos: PermitidosDeVenta },
 ): Promise<ResultadoReplay> {
     const familia = Boolean(conv.parent_id);
     const r: ResultadoReplay = {
@@ -653,8 +645,11 @@ async function reproducir(
             }
             if (s.step === 'campana_respuesta_si' && nombrado(s.texto)) { item = nombrado(s.texto); enVenta = true; }
         }
+        // A una familia del club le toca el precio de afiliado (regla de `permitidosDeServicio`).
         const violaciones = familiaYSalidas.flatMap((s) => violacionesDeVenta(s, {
-            ...base, item, enVenta, pidioClub, revisarMontos: !familia || MARCADO_VENTA(s.payload),
+            items: base.items, preguntasEmbudo: base.preguntasEmbudo,
+            permitidos: familia ? base.permitidos.afiliado : base.permitidos.prospecto, hoy: ymdBogota(Date.now()),
+            item, enVenta, pidioClub, revisarMontos: !familia || MARCADO_VENTA(s.payload),
         }));
         r.turnos.push({ entrada, salidas: t.salidas, violaciones, nota: t.nota });
     }
@@ -699,25 +694,24 @@ async function main(): Promise<void> {
 
     const desdeIso = new DateReal(instanteBogota(DESDE, '00:00')).toISOString();
     const hastaIso = HASTA ? new DateReal(instanteBogota(HASTA, '23:59')).toISOString() : new DateReal().toISOString();
-    const [items, aj, clase, extrasDeEscuela, integraciones] = await Promise.all([
+    const [items, aj, permitidos, integraciones] = await Promise.all([
         serviciosDeAnuncio(schoolId, instanteBogota(DESDE, '00:00')),
         ajustesWhatsAppDeEscuela(schoolId),
-        ajustesClasePrueba(schoolId),
-        montosDeEscuela(schoolId),
+        permitidosDeEscuela(schoolId, ymdBogota(DateReal.now())),
         supabase.from('school_whatsapp_integrations').select('id').eq('school_id', schoolId).limit(5),
     ]);
     const idsInteg = ((integraciones.data ?? []) as any[]).map((x) => String(x.id));
     if (!idsInteg.length) { log('La escuela no tiene integración de WhatsApp.'); process.exit(2); }
-    const extras = [clase?.precio, ...extrasDeEscuela];
     const base = {
         items,
-        permitidos: montosPermitidos(items, extras),
+        permitidos,
         preguntasEmbudo: (aj.preguntasProspecto ?? []).map((p) => String(p.texto ?? '').trim().split('\n').filter(Boolean).at(-1) ?? '')
             .filter((s) => s.length >= 12),
     };
     const palabras = palabrasDeServicio(items, PALABRAS);
     log(`${(escuela as any).name} · ${DESDE} → ${HASTA ?? 'hoy'} · servicios: ${items.map((i) => i.name).join(' · ') || '(ninguno vigente)'}`);
-    log(`Palabras: ${palabras.join(', ')} · montos permitidos: ${[...base.permitidos].sort((a, b) => a - b).map((n) => `$${n.toLocaleString('es-CO')}`).join(' ')}`);
+    log(`Palabras: ${palabras.join(', ')}`);
+    log(`Montos permitidos (regla de producción, prospecto): ${montosLegibles(permitidos.prospecto)} · cortes de precio: ${[...permitidos.prospecto.cortes].sort().join(' ')}`);
 
     let ids = SOLO_CONV ? [SOLO_CONV] : await idsDeConversaciones(idsInteg, desdeIso, hastaIso, palabras);
     if (MAX > 0) ids = ids.slice(0, MAX);

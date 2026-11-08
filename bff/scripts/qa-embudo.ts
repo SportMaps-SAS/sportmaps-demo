@@ -73,7 +73,9 @@
  *     «Hola/Ok/./gracias/otra fecha» a mitad de la venta, las preguntas de detalle, la clase de
  *     prueba pedida, «ya pagué», el afiliado y el reloj fijo en el borde de cada tramo. Nunca
  *     sedes, clase de prueba sin pedirla, las preguntas del embudo, otro servicio ni el correo;
- *     ningún monto fuera del catálogo/planes ni fecha de tramo mal. Reloj fijo, alias en memoria
+ *     ningún monto ni fecha de precio fuera de los datos (el verificador de producción del
+ *     frente B: catálogo + texto libre de la escuela sin las líneas que lo contradicen + planes
+ *     + clase de prueba) y nunca la fecha del error conocido («9 de noviembre»). Reloj fijo, alias en memoria
  *     y el turno de campaña salen de scripts/qa-replay-ventas.ts (ver ahí por qué).
  *   · En TODO mensaje: que la familia reciba algo (la nota «se abre en el buzón»
  *     NO cuenta), sin «gratis» si la clase tiene valor, sin undefined/null/NaN,
@@ -124,8 +126,8 @@ import { mediosDePago } from '../src/services/whatsapp-medios-de-pago.service';
 import type { CuentaDePagoEmbudo } from '../src/services/whatsapp-embudo-prospecto';
 import {
     instalarReloj, instalarAliasesVirtuales, conReloj, instanteBogota, turnoDeCampanaSimulado, violacionesDeVenta,
-    montosPermitidos, mencionaMonto, precioEsperadoQa, abonoEsperadoQa, siguienteTramoQa, opcionesQa, tramosQa,
-    diaLegibleQa, ymdBogota, CONFIRMA_ESCUELA, montosDeEscuela, type ContextoVenta,
+    mencionaMonto, precioEsperadoQa, abonoEsperadoQa, siguienteTramoQa, opcionesQa, tramosQa,
+    diaLegibleQa, ymdBogota, CONFIRMA_ESCUELA, permitidosDeEscuela, type ContextoVenta, type PermitidosDeVenta,
 } from './qa-replay-ventas';
 
 // ─── Argumentos ──────────────────────────────────────────────────────────────
@@ -2484,8 +2486,9 @@ async function correrFlows(e: Escuela): Promise<Resultado[]> {
  *  · «ya te mando el comprobante» → «con el nombre completo de quien asiste».
  *  · Reloj fijo el día ANTES y el día DEL cambio de cada tramo de precio (Monster:
  *    10-nov $300.000 / 11-nov $350.000; nunca «9 de noviembre»).
- *  · Verificador global en TODO mensaje: ningún monto fuera del catálogo/planes y
- *    ninguna fecha de tramo equivocada.
+ *  · Verificador global en TODO mensaje, con la regla de producción (`verificarSalida` +
+ *    `catalogoParaProspecto` del frente B; afiliado suma su precio): ningún monto ni fecha de
+ *    precio fuera de los datos, y como guarda la fecha del error conocido.
  */
 
 const TABLAS_CAMPANA = ['whatsapp_campanas', 'whatsapp_campana_envios'];
@@ -2498,7 +2501,8 @@ interface CtxVentas {
     items: ItemConFicha[];
     /** Por id de ítem: las cuentas que el bot daría para ese motivo. */
     cuentas: Map<string, CuentaDePagoEmbudo[]>;
-    permitidos: Set<number>;
+    /** Montos y fechas de precio permitidos con la regla de producción (frente B), para prospecto y para afiliado. */
+    permitidos: PermitidosDeVenta;
     integracionId: string;
     /** Por id de ítem: el texto que la escuela aprobó para el «Sí» de su campaña. */
     respuestaSi: Map<string, string>;
@@ -2548,27 +2552,28 @@ function nombraServicio(texto: string, it: ItemConFicha): boolean {
     return eventosNombrados([texto]).some((e) => propios.includes(e));
 }
 
-function contextoDeVenta(cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean; enVenta?: boolean } = {}): ContextoVenta {
+/** `afiliado`: la persona es de una familia del club (le toca el precio de afiliado). `hoy`: el del reloj de la conversación. */
+function contextoDeVenta(cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean; enVenta?: boolean; afiliado?: boolean } = {}): ContextoVenta {
     return {
-        items: cv.items, item: it, permitidos: cv.permitidos,
+        items: cv.items, item: it, permitidos: o.afiliado ? cv.permitidos.afiliado : cv.permitidos.prospecto, hoy: hoyBogota(),
         preguntasEmbudo: cv.e.preguntas.map((p) => ultimaLinea(p.texto)).filter((s) => s.length >= 12),
         enVenta: o.enVenta ?? true, pidioClub: !!o.pidioClub, revisarMontos: true,
     };
 }
 
 /** Lo prohibido en el último turno (las reglas de la venta). */
-function revisarTurnoVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean } = {}): void {
+function revisarTurnoVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha, o: { pidioClub?: boolean; afiliado?: boolean } = {}): void {
     for (const s of paraLaFamilia(c.turnos.at(-1)?.salidas ?? [])) {
         for (const v of violacionesDeVenta(s, contextoDeVenta(cv, it, o))) r.fallas.push(`[${v.codigo}] ${v.detalle}`);
     }
 }
 
-/** Verificador global: montos y fechas de tramo en TODO lo propio de la conversación. */
-function revisarGlobalVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha): void {
+/** Verificador global: montos y fechas de precio (regla de producción) en TODO lo propio de la conversación. */
+function revisarGlobalVenta(c: Conversacion, r: Resultado, cv: CtxVentas, it: ItemConFicha, afiliado = false): void {
     for (const t of c.turnos.slice(c.heredados)) {
         if (t.sistema) continue;
         for (const s of paraLaFamilia(t.salidas)) {
-            for (const v of violacionesDeVenta(s, contextoDeVenta(cv, it, { enVenta: false }))) r.fallas.push(`[${v.codigo}] ${v.detalle}`);
+            for (const v of violacionesDeVenta(s, contextoDeVenta(cv, it, { enVenta: false, afiliado }))) r.fallas.push(`[${v.codigo}] ${v.detalle}`);
         }
     }
 }
@@ -2677,7 +2682,7 @@ function preguntasDeDetalle(it: ItemConFicha, cuentas: CuentaDePagoEmbudo[]): { 
 /** Una conversación del bloque (nueva, o bifurcada de una base), con su reloj si se pide. */
 async function correrVenta(
     titulo: string, cv: CtxVentas, it: ItemConFicha, correr: (c: Conversacion, r: Resultado) => Promise<void>,
-    o: { reloj?: number; base?: Conversacion | null; familia?: boolean } = {},
+    o: { reloj?: number; base?: Conversacion | null; familia?: boolean; afiliado?: boolean } = {},
 ): Promise<Resultado> {
     const ejecutar = async () => {
         const c = o.base ? o.base.bifurcar(titulo) : new Conversacion(titulo, cv.e.id, nuevoN());
@@ -2685,7 +2690,7 @@ async function correrVenta(
         const r = nuevoResultado(titulo, c, 'ventas');
         r.desenlace = 'respuesta';
         await protegido(r, () => correr(c, r));
-        revisarGlobalVenta(c, r, cv, it);
+        revisarGlobalVenta(c, r, cv, it, o.afiliado);
         cerrar(r, cv.e, null);
         progreso(r);
         return r;
@@ -2702,10 +2707,10 @@ async function correrVentas(e: Escuela): Promise<Resultado[]> {
         process.stdout.write('\n');
         return [r];
     }
-    const [integ, clase, extras, campanas] = await Promise.all([
+    const [integ, permitidos, campanas] = await Promise.all([
         integracionParaSimular(e.id),
-        ajustesClasePrueba(e.id),
-        montosDeEscuela(e.id),
+        // La regla de montos y fechas de precio de producción (frente B): catálogo + texto libre sin contradicciones + planes + clase.
+        permitidosDeEscuela(e.id, hoyBogota()),
         supabase.from('whatsapp_campanas').select('respuesta_si').eq('school_id', e.id).limit(30),
     ]);
     const cuentas = new Map<string, CuentaDePagoEmbudo[]>();
@@ -2721,8 +2726,7 @@ async function correrVentas(e: Escuela): Promise<Resultado[]> {
         respuestaSi.set(it.id, reales[0] ?? (String(it.description ?? '').trim() || `*${it.name}*`));
     }
     const cv: CtxVentas = {
-        e, items, cuentas, integracionId: integ.id, respuestaSi,
-        permitidos: montosPermitidos(items, [clase?.precio, e.precio, ...extras]),
+        e, items, cuentas, integracionId: integ.id, respuestaSi, permitidos,
     };
     const hoy = hoyBogota();
 
@@ -2756,13 +2760,13 @@ async function correrVentas(e: Escuela): Promise<Resultado[]> {
                 fase1.push(() => correrVenta(`[${it.name}] afiliado: anuncio + prellenado → pago aparte con su valor de afiliado`, cv, it, async (c, r) => {
                     await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it), rpc: AFILIADO_SI });
                     revisarPagoAparte(c, r, cv, it, { hoy, afiliado: true });
-                    revisarTurnoVenta(c, r, cv, it);
-                }));
+                    revisarTurnoVenta(c, r, cv, it, { afiliado: true });
+                }, { afiliado: true }));
                 fase1.push(() => correrVenta(`[${it.name}] FAMILIA del club: «${PRELLENADO(it)}» → pago aparte con su valor de afiliado`, cv, it, async (c, r) => {
                     await c.decir(PRELLENADO(it), null, { referral: anuncioDe(it), rpc: AFILIADO_SI });
                     revisarPagoAparte(c, r, cv, it, { hoy, afiliado: true });
-                    revisarTurnoVenta(c, r, cv, it);
-                }, { familia: true }));
+                    revisarTurnoVenta(c, r, cv, it, { afiliado: true });
+                }, { familia: true, afiliado: true }));
             }
             fase1.push(() => correrVenta(`[${it.name}] campaña: «Sí, envíame la info» → el texto de la escuela + el pago aparte`, cv, it, async (c, r) => {
                 const id = sembrarCampana(c, cv, it);

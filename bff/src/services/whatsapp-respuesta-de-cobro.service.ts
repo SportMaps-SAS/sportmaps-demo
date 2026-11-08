@@ -16,7 +16,7 @@ import { aplicarComprobante, aplicarComprobanteConMotivo } from '../jobs/whatsap
 import {
     interpretarEleccion, loQueQueda, etiquetaDeCobro, resumenParaLaEscuela, TEXTO_REVISION_ESCUELA,
 } from './whatsapp-eleccion-de-pago.service';
-import { resolverRespuestaDeDeportista, botonesDeCobros } from './whatsapp-comprobante-de-ficha.service';
+import { resolverRespuestaDeDeportista, resolverRespuestaDeAsistente, botonesDeCobros } from './whatsapp-comprobante-de-ficha.service';
 import {
     resolverRespuestaGuiada, interpretarOpcion, PASO_RESUMEN_MOTIVOS, BOTON_MOTIVOS_OK, BOTON_MOTIVOS_CAMBIAR,
     type OpcionGuiada,
@@ -27,6 +27,7 @@ import { soloSaludoOCortesia } from './whatsapp-atencion.service';
 import { cargarRecargos, montoEsperado } from './whatsapp-excedente.service';
 import { esHumanoDeLaEscuela, normalizarFrase, type FilaReciente } from './whatsapp-reglas-turno';
 import type { BotonInteractivo, WhatsAppIntegration } from './whatsapp.service';
+import { MARCA_VENTA } from './whatsapp-venta-contexto';
 
 /** `error_message` de la pregunta que se cierra porque una persona de la escuela escribió. */
 export const MOTIVO_ESCUELA_TOMO = 'la escuela tomó la conversación';
@@ -53,8 +54,13 @@ const MAX_REPREGUNTAS = 2;
  */
 const SALUDO_PEGADO_MIN = 5;
 
-/** Responde a la familia. `botones`: las opciones como botones (si el canal los soporta). */
-export type ResponderCobro = (texto: string, paso: string, botones?: BotonInteractivo[]) => Promise<unknown>;
+/**
+ * Responde a la familia. `botones`: las opciones como botones (si el canal los
+ * soporta). `payload` (2026-11-08): se mezcla en el del saliente — la venta de un
+ * servicio lo marca con `venta_servicio_id` (MARCA_VENTA). `linea` no se usa acá.
+ */
+export type ResponderCobro = (texto: string, paso: string, botones?: BotonInteractivo[],
+    linea?: unknown, payload?: Record<string, unknown>) => Promise<unknown>;
 
 /**
  * Pasa el caso a la escuela con `resumen`. `mensajeFamilia`: lo que se le
@@ -71,8 +77,11 @@ interface FilaEsperando {
         storagePath: string | null;
         /** null: familia sin cuenta (cobros por ficha). */
         parentId: string | null;
-        /** 'deportista': se preguntó de qué deportista es. 'mes' / 'concepto': preguntas guiadas (spec 3.3). */
-        tipo?: 'deportista' | 'mes' | 'concepto';
+        /**
+         * 'deportista': se preguntó de qué deportista es. 'mes' / 'concepto': preguntas guiadas (spec 3.3).
+         * 'asistente_servicio' (2026-11-08): venta de un servicio, se preguntó el nombre de quien asiste.
+         */
+        tipo?: 'deportista' | 'mes' | 'concepto' | 'asistente_servicio';
         guia?: any;
         /** Meses que la familia dijo que YA pagó en respuestas anteriores («agosto»). */
         dice_pagado?: string[];
@@ -152,6 +161,17 @@ async function resolverFilaAbierta(
         // se crea el cobro y se aplica. Si no, la bandeja de siempre.
         if (fila.pregunta_ocr.tipo === 'concepto' && await aplicarMotivoElegido(fila, texto, responder)) return true;
         return resolverRespuestaGuiada(fila as any, texto, responder);
+    }
+
+    // Venta de un servicio: «¿Cuál es el nombre completo de quien asiste…?». Con
+    // un nombre se crea el cobro del servicio; lo que no es un nombre (una
+    // pregunta de la clínica, «ok») sigue al bot y la pregunta queda abierta.
+    if (fila.pregunta_ocr?.tipo === 'asistente_servicio') {
+        const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
+        if (edad > VIGENCIA_H) return false;
+        const minutos = edad * 60;
+        if (soloSaludoOCortesia(texto) && minutos <= SALUDO_PEGADO_MIN) return true;
+        return resolverRespuestaDeAsistente(fila, texto, responder);
     }
 
     // «¿De qué deportista es este pago?» (número sin ficha): la respuesta es un
@@ -654,8 +674,11 @@ export async function promoverSiguientePregunta(
             .eq('id', siguiente.id).eq('status', 'waiting_user').is('pregunta_at', null)
             .select('id');
         if (!Array.isArray(tomadas) || !tomadas.length) return false;
+        // La pregunta de una venta (el nombre de quien asiste) sale con la marca del servicio.
+        const itemVenta = typeof resto?.venta?.itemId === 'string' ? resto.venta.itemId : null;
         await responder(textoSigueEnFila({ texto: enFila.texto, monto: enFila.monto ?? siguiente.pregunta_ocr?.ocr?.amount ?? null }),
-            enFila.paso, Array.isArray(enFila.botones) && enFila.botones.length ? enFila.botones : undefined);
+            enFila.paso, Array.isArray(enFila.botones) && enFila.botones.length ? enFila.botones : undefined,
+            undefined, itemVenta ? { [MARCA_VENTA]: itemVenta } : undefined);
         return true;
     } catch {
         return false;
