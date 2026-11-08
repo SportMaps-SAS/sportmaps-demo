@@ -28,6 +28,7 @@ import { ImportarChatExportado } from '@/components/whatsapp/ImportarChatExporta
 import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/BandejaComprobantes';
 import { Campanas } from '@/components/whatsapp/Campanas';
 import { Anuncios } from '@/components/whatsapp/Anuncios';
+import { CoherenciaFicha } from '@/components/whatsapp/CoherenciaFicha';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -570,6 +571,8 @@ export default function WhatsAppPage() {
                     {schoolId && <HorariosDeEntrenamiento schoolId={schoolId} />}
                 </TabsContent>
                 <TabsContent value="config" className="space-y-4">
+                    {/* Arriba: el texto del asistente que contradice el catálogo (blindaje de ventas, frente B). */}
+                    {schoolId && <CoherenciaFicha schoolId={schoolId} />}
                     <PanelConfig
                         ajustes={estado?.ajustes ?? null}
                         guardando={guardando}
