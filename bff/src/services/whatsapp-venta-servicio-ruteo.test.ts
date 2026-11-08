@@ -109,7 +109,8 @@ vi.mock('./whatsapp-prospecto-lead.service', () => ({
 }));
 vi.mock('./wa-concepto-esperado.service', () => ({ registrarConceptoEsperado: vi.fn(async () => true) }));
 
-import { atenderDesconocido, simularEnvios, _olvidarPresentaciones } from './whatsapp-bot.service';
+import { atenderDesconocido, deliver, simularEnvios, sinPuntuacionHuerfana, _olvidarPresentaciones } from './whatsapp-bot.service';
+import { sinEmojisDeDeporte } from './whatsapp-salida-segura';
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
 import { PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_OTRA_FECHA, lineaDeSaludoDeVenta } from './whatsapp-venta-servicio';
 
@@ -219,6 +220,26 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         const { resultado, salidas } = await turno('Hola');
         expect(String(resultado)).not.toMatch(/^venta_/);
         for (const s of salidas) expect(s.payload?.[MARCA_VENTA]).toBeUndefined();
+    });
+
+    it('932fcd83 (11-07 15:41): sin el emoji (o el nombre) la frase no queda «¡Qué emoción, !»', async () => {
+        // Puro: lo que deja el filtro de emojis de deporte.
+        const filtrado = sinEmojisDeDeporte('¡Qué emoción, 🏐! Para separar tu cupo en la clínica, paga *$150.000*.');
+        expect(filtrado).toBe('¡Qué emoción, ! Para separar tu cupo en la clínica, paga *$150.000*.');
+        expect(sinPuntuacionHuerfana(filtrado)).toBe('¡Qué emoción! Para separar tu cupo en la clínica, paga *$150.000*.');
+        expect(sinPuntuacionHuerfana('¡Mucho gusto, ! 😊')).toBe('¡Mucho gusto! 😊');
+        expect(sinPuntuacionHuerfana('Hola, , ¿cómo vas ?')).toBe('Hola, ¿cómo vas?');
+        expect(sinPuntuacionHuerfana('Listo ( ) ¡ ! gracias')).toBe('Listo gracias');
+        // Lo que no se toca: montos, enlaces, comas normales.
+        const normal = 'Valor: *$1.250.000*, abono de $625.000. Paga en https://checkout.wompi.co/l/abc?x=1, y listo.';
+        expect(sinPuntuacionHuerfana(normal)).toBe(normal);
+
+        // Y cableado en `deliver`: lo que sale a Meta ya va limpio.
+        const { sendTextMessage } = await import('./whatsapp.service');
+        await deliver(INTEG, 'conv-1', TEL, '¡Qué emoción, 🏐! Para separar tu cupo, envía el comprobante por este chat.', { step: 'prospecto_ia' });
+        const enviado = (sendTextMessage as any).mock.calls.at(-1)?.[2] as string;
+        expect(enviado).toContain('¡Qué emoción! Para separar tu cupo, envía el comprobante por este chat.');
+        expect(enviado).not.toMatch(/, !/);
     });
 
     it('la escuela escribió hace 5 minutos: el bot no habla en la venta', async () => {

@@ -6003,7 +6003,7 @@ export async function deliver(
     const deLaEscuela = (context as any)?.texto_de_la_escuela === true;
     let texto = deLaEscuela
         ? aFormatoWhatsApp(conEncabezado)
-        : recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado)));
+        : sinPuntuacionHuerfana(recortarEmojis(sinEmojisDeDeporte(aFormatoWhatsApp(conEncabezado))));
     if (!PASOS_DE_CONSENTIMIENTO.includes(String((context as any)?.step ?? ''))
         && await estaDadoDeBaja(integration.id, contactWaId)) {
         texto += AVISO_DADO_DE_BAJA;
@@ -6142,6 +6142,24 @@ export async function deliver(
         llm_provider: (context as any)?.provider ?? null,
         status: 'pending',
     });
+}
+
+/**
+ * La puntuación que queda colgando cuando un filtro quita algo de una frase
+ * (Monster 2026-11-07 15:41, conversación 932fcd83: el modelo escribió «¡Qué
+ * emoción, 🏐!», el filtro de emojis de deporte quitó el balón y salió «¡Qué
+ * emoción, !»; lo mismo con un nombre vacío o un emoji recortado por el tope de
+ * 3). «, !» → «!», «, ,» → «,», «( )» y «¡ !» vacíos fuera, sin espacio antes
+ * de la coma o el cierre. No toca enlaces ni montos. Pura.
+ */
+export function sinPuntuacionHuerfana(texto: string): string {
+    return texto
+        .replace(/[ \t]*,[ \t]*(?=[!?.:;)])/g, '')     // «emoción, !» → «emoción!»
+        .replace(/,[ \t]*,/g, ',')                      // «hola, , Ana» → «hola, Ana»
+        .replace(/¡[ \t]*!|¿[ \t]*\?|\([ \t]*\)/g, '') // signos o paréntesis vacíos
+        .replace(/[ \t]+([,!?])(?=\s|$)/g, '$1')        // «emoción !» → «emoción!»
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/[ \t]+$/gm, '');
 }
 
 /**
