@@ -38,6 +38,9 @@ import {
     ACCIONES_CAMPANA, PREFIJO_BOTON_CAMPANA, avisarAdministracion, type AccionCampana,
 } from './whatsapp-campanas.service';
 import { entranteConIntencion } from './whatsapp-audiencias.service';
+import { serviciosDeAnuncio, type ItemConFicha } from './whatsapp-anuncio-destino';
+import { MARCA_VENTA, itemNombradoEn } from './whatsapp-venta-contexto';
+import { enviarPagoDeServicio, type CtxVentaServicio } from './whatsapp-venta-servicio';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -105,6 +108,8 @@ interface CampanaMin { id: string; school_id: string; integration_id: string; no
 async function enviarDirecto(a: {
     integration: WhatsAppIntegration; conversationId: string; contactWaId: string; texto: string;
     step: string; campanaId: string | null; aunConLaEscuela?: boolean;
+    /** Más claves para el payload del saliente (p. ej. la marca de la venta de un servicio). */
+    extra?: Record<string, unknown>;
 }): Promise<boolean> {
     try {
         if (!a.aunConLaEscuela && await conversacionTomada(a.conversationId)) return false;
@@ -120,7 +125,7 @@ async function enviarDirecto(a: {
             p_type: 'text',
             p_text_body: a.texto,
             // `step` + `automatico`: no es una persona de la escuela (modo discreto).
-            p_payload: { step: a.step, campana_id: a.campanaId, automatico: true },
+            p_payload: { ...(a.extra ?? {}), step: a.step, campana_id: a.campanaId, automatico: true },
             p_ai_generated: false,
             p_to_wa_id: a.contactWaId,
         });
@@ -133,6 +138,58 @@ async function enviarDirecto(a: {
     } catch {
         return false;
     }
+}
+
+/**
+ * El servicio vigente que vende la campaña: el que nombra su respuesta al «Sí» (o
+ * su nombre). null = la campaña no es la venta de un servicio. Nunca lanza.
+ */
+async function servicioDeLaCampana(schoolId: string, campana: CampanaMin): Promise<ItemConFicha | null> {
+    try {
+        const items = await serviciosDeAnuncio(schoolId);
+        if (!items.length) return null;
+        return itemNombradoEn(campana.respuesta_si, items) ?? itemNombradoEn(campana.nombre, items);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Lo de la base para el mensaje de pago tras el «Sí» (sale por `enviarDirecto`,
+ * como la respuesta aprobada: la ventana se acaba de abrir y no espera borrador).
+ */
+function ctxPagoDeCampana(a: {
+    integration: WhatsAppIntegration; conversationId: string; contactWaId: string; campanaId: string; leadId: string | null;
+}): CtxVentaServicio {
+    const schoolId = a.integration.school_id;
+    return {
+        schoolId,
+        conversationId: a.conversationId,
+        recientes: [],
+        afiliado: async () => {
+            const { esAfiliado } = await import('./wa-afiliado.service');
+            return (await esAfiliado(schoolId, a.contactWaId)).afiliado;
+        },
+        cuentas: async (motivo) => {
+            const { mediosDePago } = await import('./whatsapp-medios-de-pago.service');
+            return (await mediosDePago(schoolId, { categoria: motivo })).cuentas
+                .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular }));
+        },
+        guardarLead: async () => a.leadId,
+        registrarEsperado: async (e) => {
+            const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
+            return registrarConceptoEsperado(schoolId, a.contactWaId, { motivo: e.motivo, leadId: e.leadId, venceEn: e.venceEn });
+        },
+        responderPregunta: async () => ({ tipo: 'no_se', motivo: 'campana' }),
+        enviar: async (texto, contexto) => {
+            await enviarDirecto({
+                integration: a.integration, conversationId: a.conversationId, contactWaId: a.contactWaId, texto,
+                step: String(contexto.step ?? 'venta_servicio_pago'), campanaId: a.campanaId, extra: contexto,
+            });
+        },
+        // La administración ya recibe «X respondió Sí» con el enlace a la conversación.
+        avisarEscuela: async () => undefined,
+    };
 }
 
 async function campanaPorId(id: string): Promise<CampanaMin | null> {
@@ -226,10 +283,16 @@ async function atenderBoton(
     // «Sí».
     if (envio?.estado === 'respondio_si') return 'repetido';
     await marcarEnvio(envio?.id, 'respondio_si');
+    // ¿La campaña es la venta de un servicio vigente (la clínica, un torneo)? Entonces
+    // la respuesta lleva la marca de la venta y lo que escriba después lo atiende la
+    // venta (frente A, Monster 2026-11-08).
+    const item = await servicioDeLaCampana(integration.school_id, campana);
+    const marca = item ? { [MARCA_VENTA]: item.id } : undefined;
+    let salioLaRespuesta = false;
     if (campana.respuesta_si?.trim()) {
-        await enviarDirecto({
+        salioLaRespuesta = await enviarDirecto({
             integration, conversationId, contactWaId: msg.contactWaId, texto: campana.respuesta_si.trim(),
-            step: PASO_RESPUESTA_SI, campanaId: campana.id,
+            step: PASO_RESPUESTA_SI, campanaId: campana.id, extra: marca,
         });
     }
 
@@ -240,14 +303,28 @@ async function atenderBoton(
         .order('created_at', { ascending: false }).limit(30);
     const conIntencion = ((entrantes as any[]) ?? []).reverse()
         .map((m) => String(m.text_body ?? '')).filter((t) => entranteConIntencion(t));
-    await registrarLeadDeProspecto({
+    const lead = await registrarLeadDeProspecto({
         schoolId: integration.school_id,
         conversationId,
         contactWaId: msg.contactWaId,
         nombre: msg.contactName,
         textos: conIntencion.length ? conIntencion : [`Respondió «Sí» a la campaña «${campana.nombre}»`],
         estado: 'nuevo',
+        ...(item ? { servicio: { id: item.id, nombre: item.name, tipo: String(item.kind) } } : {}),
     });
+
+    // La plantilla preguntaba «¿Te enviamos toda la información y cómo reservar tu
+    // cupo?»: el «Sí» YA pide cómo reservar. Monster 2026-11-07: tras el texto de la
+    // escuela («responde este mensaje y te enviamos los datos de pago») 10 de 12
+    // nunca volvieron. Después del texto sale el valor y las cuentas, APARTE.
+    if (item && (salioLaRespuesta || !campana.respuesta_si?.trim())) {
+        await enviarPagoDeServicio(ctxPagoDeCampana({
+            integration, conversationId, contactWaId: msg.contactWaId, campanaId: campana.id,
+            leadId: lead?.leadId ?? null,
+        }), item, { extra: { campana_id: campana.id } }).catch((err: any) => {
+            console.warn('[campana-respuesta] no salió el mensaje de pago', { conversationId, err: err?.message || err });
+        });
+    }
 
     // Buzón + aviso a la administración (id determinístico: un toque, un aviso).
     await supabase.from('whatsapp_conversations')

@@ -48,6 +48,7 @@ vi.mock('../config/supabase', () => {
             select: () => api,
             eq: (c: string, v: any) => { filtros.push((r) => r[c] === v); return api; },
             in: (c: string, vs: any[]) => { filtros.push((r) => vs.includes(r[c])); return api; },
+            is: (c: string, v: any) => { filtros.push((r) => (r[c] ?? null) === v); return api; },
             order: () => api,
             limit: (n: number) => { lim = n; return api; },
             insert: (p: any) => { op = 'insert'; payload = p; return api; },
@@ -79,6 +80,15 @@ vi.mock('./whatsapp-prospecto-lead.service', () => ({
     registrarLeadDeProspecto: vi.fn(async (p: any) => { est.leads.push(p); return { leadId: 'lead-1', creado: true }; }),
 }));
 vi.mock('./push.service', () => ({ sendToUser: vi.fn(async () => ({ sent: 1 })) }));
+// Venta de un servicio tras el «Sí» (frente A): cuentas, afiliado y esperado B4 simulados.
+const venta = vi.hoisted(() => ({ esperados: [] as any[] }));
+vi.mock('./whatsapp-medios-de-pago.service', () => ({
+    mediosDePago: vi.fn(async () => ({ cuentas: [{ tipo: 'Nequi', numero: '3194505150', titular: 'Iván Sossa' }] })),
+}));
+vi.mock('./wa-afiliado.service', () => ({ esAfiliado: vi.fn(async () => ({ afiliado: false })) }));
+vi.mock('./wa-concepto-esperado.service', () => ({
+    registrarConceptoEsperado: vi.fn(async (_s: string, _t: string, c: any) => { venta.esperados.push(c); return true; }),
+}));
 vi.mock('./plataforma-wa.service', () => ({
     adminsDeEscuela: vi.fn(async () => new Set(['admin-1'])),
     nombreDeEscuela: vi.fn(async () => 'Monster´s Volley Club'),
@@ -191,6 +201,36 @@ describe('botones', () => {
         expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('repetido');
         expect(est.enviados).toHaveLength(1);
         expect(db.t.notifications).toHaveLength(1);
+    });
+
+    it('caso 5 (Monster 11-07): «Sí» a la campaña de la clínica → el texto de la escuela con la marca de la venta y DESPUÉS el pago aparte', async () => {
+        venta.esperados = [];
+        db.t.school_tournament_items = [{
+            id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45', school_id: ESC, name: 'Clínica de armadores y atacantes', kind: 'clase_extra',
+            price: '300000.00', active: true, event_id: null, starts_at: '2099-11-21T05:00:00Z', ends_at: '2099-11-23T04:59:00Z',
+            allow_installments: true, abono_minimo_pct: 50, precio_afiliado: null, precios_por_fecha: null, opciones: null,
+        }];
+        db.t.whatsapp_campanas[0].nombre = 'Clínica de armadores';
+        db.t.whatsapp_campanas[0].respuesta_si = '🏐 ¡CLÍNICA DE ARMADORES Y ATACANTES MONSTER’S VOLLEY! 21 y 22 de noviembre. '
+            + 'Si quieres reservar tu cupo, responde este mensaje y te enviamos los datos de pago.';
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados).toHaveLength(2);
+        expect(est.enviados[0].texto).toContain('CLÍNICA DE ARMADORES');
+        const pago = est.enviados[1].texto;
+        expect(pago).toContain('Valor hoy: *$300.000*.');
+        expect(pago).toContain('abono mínimo de *$150.000* (50 %)');
+        expect(pago).toContain('Nequi al número 3194505150 (a nombre de Iván Sossa)');
+        expect(pago).toContain('nombre completo de quien asiste');
+        expect(pago).not.toMatch(/clase de prueba|sede/i);
+        const salientes = db.rpcLlamadas.filter((l) => l.fn === 'wa_record_outbound_message').map((l) => l.args.p_payload);
+        expect(salientes[0]).toMatchObject({ step: 'campana_respuesta_si', campana_id: CAMP, venta_servicio_id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45' });
+        expect(salientes[1]).toMatchObject({
+            step: 'venta_servicio_pago', campana_id: CAMP, automatico: true, datos_de_pago: true,
+            venta_servicio_id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45',
+        });
+        // El lead queda con el servicio y el esperado B4 a su nombre (el comprobante crea el cobro de la clínica).
+        expect(est.leads[0]).toMatchObject({ servicio: { id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45', tipo: 'clase_extra' } });
+        expect(venta.esperados).toEqual([{ motivo: 'clase_extra', leadId: 'lead-1', venceEn: '2099-11-23T04:59:00Z' }]);
     });
 
     it('«Sí» con la escuela escribiendo (modo discreto) o tomada: no sale el texto, pero quedan lead y aviso', async () => {
