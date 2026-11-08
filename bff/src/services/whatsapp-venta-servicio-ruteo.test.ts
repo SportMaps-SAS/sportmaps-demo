@@ -269,6 +269,14 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         expect(ventaCedeAlEmbudo(r, CLINICA as any, 'Mariana Gómez Ruiz')).toBe(true);
         expect(ventaCedeAlEmbudo(r, CLINICA as any, '¿y la clínica es para niñas?')).toBe(false);
         expect(ventaCedeAlEmbudo(r, CLINICA as any, '¿cómo pago?')).toBe(false);
+        // Tras un mensaje de la venta, «Ok» / «Buenos días» / «gracias» / «Armadores» siguen en la venta.
+        for (const t of ['Ok', 'Buenos días', 'gracias', 'Armadores']) expect(ventaCedeAlEmbudo(r, CLINICA as any, t)).toBe(false);
+        // El embudo que el bot abrió a un saludo y nadie contestó (sedes, o la 1.ª pregunta con una sola sede) no cuenta.
+        const sedes = sal(5, 'Elige la sede', { payload: { flujo: 'embudo', paso_embudo: 'sede', datos_embudo: {}, step: 'desconocido_tema_escolar' } });
+        const unaSede = sal(5, '1️⃣ ¿nombre?', { payload: { flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0 }, step: 'desconocido_tema_escolar' } });
+        expect(embudoDelClubEnCurso([fichaMarcada(1), sedes] as any[])).toBe(false);
+        expect(embudoDelClubEnCurso([fichaMarcada(1), unaSede] as any[])).toBe(false);
+        expect(ventaCedeAlEmbudo([fichaMarcada(1), sedes] as any[], CLINICA as any, 'Mariana Gómez Ruiz')).toBe(false);
         // Sin embudo (o con la clase ya agendada), la venta no cede.
         expect(ventaCedeAlEmbudo([pagoMarcado(1), fichaMarcada(1)] as any[], CLINICA as any, 'Mariana Gómez Ruiz')).toBe(false);
         const agendada = sal(5, 'Agendada', { payload: { flujo: 'embudo', paso_embudo: 'agendada', datos_embudo: {}, step: 'embudo_agendada' } });

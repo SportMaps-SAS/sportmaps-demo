@@ -2938,9 +2938,14 @@ async function atenderVentaDelDesconocido(
             return 'escuela_atendiendo';
         }
         // El embudo del club en curso (la persona lo abrió y tiene una pregunta pendiente):
-        // la venta solo contesta lo suyo (nombra el servicio o pide pagarlo tras la venta);
-        // «Mariana Gómez Ruiz», una fecha o un botón los atiende el embudo.
-        if (ventaCedeAlEmbudo(recientes, v.venta.item, text)) return null;
+        // la venta solo contesta lo suyo; «Mariana Gómez Ruiz», una fecha o un botón se los
+        // ofrece primero al embudo. Si el embudo no lo toma, sigue la venta (nunca un
+        // embudo desde cero ni la bienvenida con sedes).
+        if (ventaCedeAlEmbudo(recientes, v.venta.item, text)
+            && embudoActivo(await ajustesDeLaEscuela(integration.school_id))
+            && await atenderEmbudoEnBot(integration, conversationId, contactWaId, text, botonId)) {
+            return 'embudo';
+        }
         marcarVentaEnElTurno(v.venta.item);
         // Primer contacto con el servicio (lo nombró, nadie le mandó nada todavía): la
         // ficha del destino por anuncio, y el pago aparte si lo pidió.
@@ -4093,12 +4098,12 @@ async function atenderDesconocidoEnEscuela(
     // el pedido del correo. Normalmente la venta ya contestó arriba (0a-ter); esto
     // cubre lo que llegue hasta acá con la venta abierta.
     if (tema === 'pagos' && !botonId && !pideElClub(text)) {
+        // (El embudo en curso ya tuvo su turno más arriba: acá la venta contesta.)
         const v = await ventaDelTurno(integration, conversationId, contactWaId);
-        const recientesVenta = v ? await mensajesRecientes(conversationId) : [];
-        if (v && !ventaCedeAlEmbudo(recientesVenta, v.venta.item, text)) {
+        if (v) {
             marcarVentaEnElTurno(v.venta.item);
             const r = await atenderVentaDeServicio(ctxVentaServicio(integration, conversationId, contactWaId,
-                recientesVenta, { familia: false }), v.venta, text);
+                await mensajesRecientes(conversationId), { familia: false }), v.venta, text);
             if (r) return r;
             marcarVentaEnElTurno(null);
         }

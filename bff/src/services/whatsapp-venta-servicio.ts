@@ -44,7 +44,7 @@ import {
     diaLegible, motivoDeServicio, precioDelServicio, type ItemConFicha, type PrecioDeServicio,
 } from './whatsapp-anuncio-destino';
 import { comoPagar, estadoDeSalientes, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
-import { cop } from './whatsapp-venta-servicios.service';
+import { cop, tokensDistintivos } from './whatsapp-venta-servicios.service';
 import { hoyBogota, opcionesDelItem } from './wa-cobro-desde-comprobante.service';
 import type { Motivo } from './motivos-de-cobro';
 import type { PreguntaDeServicio, RespuestaDeServicio } from './whatsapp-servicio-ia';
@@ -389,21 +389,39 @@ export function embudoDelClubEnCurso(recientes: FilaReciente[], ahora = Date.now
         .sort((a, b) => momento(b) - momento(a))
         .map((f) => ({ payload: f.payload ?? null, humano: f.ai_generated === false }));
     const estado = estadoDeSalientes(salientes);
-    return Boolean(estado && estado.paso !== 'agendada');
+    if (!estado || estado.paso === 'agendada' || estado.paso === 'sede') return false;
+    // La persona LO ABRIÓ: ya contestó algo del embudo. El primer mensaje del embudo lo
+    // manda el bot a un saludo (con el paso de quien lo arrancó, o `embudo_bienvenida`
+    // si repite las sedes); sin respuesta suya, la venta no le cede nada (Monster 11-08:
+    // «Hola» → sedes, y después de la ficha de la clínica «Ok» o «Armadores» repetían
+    // «Elige la sede»).
+    const fila = salientes.find((s) => s.payload?.flujo === 'embudo' && s.payload?.paso_embudo);
+    const step = String(fila?.payload?.step ?? '');
+    return step.startsWith('embudo_') && step !== 'embudo_bienvenida';
 }
+
+/** Lo que dice el mensaje del servicio, aunque sea a medias («Armadores»). Pura. */
+function nombraElServicio(texto: string, item: ItemConFicha): boolean {
+    if (itemNombradoEn(texto, [item])) return true;
+    const palabras = new Set(normalizarFrase(texto).split(' '));
+    return tokensDistintivos(item.name).some((k) => palabras.has(k));
+}
+
+/** Lo que se contesta a la venta aunque no la nombre, si lo último que salió fue de ella. */
+const INTENCIONES_DE_LA_VENTA: ReadonlySet<IntencionVenta> = new Set(['pago', 'ya_pago', 'otra_fecha', 'saludo', 'cierre']);
 
 /**
  * Con el embudo del club EN CURSO (la persona lo abrió y tiene una pregunta
  * pendiente), la venta solo atiende lo que es de ella: un mensaje que nombra el
- * servicio, o el pedido de pagar justo después de un mensaje de la venta. Lo
- * demás («Mariana Gómez Ruiz», una fecha, un botón) lo contesta el embudo
- * (Monster, batería del 2026-11-08: la venta se comía el nombre del deportista).
- * true = la venta cede al embudo. Pura.
+ * servicio, o —justo después de un mensaje de la venta— pagar, «ya pagué», otra
+ * fecha, un saludo o un cierre. Lo demás («Mariana Gómez Ruiz», una fecha, un
+ * botón) se lo ofrece primero al embudo (Monster, batería del 2026-11-08: la
+ * venta se comía el nombre del deportista). true = primero el embudo. Pura.
  */
 export function ventaCedeAlEmbudo(recientes: FilaReciente[], item: ItemConFicha, texto: string, ahora = Date.now()): boolean {
     if (!embudoDelClubEnCurso(recientes, ahora)) return false;
-    if (itemNombradoEn(texto, [item])) return false;
-    if (intencionEnVenta(texto) === 'pago' && ventaEnCurso(recientes, item, ahora)) return false;
+    if (nombraElServicio(texto, item)) return false;
+    if (INTENCIONES_DE_LA_VENTA.has(intencionEnVenta(texto)) && ventaEnCurso(recientes, item, ahora)) return false;
     return true;
 }
 
