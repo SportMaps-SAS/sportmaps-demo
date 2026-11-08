@@ -69,6 +69,8 @@ import whatsappBuzonRouter from './routes/whatsapp-buzon.routes';
 import whatsappCampanasRouter from './routes/whatsapp-campanas.routes';
 // Anuncios de Meta con clic a WhatsApp: embudo por anuncio y destino (docs/specs/whatsapp-anuncios-atribucion.md).
 import whatsappAnunciosRouter from './routes/whatsapp-anuncios.routes';
+// Coherencia del texto del asistente contra el catálogo (docs/specs/whatsapp-ventas-de-servicio-blindaje.md, frente B).
+import whatsappCoherenciaRouter from './routes/whatsapp-coherencia.routes';
 // Campañas de descuento por referidos, pago por plazos, retiro/pausa por canales y soportes obligatorios
 // (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md). Cada una detrás de su ajuste por escuela.
 import referidosRoutes from './routes/referidos.routes';
@@ -376,7 +378,7 @@ app.use('/api/v1/webhooks/resend-inbound', resendInboundRouter);
 // alguien agrega un comodín ahí, este seguiría respondiendo. En la MISMA línea
 // y no en un app.use aparte: con dos, cada petición del panel pasaría dos veces
 // por generalLimiter y gastaría doble cupo.
-app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappCampanasRouter, whatsappAnunciosRouter, whatsappAdminRouter);
+app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappCampanasRouter, whatsappAnunciosRouter, whatsappCoherenciaRouter, whatsappAdminRouter);
 
 // Link público de agendamiento de instalaciones — sin requireAuth, rate-limit propio
 const publicBookingLimiter = rateLimit({
