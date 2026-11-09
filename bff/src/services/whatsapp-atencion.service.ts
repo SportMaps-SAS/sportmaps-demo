@@ -27,12 +27,14 @@ import { supabase } from '../config/supabase';
 import type { WhatsAppIntegration } from './whatsapp.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
 import { FILTRO_SIN_MARCA_MANUAL, esMarcaNoFamilia, leerConMarca, type TipoMarcado } from './whatsapp-tipo-contacto';
+import { rolDePersonal } from './whatsapp-personal-escuela.service';
 
 /**
  * - familia            → acudiente con cuenta de un atleta activo (por teléfono o por OTP)
  * - familia_sin_cuenta → el número está en la ficha de un atleta activo, sin cuenta
  * - ambiguo            → el número está en dos cuentas: lo resuelve un humano
- * - staff              → administra la escuela (owner/admin)
+ * - staff              → personal: administra la escuela (owner/admin), es profe de
+ *                        la escuela o admin de la plataforma (whatsapp-personal-escuela)
  * - desconocido        → nada de lo anterior: amigos, proveedores, prospectos
  * - personal | negocio | otro_club | plataforma
  *                      → la escuela lo marcó a mano como no-familia (manda sobre todo;
@@ -182,6 +184,11 @@ async function clasificarSinGuardar(
         p_wa_phone_number: contactWaId,
     });
     if ((staff as any)?.estado === 'identificado') return 'staff';
+
+    // El resto del personal (profes) y los admins de la plataforma: tampoco son
+    // prospectos (Monster 2026-11-08: un admin de SportMaps le escribió a Iván y Mapi le
+    // contestó el guion de prospecto). Una consulta por escuela, cacheada.
+    if (await rolDePersonal(integration.school_id, contactWaId)) return 'staff';
 
     return 'desconocido';
 }
