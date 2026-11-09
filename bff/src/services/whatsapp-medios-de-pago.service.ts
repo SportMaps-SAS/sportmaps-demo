@@ -105,12 +105,20 @@ export async function mediosDePago(
         // `payment_accounts` es la fuente nueva; las columnas sueltas son el
         // store viejo. Conviven, asi que se leen las dos y se deduplica por
         // numero — si no, la escuela que migro veria su cuenta dos veces.
+        // Se deduplica por MEDIO + número, no solo por número: Monster recibe por Nequi y
+        // por Daviplata al MISMO celular, y con la clave solo por número la Daviplata se
+        // perdía («Pago por Nequi al 3194505150» a quien solo tiene Daviplata, 2026-11-08).
+        // `vistos` (solo el número) es lo restringido: bloquea ese número en cualquier medio.
+        // Las columnas sueltas (store viejo) son espejo de la lista: no se repiten si el
+        // número ya salió por cualquier medio (`soloNumero`).
         const vistos = new Set<string>();
-        const agregar = (tipo: string, numero: unknown, titular?: unknown) => {
+        const medio = (tipo: string) => tipo.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[^a-z0-9]+/g, '');
+        const agregar = (tipo: string, numero: unknown, titular?: unknown, o: { soloNumero?: boolean } = {}) => {
             const n = String(numero ?? '').trim();
             const clave = normalizeDestination(n);
             if (!n || !clave || vistos.has(clave)) return;
-            vistos.add(clave);
+            const mismoNumero = cuentas.filter((x) => normalizeDestination(x.numero) === clave);
+            if (o.soloNumero ? mismoNumero.length > 0 : mismoNumero.some((x) => medio(x.tipo) === medio(tipo))) return;
             cuentas.push({ tipo, titular: (titular as string) ?? c.account_holder ?? null, numero: n });
         };
 
@@ -135,9 +143,9 @@ export async function mediosDePago(
             // al bot y solo salían las columnas sueltas.
             agregar(nombreDeCuenta(a.type, a.label), a.value);
         }
-        agregar('Nequi', c.nequi_number);
-        agregar(c.bank_name ? String(c.bank_name) : 'Cuenta bancaria', c.bank_account_number);
-        agregar('Bre-B', c.breb_key);
+        agregar('Nequi', c.nequi_number, undefined, { soloNumero: true });
+        agregar(c.bank_name ? String(c.bank_name) : 'Cuenta bancaria', c.bank_account_number, undefined, { soloNumero: true });
+        agregar('Bre-B', c.breb_key, undefined, { soloNumero: true });
     }
 
     // Con link de pago, ese es el enlace para pagar en línea. Sin link, null:

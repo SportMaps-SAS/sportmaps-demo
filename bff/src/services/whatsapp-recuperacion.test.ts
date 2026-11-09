@@ -133,7 +133,7 @@ vi.mock('./whatsapp-aviso-revision.service', () => ({
 
 import {
     decidirRecuperacion, pagosQueYaCubren, fechaDeReferencia, cierreDeFila, recuperarFilaDeCola,
-    decidirPorMonto, desempatarCobro, mesesMencionados, esRecuperable, filtroDeFamilia,
+    decidirPorMonto, desempatarCobro, mesesMencionados, esRecuperable, filtroDeFamilia, mensajeRecuperacion,
     type PagoRegistrado,
 } from './whatsapp-recuperacion.service';
 import { importarAdjunto } from './whatsapp-importar-chat.service';
@@ -721,6 +721,25 @@ describe('recuperarFilaDeCola: la propuesta va en el motivo (simulación, nada s
         expect(r.pago?.id).toBe('p-oct');
         expect(r.motivo).toContain('deportista identificado por el nombre del comprobante');
         sinEscrituras();
+    });
+
+    it('PRIVACIDAD (Monster 2026-11-05): número sin ficha con el nombre a medias («Laura Peña» de «Laura Peña Ruiz») → no se liga a nadie', async () => {
+        state.hijos = [{ id: 'child-1', full_name: 'Laura Peña Ruiz' }];
+        state.porTelefono = { estado: 'no_encontrado' };
+        state.pendientes = [{ ...PEND('p-oct', 180000), atleta: 'Laura Peña Ruiz' }];
+        const r = await recuperarFilaDeCola({ ...FILA, wa_phone_number: '573009998877', media_caption: 'Mensualidad de Laura Peña' }, WA, { aplicar: false, ocrFn, cache: {} });
+        expect(r.decision).toBe('sin_familia');
+        expect(r.pago).toBeUndefined();
+        sinEscrituras();
+    });
+
+    it('PRIVACIDAD: lo que se le dice a un número sin verificar ligado por el nombre no trae datos del deportista', () => {
+        const pago = { ...PEND('p-oct', 180000), concept: 'Mensualidad 11/2026 - Laura Peña Ruiz', atleta: 'Laura Peña Ruiz' };
+        const ocr = { ...OCR, amount: 180000 } as any;
+        expect(mensajeRecuperacion({ decision: 'en_revision', pago, ocr })).toContain('Laura Peña Ruiz'); // familia verificada: como siempre
+        const neutro = mensajeRecuperacion({ decision: 'en_revision', pago, ocr, porNombreSinVerificar: true })!;
+        expect(neutro).not.toMatch(/laura|mensualidad|11\/2026/i);
+        expect(neutro).toContain('Recibí tu comprobante de $');
     });
 
     it('número sin ficha y sin nombre que lo señale: sin_familia con «deportista: sin identificar» y quién pagó', async () => {

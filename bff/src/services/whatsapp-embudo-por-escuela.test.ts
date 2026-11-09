@@ -543,8 +543,11 @@ describe('anuncios: el destino del anuncio manda (la clínica nunca cae en el em
         expect(r[0].texto).toContain('Valor hoy: *$300.000*');
         expect(r[0].texto).toContain('*$350.000*');
         expect(r[0].texto).toContain('abono mínimo de *$150.000* (50 %)');
-        expect(r[0].texto).toContain('por Nequi al número 3194505150');
-        expect(r[0].texto).not.toMatch(/sede|nombre completo|gratis/i);
+        // Frente A (2026-11-08): la ficha ya no trae la cuenta pegada; las cuentas van en un
+        // mensaje aparte y solo si las pide. Sin pedirlas, la ficha cierra con el próximo paso.
+        expect(r[0].texto).not.toContain('3194505150');
+        expect(r[0].texto).toContain('respóndeme y te paso los datos de pago');
+        expect(r[0].texto).not.toMatch(/sede|nombre completo|gratis|clase de prueba/i);
         // El motivo esperado (B4) y el lead con el servicio y el anuncio quedan registrados.
         const esperado = h.state.inserts.find((i) => i.table === 'whatsapp_conceptos_esperados')?.row;
         expect(esperado).toMatchObject({ motivo: 'clase_extra', monto: null, telefono: TEL });

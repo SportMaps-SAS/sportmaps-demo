@@ -73,7 +73,7 @@ import {
 } from './whatsapp-pago-esperado.service';
 import { cargarItemsDeTorneo, cruzarTorneo, motivoTorneo, type ItemDeTorneo } from './whatsapp-torneos-pago.service';
 import { candidatosParaPreguntar, nombreDelMes } from './whatsapp-comprobante-guiado.service';
-import { deportistaPorNombre } from './whatsapp-comprobante-de-ficha.service';
+import { deportistaPorNombreSinVerificar } from './whatsapp-comprobante-de-ficha.service';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -147,6 +147,12 @@ export interface ResultadoRecuperacion {
      * spec 3.5/3.3, 2026-10-24). Ya va dentro de `motivo`; acá aparte para el script.
      */
     propuesta?: string | null;
+    /**
+     * El deportista salió del NOMBRE escrito por un número que no es de ninguna
+     * familia: a ese número no se le dice ningún dato del deportista (ni su nombre,
+     * ni el concepto del cobro). Monster 2026-11-05 (Ethann / Laura Sofía).
+     */
+    porNombreSinVerificar?: boolean;
 }
 
 /** Lo que devuelve la regla (sin la lectura ni quién es la familia). */
@@ -813,9 +819,15 @@ export async function procesarComprobanteRecuperado(e: EntradaComprobante): Prom
     // el deportista por lo que dice el pie, el chat, el concepto y quien paga —igual
     // que el worker con un número sin ficha—. Con UN solo candidato se sigue como
     // familia con ficha; si no, va al buzón con los candidatos. Nunca se aprueba.
+    // Solo el nombre COMPLETO de UN deportista (un número sin verificar nunca se liga por
+    // dos palabras sueltas ni por el apellido: Monster 2026-11-05, Ethann / Laura Sofía).
     let deportistaPorElNombre = false;
     if (!llaves && (familia.tipo === 'desconocido' || familia.tipo === 'sin_cuenta')) {
-        const k = await deportistaPorNombre(e.schoolId, [e.pie, ocr.description, ocr.originName, ...(e.textos ?? [])]).catch(() => null);
+        const exacta = (await deportistaPorNombreSinVerificar(e.schoolId, [e.pie, ocr.description, ocr.originName, ...(e.textos ?? [])])
+            .catch(() => null))?.exacta ?? null;
+        const k = exacta
+            ? (exacta.tipo === 'child' ? { childIds: [exacta.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [exacta.id] })
+            : null;
         if (k && (k.childIds.length || k.unregisteredIds.length)) {
             llaves = { childIds: k.childIds, unregisteredIds: k.unregisteredIds };
             familia = { tipo: 'sin_cuenta', childIds: k.childIds, unregisteredIds: k.unregisteredIds };
@@ -866,7 +878,9 @@ export async function procesarComprobanteRecuperado(e: EntradaComprobante): Prom
         destinoDeLaEscuela, noDuplicado: !yaUsadoEn,
     });
     if (propuesta) d.motivo = motivoConPropuesta(d.motivo, propuesta);
-    const resultado: ResultadoRecuperacion = { ...d, ocr, parentId, sha: e.sha, propuesta };
+    const resultado: ResultadoRecuperacion = {
+        ...d, ocr, parentId, sha: e.sha, propuesta, ...(deportistaPorElNombre ? { porNombreSinVerificar: true } : {}),
+    };
 
     if ((d.decision !== 'en_revision' && d.decision !== 'abono_en_revision') || !e.aplicar) return resultado;
 
@@ -1265,9 +1279,16 @@ export type AvisoRecuperacion =
 
 /** El texto para la familia. Pura. */
 export function mensajeRecuperacion(
-    r: Pick<ResultadoRecuperacion, 'decision' | 'pago' | 'ocr' | 'pagosCubiertos' | 'excedente'>,
+    r: Pick<ResultadoRecuperacion, 'decision' | 'pago' | 'ocr' | 'pagosCubiertos' | 'excedente' | 'porNombreSinVerificar'>,
 ): string | null {
     if (!r.pago) return null;
+    if (r.porNombreSinVerificar && (r.decision === 'en_revision' || r.decision === 'abono_en_revision')) {
+        // Número sin verificar: ningún dato del deportista (ni el concepto del cobro).
+        const valor = r.ocr?.amount
+            ? ` de ${new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(r.ocr.amount)}`
+            : '';
+        return `Recibí tu comprobante${valor} 📄\n\nLa escuela lo está revisando y te confirmo por aquí cuando lo apruebe.`;
+    }
     const monto = r.ocr?.amount
         ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(r.ocr.amount)
         : null;

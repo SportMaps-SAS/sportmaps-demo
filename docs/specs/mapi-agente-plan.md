@@ -567,3 +567,144 @@ pantalla.
 3. **Ficha de la escuela con notas del admin** (§19.1): sí o no, y el tope.
 4. **Orden de las oleadas 2 y 3.** Propuesta: primero el entrenador, porque es de uso
    diario y sus acciones se pueden revertir.
+
+## 20. Cobros: lo que aprendimos con Monster y entra a Mapi (2026-11-08)
+
+> El 2026-11-08 el usuario pidió dos cosas: «todo esto debe ser tomado de aprendizaje
+> para aplicarlo en Dynasty y en más escuelas cuando lleguen» y «se debe incluir dentro
+> de lo nuevo de Mapi como agente de IA». Esta sección toma lo que falló con la Clínica
+> de Monster y con sus comprobantes, y lo vuelve herramientas de Mapi más una lista de
+> verificación para cada escuela nueva. Se lee junto con
+> `docs/specs/whatsapp-ventas-de-servicio-blindaje.md`.
+
+### 20.1 Qué pasó (los hechos, medidos)
+
+- **Una venta por WhatsApp no cerraba.** De ~130 interesados en la clínica salió una
+  sola venta registrada. El «Sí» de la campaña no traía los datos de pago, las dudas
+  que se le pasaban a la escuela quedaban sin responder y el bot metía el embudo del club
+  (sede, 5 preguntas, clase de prueba) en medio de la venta. Un comprador terminó pagando
+  una clase de prueba de $15.000 que nunca pidió.
+- **La escuela no aprobaba.** Había 32 comprobantes «Por validar» desde el 16 de octubre,
+  unos 20 en verde, y una persona había aprobado solo 2. El dueño entraba a diario y no
+  los encontraba: el selector de sede los escondía y los de personas de fuera del club
+  salían «Sin nombre». La familia preguntaba «¿sí lo confirmaron?» y nadie le contestaba.
+- **El aviso no servía.** Era solo in-app y push: ni correo ni WhatsApp a la escuela.
+- **La aprobación automática estaba apagada,** con tope de $0. Además, el camino de las
+  ventas de servicio ni siquiera pasaba por el aprobador.
+- **Una prueba en verde mentía.** El replay decía «0 violaciones» porque eximía
+  cualquier botón viejo del embudo. La lección: un verificador que exime categorías
+  enteras esconde justo el caso real, así que hay que leer la transcripción y no
+  quedarse con el contador.
+
+### 20.2 Qué quedó o queda en el código fuera de Mapi
+
+Todas las piezas sirven para cualquier escuela.
+
+| Pieza | Dónde |
+|---|---|
+| Bot en modo venta: nada del club, el pago en mensaje aparte, verificador de montos | `whatsapp-venta-*.ts`, `whatsapp-verificador-montos.ts` |
+| Comprobante de una venta a nombre de quien asiste; el abono queda como parcial | `whatsapp-queue.job.ts`, `wa-cobro-desde-comprobante.service.ts` |
+| Tipo de cobro visible y filtrable en Gestión de Pagos | `lib/tipoDeCobro.ts` |
+| Pestaña Seguimiento (quién escribió, quién respondió) | `whatsapp-seguimiento-conversaciones.service.ts` |
+| Resumen diario «Pagos por validar» por correo e in-app al dueño y a los admins | `jobs/pagos-por-validar.job.ts` (en construcción) |
+| Aprobación automática en todos los caminos y confirmación por WhatsApp a la familia | en construcción; se enciende con el interruptor de cada escuela |
+
+### 20.3 Herramientas de Mapi para cobros
+
+Mapi las usa con el alcance de quien habla (§3.4) y sobre **el mismo servicio** que usa
+la pantalla (§19.2).
+
+**Consulta (se ejecutan sin confirmar):**
+
+| Herramienta | Admin | Coach | Qué devuelve y de dónde |
+|---|:-:|:-:|---|
+| `pagos_por_validar(sede?, tipo?)` | ✔ | ✘ | La misma consulta de Gestión de Pagos, **siempre con todas las sedes** salvo que se pida una. Dice cuántos son, cuánto suman, cuál es el más viejo y cuántos están en verde. |
+| `por_que_no_se_aprobo(pago)` | ✔ | ✘ | `receipt_verdict_reasons` en palabras: «el comprobante dice $140.000 y el cobro es de $145.000», «fue a otra cuenta», «ya lo habían mandado». |
+| `seguimiento_whatsapp(dias?)` | ✔ | ✘ | El servicio de la pestaña Seguimiento: quién escribió, si respondió la escuela o el bot, quién lleva más de 2 h esperando. |
+| `auditar_pendientes()` | ✔ | ✘ | La auditoría que se hizo a mano el 2026-11-08, convertida en servicio. Cruza cada comprobante con su cobro, las cuentas de la escuela, los duplicados y la conversación, y propone «completo», «abono», «no aprobar» o «revisar». Solo propone; no aprueba. |
+| `estado_aprobacion_automatica()` | ✔ | ✘ | La lista de §20.5 contra la configuración real: qué le falta a la escuela para encenderla. |
+| `ventas_de_servicio(item?)` | ✔ | ✘ | Interesados, pagos y cupos de una clínica, un torneo o un vacacional. |
+
+**Acciones (borrador → Confirmar, §10):**
+
+| Herramienta | Admin | Coach | Qué hace |
+|---|:-:|:-:|---|
+| `aprobar_pago(pago, monto?)` | ✔ | ✘ | La tarjeta trae el comprobante, el porqué y el mismo control de la pantalla Aprobar. Si el monto es menor que el cobro, lo aprueba como abono («Parcial») y el saldo queda pendiente. Aprueba la persona al tocar Confirmar; el modelo nunca aprueba solo. |
+| `aprobar_verdes()` | ✔ | ✘ | El botón «Aprobar todos los verdes», con vista previa de la lista y la suma. |
+| `pedir_aclaracion(pago, motivo)` | ✔ | ✘ | Glosa, con el mismo servicio de `glosas.routes`. |
+| `responder_pendientes(conversaciones)` | ✔ | ✘ | Para las preguntas que el bot le pasó a la escuela: Mapi propone la respuesta desde el catálogo y la ficha, la persona la revisa y sale por `deliver` (ventana de 24 h, conversación no tomada, sin números dados de baja). |
+
+**Proactivo:** el resumen diario de pagos por validar es también el primer mensaje de
+Mapi al abrir el chat, por ejemplo «Tienes 12 pagos por validar; 9 se pueden aprobar de
+un clic. ¿Te los muestro?».
+
+**Entrenador:** no ve plata (§4, `coach_hide_financial_info`). Si una familia le dice
+«ya pagué», Mapi le dice qué contestar (que mande el comprobante por el WhatsApp del club
+o por la app) y avisa a la administración.
+
+### 20.4 Reglas que salen de esta experiencia (para el bot y para Mapi)
+
+1. **Una venta de servicio es solo una venta.** Ni sede, ni preguntas del embudo, ni
+   clase de prueba, salvo que la persona lo pida con sus palabras. Tocar un botón viejo
+   de otro flujo no cuenta como pedirlo.
+2. **El pago va en su propio mensaje y solo cuando lo piden.** Se nombran todos los
+   medios activos de la escuela (`payment_accounts`), no solo el primero.
+3. **Nada de montos ni fechas que no estén en el catálogo.** El verificador corre antes
+   de cada envío, y el auditor que cruza la ficha con el catálogo avisa en Configuración
+   si el texto libre de la escuela lo contradice.
+4. **Toda pregunta que se le pasa a la escuela tiene dueño y plazo.** Aparece en
+   Seguimiento y en el resumen diario; si en 2 h nadie responde, Mapi propone la
+   respuesta.
+5. **Un comprobante nunca queda sin respuesta para la familia.** Al aprobarlo, a mano o
+   en automático, la familia recibe la confirmación por WhatsApp. Si sigue por validar y
+   la familia pregunta «¿lo confirmaron?», el bot dice el estado real.
+6. **Si es un abono, se aprueba lo pagado.** El cobro queda «Parcial» con el saldo
+   pendiente; un pago nunca se rechaza por incompleto.
+7. **Las pruebas se leen, no solo se cuentan.** Ninguna batería exime categorías
+   enteras, y cada caso real que falla entra como guion a `qa:embudo` antes de arreglarlo.
+
+### 20.5 Lista de verificación antes de encender la aprobación automática en una escuela
+
+| | Qué | Cómo se verifica |
+|---|---|---|
+| 1 | Todas las cuentas donde recibe la escuela (Nequi, Daviplata, Bre-B, cuenta) están en `payment_accounts`, con su titular | Comparar con los destinos de los comprobantes de los últimos 60 días (`ocr_destination`) |
+| 2 | El tope de monto (`auto_approve_max_amount`) es mayor que el cobro más alto habitual | En Monster: $400.000 |
+| 3 | El BFF de producción tiene dos proveedores de OCR configurados | `listConfiguredProviders()` |
+| 4 | Todos los caminos de entrada pasan por el aprobador | Una prueba por camino: cobro existente, venta de servicio, clase de prueba, enlace público y checkout |
+| 5 | Al aprobar, sale la confirmación por WhatsApp a la familia | Prueba en la escuela de pruebas |
+| 6 | El resumen diario le llega al dueño y a los admins | Correo de prueba |
+| 7 | Los pendientes viejos se auditaron y se resolvieron antes de encender | `auditar_pendientes()` en simulación, revisada por una persona |
+| 8 | Los admins y los entrenadores recibieron el manual de cobros de la escuela, con sus medios de pago | Fuente parametrizada por club en `docs/manuales/v2/_src-cobros-monster/` (no va al repo) |
+
+**Dynasty, cuando le toque:** tiene campos propios («Valor realmente pagado» editable y
+varias cuentas destino: Giovani, la llave de Milena y la cuenta del club), y Milena
+valida a mano por decisión de la escuela. Antes de encender se corre la auditoría y se le
+pregunta a la escuela.
+
+### 20.6 Decisiones
+
+1. **§19.6.1 (aprobar un comprobante desde el chat): RESUELTA.** El 2026-11-08 el
+   usuario confirmó «sí, exactamente es eso». La tarjeta Confirmar trae el control y
+   quien aprueba es la persona.
+2. **Encender o cambiar la aprobación automática** sigue fuera de Mapi (§19.5): se hace
+   en la pestaña de configuración de Gestión de Pagos.
+3. **Oleada** *(propuesta)*: las consultas de §20.3 entran ya en la oleada 1, porque son
+   de solo lectura y la escuela las necesita hoy. Las acciones entran con la oleada 3.
+
+### 20.7 Hacia adelante: que el pago llegue validado por la fuente
+
+Dirección del usuario, 2026-11-08: «motivar a las pasarelas de pago, a Factus o algo que
+nos valide y nos dé automáticamente, y en Mapi llega "te pagaron esto y esto"». Aprobar un
+comprobante es un remedio. Lo de fondo es que el pago llegue **confirmado por quien movió
+la plata**, sin una foto de por medio.
+
+| Fuente | Qué valida | Estado |
+|---|---|---|
+| Pasarela (Wompi, MercadoPago) | El webhook marca el cobro como pagado sin que nadie revise | Existe. Hay que empujar a las escuelas a usarla y medir qué porcentaje de cobros entra por ahí |
+| Correos del banco con DKIM | El aviso «te transfirieron $X» del banco confirma la transferencia | Existe sin operar (`banco-correo-dkim.service.ts`) |
+| Extracto bancario o conciliación | Cruza lo aprobado con lo que realmente entró (`reconciliation_status`) | Pendiente (fase 6 de `receipt-extraction-v2-glosas.md`) |
+| Factus (facturación electrónica) | La factura sale sola cuando el pago queda confirmado; es el cierre contable, no la validación | Integración existente |
+
+En Mapi esto se vuelve un aviso proactivo: «Te pagaron hoy: Mariana, mensualidad de
+noviembre, $145.000 (Nequi, confirmado por el banco)…». Va en paralelo con el rediseño
+V2. Se prioriza después de cerrar lo del bot de ventas.

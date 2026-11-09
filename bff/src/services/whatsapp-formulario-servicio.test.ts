@@ -221,7 +221,7 @@ describe('atenderRespuestaDeFormulario', () => {
         expect(t).toContain('*Mariana Gómez*');
         expect(t).toContain('Valor a pagar: *$300.000*');
         expect(t).toContain('Talla de camiseta: M');
-        expect(t).toMatch(/Nequi al número 3194505150[\s\S]*comprobante/);
+        expect(t).toMatch(/Nequi al 319 450 5150[\s\S]*comprobante/);
         expect(t).not.toMatch(/cambió|afiliado|undefined|null|gratis/);
         expect(reg.enviados[0].contexto).toMatchObject({ step: 'formulario_respuesta', monto: 300000, forma_pago: 'completo', motivo_esperado: { motivo: 'clase_extra', monto: 300000, registrado: true } });
         expect(reg.avisos).toEqual([]);

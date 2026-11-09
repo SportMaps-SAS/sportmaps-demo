@@ -18,6 +18,7 @@ import { buildVerdictContext } from './receipt-context.service';
 import { autoCreateGlosaFromReasons, maybeAutoCreateGlosa } from './glosa.service';
 import { emailClient } from '../utils/emailClient';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
+import { saldoPorCobrar } from '../utils/saldo-cobro';
 
 const fmtCop = (n?: number | null) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
@@ -32,11 +33,28 @@ function guessMime(path: string): string {
 
 type PaymentRow = {
     id: string; school_id: string; status: string; amount: number;
+    amount_paid?: number | null; early_payment_discount_applied?: number | null;
     receipt_url: string | null; receipt_image_sha256: string | null;
     parent_id: string | null; child_id: string | null; team_id: string | null;
     concept: string | null; ocr_reference: string | null;
     receipt_verdict: string | null; receipt_verdict_reasons: unknown;
 };
+
+/**
+ * Lo que el comprobante DEBE decir: el saldo del cobro con el pronto pago
+ * descontado (amount − amount_paid − early_payment_discount_applied, la regla
+ * de utils/saldo-cobro). Antes se comparaba contra `amount`: con pronto pago
+ * (Monster: 5 % hasta el día 5) la familia transfiere $137.750 de un cobro de
+ * $145.000, el veredicto salía MONTO_DIFIERE y el comprobante iba a glosa en
+ * vez de aprobarse solo. `auto_approve_payment` ya acredita amount − descuento
+ * (migración 20261025205952). Sin saldo (cobro raro en 0), `amount`. Pura.
+ */
+export function montoEsperadoDelComprobante(
+    p: Pick<PaymentRow, 'amount' | 'amount_paid' | 'early_payment_discount_applied'>,
+): number {
+    const saldo = saldoPorCobrar(p);
+    return saldo > 0 ? saldo : Number(p.amount) || 0;
+}
 
 export interface EvaluateResult {
     action: 'approved' | 'glosa' | 'rejected' | 'none';
@@ -170,7 +188,7 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
     try {
         const { data: pay } = await supabase
             .from('payments')
-            .select('id, school_id, status, amount, receipt_url, receipt_image_sha256, parent_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons')
+            .select('id, school_id, status, amount, amount_paid, early_payment_discount_applied, receipt_url, receipt_image_sha256, parent_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons')
             .eq('id', paymentId)
             .single();
         if (!pay || (pay as PaymentRow).status !== 'awaiting_approval') return { action: 'none' };
@@ -183,6 +201,7 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
             .single();
 
         const amount = Number(p.amount);
+        const esperado = montoEsperadoDelComprobante(p);
         const cap = Number(settings?.auto_approve_max_amount ?? 0);
         // Monto elegido por el navegador (amount_source='cliente', migración
         // 20261025205952): el comprobante se compararía contra un valor que pone
@@ -225,7 +244,7 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
                     const ctx = await buildVerdictContext(p.school_id, {
                         referenceNorm: normalizeReference(ocrA.reference),
                         imageSha256: realHash,
-                        expectedAmount: amount,
+                        expectedAmount: esperado,
                         paymentId, // excluir el propio pago del dedup (si no, se marca dup contra sí mismo)
                     });
                     const verdictA = evaluateVerdict(ocrA, ctx);
@@ -271,7 +290,7 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
                             if (evidencia.ok) {
                                 const { data: approved } = await supabase.rpc('auto_approve_payment', { p_payment_id: paymentId });
                                 if (approved === true) {
-                                    await sendApprovalEmail(p, log);
+                                    await sendApprovalEmail(p, esperado, log);
                                     (log ?? console).info?.({ paymentId, providerA, providerB }, '[auto-approve] aprobado');
                                     return { action: 'approved' };
                                 }
@@ -320,14 +339,15 @@ async function glosaFallback(p: PaymentRow, log?: Logger): Promise<EvaluateResul
     return { action: gid ? 'glosa' : 'none', glosaId: gid };
 }
 
-async function sendApprovalEmail(p: PaymentRow, log?: Logger): Promise<void> {
+/** `pagado`: lo que la familia transfirió (con pronto pago, amount − descuento), no `amount`. */
+async function sendApprovalEmail(p: PaymentRow, pagado: number, log?: Logger): Promise<void> {
     try {
         if (!p.parent_id) return;
         const { data: parent } = await supabase.from('profiles').select('full_name, email').eq('id', p.parent_id).single();
         if (!parent?.email) return;
         const tpl = await BrandedEmailTemplates.paymentConfirmation({
             parentName: parent.full_name || 'Acudiente',
-            amount: fmtCop(p.amount),
+            amount: fmtCop(pagado),
             concept: p.concept || 'tu pago',
             receiptNumber: p.ocr_reference || String(p.id).slice(0, 8).toUpperCase(),
             schoolId: p.school_id,

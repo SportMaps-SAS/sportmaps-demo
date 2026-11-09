@@ -27,6 +27,7 @@ import type { PagoPendiente } from './whatsapp-receipt-matching.service';
 import type { ConceptoEsperado } from './wa-concepto-esperado.service';
 import type { OpcionGuiada } from './whatsapp-comprobante-guiado.service';
 import { esAfiliado } from './wa-afiliado.service';
+import { normalizarFrase } from './whatsapp-reglas-turno';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -544,7 +545,11 @@ export interface CrearCobroDesdeComprobanteInput extends DuenoDelCobro {
 export type CobroDesdeComprobante =
     /** `concepto`: el que quedó en el cobro (null si la base no lo devolvió, p. ej. `ya_existia`). */
     | { ok: true; paymentId: string; precio: number; esAbono: boolean; yaExistia: boolean; concepto: string | null }
-    | { ok: false; codigo: string; paymentId?: string };
+    /**
+     * `paymentId`: el cobro que ya existe (`ya_tiene_cobro`). `precio` / `abonoMinimo`:
+     * lo que la base esperaba cuando el monto no cuadra (`monto_no_coincide`).
+     */
+    | { ok: false; codigo: string; paymentId?: string; precio?: number | null; abonoMinimo?: number | null };
 
 /**
  * Crea el cobro con la RPC (idempotente por fila de la cola + fuente). El
@@ -580,6 +585,8 @@ export async function crearCobroDesdeComprobante(i: CrearCobroDesdeComprobanteIn
             return {
                 ok: false, codigo: String(r.codigo ?? 'error'),
                 ...(typeof r.payment_id === 'string' ? { paymentId: r.payment_id } : {}),
+                ...(num(r.precio) !== null ? { precio: num(r.precio) } : {}),
+                ...(num(r.abono_minimo) !== null ? { abonoMinimo: num(r.abono_minimo) } : {}),
             };
         }
         return {
@@ -681,6 +688,284 @@ export async function leadPorTelefono(schoolId: string, telefono: string): Promi
         const l = Array.isArray(data) ? (data[0] as any) : null;
         if (error || !l?.id) return null;
         return { id: l.id, nombre: l.full_name ?? null, status: String(l.status ?? '') };
+    } catch {
+        return null;
+    }
+}
+
+// ─── Venta de un servicio (frente C, 2026-11-08) ─────────────────────────────
+//
+// Monster, clínica de armadores: un comprobante de $300.000 de alguien de FUERA
+// del club recibía «¿De qué deportista es este pago?» → «No encontré a ese
+// deportista». En una venta el comprobante es del SERVICIO: su precio (por tramo
+// de fecha, de afiliado), un abono que separa el cupo o el saldo de un abono
+// anterior. Acá solo se decide qué dice el MONTO (puro) y se leen el cobro previo
+// y el prospecto; el precio del cobro lo sigue poniendo la base (la RPC).
+// Plan: docs/specs/whatsapp-ventas-de-servicio-blindaje.md §4.C.
+
+/** El motivo de cobro del ítem (= su `kind` si es de servicio; si no, 'otro'). Pura. */
+export function motivoDelItem(item: Pick<ItemDeServicio, 'kind'>): Motivo {
+    return (['torneo', 'viaje', 'clase_extra', 'vacacional', 'otro'] as const).find((k) => k === item.kind) ?? 'otro';
+}
+
+/** El cobro que ya tiene el dueño (deportista o prospecto) por ESE servicio. */
+export interface CobroPrevioDeServicio {
+    id: string;
+    amount: number;
+    amountPaid: number;
+    status: string;
+    /** El monto del comprobante que ya tiene (el abono que sigue en revisión). */
+    ocrAmount: number | null;
+    concept: string | null;
+    childId: string | null;
+}
+
+/** Lo que dice el monto de un comprobante en la venta de UN servicio. */
+export type MontoDeVenta =
+    /** El precio de hoy (de afiliado, de la opción, del tramo vigente). */
+    | { tipo: 'completo'; precio: PrecioDeMotivo }
+    /** Al menos el abono mínimo y menos que el precio: separa el cupo (cobro parcial). */
+    | { tipo: 'abono'; precio: PrecioDeMotivo; total: number; minimo: number }
+    /** Completa el abono ya aprobado (`partial`): va al MISMO cobro. */
+    | { tipo: 'saldo'; previo: CobroPrevioDeServicio; saldo: number }
+    /** Completa un abono que la escuela todavía no aprobó: no se puede estampar encima. */
+    | { tipo: 'saldo_en_revision'; previo: CobroPrevioDeServicio; saldo: number }
+    /** Ya hay un cobro pendiente (sin comprobante) de ese servicio por ese valor o un abono válido. */
+    | { tipo: 'aplicar_previo'; previo: CobroPrevioDeServicio; esAbono: boolean }
+    /** Ya tiene el servicio cobrado y el monto es otro precio entero (¿un segundo cupo?). */
+    | { tipo: 'ya_tiene_cobro'; previo: CobroPrevioDeServicio }
+    /**
+     * El monto es el precio (o un abono válido) del DÍA DEL PAGO, no el de hoy
+     * (pagó el 10 la preventa y se procesa el 11). La RPC cobra el precio de hoy:
+     * hasta que reciba la fecha del pago, lo registra una persona.
+     */
+    | { tipo: 'tramo_anterior'; fecha: string; precioDeEseDia: number; precioHoy: number | null; esAbono: boolean }
+    /** Dos opciones del servicio valen eso (semanas del vacacional con el mismo precio). */
+    | { tipo: 'ambiguo'; precios: PrecioDeMotivo[] }
+    | { tipo: 'no_cuadra'; precios: number[]; minimo: number | null };
+
+/** Hasta cuántos días atrás cuenta la fecha del pago para el precio del tramo. */
+export const DIAS_TRAMO_POR_FECHA_DE_PAGO = 30;
+
+/** Mediodía en Bogotá de un 'YYYY-MM-DD' (para leer el precio de ese día). */
+const msDelDia = (f: string) => Date.parse(`${f}T12:00:00-05:00`);
+
+/**
+ * La fecha del pago que leyó el OCR, si sirve para el precio: 'YYYY-MM-DD',
+ * ANTERIOR a hoy (hoy o futuro: manda el precio de hoy) y de los últimos
+ * `DIAS_TRAMO_POR_FECHA_DE_PAGO` días. Pura.
+ */
+export function fechaDePagoParaPrecio(fecha: unknown, hoy: string): string | null {
+    const f = typeof fecha === 'string' ? fecha.trim().slice(0, 10) : '';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f) || !Number.isFinite(msDelDia(f))) return null;
+    if (f >= hoy) return null;
+    if (msDelDia(hoy) - msDelDia(f) > DIAS_TRAMO_POR_FECHA_DE_PAGO * 86_400_000) return null;
+    return f;
+}
+
+/** Los precios del ítem en un momento: los completos, el total (sin opciones) y el abono mínimo. Pura. */
+function preciosDeVentaEn(item: ItemDeServicio, ahora: number, afiliado: boolean) {
+    const precios = preciosDeServicios([item], { ahora, afiliado });
+    const completos = precios.filter((p) => !p.esAbono);
+    const sinOpciones = opcionesDelItem(item).length === 0;
+    const total = sinOpciones && completos.length === 1 ? completos[0].monto : null;
+    const minimo = total !== null ? precios.find((p) => p.esAbono)?.monto ?? null : null;
+    return { completos, total, minimo };
+}
+
+/** ¿`monto` es un abono válido de `total` (≥ mínimo −$1 y < total −$1, como la RPC)? Pura. */
+const esAbonoValido = (monto: number, total: number | null, minimo: number | null) =>
+    total !== null && minimo !== null && monto >= minimo - TOLERANCIA && monto < total - TOLERANCIA;
+
+/**
+ * ¿Qué es este monto en la venta de `item`? Pura. Orden:
+ *  1. Con un cobro previo del servicio: el saldo de un abono aprobado (mismo
+ *     cobro), el de uno en revisión, o el cobro pendiente que ya existía.
+ *  2. El precio de hoy (completo) → el precio del día del pago (tramo anterior)
+ *     → un abono de hoy → un abono del día del pago.
+ *  3. Si el dueño ya tiene el servicio cobrado y el monto es otro precio: ya_tiene_cobro.
+ * Nunca decide el precio del cobro: eso lo hace la RPC con la fuente.
+ */
+export function decidirMontoDeVenta(
+    monto: number | null,
+    item: ItemDeServicio,
+    o: { ahora?: number; afiliado?: boolean; fechaPago?: string | null; previo?: CobroPrevioDeServicio | null } = {},
+): MontoDeVenta {
+    const ahora = o.ahora ?? Date.now();
+    const afiliado = o.afiliado === true;
+    const hoy = preciosDeVentaEn(item, ahora, afiliado);
+    const noCuadra: MontoDeVenta = { tipo: 'no_cuadra', precios: hoy.completos.map((p) => p.monto), minimo: hoy.minimo };
+    if (monto === null || !(monto > 0)) return noCuadra;
+
+    const previo = o.previo ?? null;
+    if (previo) {
+        if (previo.status === 'partial') {
+            const saldo = Math.max(0, previo.amount - previo.amountPaid);
+            if (saldo > 0 && igual(saldo, monto)) return { tipo: 'saldo', previo, saldo };
+        } else if (previo.status === 'awaiting_approval' && previo.ocrAmount !== null
+            && previo.ocrAmount < previo.amount - TOLERANCIA) {
+            const saldo = previo.amount - previo.ocrAmount;
+            if (igual(saldo, monto)) return { tipo: 'saldo_en_revision', previo, saldo };
+        } else if (previo.status === 'pending' || previo.status === 'overdue') {
+            if (igual(previo.amount, monto)) return { tipo: 'aplicar_previo', previo, esAbono: false };
+            const min = item.allow_installments === true ? abonoMinimo(previo.amount, item.abono_minimo_pct) : null;
+            if (esAbonoValido(monto, previo.amount, min)) return { tipo: 'aplicar_previo', previo, esAbono: true };
+        }
+    }
+
+    const pagoDia = fechaDePagoParaPrecio(o.fechaPago, hoyBogota(ahora));
+    const eseDia = pagoDia ? preciosDeVentaEn(item, msDelDia(pagoDia), afiliado) : null;
+    let r: MontoDeVenta | null = null;
+    const iguales = hoy.completos.filter((p) => igual(p.monto, monto));
+    const igualesEseDia = eseDia ? eseDia.completos.filter((p) => igual(p.monto, monto)) : [];
+    if (iguales.length > 1) return { tipo: 'ambiguo', precios: iguales };
+    if (iguales.length === 1) {
+        r = { tipo: 'completo', precio: iguales[0] };
+    } else if (pagoDia && igualesEseDia.length === 1) {
+        r = { tipo: 'tramo_anterior', fecha: pagoDia, precioDeEseDia: igualesEseDia[0].monto, precioHoy: hoy.total, esAbono: false };
+    } else if (esAbonoValido(monto, hoy.total, hoy.minimo) && hoy.completos.length === 1) {
+        r = { tipo: 'abono', precio: { ...hoy.completos[0], monto, esAbono: true }, total: hoy.total as number, minimo: hoy.minimo as number };
+    } else if (pagoDia && eseDia && esAbonoValido(monto, eseDia.total, eseDia.minimo)) {
+        r = { tipo: 'tramo_anterior', fecha: pagoDia, precioDeEseDia: eseDia.total as number, precioHoy: hoy.total, esAbono: true };
+    }
+    if (!r) return noCuadra;
+    if (previo) return { tipo: 'ya_tiene_cobro', previo };
+    return r;
+}
+
+const ESTADOS_VIVOS_SERVICIO = ['pending', 'overdue', 'awaiting_approval', 'partial', 'paid'];
+
+const previoDesdeFila = (p: any): CobroPrevioDeServicio => ({
+    id: String(p.id), amount: Number(p.amount) || 0, amountPaid: Number(p.amount_paid) || 0,
+    status: String(p.status ?? ''), ocrAmount: num(p.ocr_amount), concept: p.concept ?? null, childId: p.child_id ?? null,
+});
+
+/**
+ * El cobro vivo más reciente del dueño por ESE servicio: misma categoría y el
+ * nombre del servicio en el concepto (el que arma la RPC o el asistente). Una
+ * lectura. Nunca lanza (ante el error, null: decide la RPC con `ya_tiene_cobro`).
+ */
+export async function cobroPrevioDelServicio(
+    schoolId: string, dueno: DuenoDelCobro, item: Pick<ItemDeServicio, 'name' | 'kind'>,
+): Promise<CobroPrevioDeServicio | null> {
+    try {
+        let q = supabase.from('payments')
+            .select('id, amount, amount_paid, status, ocr_amount, concept, child_id')
+            .eq('school_id', schoolId).eq('payment_category', motivoDelItem(item))
+            .in('status', ESTADOS_VIVOS_SERVICIO);
+        if (dueno.childId) q = q.eq('child_id', dueno.childId);
+        else if (dueno.unregisteredId) q = q.eq('unregistered_athlete_id', dueno.unregisteredId);
+        else if (dueno.leadId) q = q.eq('signup_lead_id', dueno.leadId);
+        else return null;
+        const { data, error } = await q.order('created_at', { ascending: false }).limit(10);
+        if (error || !Array.isArray(data)) return null;
+        const nombre = normalizarFrase(item.name);
+        const delServicio = (data as any[]).find((p) => !!nombre && normalizarFrase(p.concept).includes(nombre));
+        return delServicio ? previoDesdeFila(delServicio) : null;
+    } catch {
+        return null;
+    }
+}
+
+/** El cobro por id (el que la RPC dijo que ya existe), de ESA escuela. Nunca lanza. */
+export async function cobroDeServicioPorId(schoolId: string, paymentId: string): Promise<CobroPrevioDeServicio | null> {
+    try {
+        const { data, error } = await supabase.from('payments')
+            .select('id, amount, amount_paid, status, ocr_amount, concept, child_id')
+            .eq('school_id', schoolId).eq('id', paymentId).maybeSingle();
+        if (error || !(data as any)?.id) return null;
+        return previoDesdeFila(data);
+    } catch {
+        return null;
+    }
+}
+
+/** El prospecto de una venta: con `conocido` si su nombre es el de quien asiste (registro completo). */
+export interface LeadDeVenta {
+    id: string;
+    /** null si el nombre es de relleno («Prospecto WhatsApp»). */
+    nombre: string | null;
+    /** El nombre es el del deportista (el lead pasó por un registro completo: embudo, puerta, formulario). */
+    conocido: boolean;
+    sourceDetail: Record<string, any>;
+}
+
+/** ¿Nombre de relleno del lead (el que pone el registro cuando no sabe ninguno)? Pura. */
+export function esNombreDeRelleno(n: string | null | undefined): boolean {
+    const t = normalizarFrase(n);
+    return !t || /^(prospecto( whatsapp)?|sin nombre|cliente|usuario|interesado|interesada)$/.test(t);
+}
+
+/**
+ * El prospecto de la venta: el del motivo esperado (por id) o el del teléfono
+ * (el más reciente, no descartado). Una lectura. Nunca lanza.
+ */
+export async function leadDeVenta(schoolId: string, telefono: string, leadId?: string | null): Promise<LeadDeVenta | null> {
+    try {
+        let q = supabase.from('school_signup_leads').select('id, full_name, status, source_detail').eq('school_id', schoolId);
+        if (leadId) {
+            q = q.eq('id', leadId);
+        } else {
+            const { variantesTelefonoLead } = await import('./whatsapp-prospecto-lead.service');
+            const variantes = variantesTelefonoLead(telefono);
+            if (!variantes.length) return null;
+            q = q.in('phone', variantes).neq('status', 'discarded');
+        }
+        const { data, error } = await q.order('created_at', { ascending: false }).limit(1);
+        const l = !error && Array.isArray(data) ? (data[0] as any) : null;
+        if (!l?.id || l.status === 'discarded') return null;
+        const sd = (l.source_detail && typeof l.source_detail === 'object' ? l.source_detail : {}) as Record<string, any>;
+        const nombre = esNombreDeRelleno(l.full_name) ? null : String(l.full_name).trim();
+        return { id: l.id, nombre, conocido: !!nombre && !!(sd.registro_completo_at || sd.asistente_servicio), sourceDetail: sd };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * El prospecto queda con el nombre de quien asiste: si no existe se crea por el
+ * registro de siempre (`registrarLeadDeProspecto`, una fila por escuela +
+ * teléfono, con el servicio); si existe sin ese nombre, se le pone (el que tenía
+ * pasa a `source_detail.contacto`). Devuelve el id, o null si no se pudo.
+ * Nunca lanza.
+ */
+export async function asegurarLeadDeVenta(p: {
+    schoolId: string; conversationId: string | null; telefono: string; nombre: string;
+    item: Pick<ItemDeServicio, 'id' | 'name' | 'kind'>; lead: LeadDeVenta | null;
+}): Promise<string | null> {
+    try {
+        const ahora = new Date().toISOString();
+        if (p.lead) {
+            if (!p.lead.conocido) {
+                const sd = p.lead.sourceDetail ?? {};
+                const { error } = await supabase.from('school_signup_leads').update({
+                    full_name: p.nombre,
+                    source_detail: {
+                        ...sd,
+                        ...(p.lead.nombre && p.lead.nombre !== p.nombre && !sd.contacto ? { contacto: p.lead.nombre } : {}),
+                        asistente_servicio: { nombre: p.nombre, servicio_id: p.item.id, at: ahora },
+                    },
+                    updated_at: ahora,
+                }).eq('id', p.lead.id);
+                if (error) console.warn('[wa-cobro-comprobante] no se pudo poner el nombre al prospecto', { leadId: p.lead.id, msg: error.message });
+            }
+            return p.lead.id;
+        }
+        const { registrarLeadDeProspecto } = await import('./whatsapp-prospecto-lead.service');
+        const r = await registrarLeadDeProspecto({
+            schoolId: p.schoolId, conversationId: p.conversationId ?? '', contactWaId: p.telefono, nombre: p.nombre,
+            textos: [], estado: 'respondido', servicio: { id: p.item.id, nombre: p.item.name, tipo: p.item.kind },
+        });
+        if (!r?.leadId) return null;
+        // Marca: este nombre es el de quien asiste (el próximo comprobante no lo vuelve a preguntar).
+        const { data: creado } = await supabase.from('school_signup_leads').select('source_detail').eq('id', r.leadId).maybeSingle();
+        await supabase.from('school_signup_leads').update({
+            source_detail: {
+                ...(((creado as any)?.source_detail ?? {}) as Record<string, unknown>),
+                asistente_servicio: { nombre: p.nombre, servicio_id: p.item.id, at: ahora },
+            },
+        }).eq('id', r.leadId);
+        return r.leadId;
     } catch {
         return null;
     }

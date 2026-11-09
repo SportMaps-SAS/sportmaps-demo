@@ -321,14 +321,13 @@ export async function comprobanteSimulado(
             });
             veredicto = evaluateVerdict(ocr, vctx);
         }
-        let candidatos: string[] = [];
+        // Un número sin ficha NUNCA ve nombres de deportistas (Monster 2026-11-05): la
+        // pregunta va escrita, sin botones, como en la cola (comprobanteDeNumeroSinFicha).
+        const candidatos: string[] = [];
         let preguntaDeportista: string | undefined;
         if (rol === 'prospecto' && r.decision === 'sin_familia') {
-            const guiado = await import('./whatsapp-comprobante-guiado.service');
             const { PREGUNTA_DEPORTISTA } = await import('./whatsapp-comprobante-de-ficha.service');
-            candidatos = (await guiado.candidatosParaPreguntar(schoolId, [...textos, ocr.description, ocr.originName]))
-                .map((c) => c.nombre);
-            preguntaDeportista = candidatos.length ? guiado.textoPreguntaDeportista() : PREGUNTA_DEPORTISTA;
+            preguntaDeportista = PREGUNTA_DEPORTISTA;
         }
         return textoComprobanteSimulado({
             rol, ocr, destino, camino, hablaDePago, veredicto, candidatos, preguntaDeportista,

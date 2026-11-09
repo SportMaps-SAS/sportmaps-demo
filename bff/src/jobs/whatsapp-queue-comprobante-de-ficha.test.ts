@@ -115,6 +115,10 @@ vi.mock('../services/whatsapp-optin.service', () => ({
 vi.mock('../services/whatsapp-atencion.service', () => ({
     debeAtender: vi.fn(() => Promise.resolve(state.atencion)),
 }));
+const rolDePersonalMock = vi.fn((..._a: any[]) => Promise.resolve(null as any));
+vi.mock('../services/whatsapp-personal-escuela.service', () => ({
+    rolDePersonal: (...a: any[]) => rolDePersonalMock(...a),
+}));
 vi.mock('../services/whatsapp-invitacion-vigente.service', () => ({
     invitacionPendienteVigente: vi.fn(() => Promise.resolve({ invitacion: { invite_id: 'inv-1' }, atletaInactivo: false })),
 }));
@@ -155,6 +159,7 @@ vi.mock('../services/whatsapp-receipt-matching.service', async () => {
 
 const fichasPorTelefonoMock = vi.fn((..._a: any[]) => Promise.resolve({ childIds: [] as string[], unregisteredIds: [] as string[] }));
 const deportistaPorNombreMock = vi.fn((..._a: any[]) => Promise.resolve(null as any));
+const deportistaPorNombreSinVerificarMock = vi.fn((..._a: any[]) => Promise.resolve({ exacta: null, parecida: null } as any));
 const pendientesPorLlavesMock = vi.fn((..._a: any[]) => Promise.resolve([] as any[]));
 const pagoYaRegistradoMock = vi.fn((..._a: any[]) => Promise.resolve(null as any));
 vi.mock('../services/whatsapp-comprobante-de-ficha.service', async () => {
@@ -163,6 +168,7 @@ vi.mock('../services/whatsapp-comprobante-de-ficha.service', async () => {
         ...real,
         fichasPorTelefono: (...a: any[]) => fichasPorTelefonoMock(...a),
         deportistaPorNombre: (...a: any[]) => deportistaPorNombreMock(...a),
+        deportistaPorNombreSinVerificar: (...a: any[]) => deportistaPorNombreSinVerificarMock(...a),
         pendientesPorLlaves: (...a: any[]) => pendientesPorLlavesMock(...a),
         pagoYaRegistrado: (...a: any[]) => pagoYaRegistradoMock(...a),
     };
@@ -199,6 +205,8 @@ beforeEach(() => {
     extractReceiptMock.mockResolvedValue(comprobante(150000));
     fichasPorTelefonoMock.mockResolvedValue({ childIds: [], unregisteredIds: [] });
     deportistaPorNombreMock.mockResolvedValue(null);
+    deportistaPorNombreSinVerificarMock.mockResolvedValue({ exacta: null, parecida: null });
+    rolDePersonalMock.mockResolvedValue(null);
     pendientesPorLlavesMock.mockResolvedValue([]);
     pagoYaRegistradoMock.mockResolvedValue(null);
     pagosPendientesDeMock.mockResolvedValue([]);
@@ -279,16 +287,28 @@ describe('(b) número sin ficha', () => {
         expect(updatesCola.find((u) => u.status === 'waiting_user')).toBeTruthy();
     });
 
-    it('el pie trae el nombre → se aplica sin preguntar', async () => {
+    it('el pie trae el nombre COMPLETO y el monto es el de su cobro → se liga sin preguntar, sin decirle datos del deportista', async () => {
         state.claim = [FILA('f1', { media_caption: 'Mensualidad de Laura Peña' })];
-        deportistaPorNombreMock.mockResolvedValue({ childIds: ['c1'], unregisteredIds: [] });
+        deportistaPorNombreSinVerificarMock.mockResolvedValue({ exacta: { id: 'c1', nombre: 'Laura Peña', tipo: 'child' }, parecida: null });
         pendientesPorLlavesMock.mockResolvedValue([OCT]);
         await runWhatsAppQueue();
         // Busca con el pie, el chat, el concepto y quien paga.
-        expect(deportistaPorNombreMock.mock.calls[0][1]).toEqual(
+        expect(deportistaPorNombreSinVerificarMock.mock.calls[0][1]).toEqual(
             expect.arrayContaining(['Mensualidad de Laura Peña', 'Pedro Gómez']));
-        expect(enviados()[0]).toContain('Listo: comprobante de *$150.000* de *Laura* para *octubre*');
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith('p-oct', undefined);
+        // Un número sin verificar no recibe el nombre, el mes ni los cobros del deportista (Monster 2026-11-05).
+        expect(enviados()).toEqual(['Recibí tu comprobante de *$150.000* 📄 La escuela lo valida y te confirma por aquí.']);
         expect(cierre()).toMatchObject({ status: 'done', result_ref_id: 'p-oct' });
+    });
+
+    it('solo un nombre PARECIDO (no completo) → nada se liga: la pregunta escrita, sin botones', async () => {
+        state.claim = [FILA('f1', { media_caption: 'pago de Laura' })];
+        deportistaPorNombreSinVerificarMock.mockResolvedValue({ exacta: null, parecida: { id: 'c1', nombre: 'Laura Peña', tipo: 'child' } });
+        pendientesPorLlavesMock.mockResolvedValue([OCT]);
+        await runWhatsAppQueue();
+        expect(sendInteractiveButtonsMock).not.toHaveBeenCalled();
+        expect(enviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
     });
 
     it('a una cuenta que no es de la escuela → sin responderle, pero a la bandeja como destino_ajeno (nunca se ignora un comprobante)', async () => {
@@ -398,5 +418,27 @@ describe('(e) el pie dice «saldo» y el monto no cuadra con ningún cobro', () 
         pagosPendientesDeMock.mockResolvedValue([SEP, OCT]);
         await runWhatsAppQueue();
         expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith('p-oct', undefined);
+    });
+});
+
+// ─── El personal que no administra (Monster 2026-11-08) ─────────────────────
+
+describe('personal de la escuela o de la plataforma que NO administra', () => {
+    it('un profe manda un comprobante: ni «¿de qué deportista?» ni la rama de alta por matrícula; a la bandeja sin escribirle', async () => {
+        state.atencion = { atender: false, tipo: 'staff', botEncendido: true };
+        rolDePersonalMock.mockResolvedValue('coach');
+        await runWhatsAppQueue();
+        expect(enviados()).toEqual([]);
+        const c = cierre();
+        expect(c).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(c.error_message).toMatch(/^sin_familia: contacto_no_atendido \(staff_coach\)/);
+    });
+
+    it('un admin de la plataforma: igual, nada de prospecto ni de familia', async () => {
+        state.atencion = { atender: false, tipo: 'staff', botEncendido: true };
+        rolDePersonalMock.mockResolvedValue('plataforma');
+        await runWhatsAppQueue();
+        expect(enviados()).toEqual([]);
+        expect(cierre().error_message).toMatch(/\(staff_plataforma\)/);
     });
 });

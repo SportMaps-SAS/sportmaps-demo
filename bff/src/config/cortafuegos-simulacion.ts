@@ -143,6 +143,39 @@ export function valorDeColumna(fila: Fila, col: string): any {
     return v;
 }
 
+/**
+ * Las columnas CALCULADAS de un select de PostgREST: `alias:col->>clave`,
+ * `alias:col->a->>b`, `alias:col` (renombre) y `col->>clave` sin alias (PostgREST
+ * la nombra con la última clave). Los recursos embebidos (`tabla(...)`) y las
+ * columnas simples no cuentan: la fila en memoria ya las trae. Pura.
+ *
+ * Sin esto `mensajesParaVenta` (whatsapp-venta-contexto.db) leía el payload vacío
+ * en simulación y una venta marcada con `venta_servicio_id` no se detectaba en
+ * qa:embudo ni en el número de pruebas (frente F, 2026-11-08).
+ */
+export function aliasesDelSelect(cols: string | null | undefined): { alias: string; expr: string }[] {
+    if (!cols) return [];
+    const partes: string[] = [];
+    let profundidad = 0;
+    let actual = '';
+    for (const ch of cols) {
+        if (ch === '(') profundidad++;
+        if (ch === ')') profundidad--;
+        if (ch === ',' && profundidad === 0) { partes.push(actual); actual = ''; } else actual += ch;
+    }
+    partes.push(actual);
+    const out: { alias: string; expr: string }[] = [];
+    for (const parte of partes.map((p) => p.trim()).filter(Boolean)) {
+        if (parte.includes('(') || parte === '*') continue;
+        const m = /^([A-Za-z_]\w*)\s*:\s*(.+)$/.exec(parte);
+        const expr = (m ? m[2] : parte).trim().replace(/::[\w\s]+$/, '').trim();
+        if (!m && !/->/.test(expr)) continue;
+        const alias = m ? m[1] : expr.split(/->>?/).pop()!.trim();
+        if (alias) out.push({ alias, expr });
+    }
+    return out;
+}
+
 function comparar(a: any, b: any): number {
     if (a === b) return 0;
     if (a === null || a === undefined) return -1;
@@ -197,6 +230,7 @@ export class ConsultaVirtual {
     private devolver = false;
     private soloConteo = false;
     private conConteo = false;
+    private aliases: { alias: string; expr: string }[] = [];
 
     constructor(private readonly ctx: ContextoCortafuegos, private readonly tabla: string) {}
 
@@ -205,8 +239,10 @@ export class ConsultaVirtual {
         return this.ctx.memoria[this.tabla];
     }
 
-    select(_cols?: string, opts?: { count?: string; head?: boolean }): this {
+    select(cols?: string, opts?: { count?: string; head?: boolean }): this {
         if (this.op !== 'select') this.devolver = true;
+        // La fila completa sale igual; los alias calculados (`x:payload->>x`) se agregan.
+        this.aliases = aliasesDelSelect(cols);
         if (opts?.count) this.conConteo = true;
         if (opts?.head) this.soloConteo = true;
         return this;
@@ -307,7 +343,14 @@ export class ConsultaVirtual {
         const total = filas.length;
         if (this.desde) filas = filas.slice(this.desde);
         if (this.limite !== null) filas = filas.slice(0, this.limite);
-        const copia = filas.map((f) => JSON.parse(JSON.stringify(f)));
+        const copia = filas.map((f) => {
+            const c = JSON.parse(JSON.stringify(f));
+            for (const a of this.aliases) {
+                const v = valorDeColumna(f, a.expr);
+                c[a.alias] = v === undefined ? null : JSON.parse(JSON.stringify(v));
+            }
+            return c;
+        });
         if (this.soloConteo) return { data: null, error: null, count: total, status: 200, statusText: 'OK' };
         if (this.modo === 'una') {
             if (copia.length !== 1) {

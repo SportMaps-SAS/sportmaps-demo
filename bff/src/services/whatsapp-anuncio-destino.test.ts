@@ -30,9 +30,10 @@ vi.mock('../config/supabase', () => {
 import {
     atenderDestinoDeAnuncio, decidirDestino, diaLegible, eleccionPendiente, eventosNombrados, fichaReciente,
     inferirServicio, mapeoDeAnuncio, mapeoDesdeFila, necesitaCatalogo, precioDelServicio, referralDeLaRafaga,
-    referralDePayload, textoFichaDeServicio, textoAPersona, motivoDeServicio, MARCA_DESTINO,
+    referralDePayload, textoFichaDeServicio, textoAPersona, motivoDeServicio, MARCA_DESTINO, CTA_FICHA_DE_SERVICIO,
     type CtxAnuncio, type ItemConFicha, type MapeoAnuncio, type ReferralAnuncio,
 } from './whatsapp-anuncio-destino';
+import { MARCA_VENTA } from './whatsapp-venta-contexto';
 import { EVENTO_DE_SERVICIO, normalizarFrase, type FilaReciente } from './whatsapp-reglas-turno';
 import { detalleDeAnuncio } from './whatsapp-prospecto-lead.service';
 
@@ -239,18 +240,27 @@ describe('precio de hoy de la clínica', () => {
 describe('la ficha', () => {
     const CUENTAS = [{ tipo: 'Nequi', numero: '3194505150', titular: 'Monster Volley' }];
 
-    it('descripción de la escuela, cuándo, valor de hoy, abono y cómo pagar; nunca «gratis»', () => {
+    // Frente A (2026-11-08): la ficha ya NO trae el bloque de pago pegado (Monster: con
+    // 2.581 caracteres la cuenta quedaba al final y nadie la veía). Las cuentas van en
+    // un mensaje aparte y solo si las pide (`textoDePagoDeServicio`); la ficha cierra
+    // con el próximo paso.
+    it('descripción de la escuela, cuándo, valor de hoy y abono, SIN la cuenta pegada; nunca «gratis»', () => {
         const t = textoFichaDeServicio(CLINICA, precioDelServicio(CLINICA, { afiliado: false, hoy: '2026-11-04' }), CUENTAS);
         expect(t).toContain('*Clínica de armadores y atacantes*');
         expect(t).toContain(CLINICA.description!);
         expect(t).toContain('Cuándo: del 21 al 22 de noviembre');
         expect(t).toContain('Valor hoy: *$300.000* (hasta el 10 de noviembre; desde el 11 de noviembre, *$350.000*)');
         expect(t).toContain('Separas el cupo con un abono mínimo de *$150.000* (50 %).');
-        expect(t).toContain('transfiere por Nequi al número 3194505150 (a nombre de Monster Volley) y envíame aquí mismo la foto o el PDF del comprobante');
+        expect(t).not.toContain('3194505150');
+        expect(t).toContain(CTA_FICHA_DE_SERVICIO);
         expect(t).not.toMatch(/gratis|undefined|null|NaN/i);
+        // Si pidió el pago, el pago sale después: la ficha no lleva ni la cuenta ni el «respóndeme».
+        const conPago = textoFichaDeServicio(CLINICA, precioDelServicio(CLINICA, { afiliado: false, hoy: '2026-11-04' }), CUENTAS, { pidePago: true });
+        expect(conPago).not.toContain(CTA_FICHA_DE_SERVICIO);
+        expect(conPago).not.toContain('3194505150');
     });
 
-    it('si la descripción es el texto completo del anuncio, se manda tal cual y solo se agrega cómo pagar', () => {
+    it('si la descripción es el texto completo del anuncio, se manda tal cual, sin la cuenta pegada', () => {
         const largo = `🏐 ¡CLÍNICA!
 ${'Texto de la escuela. '.repeat(50)}
 💰 Inversión: *$300.000*`;
@@ -259,7 +269,8 @@ ${'Texto de la escuela. '.repeat(50)}
         expect(t.startsWith(largo)).toBe(true);
         expect(t).not.toContain('Valor hoy');
         expect(t).not.toContain('*Clínica de armadores y atacantes*');
-        expect(t).toContain('transfiere por Nequi al número 3194505150');
+        expect(t).not.toContain('3194505150');
+        expect(t.endsWith(CTA_FICHA_DE_SERVICIO)).toBe(true);
     });
 
     it('texto completo: el afiliado ve además su valor; quien no es afiliado, no', () => {
@@ -346,6 +357,41 @@ describe('atenderDestinoDeAnuncio', () => {
         expect(reg.avisos).toEqual([]);
         // El precio de afiliado se pregunta porque la clínica lo tiene.
         expect(reg.lecturas.afiliado).toBe(1);
+    });
+
+    it('caso 4 (Monster 11-08): el prellenado «¿Cuánto cuesta la clínica? ¿Cómo aparto mi cupo?» → la ficha y DESPUÉS el pago aparte', async () => {
+        const PRELLENADO = '¿Cuánto cuesta la clínica? ¿Cómo aparto mi cupo?';
+        const largo = `🏐 ¡CLÍNICA DE ARMADORES Y ATACANTES MONSTER’S VOLLEY! 🔥\n${'Texto de la escuela. '.repeat(100)}`;
+        const item = { ...CLINICA, description: largo };
+        const { ctx, reg } = ctxDe({
+            recientes: [entrante(PRELLENADO, { referral: ANUNCIO_CLINICA })], items: [item],
+            cuentas: [{ tipo: 'Nequi', numero: '3194505150', titular: 'Iván Sossa' } as any],
+        });
+        expect(await atenderDestinoDeAnuncio(ctx, PRELLENADO)).toBe('anuncio_servicio');
+        expect(reg.enviados).toHaveLength(2);
+        const [ficha, pago] = reg.enviados;
+        // La ficha: el texto de la escuela, sin la cuenta ni el «respóndeme» (el pago va enseguida).
+        expect(ficha.texto.startsWith(largo.trim())).toBe(true);
+        expect(ficha.texto).not.toContain('3194505150');
+        expect(ficha.contexto).toMatchObject({ [MARCA_DESTINO]: 'servicio', servicio_id: CLINICA.id, [MARCA_VENTA]: CLINICA.id });
+        // El pago: corto, aparte, con el precio de hoy, el tramo con la fecha correcta, abono, cuenta con titular y el cierre.
+        expect(pago.texto.length).toBeLessThan(600);
+        expect(pago.texto).toContain('Valor hoy: *$300.000* (hasta el martes 10 de noviembre; desde el 11, *$350.000*)');
+        expect(pago.texto).toContain('abono mínimo de *$150.000* (50 %)');
+        expect(pago.texto).toContain('Nequi al 319 450 5150, a nombre de Iván Sossa');
+        expect(pago.texto).toContain('nombre completo de quien asiste');
+        expect(pago.texto).not.toMatch(/9 de noviembre|clase de prueba|sede/i);
+        expect(pago.contexto).toMatchObject({ [MARCA_VENTA]: CLINICA.id, step: 'venta_servicio_pago', datos_de_pago: true });
+        expect(pago.contexto).not.toHaveProperty(MARCA_DESTINO);
+    });
+
+    it('sin pedir el pago («quiero más información»): UNA ficha con el próximo paso, sin la cuenta', async () => {
+        const { ctx, reg } = ctxDe({ recientes: [entrante('Hola, quiero más información', { referral: ANUNCIO_CLINICA })] });
+        await atenderDestinoDeAnuncio(ctx, 'Hola, quiero más información');
+        expect(reg.enviados).toHaveLength(1);
+        expect(reg.enviados[0].texto).toContain(CTA_FICHA_DE_SERVICIO);
+        expect(reg.enviados[0].texto).not.toContain('3194505150');
+        expect(reg.enviados[0].contexto).toMatchObject({ [MARCA_VENTA]: CLINICA.id });
     });
 
     it('afiliado: la ficha dice su valor ($250.000)', async () => {

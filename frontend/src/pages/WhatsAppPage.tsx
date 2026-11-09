@@ -28,6 +28,8 @@ import { ImportarChatExportado } from '@/components/whatsapp/ImportarChatExporta
 import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/BandejaComprobantes';
 import { Campanas } from '@/components/whatsapp/Campanas';
 import { Anuncios } from '@/components/whatsapp/Anuncios';
+import { CoherenciaFicha } from '@/components/whatsapp/CoherenciaFicha';
+import { SeguimientoConversaciones } from '@/components/whatsapp/SeguimientoConversaciones';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -41,6 +43,7 @@ import {
     MessageSquare, RefreshCw, AlertTriangle, Clock, FileText, Inbox, Settings, Plus, Loader2, Power, BarChart3, CalendarCheck,
     Megaphone,
     Target,
+    ListChecks,
 } from 'lucide-react';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
@@ -422,6 +425,9 @@ export default function WhatsAppPage() {
                         <Inbox className="h-4 w-4 mr-1" /> Bandeja
                         {pendientesBandeja > 0 && <Badge variant="secondary" className="ml-2">{pendientesBandeja}</Badge>}
                     </TabsTrigger>
+                    <TabsTrigger value="seguimiento" className="h-full">
+                        <ListChecks className="h-4 w-4 mr-1" /> Seguimiento
+                    </TabsTrigger>
                     <TabsTrigger value="cortesias" className="h-full">
                         <CalendarCheck className="h-4 w-4 mr-1" /> Clases de cortesía
                     </TabsTrigger>
@@ -544,6 +550,11 @@ export default function WhatsAppPage() {
                     {schoolId && <Anuncios schoolId={schoolId} />}
                 </TabsContent>
 
+                {/* ── Seguimiento: quién escribió, si respondió la escuela o el bot, quién espera ── */}
+                <TabsContent value="seguimiento">
+                    {schoolId && <SeguimientoConversaciones schoolId={schoolId} onAbrirConversacion={verChat} />}
+                </TabsContent>
+
                 {/* ── Bandeja ── */}
                 <TabsContent value="bandeja" className="space-y-3">
                     {/* Comprobantes viejos que solo están en el celular de la escuela. */}
@@ -570,6 +581,8 @@ export default function WhatsAppPage() {
                     {schoolId && <HorariosDeEntrenamiento schoolId={schoolId} />}
                 </TabsContent>
                 <TabsContent value="config" className="space-y-4">
+                    {/* Arriba: el texto del asistente que contradice el catálogo (blindaje de ventas, frente B). */}
+                    {schoolId && <CoherenciaFicha schoolId={schoolId} />}
                     <PanelConfig
                         ajustes={estado?.ajustes ?? null}
                         guardando={guardando}
