@@ -3021,13 +3021,13 @@ async function botonDelClubEnLaVenta(
  */
 async function atenderBotonDeVentaEnBot(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
-    boton: NonNullable<ReturnType<typeof parsearBotonDeVenta>>, recientes: FilaReciente[], waMessageId: string,
-): Promise<void> {
+    boton: NonNullable<ReturnType<typeof parsearBotonDeVenta>>, recientes: FilaReciente[], waMessageId: string | null,
+): Promise<ResultadoVenta> {
     try {
         const item = (await serviciosDelTurno(integration.school_id)).find((i) => i.id === boton.itemId) ?? null;
         if (!item) {
             await deliver(integration, conversationId, contactWaId, TEXTO_SERVICIO_NO_VIGENTE, { step: PASO_VENTA.NO_VIGENTE });
-            return;
+            return 'venta_respuesta';
         }
         const { data: conv } = await supabase.from('whatsapp_conversations')
             .select('parent_id').eq('id', conversationId).maybeSingle();
@@ -3036,8 +3036,10 @@ async function atenderBotonDeVentaEnBot(
             ctxVentaServicio(integration, conversationId, contactWaId, recientes,
                 { familia: Boolean((conv as any)?.parent_id), waMessageId }), item, boton.accion);
         console.info('[whatsapp-bot] botón de la venta', { conversationId, servicio: item.id, accion: boton.accion, r });
+        return r;
     } catch (e: any) {
         console.warn('[whatsapp-bot] botón de la venta falló', { conversationId, accion: boton.accion, err: e?.message });
+        return 'venta_silencio';
     }
 }
 
@@ -3049,6 +3051,17 @@ async function atenderVentaDelDesconocido(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
     text: string, botonId: string | null, rafaga: string | null,
 ): Promise<ResultadoDesconocido | null> {
+    // Botón de la venta ([Separar mi cupo] [Ver detalles] [Hablar con alguien] [Ya pagué]): el
+    // desconocido llega acá sin pasar por `runBotTurn` (el webhook llama `atenderDesconocido`).
+    const botonVenta = parsearBotonDeVenta(botonId);
+    if (botonVenta) {
+        const recientes = await mensajesRecientes(conversationId);
+        if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+            await marcarAbiertaSinAviso(conversationId);
+            return 'escuela_atendiendo';
+        }
+        return atenderBotonDeVentaEnBot(integration, conversationId, contactWaId, botonVenta, recientes, null);
+    }
     if (botonId) return botonDelClubEnLaVenta(integration, conversationId, contactWaId, botonId);
     if (!text) return null;
     // «Es posible agendar una clase de prueba?»: sale de la venta (el bot de siempre), pero

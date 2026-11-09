@@ -2779,12 +2779,20 @@ async function correrVentas(e: Escuela): Promise<Resultado[]> {
                     revisarTurnoVenta(c, r, cv, it, { afiliado: true });
                 }, { familia: true, afiliado: true }));
             }
-            fase1.push(() => correrVenta(`[${it.name}] campaña: «Sí, envíame la info» → el texto de la escuela + el pago aparte`, cv, it, async (c, r) => {
+            // Monster 2026-11-09 («más fácil y concreto, vender más rápido»): el «Sí» trae el texto de la escuela
+            // con [Separar mi cupo] [Ver detalles] [Hablar con alguien]; el pago sale APARTE al tocar «Separar mi cupo».
+            fase1.push(() => correrVenta(`[${it.name}] campaña: «Sí, envíame la info» → el texto de la escuela con [Separar mi cupo]; al tocarlo, el pago aparte`, cv, it, async (c, r) => {
                 const id = sembrarCampana(c, cv, it);
                 await tocarSiDeCampana(c, id);
                 const fam = paraLaFamilia(c.turnos.at(-1)!.salidas);
                 const textoEscuela = planoQa(cv.respuestaSi.get(it.id)).slice(0, 60);
                 debe(r, fam.some((s) => planoQa(s.texto).includes(textoEscuela)), 'no mandó el texto que la escuela aprobó para el «Sí»');
+                const separar = `vs:${it.id}:separar`;
+                // En simulación el cortafuegos no deja salir a Meta: el envío cae a texto y los botones quedan en
+                // `botones_intentados`. En producción salen como botones (`botones`).
+                debe(r, fam.some((s) => ([...((s.payload as any)?.botones ?? []), ...((s.payload as any)?.botones_intentados ?? [])])
+                    .some((b: any) => b?.id === separar)), 'el «Sí» no trajo el botón [Separar mi cupo]');
+                await c.decir('Separar mi cupo', separar);
                 revisarPagoAparte(c, r, cv, it, { hoy });
                 revisarTurnoVenta(c, r, cv, it);
                 base.campana = c;

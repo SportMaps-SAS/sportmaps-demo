@@ -135,7 +135,8 @@ async function enviarDirecto(a: {
             // `step` + `automatico`: no es una persona de la escuela (modo discreto).
             p_payload: {
                 ...(a.extra ?? {}), step: a.step, campana_id: a.campanaId, automatico: true,
-                ...(conBotones ? { botones: a.botones } : {}),
+                // Botones que no salieron (Meta los rechazó; o simulación): quedan a la vista para auditar.
+                ...(conBotones ? { botones: a.botones } : a.botones?.length ? { botones_intentados: a.botones } : {}),
             },
             p_ai_generated: false,
             p_to_wa_id: a.contactWaId,
