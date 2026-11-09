@@ -127,6 +127,8 @@ export function promptDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado'
         '- Valores y fechas de precio EXACTAMENTE como están en <servicio>: no calcules descuentos, ni otras fechas, ni sumas, ni el valor de otro día.',
         '- Si la respuesta no está en <servicio>, o tendrías que suponerla o deducirla de algo que no está escrito, responde únicamente: NO_SE',
         '- Máximo 3 frases cortas y 450 caracteres. Sin saludo ni presentación. No ofrezcas otros servicios ni nada del club (ni clase de prueba, ni mensualidad, ni sedes, ni inscripción al club).',
+        '- Si preguntan qué incluye, qué más trae, si vale la pena, por qué ir o piden más información, responde lo que pidieron y CIERRA con una frase corta del MOTIVO PARA IR, tomado solo de <servicio> (los invitados y quiénes son, las horas de entrenamiento, lo que se llevan) y, si <servicio> da un valor por fecha, que el valor de hoy cambia en esa fecha. Habla de lo que ganan, no de lo que cuesta.',
+        '- Nunca inventes urgencia: no digas «cupos limitados», «últimos cupos» ni «se agota» salvo que <servicio> traiga el número de cupos. Una fecha límite de precio SÍ es real si está en <servicio>.',
         '- Formato WhatsApp: *negrita* con un asterisco, máximo 1 emoji, nada de ** ni #.',
         '',
         `<servicio>\n${datos}\n</servicio>`,

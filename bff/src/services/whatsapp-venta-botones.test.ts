@@ -14,8 +14,8 @@ import { vi } from 'vitest';
 vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
-    atenderBotonDeVenta, atenderVentaDeServicio, botonesDeVenta, idBotonDeVenta, parsearBotonDeVenta,
-    BOTONES_DE_ENTRADA, MAX_CUERPO_CON_BOTONES, PASO_VENTA, TEXTO_A_LA_ESCUELA_REPETIDO, TEXTO_COMPROBANTE_YA_RECIBIDO,
+    accionesDeCierre, atenderBotonDeVenta, atenderVentaDeServicio, botonesDeVenta, idBotonDeVenta, parsearBotonDeVenta,
+    BOTONES_DE_ENTRADA, MAX_CUERPO_CON_BOTONES, PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_A_LA_ESCUELA_REPETIDO, TEXTO_COMPROBANTE_YA_RECIBIDO,
     TEXTO_HUMANO, TEXTO_TRAS_DETALLES, TEXTO_YA_PAGO, TITULO_BOTON_VENTA,
     type BotonDeVenta, type CtxVentaServicio,
 } from './whatsapp-venta-servicio';
@@ -39,7 +39,7 @@ const AHORA = new Date('2026-11-10T00:00:00Z');
 const hace = (min: number) => new Date(AHORA.getTime() - min * 60_000).toISOString();
 
 interface Enviado { texto: string; contexto: Record<string, unknown>; botones?: BotonDeVenta[] }
-function ctxDe(o: { recientes?: FilaReciente[]; afiliado?: boolean; cuentas?: CuentaDePagoEmbudo[]; enCola?: boolean; ahora?: Date } = {}) {
+function ctxDe(o: { recientes?: FilaReciente[]; afiliado?: boolean; cuentas?: CuentaDePagoEmbudo[]; enCola?: boolean; ahora?: Date; ia?: string } = {}) {
     const reg = { enviados: [] as Enviado[], avisos: [] as string[], esperados: [] as any[], leads: [] as any[] };
     const ctx: CtxVentaServicio = {
         schoolId: 'school-monster', conversationId: 'conv-1', recientes: o.recientes ?? [],
@@ -47,7 +47,7 @@ function ctxDe(o: { recientes?: FilaReciente[]; afiliado?: boolean; cuentas?: Cu
         cuentas: async () => o.cuentas ?? CUENTAS,
         guardarLead: async (s) => { reg.leads.push(s); return 'lead-1'; },
         registrarEsperado: async (e) => { reg.esperados.push(e); return true; },
-        responderPregunta: async () => ({ tipo: 'no_se', motivo: 'sin_dato' }),
+        responderPregunta: async () => (o.ia ? { tipo: 'respuesta', texto: o.ia } as any : { tipo: 'no_se', motivo: 'sin_dato' }),
         enviar: async (texto, contexto, botones) => { reg.enviados.push({ texto, contexto, ...(botones ? { botones } : {}) }); },
         avisarEscuela: async (d) => { reg.avisos.push(d); },
         comprobanteEnCurso: async () => o.enCola ?? false,
@@ -170,5 +170,45 @@ describe('saludo dentro de la venta', () => {
         const venta: VentaActiva = { item: CLINICA, origen: 'marca', desde: hace(60) };
         expect(await atenderVentaDeServicio(ctx, venta, 'Hola')).toBe('venta_saludo');
         expect(titulos(reg.enviados[0])).toEqual(['Separar mi cupo', 'Ver detalles', 'Hablar con alguien']);
+    });
+});
+
+describe('botones al cierre de cada respuesta de la venta (Monster 2026-11-09: «debemos vender más»)', () => {
+    const VENTA: VentaActiva = { item: CLINICA, origen: 'marca', desde: hace(60) };
+    const pagoEnviado = { direction: 'outbound', type: 'text', text_body: 'pago', created_at: hace(20), wa_timestamp: hace(20),
+        payload: { step: PASO_VENTA.PAGO, [MARCA_VENTA]: ID } } as FilaReciente;
+    const foto = { direction: 'inbound', type: 'image', text_body: null, created_at: hace(5), wa_timestamp: hace(5) } as FilaReciente;
+
+    it('accionesDeCierre: sin pago → separar; con datos de pago → ya pagué; con comprobante → ninguno', () => {
+        expect(accionesDeCierre([], AHORA.getTime())).toEqual(['separar', 'humano']);
+        expect(accionesDeCierre([pagoEnviado], AHORA.getTime())).toEqual(['ya_pague', 'humano']);
+        expect(accionesDeCierre([pagoEnviado, foto], AHORA.getTime())).toBeNull();
+    });
+    it('la respuesta de la IA a «¿qué incluye?» sale con [Separar mi cupo] [Hablar con alguien]', async () => {
+        const { ctx, reg } = ctxDe({ ia: 'Incluye camiseta oficial y foto con los ponentes.' });
+        expect(await atenderVentaDeServicio(ctx, VENTA, '¿qué incluye?')).toBe('venta_respuesta');
+        expect(reg.enviados[0].botones?.map((b) => b.title)).toEqual(['Separar mi cupo', 'Hablar con alguien']);
+    });
+    it('con los datos de pago ya enviados, la respuesta cierra con [Ya pagué]', async () => {
+        const { ctx, reg } = ctxDe({ ia: 'Sí hay cupos disponibles.', recientes: [pagoEnviado] });
+        await atenderVentaDeServicio(ctx, VENTA, '¿quedan cupos?');
+        expect(reg.enviados[0].botones?.map((b) => b.title)).toEqual(['Ya pagué', 'Hablar con alguien']);
+    });
+    it('ya mandó el comprobante: la respuesta sale SIN botones (no se le vende lo que ya compró)', async () => {
+        const { ctx, reg } = ctxDe({ ia: 'Es el sábado 21 y domingo 22.', recientes: [pagoEnviado, foto] });
+        await atenderVentaDeServicio(ctx, VENTA, '¿qué días es?');
+        expect(reg.enviados[0].botones).toBeUndefined();
+    });
+    it('«eso te lo confirma la escuela» lleva [Separar mi cupo] la primera vez y nada la segunda (30 min)', async () => {
+        const primera = ctxDe();
+        await atenderVentaDeServicio(primera.ctx, VENTA, '¿hay parqueadero cerca?');
+        expect(primera.reg.enviados[0].texto).toBe(TEXTO_A_LA_ESCUELA);
+        expect(primera.reg.enviados[0].botones?.map((b) => b.title)).toEqual(['Separar mi cupo', 'Hablar con alguien']);
+        const previa = { direction: 'outbound', type: 'text', text_body: TEXTO_A_LA_ESCUELA, created_at: hace(5), wa_timestamp: hace(5),
+            payload: { step: PASO_VENTA.A_LA_ESCUELA, [MARCA_VENTA]: ID } } as FilaReciente;
+        const segunda = ctxDe({ recientes: [previa] });
+        await atenderVentaDeServicio(segunda.ctx, VENTA, '¿y hay baños?');
+        expect(segunda.reg.enviados[0].texto).toBe(TEXTO_A_LA_ESCUELA_REPETIDO);
+        expect(segunda.reg.enviados[0].botones).toBeUndefined();
     });
 });

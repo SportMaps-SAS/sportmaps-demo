@@ -2584,8 +2584,8 @@ function ctxAnuncio(
         },
         // Mismo step que la primera respuesta al prospecto: cuenta para el freno de 30 días y
         // lo que escriba después lo atiende el seguimiento del interesado (nunca silencio).
-        enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto,
-            { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'anuncio', ...contexto }),
+        enviar: (texto, contexto, botones) => deliver(integration, conversationId, contactWaId, texto,
+            { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'anuncio', ...contexto }, botones?.length ? { botones } : undefined),
         avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle }),
         iniciarEmbudo: async () => iniciarEmbudoEnBot(integration, conversationId, contactWaId,
             { saludo: await saludo(), step: PASO_DESCONOCIDO_ESCOLAR }),
@@ -3759,7 +3759,7 @@ export type ResultadoDesconocido =
     | 'externo' | 'horarios_de_hoy' | 'disputa_de_pago'
     | 'pregunta_de_comprobante'
     | 'llegada_clase'
-    | 'consentimiento_sin_cuenta'
+    | 'consentimiento_sin_cuenta' | 'avisos_reactivados'
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
     | 'embudo' | 'embudo_acuse'
@@ -3880,6 +3880,13 @@ async function atenderDesconocidoEnEscuela(
     if (!text && !botonId) return 'silencio';
     // Los ajustes de la escuela, una vez (modo discreto por escuela y embudo).
     await ajustesDeLaEscuela(integration.school_id);
+
+    // 0-bis. «ACTIVAR» de quien se dio de baja: la confirmación de la baja se lo ofrece («si cambias de opinión,
+    //        escríbenos ACTIVAR»). Para un número sin ficha lo atrapaba la venta («eso te lo confirma la escuela») y
+    //        nunca se reactivaba (Monster 2026-11-09, campaña de la clínica: «*ACTIVAR*» → pendiente falso en el buzón).
+    if (!botonId && text && REACTIVAR.has(normalizar(text)) && await reactivarAvisosDelDesconocido(integration, conversationId, contactWaId)) {
+        return 'avisos_reactivados';
+    }
 
     // 0a. Contesta «¿De qué deportista es este pago?» (o «¿a cuál cobro?») de un
     //     comprobante que mandó desde este número sin ficha. También [Sí, está
@@ -5303,6 +5310,31 @@ export async function ofrecerConsentimientoSiFalta(
 export function botHabloHacePoco(recientes: FilaReciente[], ms: number, ahora = Date.now()): boolean {
     return recientes.some((f) => f.direction === 'outbound' && f.ai_generated !== false
         && new Date(f.created_at || f.wa_timestamp || 0).getTime() >= ahora - ms);
+}
+
+/**
+ * Un número SIN ficha que se dio de baja y escribe ACTIVAR: se le reactivan los avisos y se le confirma.
+ * false = no estaba de baja (el mensaje sigue su camino). La prueba del consentimiento (`source_ref`) es su
+ * último mensaje entrante. Nunca lanza.
+ */
+async function reactivarAvisosDelDesconocido(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+): Promise<boolean> {
+    try {
+        const { data: optin } = await supabase.from('whatsapp_optins').select('opted_out_at')
+            .eq('integration_id', integration.id).eq('contact_wa_id', contactWaId).maybeSingle();
+        if (!(optin as any)?.opted_out_at) return false;
+        const { data: ultimo } = await supabase.from('whatsapp_messages').select('wa_message_id')
+            .eq('conversation_id', conversationId).eq('direction', 'inbound')
+            .order('created_at', { ascending: false }).limit(1).maybeSingle();
+        await registrarOptIn(integration, contactWaId, null, String((ultimo as any)?.wa_message_id ?? `reactivar-${crypto.randomUUID()}`));
+        await deliver(integration, conversationId, contactWaId,
+            '✅ Listo, reactivé los mensajes de la escuela por WhatsApp. (Si algún día no quieres recibirlos, me escribes *BAJA*.)',
+            { step: 'opt_in_reactivado' });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 async function registrarOptIn(

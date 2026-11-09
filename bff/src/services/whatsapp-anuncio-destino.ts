@@ -47,7 +47,7 @@ import {
 } from './wa-cobro-desde-comprobante.service';
 // Ciclo a propósito (venta-servicio usa el precio de acá): solo se usan dentro de funciones.
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
-import { PASO_VENTA, pideDatosDePago, textoDePagoDeServicio } from './whatsapp-venta-servicio';
+import { PASO_VENTA, botonesDeVenta, pideDatosDePago, textoDePagoDeServicio, type BotonDeVenta } from './whatsapp-venta-servicio';
 
 // ─── El anuncio (referral de Meta) ──────────────────────────────────────────
 
@@ -657,8 +657,8 @@ export interface CtxAnuncio {
     guardarLead: (l: LeadDeAnuncio) => Promise<string | null>;
     /** B4: el motivo del próximo comprobante (sin monto = cualquier precio vigente de ese servicio). */
     registrarEsperado: (e: { motivo: Motivo; leadId: string | null }) => Promise<boolean>;
-    /** UN mensaje; `contexto` va al payload del saliente. */
-    enviar: (texto: string, contexto: Record<string, unknown>) => Promise<void>;
+    /** UN mensaje; `contexto` va al payload del saliente. Con `botones`, botones de respuesta (si no salen, el texto solo). */
+    enviar: (texto: string, contexto: Record<string, unknown>, botones?: BotonDeVenta[]) => Promise<void>;
     /** Buzón con aviso a la escuela. */
     avisarEscuela: (detalle: string) => Promise<void>;
     /** El embudo de la clase de prueba (false = la escuela no lo tiene). */
@@ -809,7 +809,7 @@ export async function atenderDestinoDeAnuncio(
             ...(precio.abono !== null ? { abono: precio.abono } : {}),
             ...(precio.deAfiliado ? { afiliado: true } : {}),
             ...(cuentas.length ? {} : { sin_cuentas: true }),
-        });
+        }, cuentas.length ? botonesDeVenta(item, ['ya_pague']) : undefined);
     }
     if (!cuentas.length) {
         await ctx.avisarEscuela(detalleParaLaEscuela(referral, msg,
@@ -818,9 +818,15 @@ export async function atenderDestinoDeAnuncio(
     // El formulario va DESPUÉS de la ficha (y del pago, si lo pidió): si no abre o lo
     // cierran, la ficha ya dice el valor y cómo seguir (nunca un callejón). Solo un
     // precio (sin opciones).
+    let formularioSalio = false;
     if (ctx.ofrecerFormulario && !precio.opciones.length && precio.hoy !== null) {
-        await ctx.ofrecerFormulario({ item, sinCuentas: !cuentas.length, leadId, datosDePagoEnviados: pidePago && cuentas.length > 0 })
+        formularioSalio = await ctx.ofrecerFormulario({ item, sinCuentas: !cuentas.length, leadId, datosDePagoEnviados: pidePago && cuentas.length > 0 })
             .catch(() => false);
+    }
+    // Sin pago pedido ni formulario: la ficha cierra con [Separar mi cupo] [Hablar con alguien] (Monster 2026-11-09).
+    if (!pidePago && !formularioSalio && cuentas.length) {
+        await ctx.enviar('¿Qué quieres hacer? 👇', { [MARCA_VENTA]: item.id, step: PASO_VENTA.DETALLES, repetible: true },
+            botonesDeVenta(item, ['separar', 'humano']));
     }
     return 'anuncio_servicio';
 }
