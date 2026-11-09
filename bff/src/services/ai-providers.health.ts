@@ -17,9 +17,16 @@
  * El sondeo NO gasta tokens. Pregunta por el metadato del modelo
  * (`GET .../models/<id>`), que valida la llave Y la existencia del modelo en una
  * sola llamada gratis. Es exactamente lo que habría atrapado las dos fallas.
+ *
+ *  3. (2026-11-09) La doble lectura de la aprobación automática tenía UN solo
+ *     proveedor: nunca había lectura B y no se aprobaba ningún comprobante, sin
+ *     un solo error en el log. Ahora es una advertencia (`dobleLectura`).
  */
 
-export type ProviderName = 'gemini' | 'openai' | 'groq' | 'deepseek';
+import Anthropic from '@anthropic-ai/sdk';
+import { listConfiguredProviders, modeloClaudeOcr } from './ocr.service';
+
+export type ProviderName = 'gemini' | 'openai' | 'groq' | 'deepseek' | 'claude';
 export type ProviderRole = 'ocr' | 'llm';
 
 export interface ProviderCheck {
@@ -47,6 +54,11 @@ export interface ProviderCheck {
 export interface AiHealthReport {
     /** Valor crudo de las variables que eligen proveedor. Nunca una llave. */
     config: { OCR_PROVIDER: string; WHATSAPP_LLM_PROVIDER: string; GROQ_OCR_MODEL: string | null };
+    /**
+     * Proveedores de la doble lectura de la aprobación automática, en orden
+     * (`listConfiguredProviders`). Con menos de dos no se aprueba nada solo.
+     */
+    dobleLectura: string[];
     checks: ProviderCheck[];
     warnings: string[];
 }
@@ -56,6 +68,7 @@ const KEY_ENV: Record<ProviderName, string> = {
     openai: 'OPENAI_API_KEY',
     groq: 'GROQ_API_KEY',
     deepseek: 'DEEPSEEK_API_KEY',
+    claude: 'ANTHROPIC_API_KEY',
 };
 
 /** Modelos por rol. Deben espejar `ocr.service.ts` y `llm.service.ts`. */
@@ -65,6 +78,7 @@ function modelFor(role: ProviderRole, provider: ProviderName): string {
             case 'gemini': return process.env.GEMINI_MODEL || 'gemini-flash-latest';
             case 'openai': return 'gpt-4o-mini';
             case 'groq': return process.env.GROQ_OCR_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct';
+            case 'claude': return modeloClaudeOcr();
             default: return '(no aplica)';
         }
     }
@@ -84,9 +98,13 @@ function chain(role: ProviderRole): ProviderName[] {
     //
     // En OCR, groq solo entra si `GROQ_OCR_MODEL` está definida — el mismo
     // interruptor que usa `groqPuedeVer()`, porque la cuenta no tiene modelos de
-    // visión.
+    // visión. Claude, solo con `ANTHROPIC_API_KEY`, igual que en `extractReceipt()`.
     const fallback: ProviderName[] = role === 'ocr'
-        ? (process.env.GROQ_OCR_MODEL ? ['gemini', 'openai', 'groq'] : ['gemini', 'openai'])
+        ? [
+            'gemini', 'openai',
+            ...(process.env.ANTHROPIC_API_KEY ? ['claude' as const] : []),
+            ...(process.env.GROQ_OCR_MODEL ? ['groq' as const] : []),
+        ]
         : ['gemini', 'groq', 'deepseek'];
 
     const crudo = (role === 'ocr' ? process.env.OCR_PROVIDER : process.env.WHATSAPP_LLM_PROVIDER)?.toLowerCase();
@@ -137,6 +155,13 @@ export function describeAiProviders(): AiHealthReport {
     if (!checks.some((c) => c.role === 'ocr' && c.keyPresent)) {
         warnings.push('Ningun proveedor de OCR tiene llave: todo comprobante quedara sin veredicto.');
     }
+    const dobleLectura = listConfiguredProviders();
+    if (dobleLectura.length < 2) {
+        warnings.push(
+            `La aprobacion automatica no puede aprobar: la doble lectura tiene ${dobleLectura.length} proveedor(es)` +
+            ` (${dobleLectura.join(', ') || 'ninguno'}) y exige dos distintos. Configurar ANTHROPIC_API_KEY u OPENAI_API_KEY.`,
+        );
+    }
 
     return {
         config: {
@@ -144,13 +169,14 @@ export function describeAiProviders(): AiHealthReport {
             WHATSAPP_LLM_PROVIDER: process.env.WHATSAPP_LLM_PROVIDER || '(sin definir, cae en gemini)',
             GROQ_OCR_MODEL: process.env.GROQ_OCR_MODEL || null,
         },
+        dobleLectura,
         checks,
         warnings,
     };
 }
 
 /** URL de metadato del modelo. Gratis: no genera tokens. */
-function probeUrl(provider: ProviderName, model: string): { url: string; headers: Record<string, string> } | null {
+function probeUrl(provider: Exclude<ProviderName, 'claude'>, model: string): { url: string; headers: Record<string, string> } | null {
     const key = process.env[KEY_ENV[provider]];
     if (!key) return null;
     switch (provider) {
@@ -171,6 +197,26 @@ function probeUrl(provider: ProviderName, model: string): { url: string; headers
 }
 
 /**
+ * Estado HTTP del metadato del modelo. Claude va por el SDK oficial
+ * (`models.retrieve`, también gratis); los demás, por `fetch` a `probeUrl`.
+ */
+async function sondear(provider: ProviderName, model: string, timeoutMs: number): Promise<number> {
+    if (provider === 'claude') {
+        try {
+            await new Anthropic({ maxRetries: 0, timeout: timeoutMs }).models.retrieve(model);
+            return 200;
+        } catch (err) {
+            if (err instanceof Anthropic.APIError && typeof err.status === 'number') return err.status;
+            throw err;
+        }
+    }
+    const probe = probeUrl(provider, model);
+    if (!probe) throw new Error('sin llave');
+    const res = await fetch(probe.url, { headers: probe.headers, signal: AbortSignal.timeout(timeoutMs) });
+    return res.status;
+}
+
+/**
  * Sondea cada proveedor con llave. Resuelve siempre: un proveedor caído no puede
  * tumbar el arranque del BFF ni la respuesta del endpoint.
  */
@@ -179,28 +225,25 @@ export async function probeAiProviders(timeoutMs = 8000): Promise<AiHealthReport
 
     await Promise.all(
         report.checks.map(async (c) => {
-            const probe = probeUrl(c.provider, c.model);
-            if (!probe) { c.detail = 'sin llave, no se sondeo'; return; }
+            if (!process.env[c.keyEnv]) { c.detail = 'sin llave, no se sondeo'; return; }
             try {
-                const res = await fetch(probe.url, {
-                    headers: probe.headers,
-                    signal: AbortSignal.timeout(timeoutMs),
-                });
-                c.reachable = res.ok;
-                if (!res.ok) {
+                const status = await sondear(c.provider, c.model, timeoutMs);
+                c.reachable = status >= 200 && status < 300;
+                if (!c.reachable) {
                     // 404 = el modelo no existe para esa cuenta (el caso Groq).
-                    // 400/403 = llave de otro proyecto o sin permiso (el caso Gemini).
-                    c.detail = `HTTP ${res.status}`;
+                    // 400/401/403 = llave de otro proyecto o sin permiso (el caso Gemini).
+                    c.detail = `HTTP ${status}`;
                     report.warnings.push(
-                        `${c.role.toUpperCase()} ${c.provider} (${c.model}): HTTP ${res.status}.` +
-                        (res.status === 404 ? ' El modelo no existe para esa llave.' : '') +
-                        (res.status === 400 || res.status === 403 ? ' Llave invalida o de otro proyecto.' : ''),
+                        `${c.role.toUpperCase()} ${c.provider} (${c.model}): HTTP ${status}.` +
+                        (status === 404 ? ' El modelo no existe para esa llave.' : '') +
+                        ([400, 401, 403].includes(status) ? ' Llave invalida o de otro proyecto.' : ''),
                     );
                 }
             } catch (err: unknown) {
                 const e = err as { name?: string; message?: string };
                 c.reachable = false;
-                c.detail = e?.name === 'TimeoutError' ? 'timeout' : String(e?.message ?? err);
+                // `TimeoutError` de AbortSignal; `APIConnectionTimeoutError` del SDK de Anthropic.
+                c.detail = /Timeout/.test(e?.name ?? '') ? 'timeout' : String(e?.message ?? err);
                 report.warnings.push(`${c.role.toUpperCase()} ${c.provider}: ${c.detail}`);
             }
         }),
