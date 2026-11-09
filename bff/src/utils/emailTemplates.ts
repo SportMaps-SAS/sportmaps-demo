@@ -921,6 +921,79 @@ export const BrandedEmailTemplates = {
             }),
         };
     },
+
+    /**
+     * Resumen de «Pagos por validar» para el dueño y los admins de la escuela
+     * (jobs/pagos-por-validar.job). Va DE SportMaps A la escuela, así que usa
+     * la marca de SportMaps (sin schoolId), no la de la escuela. Los textos ya
+     * vienen armados por el job; acá solo se escapan y se maquetan.
+     */
+    pagosPorValidar: async (params: {
+        escuela: string;
+        asunto: string;
+        titulo: string;
+        total: number;
+        /** Ya formateado («$4.547.500»). */
+        monto: string;
+        lineaVerdes: string | null;
+        lineaEspera: string;
+        /** «4 nov, 8:08 a. m.» (hora de Colombia), o vacío. */
+        masAntiguoFecha: string;
+        linea48: string | null;
+        desglose: { etiqueta: string; cantidad: number; monto: string }[];
+        url: string;
+    }): Promise<{ subject: string; html: string }> => {
+        const branding = await resolveSchoolBranding(null); // marca SportMaps
+        const escuela = escapeHtml(params.escuela);
+        const filas = params.desglose.map((l) => `
+                        <tr>
+                            <td style="padding: 8px 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(l.etiqueta)}</td>
+                            <td style="padding: 8px 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${l.cantidad}</td>
+                            <td style="padding: 8px 10px; border-bottom: 1px solid #e5e7eb; text-align: right; white-space: nowrap;">${escapeHtml(l.monto)}</td>
+                        </tr>`).join('');
+        const espera = params.masAntiguoFecha
+            ? `${escapeHtml(params.lineaEspera.replace(/\.$/, ''))} (entró el ${escapeHtml(params.masAntiguoFecha)}).`
+            : escapeHtml(params.lineaEspera);
+
+        return {
+            subject: params.asunto,
+            html: buildBrandedEmail({
+                branding,
+                title: params.titulo,
+                greeting: `Hola, equipo de ${params.escuela}:`,
+                bodyHtml: `
+                    <table cellpadding="0" cellspacing="0" border="0" width="100%"
+                           style="background-color: #f3f4f6; border-radius: 8px; margin: 4px 0 18px 0;">
+                        <tr>
+                            <td style="padding: 16px; text-align: center; width: 50%;">
+                                <div style="font-size: 28px; font-weight: 700; color: #111827;">${params.total}</div>
+                                <div style="font-size: 13px; color: #6b7280;">${params.total === 1 ? 'pago por validar' : 'pagos por validar'}</div>
+                            </td>
+                            <td style="padding: 16px; text-align: center; width: 50%;">
+                                <div style="font-size: 28px; font-weight: 700; color: #111827;">${escapeHtml(params.monto)}</div>
+                                <div style="font-size: 13px; color: #6b7280;">por confirmar</div>
+                            </td>
+                        </tr>
+                    </table>
+                    ${params.lineaVerdes ? `<p style="margin: 0 0 10px 0; padding: 10px 12px; background-color: #ecfdf5; border-left: 3px solid #059669; border-radius: 6px;"><span style="color: #047857;">${escapeHtml(params.lineaVerdes)}</span></p>` : ''}
+                    <p style="margin: 0 0 10px 0;">${espera}</p>
+                    ${params.linea48 ? `<p style="margin: 0 0 10px 0; padding: 10px 12px; background-color: #fffbeb; border-left: 3px solid #d97706; border-radius: 6px;">${escapeHtml(params.linea48)}</p>` : ''}
+                    ${filas ? `
+                    <p style="margin: 18px 0 6px 0; font-weight: 600; color: #111827;">Por tipo de cobro</p>
+                    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse: collapse; font-size: 14px;">
+                        <tr style="color: #6b7280;">
+                            <td style="padding: 6px 10px; border-bottom: 2px solid #e5e7eb;">Tipo</td>
+                            <td style="padding: 6px 10px; border-bottom: 2px solid #e5e7eb; text-align: center;">Cantidad</td>
+                            <td style="padding: 6px 10px; border-bottom: 2px solid #e5e7eb; text-align: right;">Valor</td>
+                        </tr>${filas}
+                    </table>` : ''}
+                `,
+                cta: { label: 'Revisar pagos por validar', url: params.url },
+                closingHtml: `Recibes este resumen porque eres dueño o administrador de <strong>${escuela}</strong> en SportMaps.
+                    Llega a las 7:30 a. m. solo los días con pagos esperando, y a las 5:00 p. m. si alguno lleva más de 48 horas.`,
+            }),
+        };
+    },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

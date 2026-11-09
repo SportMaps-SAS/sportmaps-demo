@@ -32,6 +32,23 @@
  *     MAX_INTENTOS; después, «aviso_no_entregado».
  * El estado va como sufijo de `error_message` (« | aviso_…»): las filas
  * `done` no lo usan y las de la recuperación conservan su texto.
+ *
+ * Huecos cerrados el 2026-11-08 (aprobación automática de Monster y los 19
+ * comprobantes aprobados a mano tras la auditoría):
+ *   - ABONO: un cobro que queda `partial` se avisa (monto abonado + saldo). La
+ *     fila NO se cierra: cuando el cobro termine de pagarse se avisa el pago.
+ *     Idempotencia por el `amount_paid` avisado (marca `aviso_abono:<monto>`).
+ *   - MONTO: se confirma lo que la familia PAGÓ (este comprobante, o
+ *     amount_paid menos lo ya avisado), no `amount`. Con pronto pago la familia
+ *     pagó $137.750 de un cobro de $145.000 y se le confirmaban $145.000.
+ *   - RECHAZO: se dice el monto del COMPROBANTE (`ocr_amount`), o ninguno. Caso
+ *     real: «tu comprobante de $155.000» cuando el comprobante era de $117.750.
+ *   - OTRO CONCEPTO: torneo, clínica o vacacional vendidos a un prospecto (sin
+ *     ficha) no tenían nombre de deportista y la plantilla salía con
+ *     `dato_faltante`; ahora el nombre sale del prospecto o del titular.
+ *   - SIN OPT-IN: si la plantilla no sale por falta de consentimiento, el pago
+ *     o el abono se confirman por correo (`payment_confirmation` de send-email)
+ *     al acudiente. 11 de 12 familias de Monster no tenían opt-in.
  */
 
 import crypto from 'node:crypto';
@@ -44,11 +61,13 @@ import { conversacionTomada } from '../services/whatsapp-tomada.service';
 import { modoDiscreto, escuelaActiva } from '../services/whatsapp-modo-discreto';
 import { modoDiscretoEfectivo } from '../services/whatsapp-ajustes-escuela.service';
 import {
-    enviarCobroPorPlantilla, ventanaAbierta, esErrorDeVentana, type ConceptoCobro,
+    enviarCobroPorPlantilla, ventanaAbierta, esErrorDeVentana, type ConceptoCobro, type DatosCobro,
 } from '../services/whatsapp-plantillas.service';
 import { emitirTokenCobro } from '../services/cobro-enlace-publico.service';
 import { conceptoDelCobro } from '../services/whatsapp-otro-concepto.service';
 import { esPagoUnico, type CobroClasificable } from '../services/tipo-de-cobro';
+import { enviarConReserva } from '../services/avisos-correo.service';
+import { saldoPorCobrar } from '../utils/saldo-cobro';
 import type { Logger } from 'pino';
 
 const LOTE = 100;
@@ -59,6 +78,12 @@ export const MAX_INTENTOS = 3;
 export const ESPERA_MIN = [5, 20, 60];
 /** Hasta cuántos días atrás se buscan textos rechazados por ventana. */
 const DIAS_BARRIDO = 7;
+/**
+ * Un abono se avisa solo si la escuela lo aprobó hace menos de esto. Sin el
+ * tope, al desplegar saldrían de golpe los abonos de semanas atrás (filas que
+ * seguían abiertas porque `partial` no era desenlace).
+ */
+export const VENTANA_ABONO_MS = 72 * 3600_000;
 
 const cop = (n: number) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n);
@@ -69,7 +94,7 @@ const RESUELTOS = ['paid', 'rejected', 'glosado'];
 /** Estados en que queda un cobro cuyo comprobante se rechazó (la deuda sigue). */
 const VIVOS_TRAS_RECHAZO = ['pending', 'overdue', 'partial'];
 
-export type Desenlace = 'paid' | 'rejected' | 'glosado';
+export type Desenlace = 'paid' | 'rejected' | 'glosado' | 'partial';
 
 /**
  * Qué hay que contarle al acudiente sobre el comprobante de ESTA fila, o null si
@@ -80,19 +105,36 @@ export type Desenlace = 'paid' | 'rejected' | 'glosado';
  * estampa `receipt_rejected_at`. El rechazo se reconoce por esa marca, y solo si
  * es POSTERIOR a la llegada de la fila: un rechazo viejo no es el desenlace de
  * un comprobante nuevo. 'rejected' sigue valiendo para los rechazos de antes.
+ *
+ * ABONO (2026-11-08): un cobro `partial` con plata acreditada es desenlace si la
+ * escuela lo aprobó DESPUÉS de que llegó la fila (si no, el abono es de otra
+ * plata, p. ej. efectivo de antes) y hace menos de VENTANA_ABONO_MS.
  */
 export function desenlaceDelPago(
-    pago: { status: string; receipt_rejected_at?: string | null },
+    pago: {
+        status: string;
+        receipt_rejected_at?: string | null;
+        amount_paid?: number | string | null;
+        approved_at?: string | null;
+    },
     filaCreadaEn: string | null | undefined,
+    ahora: number = Date.now(),
 ): Desenlace | null {
     if (RESUELTOS.includes(pago.status)) return pago.status as Desenlace;
-    if (!VIVOS_TRAS_RECHAZO.includes(pago.status) || !pago.receipt_rejected_at) return null;
-    const rechazo = Date.parse(pago.receipt_rejected_at);
+    if (!VIVOS_TRAS_RECHAZO.includes(pago.status)) return null;
     const llegada = Date.parse(String(filaCreadaEn ?? ''));
-    // Sin fecha de la fila no se puede afirmar que el rechazo sea de este
-    // comprobante: mejor callar que contar un rechazo ajeno.
-    if (!Number.isFinite(rechazo) || !Number.isFinite(llegada)) return null;
-    return rechazo >= llegada ? 'rejected' : null;
+    // Sin fecha de la fila no se puede afirmar que el rechazo (o el abono) sea
+    // de este comprobante: mejor callar que contar algo ajeno.
+    if (!Number.isFinite(llegada)) return null;
+    if (pago.receipt_rejected_at) {
+        const rechazo = Date.parse(pago.receipt_rejected_at);
+        if (Number.isFinite(rechazo) && rechazo >= llegada) return 'rejected';
+    }
+    if (pago.status === 'partial' && (Number(pago.amount_paid) || 0) > 0) {
+        const aprobado = Date.parse(String(pago.approved_at ?? ''));
+        if (Number.isFinite(aprobado) && aprobado >= llegada && ahora - aprobado <= VENTANA_ABONO_MS) return 'partial';
+    }
+    return null;
 }
 
 // ─── Estado del aviso (puro) ────────────────────────────────────────────────
@@ -104,7 +146,14 @@ export type EstadoAviso =
     | { tipo: 'reintento'; intentos: number; proximo: number }
     | { tipo: 'en_curso' }
     | { tipo: 'por_plantilla'; plantilla: string }
-    | { tipo: 'no_entregado'; motivo: string };
+    /** La plantilla no salió (sin opt-in) y se confirmó por correo. */
+    | { tipo: 'por_correo'; detalle: string }
+    | { tipo: 'no_entregado'; motivo: string }
+    /**
+     * Abono avisado: `pagado` es el amount_paid del cobro que ya se contó (la
+     * fila sigue abierta hasta el pago completo). `detalle`: por dónde salió.
+     */
+    | { tipo: 'abono'; pagado: number; detalle: string };
 
 /** Separa lo que ya tenía `error_message` del estado del aviso. */
 export function separarAviso(em: string | null | undefined): { base: string | null; aviso: EstadoAviso } {
@@ -122,7 +171,11 @@ export function separarAviso(em: string | null | undefined): { base: string | nu
     }
     if (marca.startsWith('aviso_en_curso')) return { base: baseFinal, aviso: { tipo: 'en_curso' } };
     if ((m = marca.match(/^aviso_por_plantilla:(.*)$/))) return { base: baseFinal, aviso: { tipo: 'por_plantilla', plantilla: m[1] } };
+    if ((m = marca.match(/^aviso_por_correo:\s*(.*)$/))) return { base: baseFinal, aviso: { tipo: 'por_correo', detalle: m[1] } };
     if ((m = marca.match(/^aviso_no_entregado:\s*(.*)$/))) return { base: baseFinal, aviso: { tipo: 'no_entregado', motivo: m[1] } };
+    if ((m = marca.match(/^aviso_abono:(\d+)(?::(.*))?$/))) {
+        return { base: baseFinal, aviso: { tipo: 'abono', pagado: Number(m[1]), detalle: m[2] ?? '' } };
+    }
     return { base: em ?? null, aviso: { tipo: 'nuevo' } };
 }
 
@@ -133,7 +186,9 @@ export function conAviso(base: string | null, aviso: EstadoAviso): string | null
         case 'reintento': marca = `aviso_reintento:${aviso.intentos}:${new Date(aviso.proximo).toISOString()}`; break;
         case 'en_curso': marca = 'aviso_en_curso'; break;
         case 'por_plantilla': marca = `aviso_por_plantilla:${aviso.plantilla}`; break;
+        case 'por_correo': marca = `aviso_por_correo: ${aviso.detalle}`; break;
         case 'no_entregado': marca = `aviso_no_entregado: ${aviso.motivo}`; break;
+        case 'abono': marca = `aviso_abono:${Math.round(aviso.pagado)}${aviso.detalle ? `:${aviso.detalle}` : ''}`; break;
     }
     if (!marca) return base;
     return (base ? `${base}${SEPARADOR}${marca}` : marca).slice(-500);
@@ -146,6 +201,126 @@ export function siguienteTrasFallo(intentos: number, motivo: string, ahora: numb
     return { tipo: 'reintento', intentos, proximo: ahora + espera * 60_000 };
 }
 
+/** Cómo queda anotado un abono según por dónde salió (o por qué no). Pura. */
+export function detalleDeAbono(final: EstadoAviso): string {
+    switch (final.tipo) {
+        case 'nuevo': return 'texto';
+        case 'por_plantilla': return `plantilla ${final.plantilla}`;
+        case 'por_correo': return `correo (${final.detalle})`;
+        case 'no_entregado': return `no_entregado: ${final.motivo}`.slice(0, 200);
+        case 'reintento': return 'no_entregado: fallo transitorio';
+        default: return '';
+    }
+}
+
+/** El mayor amount_paid ya avisado como abono, por cobro, entre las filas del lote. Pura. */
+export function abonosAvisadosDelLote(
+    filas: readonly { result_ref_id?: string | null; error_message?: string | null }[],
+): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const f of filas) {
+        if (!f.result_ref_id) continue;
+        const { aviso } = separarAviso(f.error_message);
+        if (aviso.tipo === 'abono') out.set(f.result_ref_id, Math.max(out.get(f.result_ref_id) ?? 0, aviso.pagado));
+    }
+    return out;
+}
+
+/** ¿Hay plata acreditada que todavía no se le contó a la familia? Pura. */
+export function hayAbonoNuevo(pago: { amount_paid?: number | string | null }, avisado: number): boolean {
+    return Math.round(Number(pago.amount_paid) || 0) > Math.round(avisado || 0);
+}
+
+// ─── Montos (puro) ──────────────────────────────────────────────────────────
+
+export interface MontosDelAviso {
+    /** Lo que la familia pagó en ESTE desenlace (pago o abono). */
+    pagado: number;
+    /** Lo que dice el comprobante (para el rechazo y la glosa), o null si no se leyó. */
+    comprobante: number | null;
+    /** Lo que queda por pagar del cobro (0 si quedó pagado). */
+    saldo: number;
+    /** amount_paid del cobro después del desenlace (idempotencia del abono). */
+    pagadoTotal: number;
+}
+
+const num = (v: unknown): number => {
+    const x = Number(v ?? 0);
+    return Number.isFinite(x) ? x : 0;
+};
+
+/**
+ * Los montos que se le dicen a la familia. Pura.
+ *
+ *   pagadoTotal = amount_paid; en un cobro pagado sin amount_paid (el webhook de
+ *                 Wompi no lo escribe en un pago exacto), amount − pronto pago.
+ *   pagado      = el valor que la escuela confirmó en ESTA aprobación
+ *                 (receipt_amount_confirmed, misma marca de tiempo que
+ *                 approved_at), si no lo que dice el comprobante (ocr_amount, si
+ *                 no supera lo acreditado), si no lo acreditado menos lo ya
+ *                 avisado como abono.
+ */
+export function montosDelAviso(
+    pago: {
+        status: string;
+        amount: number | string | null;
+        amount_paid?: number | string | null;
+        early_payment_discount_applied?: number | string | null;
+        ocr_amount?: number | string | null;
+        approved_at?: string | null;
+        receipt_amount_confirmed?: number | string | null;
+        receipt_amount_confirmed_at?: string | null;
+    },
+    o: { abonoAvisado?: number; esComprobante: boolean },
+): MontosDelAviso {
+    const debido = Math.max(num(pago.amount) - Math.max(num(pago.early_payment_discount_applied), 0), 0);
+    const acreditado = Math.max(num(pago.amount_paid), 0);
+    const pagadoTotal = pago.status === 'paid' && acreditado <= 0 ? debido : acreditado;
+    const previo = Math.max(num(o.abonoAvisado), 0);
+    const delta = previo > 0 && previo < pagadoTotal ? pagadoTotal - previo : pagadoTotal;
+
+    const ocr = o.esComprobante && num(pago.ocr_amount) > 0 ? num(pago.ocr_amount) : null;
+    const confirmadoEn = Date.parse(String(pago.receipt_amount_confirmed_at ?? ''));
+    const aprobadoEn = Date.parse(String(pago.approved_at ?? ''));
+    const confirmado = o.esComprobante && num(pago.receipt_amount_confirmed) > 0
+        && Number.isFinite(confirmadoEn) && Number.isFinite(aprobadoEn) && Math.abs(confirmadoEn - aprobadoEn) <= 60_000
+        ? num(pago.receipt_amount_confirmed) : null;
+
+    const pagado = confirmado ?? (ocr !== null && ocr <= delta + 1 ? ocr : delta);
+    return {
+        pagado: Math.round(pagado),
+        comprobante: ocr === null ? null : Math.round(ocr),
+        saldo: pago.status === 'paid' ? 0 : Math.round(saldoPorCobrar(pago)),
+        pagadoTotal: Math.round(pagadoTotal),
+    };
+}
+
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+    'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+/** '2026-11-05' → «5 de noviembre» (con el año si no es el de hoy en Colombia). null sin fecha. Pura. */
+export function fechaEnPalabras(fecha: string | null | undefined, ahora: number = Date.now()): string | null {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(fecha ?? ''));
+    if (!m) return null;
+    const mes = Number(m[2]);
+    const dia = Number(m[3]);
+    if (mes < 1 || mes > 12 || dia < 1 || dia > 31) return null;
+    const anioHoy = new Date(ahora - 5 * 3600_000).getUTCFullYear();
+    return `${dia} de ${MESES[mes - 1]}${Number(m[1]) !== anioHoy ? ` de ${m[1]}` : ''}`;
+}
+
+// ─── Plantillas ─────────────────────────────────────────────────────────────
+
+/** ¿El cobro NO es la mensualidad? (la plantilla que dice «la mensualidad» le mentiría). Pura. */
+function esOtroConcepto(
+    concept: string | null,
+    cobro?: Pick<CobroClasificable, 'payment_category' | 'payment_type'> | null,
+): boolean {
+    return cobro?.payment_category
+        ? esPagoUnico({ ...cobro, concept })
+        : conceptoDelCobro(concept) !== null;
+}
+
 /**
  * La plantilla que cuenta este desenlace, o por qué no hay. Pura.
  * `pago_confirmado` dice «por la mensualidad de {{2}}»: no se usa para un
@@ -153,6 +328,9 @@ export function siguienteTrasFallo(intentos: number, motivo: string, ahora: numb
  * `pago_recibido_otro_concepto` (2026-10-07), que nombra lo pagado; mientras
  * no esté APPROVED en la WABA de la escuela el envío devuelve
  * `plantilla_no_aprobada` y el aviso queda «no entregado», como antes.
+ *
+ * El abono (`abono_recibido`) dice «a la mensualidad de {{2}}» y pide la fecha
+ * límite: sin ella, o para un torneo o una clínica, no hay plantilla.
  */
 export function plantillaDelDesenlace(
     estado: string,
@@ -162,13 +340,15 @@ export function plantillaDelDesenlace(
      * «Inscripción — PLAN RM MENSUAL — …» dice «mensual» en el nombre del plan
      * y por el texto salía «por la mensualidad de …» para una inscripción.
      */
-    cobro?: Pick<CobroClasificable, 'payment_category' | 'payment_type'> | null,
+    cobro?: Pick<CobroClasificable, 'payment_category' | 'payment_type' | 'due_date'> | null,
 ): { concepto: ConceptoCobro } | { motivo: string } {
     if (estado === 'paid') {
-        const otro = cobro?.payment_category
-            ? esPagoUnico({ ...cobro, concept })
-            : conceptoDelCobro(concept) !== null;
-        return otro ? { concepto: 'pago_recibido_otro_concepto' } : { concepto: 'pago_confirmado' };
+        return esOtroConcepto(concept, cobro) ? { concepto: 'pago_recibido_otro_concepto' } : { concepto: 'pago_confirmado' };
+    }
+    if (estado === 'partial') {
+        if (esOtroConcepto(concept, cobro)) return { motivo: 'abono de un cobro que no es la mensualidad (abono_recibido dice «la mensualidad»)' };
+        if (!cobro?.due_date) return { motivo: 'abono sin fecha límite (abono_recibido la pide)' };
+        return { concepto: 'abono_recibido' };
     }
     if (estado === 'rejected') return { concepto: 'comprobante_rechazado' };
     return { motivo: `sin plantilla para el estado ${estado}` };
@@ -176,13 +356,16 @@ export function plantillaDelDesenlace(
 
 /**
  * Lo pagado, como lo escribió la escuela en el cobro («Uniforme talla M»), para
- * {{2}} de `pago_recibido_otro_concepto`. Sin texto, null (dato_faltante: no sale).
- * Pura.
+ * {{2}} de `pago_recibido_otro_concepto`. Sin el nombre del deportista que suele
+ * ir detrás de « — » («Clínica de saque — Juan Pérez»): la plantilla ya lo dice
+ * en {{3}}. Sin texto, null (dato_faltante: no sale). Pura.
  */
 export function textoDelConcepto(concept: string | null | undefined): string | null {
     const t = String(concept ?? '').replace(/\s+/g, ' ').trim();
     if (!t) return null;
-    return t.length > 60 ? `${t.slice(0, 59).trimEnd()}…` : t;
+    const cabeza = t.split(/\s+[—–-]\s+/)[0].trim();
+    const u = cabeza.length >= 3 ? cabeza : t;
+    return u.length > 60 ? `${u.slice(0, 59).trimEnd()}…` : u;
 }
 
 /** «ISABELLA RODRIGUEZ HERNANDEZ» → «Isabella Rodriguez». */
@@ -273,10 +456,6 @@ export function puedeOfrecerConsentimiento(
 }
 
 /**
- * El aviso de comprobante rechazado, con el motivo que escribió la escuela.
- * Sin motivo (rechazos viejos) igual dice que el cobro sigue pendiente. Pura.
- */
-/**
  * Cómo cierra el aviso de pago confirmado. «Queda al día» SOLO si la familia
  * no tiene otro cobro vivo: con pagos únicos (2026-10-10) pagar la inscripción
  * deja la mensualidad y el seguro pendientes, y decirle «al día» es mentirle.
@@ -311,11 +490,97 @@ async function otrosPendientesDeLaFamilia(pago: PagoDesenlace): Promise<number |
     }
 }
 
-export function textoComprobanteRechazado(monto: string, concepto: string | null, motivo: string | null | undefined): string {
+// ─── Textos (puros) ─────────────────────────────────────────────────────────
+
+/**
+ * El aviso de comprobante rechazado, con el motivo que escribió la escuela.
+ * `monto` es el del COMPROBANTE (ocr_amount), no el del cobro: el 2026-11-08 se
+ * le dijo a una familia «tu comprobante de $155.000» cuando había mandado uno
+ * de $117.750. Sin monto leído, no se dice monto. Sin motivo (rechazos viejos)
+ * igual dice que el cobro sigue pendiente. Pura.
+ */
+export function textoComprobanteRechazado(monto: string | null, concepto: string | null, motivo: string | null | undefined): string {
     const m = String(motivo ?? '').trim();
-    return `La escuela revisó tu comprobante de *${monto}* por *${concepto ?? 'tu cobro'}* y no lo pudo aprobar.` +
+    return `La escuela revisó tu comprobante${monto ? ` de *${monto}*` : ''} por *${concepto ?? 'tu cobro'}* y no lo pudo aprobar.` +
         (m ? `\n\n*Motivo:* ${m}` : '') +
         '\n\nEl cobro sigue pendiente. Si tienes el comprobante correcto, mándalo por acá y lo reviso enseguida.';
+}
+
+/** El aviso de abono: lo abonado, el saldo y, si hay, la fecha límite. Pura. */
+export function textoAbonoRegistrado(abono: string, concepto: string | null, saldo: string, fechaLimite: string | null): string {
+    return `¡Listo! ✅ La escuela registró tu abono de *${abono}* a *${concepto ?? 'tu cobro'}*.` +
+        `\n\nSaldo pendiente: *${saldo}*${fechaLimite ? ` (fecha límite: ${fechaLimite})` : ''}.` +
+        ' Cuando pagues el resto, mándame el comprobante por acá.';
+}
+
+/** El texto (ventana abierta) de cada desenlace. Pura. */
+export function textoDelDesenlace(
+    desenlace: Desenlace,
+    pago: { concept: string | null; rejection_reason?: string | null; due_date?: string | null },
+    montos: MontosDelAviso,
+    o: { enLinea?: boolean; cierre?: string; ahora?: number } = {},
+): string {
+    const concepto = pago.concept ?? 'tu cobro';
+    if (desenlace === 'paid') {
+        return (o.enLinea
+            ? `¡Listo! ✅ Recibimos tu pago en línea de *${cop(montos.pagado)}* por *${concepto}*.`
+            : `¡Listo! ✅ La escuela confirmó tu pago de *${cop(montos.pagado)}* por *${concepto}*.`) + (o.cierre ?? '');
+    }
+    if (desenlace === 'partial') {
+        return textoAbonoRegistrado(cop(montos.pagado), pago.concept, cop(montos.saldo), fechaEnPalabras(pago.due_date, o.ahora));
+    }
+    // El motivo importa: un rechazo sin explicación deja al acudiente sin
+    // saber qué corregir, que es justo el caso que originó todo esto.
+    if (desenlace === 'rejected') {
+        return textoComprobanteRechazado(montos.comprobante !== null ? cop(montos.comprobante) : null, pago.concept, pago.rejection_reason);
+    }
+    return `La escuela necesita una aclaración sobre tu pago${montos.comprobante !== null ? ` de *${cop(montos.comprobante)}*` : ''} por *${concepto}*. ` +
+        'Te van a escribir para resolverlo.';
+}
+
+// ─── Respaldo por correo (sin opt-in) ───────────────────────────────────────
+
+/** Tipo en email_sends del respaldo. */
+export const TIPO_CORREO_RESPALDO = 'wa_desenlace_respaldo';
+
+/** Motivos de no envío de la plantilla que se respaldan por correo. */
+const MOTIVOS_CON_RESPALDO = new Set(['sin_optin']);
+
+/** ¿El desenlace se confirma por correo si la plantilla no salió por este motivo? Pura. */
+export function debeRespaldarPorCorreo(desenlace: Desenlace, motivo: string): boolean {
+    return (desenlace === 'paid' || desenlace === 'partial') && MOTIVOS_CON_RESPALDO.has(motivo);
+}
+
+/**
+ * Clave del correo de respaldo: una por cobro, desenlace y plata acreditada. Un
+ * segundo abono (otro amount_paid) es otro correo; el mismo, nunca dos.
+ */
+export function claveCorreoRespaldo(paymentId: string, desenlace: Desenlace, pagadoTotal: number): string {
+    return `${TIPO_CORREO_RESPALDO}:${paymentId}:${desenlace}:${Math.round(pagadoTotal)}`;
+}
+
+/** send-email mete `data` en el HTML sin escapar: fuera < y >. */
+const limpioParaCorreo = (s: string | null | undefined) => String(s ?? '').replace(/[<>]/g, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Los datos de la plantilla `payment_confirmation` de send-email (userName,
+ * schoolName, concept, amount, reference). En un abono el concepto dice que es
+ * un abono y el saldo. Pura.
+ */
+export function datosCorreoRespaldo(p: {
+    desenlace: Desenlace; acudiente: string | null; escuela: string | null; concepto: string | null;
+    montos: MontosDelAviso; referencia: string;
+}): Record<string, string> {
+    const concepto = limpioParaCorreo(p.concepto) || 'tu cobro';
+    return {
+        userName: limpioParaCorreo(p.acudiente) || 'familia',
+        schoolName: limpioParaCorreo(p.escuela) || 'La escuela',
+        concept: p.desenlace === 'partial'
+            ? `Abono a ${concepto} · saldo pendiente ${cop(p.montos.saldo)}`
+            : concepto,
+        amount: cop(p.montos.pagado),
+        reference: limpioParaCorreo(p.referencia),
+    };
 }
 
 // ─── Envíos ─────────────────────────────────────────────────────────────────
@@ -327,6 +592,18 @@ interface PagoDesenlace {
     payment_category?: string | null;
     payment_type?: string | null;
     payment_channel?: string | null;
+    // Con las columnas de montos (2026-11-08); sin ellas el aviso cae a `amount`.
+    amount_paid?: number | string | null;
+    early_payment_discount_applied?: number | string | null;
+    ocr_amount?: number | string | null;
+    ocr_reference?: string | null;
+    due_date?: string | null;
+    user_id?: string | null;
+    approved_at?: string | null;
+    approved_by?: string | null;
+    signup_lead_id?: string | null;
+    receipt_amount_confirmed?: number | string | null;
+    receipt_amount_confirmed_at?: string | null;
 }
 
 /**
@@ -342,23 +619,42 @@ export function pagadoEnLinea(pago: { payment_channel?: string | null }): boolea
 
 const COLUMNAS_PAGO = 'id, status, amount, concept, payment_category, payment_type, payment_channel, rejection_reason, school_id, parent_id, child_id, unregistered_athlete_id';
 /** Con la migración 20261008165728: la marca del rechazo del comprobante. */
-const COLUMNAS_PAGO_CON_RECHAZO = `${COLUMNAS_PAGO}, receipt_rejected_at`;
-let sinMarcaDeRechazo = false;
+const COLUMNAS_RECHAZO = 'receipt_rejected_at';
+/** Lo que pagó la familia, el abono y a quién avisar (2026-11-08). */
+const COLUMNAS_MONTOS = 'amount_paid, early_payment_discount_applied, ocr_amount, ocr_reference, due_date, user_id, approved_at, approved_by, signup_lead_id';
+/** Con la migración 20261105212222: el valor que confirmó la escuela al aprobar. */
+const COLUMNAS_CONFIRMADO = 'receipt_amount_confirmed, receipt_amount_confirmed_at';
 
 /**
- * Lee el pago con la marca de rechazo; sin la migración (42703, columna
- * inexistente) cae a las columnas de siempre y no lo vuelve a intentar. Sin
- * esto, un SELECT con una columna que no existe dejaba al job sin avisar nada,
- * tampoco los pagos confirmados.
+ * De la lectura más completa a la mínima. Una columna que no existe (42703,
+ * migración sin aplicar) baja un nivel y no se vuelve a intentar: un SELECT con
+ * una columna inexistente dejaba al job sin avisar nada, tampoco los pagos
+ * confirmados.
  */
-async function leerPago(id: string): Promise<PagoDesenlace | null> {
-    if (!sinMarcaDeRechazo) {
-        const { data, error } = await supabase.from('payments').select(COLUMNAS_PAGO_CON_RECHAZO).eq('id', id).maybeSingle();
-        if (!error) return (data as PagoDesenlace | null) ?? null;
-        if ((error as { code?: string }).code !== '42703') return null;
-        sinMarcaDeRechazo = true;
+const NIVELES_COLUMNAS = [
+    `${COLUMNAS_PAGO}, ${COLUMNAS_RECHAZO}, ${COLUMNAS_MONTOS}, ${COLUMNAS_CONFIRMADO}`,
+    `${COLUMNAS_PAGO}, ${COLUMNAS_RECHAZO}, ${COLUMNAS_MONTOS}`,
+    `${COLUMNAS_PAGO}, ${COLUMNAS_RECHAZO}`,
+    COLUMNAS_PAGO,
+];
+let nivelColumnas = 0;
+
+async function consultarPagos(
+    consulta: (columnas: string) => PromiseLike<{ data: unknown; error: unknown }>,
+): Promise<{ data: unknown; error: unknown }> {
+    for (;;) {
+        const r = await consulta(NIVELES_COLUMNAS[nivelColumnas]);
+        if (r.error && (r.error as { code?: string }).code === '42703' && nivelColumnas < NIVELES_COLUMNAS.length - 1) {
+            nivelColumnas++;
+            continue;
+        }
+        return r;
     }
-    const { data } = await supabase.from('payments').select(COLUMNAS_PAGO).eq('id', id).maybeSingle();
+}
+
+async function leerPago(id: string): Promise<PagoDesenlace | null> {
+    const { data, error } = await consultarPagos((cols) => supabase.from('payments').select(cols).eq('id', id).maybeSingle());
+    if (error) return null;
     return (data as PagoDesenlace | null) ?? null;
 }
 
@@ -373,12 +669,7 @@ async function leerPagos(ids: string[]): Promise<Map<string, PagoDesenlace> | nu
     const unicos = [...new Set(ids.filter(Boolean))];
     const porId = new Map<string, PagoDesenlace>();
     if (unicos.length === 0) return porId;
-    const columnas: string = sinMarcaDeRechazo ? COLUMNAS_PAGO : COLUMNAS_PAGO_CON_RECHAZO;
-    let { data, error }: { data: unknown; error: unknown } = await supabase.from('payments').select(columnas).in('id', unicos);
-    if (error && (error as { code?: string }).code === '42703' && !sinMarcaDeRechazo) {
-        sinMarcaDeRechazo = true;
-        ({ data, error } = await supabase.from('payments').select(COLUMNAS_PAGO).in('id', unicos));
-    }
+    const { data, error } = await consultarPagos((cols) => supabase.from('payments').select(cols).in('id', unicos));
     if (error || !Array.isArray(data)) return null;
     for (const p of data as unknown as PagoDesenlace[]) porId.set(p.id, p);
     return porId;
@@ -393,22 +684,121 @@ async function leerPagos(ids: string[]): Promise<Map<string, PagoDesenlace> | nu
 const BARRIDO_VENTANA_CADA_MS = 10 * 60_000;
 let ultimoBarridoVentana = 0;
 
-/** Manda el desenlace por plantilla. Devuelve el estado final del aviso. */
-async function avisarPorPlantilla(pago: PagoDesenlace, telefono: string, desenlace: Desenlace): Promise<EstadoAviso> {
-    const cual = plantillaDelDesenlace(desenlace, pago.concept, pago);
-    if ('motivo' in cual) return { tipo: 'no_entregado', motivo: `ventana cerrada; ${cual.motivo}` };
+interface NombresDelAviso {
+    atleta: string | null;
+    contacto: string;
+    escuela: string;
+    /** Quien recibe el respaldo por correo: el acudiente (parent_id) o el titular (user_id). */
+    acudiente: string | null;
+    correo: string | null;
+}
 
-    const [perfil, hijo, sinRegistrar, escuela] = await Promise.all([
-        pago.parent_id ? supabase.from('profiles').select('full_name').eq('id', pago.parent_id).maybeSingle() : Promise.resolve({ data: null }),
+/**
+ * Los nombres para la plantilla y el correo. El deportista sale del hijo, del
+ * deportista sin cuenta, del prospecto (venta de una clínica o un vacacional a
+ * alguien sin ficha) o del titular adulto: sin nombre, `pago_recibido_otro_concepto`
+ * salía con `dato_faltante`. Lecturas puntuales: solo corre con un desenlace.
+ */
+async function nombresDelAviso(pago: PagoDesenlace): Promise<NombresDelAviso> {
+    const idsPerfil = [...new Set([pago.parent_id, pago.user_id].filter((x): x is string => !!x))];
+    const [perfiles, hijo, sinRegistrar, prospecto, escuela] = await Promise.all([
+        idsPerfil.length ? supabase.from('profiles').select('id, full_name, email').in('id', idsPerfil) : Promise.resolve({ data: [] }),
         pago.child_id ? supabase.from('children').select('full_name').eq('id', pago.child_id).maybeSingle() : Promise.resolve({ data: null }),
         pago.unregistered_athlete_id
             ? supabase.from('unregistered_athletes').select('full_name').eq('id', pago.unregistered_athlete_id).maybeSingle()
             : Promise.resolve({ data: null }),
+        pago.signup_lead_id
+            ? supabase.from('school_signup_leads').select('full_name, guardian_name').eq('id', pago.signup_lead_id).maybeSingle()
+            : Promise.resolve({ data: null }),
         supabase.from('schools').select('name').eq('id', pago.school_id).maybeSingle(),
     ]);
-    const atleta = nombreCorto((hijo as any)?.data?.full_name ?? (sinRegistrar as any)?.data?.full_name);
-    const contacto = nombreCorto((perfil as any)?.data?.full_name)?.split(' ')[0] ?? 'familia';
+    const porId = new Map<string, { full_name?: string | null; email?: string | null }>(
+        (((perfiles as any)?.data ?? []) as any[]).map((p) => [p.id, p]),
+    );
+    const padre = pago.parent_id ? porId.get(pago.parent_id) : undefined;
+    const titular = pago.user_id ? porId.get(pago.user_id) : undefined;
+    const lead = (prospecto as any)?.data as { full_name?: string | null; guardian_name?: string | null } | null;
+    const atleta = nombreCorto((hijo as any)?.data?.full_name ?? (sinRegistrar as any)?.data?.full_name
+        ?? lead?.full_name ?? (!pago.parent_id ? titular?.full_name : null));
+    const destinatario = padre ?? titular;
+    return {
+        atleta,
+        contacto: nombreCorto(padre?.full_name ?? lead?.guardian_name ?? titular?.full_name ?? lead?.full_name)?.split(' ')[0] ?? 'familia',
+        escuela: (escuela as any)?.data?.name ?? '',
+        acudiente: destinatario?.full_name ?? null,
+        correo: String(destinatario?.email ?? '').trim().toLowerCase() || null,
+    };
+}
 
+/** Los datos de la plantilla de cada desenlace. Pura. */
+export function datosDePlantilla(
+    pago: { rejection_reason?: string | null; concept: string | null; due_date?: string | null },
+    desenlace: Desenlace,
+    montos: MontosDelAviso,
+    nombres: Pick<NombresDelAviso, 'atleta' | 'contacto' | 'escuela'>,
+    ahora: number = Date.now(),
+): DatosCobro {
+    return {
+        nombreContacto: nombres.contacto,
+        nombreAtleta: nombres.atleta ?? '',
+        nombreEscuela: nombres.escuela,
+        // pago_confirmado / otro concepto: lo pagado. comprobante_rechazado: lo
+        // que dice el comprobante; sin monto leído, «el pago» («revisamos el
+        // comprobante que enviaste por el pago de Samuel»).
+        monto: desenlace === 'rejected'
+            ? (montos.comprobante !== null ? cop(montos.comprobante) : 'el pago')
+            : cop(montos.pagado),
+        montoAbono: cop(montos.pagado),
+        saldoPendiente: cop(montos.saldo),
+        fechaVencimiento: fechaEnPalabras(pago.due_date, ahora),
+        motivo: pago.rejection_reason || 'la escuela no lo pudo validar',
+        conceptoPago: textoDelConcepto(pago.concept),
+    };
+}
+
+async function respaldoPorCorreo(
+    pago: PagoDesenlace, desenlace: Desenlace, montos: MontosDelAviso, nombres: NombresDelAviso, motivo: string,
+): Promise<EstadoAviso> {
+    if (!nombres.correo || !nombres.correo.includes('@')) {
+        return { tipo: 'no_entregado', motivo: `ventana cerrada; plantilla: ${motivo}; sin correo del acudiente` };
+    }
+    const data = datosCorreoRespaldo({
+        desenlace, acudiente: nombres.acudiente, escuela: nombres.escuela, concepto: pago.concept, montos,
+        referencia: pago.ocr_reference || String(pago.id).slice(0, 8).toUpperCase(),
+    });
+    const r = await enviarConReserva({
+        clave: claveCorreoRespaldo(pago.id, desenlace, montos.pagadoTotal),
+        tipo: TIPO_CORREO_RESPALDO,
+        schoolId: pago.school_id,
+        refId: pago.id,
+        destinos: [nombres.correo],
+        plantilla: 'payment_confirmation',
+        data,
+        respaldo: {
+            subject: `Pago aprobado: ${data.concept}`,
+            titulo: desenlace === 'partial' ? 'Abono registrado' : '¡Pago aprobado!',
+            lineas: [
+                `Hola ${data.userName}, ${data.schoolName} confirmó tu ${desenlace === 'partial' ? 'abono' : 'pago'} de ${data.amount}.`,
+                `Concepto: ${data.concept}.`,
+            ],
+        },
+    });
+    if (r === 'fallo') return { tipo: 'no_entregado', motivo: `ventana cerrada; plantilla: ${motivo}; el correo falló` };
+    return { tipo: 'por_correo', detalle: r === 'duplicado' ? `${motivo}, ya enviado` : motivo };
+}
+
+/**
+ * Manda el desenlace por plantilla. Devuelve el estado final del aviso. Con
+ * `correo`, si la plantilla no sale por falta de opt-in, confirma por correo.
+ */
+async function avisarPorPlantilla(
+    pago: PagoDesenlace, telefono: string, desenlace: Desenlace, montos: MontosDelAviso,
+    opciones: { correo: boolean } = { correo: false },
+): Promise<EstadoAviso> {
+    const cual = plantillaDelDesenlace(desenlace, pago.concept, pago);
+    if ('motivo' in cual) return { tipo: 'no_entregado', motivo: `ventana cerrada; ${cual.motivo}` };
+
+    const nombres = await nombresDelAviso(pago);
     const r = await enviarCobroPorPlantilla({
         schoolId: pago.school_id,
         concepto: cual.concepto,
@@ -416,17 +806,25 @@ async function avisarPorPlantilla(pago: PagoDesenlace, telefono: string, desenla
         tokenBoton: await emitirTokenCobro(pago.id),
         paymentId: pago.id,
         parentId: pago.parent_id,
-        datos: {
-            nombreContacto: contacto,
-            nombreAtleta: atleta ?? '',
-            nombreEscuela: (escuela as any)?.data?.name ?? '',
-            monto: cop(Number(pago.amount)),
-            motivo: pago.rejection_reason || 'la escuela no lo pudo validar',
-            conceptoPago: textoDelConcepto(pago.concept),
-        },
+        datos: datosDePlantilla(pago, desenlace, montos, nombres),
     });
     if (r.enviado) return { tipo: 'por_plantilla', plantilla: r.plantilla };
+    if (opciones.correo && debeRespaldarPorCorreo(desenlace, r.motivo)) {
+        return respaldoPorCorreo(pago, desenlace, montos, nombres, r.motivo);
+    }
     return { tipo: 'no_entregado', motivo: `ventana cerrada; plantilla: ${r.motivo}${r.detalle ? ` (${r.detalle})` : ''}`.slice(0, 200) };
+}
+
+/**
+ * ¿Se respalda por correo? Solo comprobantes (un link pagado en línea ya trae el
+ * recibo de la pasarela) y no si lo aprobó la aprobación automática
+ * (`approved_by` NULL): esa ya le manda el correo de aprobación. Pura.
+ */
+export function permiteCorreoDeRespaldo(
+    pago: { approved_by?: string | null }, desenlace: Desenlace, porLink: boolean,
+): boolean {
+    if (porLink) return false;
+    return !(desenlace === 'paid' && pago.approved_by === null);
 }
 
 /**
@@ -454,6 +852,50 @@ async function guardarAviso(
         .update({ error_message: conAviso(base, aviso), ...extra })
         .in('id', ids);
 }
+
+// ─── Reserva del abono ──────────────────────────────────────────────────────
+
+interface ReservaAbono { filas: { id: string; base: string | null }[]; pagado: number }
+
+/**
+ * Reserva el aviso de un abono SIN cerrar las filas (el pago completo se avisa
+ * después). El candado es la fila más vieja del cobro: un UPDATE condicionado
+ * al `error_message` leído; con los 3 BFF solo uno lo gana. null si otro ya lo
+ * tomó o ya se avisó ese monto.
+ */
+async function reservarAbono(paymentId: string, pagado: number): Promise<ReservaAbono | null> {
+    const { data, error } = await supabase.from('whatsapp_inbound_queue')
+        .select('id, error_message, created_at')
+        .eq('result_ref_id', paymentId)
+        .eq('result_type', 'payment_receipt')
+        .is('outcome_notified_at', null)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+        .limit(20);
+    if (error || !Array.isArray(data) || data.length === 0) return null;
+    const filas = (data as any[]).map((f) => ({ id: f.id as string, em: (f.error_message ?? null) as string | null, ...separarAviso(f.error_message) }));
+    if (filas.some((f) => f.aviso.tipo === 'abono' && f.aviso.pagado >= pagado)) return null;
+
+    const candado = filas[0];
+    let toma = supabase.from('whatsapp_inbound_queue')
+        .update({ error_message: conAviso(candado.base, { tipo: 'abono', pagado, detalle: 'en_curso' }) })
+        .eq('id', candado.id)
+        .is('outcome_notified_at', null);
+    toma = candado.em === null ? toma.is('error_message', null) : toma.eq('error_message', candado.em);
+    const { data: tomadas } = await toma.select('id');
+    if (!tomadas?.length) return null;
+    return { filas: filas.map((f) => ({ id: f.id, base: f.base })), pagado };
+}
+
+/** Deja el abono anotado en TODAS las filas abiertas del cobro, cada una con su texto. */
+async function cerrarAbono(r: ReservaAbono, detalle: string): Promise<void> {
+    await Promise.all(r.filas.map((f) => supabase.from('whatsapp_inbound_queue')
+        .update({ error_message: conAviso(f.base, { tipo: 'abono', pagado: r.pagado, detalle }) })
+        .eq('id', f.id)
+        .is('outcome_notified_at', null)));
+}
+
+const cuentaComoAvisado = (e: EstadoAviso) => e.tipo === 'por_plantilla' || e.tipo === 'por_correo';
 
 export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisados: number }> {
     // Primero lo que Meta rechazó DESPUÉS de aceptarlo (webhook de estados).
@@ -491,6 +933,10 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
         log?.warn?.('[wa-outcome] no se pudieron leer los pagos del lote');
         return { avisados: 0 };
     }
+    // Abonos ya contados (por cobro), sin una consulta más: la marca va en las
+    // mismas filas. Un abono que ya se avisó se salta sin tocar la base.
+    const abonosAvisados = abonosAvisadosDelLote(filas as any[]);
+    const abonosDeEstaVuelta = new Set<string>();
 
     for (const fila of filas) {
         const previo = separarAviso(fila.error_message as string | null);
@@ -520,8 +966,15 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
 
         // Todavía en revisión: no hay nada que contar. Se vuelve a mirar en la
         // siguiente vuelta.
-        const desenlace = pago ? desenlaceDelPago(pago, (fila as any).created_at) : null;
+        const desenlace = pago ? desenlaceDelPago(pago, (fila as any).created_at, ahora) : null;
         if (!pago || !desenlace) continue;
+
+        const abonoAvisado = abonosAvisados.get(pago.id) ?? 0;
+        // Abono: una vez por monto acreditado (y una sola fila del cobro por vuelta).
+        if (desenlace === 'partial') {
+            if (abonosDeEstaVuelta.has(pago.id) || !hayAbonoNuevo(pago, abonoAvisado)) continue;
+            abonosDeEstaVuelta.add(pago.id);
+        }
 
         const { data: integration } = await supabase
             .from('school_whatsapp_integrations')
@@ -541,23 +994,12 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
             continue;
         }
 
-        const monto = cop(Number(pago.amount));
-        let texto: string;
-        if (desenlace === 'paid' && porLink && pagadoEnLinea(pago)) {
-            texto = `¡Listo! ✅ Recibimos tu pago en línea de *${monto}* por *${pago.concept}*.`
-                + cierreDelAvisoDePago(await otrosPendientesDeLaFamilia(pago));
-        } else if (desenlace === 'paid') {
-            texto = `¡Listo! ✅ La escuela confirmó tu pago de *${monto}* por *${pago.concept}*.`
-                + cierreDelAvisoDePago(await otrosPendientesDeLaFamilia(pago));
-        } else if (desenlace === 'rejected') {
-            // El motivo importa: un rechazo sin explicación deja al acudiente sin
-            // saber qué corregir, que es justo el caso que originó todo esto.
-            texto = textoComprobanteRechazado(monto, pago.concept, pago.rejection_reason);
-        } else {
-            texto =
-                `La escuela necesita una aclaración sobre tu pago de *${monto}* por *${pago.concept}*. ` +
-                'Te van a escribir para resolverlo.';
-        }
+        const montos = montosDelAviso(pago, { abonoAvisado, esComprobante: !porLink });
+        const texto = textoDelDesenlace(desenlace, pago, montos, {
+            enLinea: porLink && pagadoEnLinea(pago),
+            cierre: desenlace === 'paid' ? cierreDelAvisoDePago(await otrosPendientesDeLaFamilia(pago)) : '',
+            ahora,
+        });
 
         // Mejora 9: una persona tomó la conversación en el buzón → no se le
         // escribe. NO se marca como avisado: sale en la primera vuelta después
@@ -578,15 +1020,27 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
         // pendiente y enviaba («La escuela confirmó tu pago» ×3 en el mismo
         // segundo, 2026-10-06). Se reservan todas las filas del MISMO pago (dos
         // comprobantes de un pago salían ×6); solo quien las toma avisa.
-        const reservadaEn = new Date().toISOString();
-        const { data: reservadas } = await supabase.from('whatsapp_inbound_queue')
-            .update({ outcome_notified_at: reservadaEn })
-            .or(FILTRO_FILAS_CON_DESENLACE)
-            .eq('result_ref_id', fila.result_ref_id as string)
-            .is('outcome_notified_at', null)
-            .select('id');
-        if (!reservadas?.length) continue;
-        const idsReservados = (reservadas as any[]).map((r) => r.id);
+        // El abono reserva sin cerrar (ver reservarAbono).
+        let reservaAbono: ReservaAbono | null = null;
+        let idsReservados: string[] = [];
+        let reservadaEn = '';
+        if (desenlace === 'partial') {
+            reservaAbono = await reservarAbono(pago.id, montos.pagadoTotal);
+            if (!reservaAbono) continue;
+        } else {
+            reservadaEn = new Date().toISOString();
+            const { data: reservadas } = await supabase.from('whatsapp_inbound_queue')
+                .update({ outcome_notified_at: reservadaEn })
+                .or(FILTRO_FILAS_CON_DESENLACE)
+                .eq('result_ref_id', fila.result_ref_id as string)
+                .is('outcome_notified_at', null)
+                .select('id');
+            if (!reservadas?.length) continue;
+            idsReservados = (reservadas as any[]).map((r) => r.id);
+        }
+        const registrar = (final: EstadoAviso): Promise<void> => (reservaAbono
+            ? cerrarAbono(reservaAbono, detalleDeAbono(final))
+            : guardarAviso(idsReservados, previo.base, final));
 
         // Modo discreto (2026-10-29): si una persona de la escuela escribió en este
         // chat en las últimas 12 h, ella le confirma a su modo; el aviso queda
@@ -594,19 +1048,20 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
         // solo la variable global: Monster lo tiene en «no».
         if ((conv as any)?.id && await modoDiscretoEfectivo(fila.school_id as string, modoDiscreto())
             && await escuelaActiva((conv as any).id as string)) {
-            await guardarAviso(idsReservados, previo.base,
-                { tipo: 'no_entregado', motivo: 'la escuela estaba en la conversación (modo discreto)' });
+            await registrar({ tipo: 'no_entregado', motivo: 'la escuela estaba en la conversación (modo discreto)' });
             log?.info?.({ queueId: fila.id, paymentId: pago.id }, '[wa-outcome] la escuela está en el chat: no se avisa');
             continue;
         }
 
+        const correo = permiteCorreoDeRespaldo(pago, desenlace, porLink);
+
         // Fuera de la ventana de 24 h el texto libre no llega (131047): directo
         // a la plantilla, sin gastar un intento que Meta va a rechazar.
         if (!ventanaAbierta((conv as any)?.last_inbound_at ?? null, ahora)) {
-            const final = await avisarPorPlantilla(pago, fila.wa_phone_number as string, desenlace);
-            await guardarAviso(idsReservados, previo.base, final);
-            if (final.tipo === 'por_plantilla') avisados++;
-            log?.info?.({ queueId: fila.id, paymentId: pago.id, aviso: final }, '[wa-outcome] ventana cerrada');
+            const final = await avisarPorPlantilla(pago, fila.wa_phone_number as string, desenlace, montos, { correo });
+            await registrar(final);
+            if (cuentaComoAvisado(final)) avisados++;
+            log?.info?.({ queueId: fila.id, paymentId: pago.id, desenlace, aviso: final }, '[wa-outcome] ventana cerrada');
             continue;
         }
 
@@ -645,10 +1100,17 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
             // Ventana cerrada en el acto (el último entrante estaba al borde):
             // la plantilla, una vez.
             if (esErrorDeVentana(enviado.error)) {
-                const r = await avisarPorPlantilla(pago, fila.wa_phone_number as string, desenlace);
-                await guardarAviso(idsReservados, previo.base, r);
-                if (r.tipo === 'por_plantilla') avisados++;
+                const r = await avisarPorPlantilla(pago, fila.wa_phone_number as string, desenlace, montos, { correo });
+                await registrar(r);
+                if (cuentaComoAvisado(r)) avisados++;
                 log?.info?.({ queueId: fila.id, paymentId: pago.id, aviso: r }, '[wa-outcome] texto rechazado por ventana');
+                continue;
+            }
+            // El abono no se reintenta: la fila sigue abierta para el pago
+            // completo y la familia ya tiene el aviso in-app.
+            if (reservaAbono) {
+                await registrar({ tipo: 'no_entregado', motivo: `el texto no salió (${String(enviado.error ?? 'error')})`.slice(0, 200) });
+                log?.warn?.({ queueId: fila.id, err: enviado.error }, '[wa-outcome] el abono no salió');
                 continue;
             }
             // Transitorio: se libera la reserva con espera, hasta MAX_INTENTOS.
@@ -684,8 +1146,9 @@ export async function runWhatsAppPaymentOutcome(log?: Logger): Promise<{ avisado
                 p_to_wa_id: fila.wa_phone_number,
             });
         }
-        // Limpia un «reintento» anterior: ya salió.
-        if (previo.aviso.tipo !== 'nuevo') await guardarAviso(idsReservados, previo.base, { tipo: 'nuevo' });
+        // Abono: queda anotado «por texto». Si no, limpia un «reintento» anterior: ya salió.
+        if (reservaAbono) await registrar({ tipo: 'nuevo' });
+        else if (previo.aviso.tipo !== 'nuevo') await guardarAviso(idsReservados, previo.base, { tipo: 'nuevo' });
 
         avisados++;
         log?.info?.({ queueId: fila.id, paymentId: pago.id, estado: pago.status, desenlace }, '[wa-outcome] avisado');
@@ -722,27 +1185,44 @@ export async function reintentarAvisosFueraDeVentana(log?: Logger, ahora = Date.
     let mandados = 0;
     for (const [paymentId, queueId] of porPago) {
         const { data: fila } = await supabase.from('whatsapp_inbound_queue')
-            .select('id, wa_phone_number, error_message, created_at')
+            .select('id, wa_phone_number, error_message, created_at, message_type')
             .eq('id', queueId).maybeSingle();
         if (!fila) continue;
         const previo = separarAviso((fila as any).error_message);
-        if (previo.aviso.tipo !== 'nuevo') continue; // ya se intentó (o se está intentando)
+        // Un abono avisado por texto se reintenta igual que un pago; cualquier
+        // otro estado ya se intentó (o se está intentando).
+        const abonoPorTexto = previo.aviso.tipo === 'abono' && previo.aviso.detalle === 'texto' ? previo.aviso : null;
+        if (previo.aviso.tipo !== 'nuevo' && !abonoPorTexto) continue;
 
         const em = (fila as any).error_message as string | null;
         let toma = supabase.from('whatsapp_inbound_queue')
-            .update({ error_message: conAviso(previo.base, { tipo: 'en_curso' }) })
+            .update({
+                error_message: conAviso(previo.base, abonoPorTexto
+                    ? { tipo: 'abono', pagado: abonoPorTexto.pagado, detalle: 'en_curso' }
+                    : { tipo: 'en_curso' }),
+            })
             .eq('id', queueId);
         toma = em === null ? toma.is('error_message', null) : toma.eq('error_message', em);
         const { data: tomadas } = await toma.select('id');
         if (!tomadas?.length) continue;
 
         const pago = await leerPago(paymentId);
-        const desenlace = pago ? desenlaceDelPago(pago, (fila as any).created_at) : null;
-        const final: EstadoAviso = pago && desenlace
-            ? await avisarPorPlantilla(pago, (fila as any).wa_phone_number, desenlace)
+        const desenlace = pago ? desenlaceDelPago(pago, (fila as any).created_at, ahora) : null;
+        const porLink = (fila as any).message_type === MESSAGE_TYPE_LINK;
+        const sigueIgual = abonoPorTexto ? desenlace === 'partial' : !!desenlace && desenlace !== 'partial';
+        const final: EstadoAviso = pago && desenlace && sigueIgual
+            ? await avisarPorPlantilla(pago, (fila as any).wa_phone_number, desenlace,
+                montosDelAviso(pago, { esComprobante: !porLink }),
+                { correo: permiteCorreoDeRespaldo(pago, desenlace, porLink) })
             : { tipo: 'no_entregado', motivo: 'ventana cerrada; el pago ya no está resuelto' };
-        await guardarAviso([queueId], previo.base, final);
-        if (final.tipo === 'por_plantilla') mandados++;
+        if (abonoPorTexto) {
+            await supabase.from('whatsapp_inbound_queue')
+                .update({ error_message: conAviso(previo.base, { tipo: 'abono', pagado: abonoPorTexto.pagado, detalle: detalleDeAbono(final) }) })
+                .eq('id', queueId);
+        } else {
+            await guardarAviso([queueId], previo.base, final);
+        }
+        if (cuentaComoAvisado(final)) mandados++;
         log?.info?.({ queueId, paymentId, aviso: final }, '[wa-outcome] texto rechazado por ventana (webhook)');
     }
     return mandados;

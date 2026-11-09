@@ -210,3 +210,58 @@ export function avisoDeCartera(e: EntradaCartera): AvisoPlataforma {
 export function avisarCarteraPorPlataforma(e: EntradaCartera): void {
     enSegundoPlano(async () => avisoDeCartera(e));
 }
+
+// ─── Resumen de pagos por validar (pagos-por-validar.job) ───────────────────
+//
+// APAGADO a propósito (2026-11-08): el canal de plataforma no está conectado.
+// Además de este flag tienen que cumplirse los gates de `avisarPorPlataforma`
+// (canal habilitado y activo, escuela habilitada, suscripción activa con
+// `avisar_comprobantes`). Para encenderlo: PAGOS_POR_VALIDAR_WA_ENABLED=true en
+// el BFF de producción, con el canal de plataforma ya conectado (spec
+// canal-whatsapp-plataforma) y la escuela suscrita a `avisar_comprobantes`.
+//
+// Reusa la plantilla `sm_comprobantes_por_revisar` ({{1}} escuela · {{2}}
+// cantidad · {{3}} espera): no hace falta aprobar otra en Meta.
+
+/** ¿Sale el resumen de pagos por validar por WhatsApp? Solo con PAGOS_POR_VALIDAR_WA_ENABLED=true. Pura. */
+export function pagosPorValidarWaHabilitado(env: NodeJS.ProcessEnv = process.env): boolean {
+    return env.PAGOS_POR_VALIDAR_WA_ENABLED === 'true';
+}
+
+export interface EntradaPagosPorValidar {
+    schoolId: string;
+    escuela: string;
+    /** 'YYYY-MM-DD' de Colombia. */
+    fecha: string;
+    tramo: 'manana' | 'tarde';
+    /** Los mismos título y mensaje del aviso in-app. */
+    titulo: string;
+    mensaje: string;
+    total: number;
+    /** «4 días», «30 h». */
+    esperaMasAntiguo: string;
+}
+
+export function avisoDePagosPorValidar(e: EntradaPagosPorValidar): AvisoPlataforma {
+    return {
+        tipo: 'comprobantes',
+        schoolId: e.schoolId,
+        // Misma clave que la reserva del correo: un aviso por escuela, día y tramo.
+        clave: `pagos_por_validar:${e.schoolId}:${e.fecha}:${e.tramo}`,
+        texto: `*${e.titulo}* — ${e.escuela}\n${e.mensaje}\n\nSe aprueban en SportMaps → Gestión de pagos.`,
+        ruta: '/payments-automation?tab=recurrent',
+        plantilla: {
+            nombre: PLANTILLAS_PLATAFORMA.comprobantes,
+            variables: [e.escuela, String(e.total), e.esperaMasAntiguo],
+        },
+    };
+}
+
+/** Dispara y se olvida. Devuelve si se intentó (false = flag apagado, no sale nada). */
+export function avisarPagosPorValidarPorPlataforma(
+    e: EntradaPagosPorValidar, env: NodeJS.ProcessEnv = process.env,
+): boolean {
+    if (!pagosPorValidarWaHabilitado(env)) return false;
+    enSegundoPlano(async () => avisoDePagosPorValidar(e));
+    return true;
+}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { approvePayment, notifyGroupApproved } from '@/lib/approvePayment';
-import { orderReceiptGroup, remainingOf, joinSpanish } from '@/lib/receiptReview';
+import { orderReceiptGroup, remainingOf, dueOf, joinSpanish } from '@/lib/receiptReview';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -80,12 +80,17 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   const allMonths = selected.length > 0 && selected.every((p) => !!p.period_label);
   const noun = (n: number) => (allMonths ? (n === 1 ? 'mes' : 'meses') : (n === 1 ? 'cobro' : 'cobros'));
 
-  const expected = Number(payment?.amount) || 0;
+  // Lo debido = valor del cobro − pronto pago (lib/receiptReview.dueOf). Con
+  // pronto pago la familia transfiere menos y NO es un abono: comparar contra
+  // `amount` proponía un abono con «saldo» igual al descuento.
+  const listAmount = Number(payment?.amount) || 0;
+  const earlyDiscount = payment ? listAmount - dueOf(payment) : 0;
+  const expected = payment ? dueOf(payment) : 0;
   const existingPaid = Number(payment?.amount_paid) || 0;   // abonos previos
   // Saldo por cubrir: el del cobro o, en grupo, la suma de los marcados.
   const remaining = isGroup
     ? selected.reduce((s, p) => s + remainingOf(p), 0)
-    : Math.max(expected - existingPaid, 0);
+    : (payment ? remainingOf(payment) : 0);
   // En grupo el monto leído está en el cobro que el bot estampó con la foto.
   const ocrRaw = isGroup ? group.find((p) => p.ocr_amount != null)?.ocr_amount : payment?.ocr_amount;
   const ocrAmount = ocrRaw != null ? Number(ocrRaw) : null;
@@ -343,6 +348,11 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
               <p className="text-xs text-slate-400 uppercase tracking-wide">Esperado</p>
               <p className="text-2xl font-bold text-slate-900">{formatCurrency(expected)}</p>
             </div>
+            {earlyDiscount > 0 && (
+              <p className="text-xs text-emerald-700 text-right">
+                Valor {formatCurrency(listAmount)} − pronto pago {formatCurrency(earlyDiscount)}
+              </p>
+            )}
             {existingPaid > 0 && (
               <div className="flex items-baseline justify-between mt-1 pt-1 border-t border-slate-200">
                 <p className="text-xs text-slate-400 uppercase tracking-wide">Ya abonado</p>

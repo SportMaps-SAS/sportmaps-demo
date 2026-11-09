@@ -46,7 +46,7 @@ import { canManageCharges, canReadChargeBatches, isMensualidad } from '@/lib/cob
 import { ApprovePaymentMethodSheet } from '@/components/payment/ApprovePaymentMethodSheet';
 import { RejectReceiptDialog } from '@/components/payment/RejectReceiptDialog';
 import { BulkApproveGreensDialog } from '@/components/payment/BulkApproveGreensDialog';
-import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish } from '@/lib/receiptReview';
+import { sortReviewQueue, waitingLabel, waitingSince, bulkGreenSelection, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish, remainingOf } from '@/lib/receiptReview';
 import { bffClient } from '@/lib/api/bffClient';
 import { GlosaConciliationDialog } from '@/components/payment/GlosaConciliationDialog';
 import { ReconciliationTab } from '@/components/payment/ReconciliationTab';
@@ -1324,7 +1324,7 @@ export default function PaymentsAutomationPage() {
   const proofGroupNote = (payment: PaymentTransaction): string | null => {
     const group = payment.receipt_url ? pendingReceiptGroups.get(payment.receipt_url) : undefined;
     if (!group) return null;
-    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    const total = group.reduce((s, o) => s + remainingOf(o), 0);
     return `Cubre ${group.length} cobros: ${joinSpanish(orderReceiptGroup(group).map(o => (o as any).period_label || o.concept))} · ${formatCurrency(total)}`;
   };
   const handleShowProof = async (payment: PaymentTransaction) => {
@@ -1402,7 +1402,7 @@ export default function PaymentsAutomationPage() {
   const renderReceiptGroupChip = (p: PaymentTransaction) => {
     const group = p.receipt_url ? pendingReceiptGroups.get(p.receipt_url) : undefined;
     if (!group) return null;
-    const total = group.reduce((s, o) => s + Math.max((Number(o.amount) || 0) - (Number(o.amount_paid) || 0), 0), 0);
+    const total = group.reduce((s, o) => s + remainingOf(o), 0);
     return (
       <Badge variant="outline" title={group.map(o => (o as any).period_label || o.concept).join(' · ')} className="text-[10px] py-0 h-5 whitespace-nowrap bg-violet-50 text-violet-700 border-violet-200">
         1 comprobante · {group.length} cobros · {formatCurrency(total)}
@@ -1949,7 +1949,7 @@ export default function PaymentsAutomationPage() {
                                       Abono parcial
                                     </Badge>
                                     <span className="text-[10px] font-normal text-muted-foreground whitespace-nowrap">
-                                      Abonado {formatCurrency(Number(payment.amount_paid) || 0)} · saldo {formatCurrency(Math.max(payment.amount - (Number(payment.amount_paid) || 0), 0))}
+                                      Abonado {formatCurrency(Number(payment.amount_paid) || 0)} · saldo {formatCurrency(remainingOf(payment))}
                                     </span>
                                   </>
                                 )}
