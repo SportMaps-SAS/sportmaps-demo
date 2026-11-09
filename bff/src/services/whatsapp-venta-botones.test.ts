@@ -14,7 +14,7 @@ import { vi } from 'vitest';
 vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
-    accionesDeCierre, atenderBotonDeVenta, atenderVentaDeServicio, botonesDeVenta, idBotonDeVenta, parsearBotonDeVenta,
+    textoSeguimientoDeVenta, accionesDeCierre, atenderBotonDeVenta, atenderVentaDeServicio, botonesDeVenta, idBotonDeVenta, parsearBotonDeVenta,
     BOTONES_DE_ENTRADA, MAX_CUERPO_CON_BOTONES, PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_A_LA_ESCUELA_REPETIDO, TEXTO_COMPROBANTE_YA_RECIBIDO,
     TEXTO_HUMANO, TEXTO_TRAS_DETALLES, TEXTO_YA_PAGO, TITULO_BOTON_VENTA,
     type BotonDeVenta, type CtxVentaServicio,
@@ -210,5 +210,33 @@ describe('botones al cierre de cada respuesta de la venta (Monster 2026-11-09: �
         await atenderVentaDeServicio(segunda.ctx, VENTA, '¿y hay baños?');
         expect(segunda.reg.enviados[0].texto).toBe(TEXTO_A_LA_ESCUELA_REPETIDO);
         expect(segunda.reg.enviados[0].botones).toBeUndefined();
+    });
+});
+
+describe('seguimiento con datos de pago: el último día del precio se dice (Monster 2026-11-09)', () => {
+    const pagoEnviado = { direction: 'outbound', type: 'text', text_body: 'pago', created_at: hace(20), wa_timestamp: hace(20),
+        payload: { step: PASO_VENTA.PAGO, [MARCA_VENTA]: ID } } as FilaReciente;
+    const sin = (hoy: string) => textoSeguimientoDeVenta(CLINICA, { recientes: [pagoEnviado], afiliado: false, hoy, ahora: AHORA.getTime() });
+
+    it('el 10 de nov (último día de la preventa): «termina hoy», el valor de mañana y el abono', () => {
+        const t = sin('2026-11-10')!;
+        expect(t).toContain('termina *hoy*');
+        expect(t).toContain('*$300.000*');
+        expect(t).toContain('desde mañana, *$350.000*');
+        expect(t).toContain('abono de *$150.000*');
+        expect(t).toContain('¿Pudiste hacer el pago');
+    });
+    it('a dos días del cambio: dice hasta cuándo va el valor, sin «hoy» ni el abono', () => {
+        const t = sin('2026-11-09')!;
+        expect(t).toContain('va hasta el martes 10 de noviembre');
+        expect(t).not.toContain('termina *hoy*');
+    });
+    it('lejos del cambio o ya en el precio final: sin urgencia', () => {
+        expect(sin('2026-11-02')).not.toContain('⏳');
+        expect(sin('2026-11-12')).not.toContain('⏳');
+    });
+    it('sin datos de pago enviados: el seguimiento de siempre, sin urgencia nueva', () => {
+        const t = textoSeguimientoDeVenta(CLINICA, { recientes: [], afiliado: false, hoy: '2026-11-10', ahora: AHORA.getTime() })!;
+        expect(t).not.toContain('termina *hoy*');
     });
 });

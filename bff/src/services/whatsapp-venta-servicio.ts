@@ -335,7 +335,19 @@ export function textoSeguimientoDeVenta(
     if (comprobanteRecibido(o.recientes, 24 * 60, o.ahora ?? Date.now())) return null;
     const conDatos = o.recientes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_VENTA.PAGO);
     if (conDatos) {
-        return `Hola 👋 ¿Pudiste hacer el pago ${deLaDelServicio(item)}? Cuando lo hagas, ${CIERRE_DE_PAGO.charAt(0).toLowerCase()}${CIERRE_DE_PAGO.slice(1)}`;
+        // La fecha límite del precio SÍ es real (sale de los tramos del catálogo): el último día se dice (Monster 2026-11-09).
+        const pd = precioDelServicio(item, { afiliado: o.afiliado, hoy: o.hoy });
+        let urgencia = '';
+        if (pd.hoy !== null && pd.siguiente && !pd.opciones.length && !pd.deAfiliado) {
+            const dias = Math.round((Date.parse(`${pd.siguiente.desde.slice(0, 10)}T12:00:00Z`) - Date.parse(`${o.hoy.slice(0, 10)}T12:00:00Z`)) / 86_400_000);
+            if (dias === 1) {
+                urgencia = ` ⏳ El valor de *${cop(pd.hoy)}* termina *hoy*: desde mañana, *${cop(pd.siguiente.precio)}*.`
+                    + (pd.abono !== null ? ` Con el abono de *${cop(pd.abono)}* mantienes ese valor.` : '');
+            } else if (dias >= 2 && dias <= 3) {
+                urgencia = ` ⏳ El valor de *${cop(pd.hoy)}* va ${textoDelTramo(pd.siguiente)}.`;
+            }
+        }
+        return `Hola 👋 ¿Pudiste hacer el pago ${deLaDelServicio(item)}?${urgencia} Cuando lo hagas, ${CIERRE_DE_PAGO.charAt(0).toLowerCase()}${CIERRE_DE_PAGO.slice(1)}`;
     }
     const p = precioDelServicio(item, { afiliado: o.afiliado, hoy: o.hoy });
     let valor = '';
