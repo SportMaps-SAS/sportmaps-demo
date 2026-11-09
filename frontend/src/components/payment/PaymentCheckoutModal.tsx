@@ -138,6 +138,10 @@ export function PaymentCheckoutModal({
   const [onlineFeePct, setOnlineFeePct] = useState(3);
   const [allowInstallments, setAllowInstallments] = useState(false);
   const [minInstallmentAmount, setMinInstallmentAmount] = useState(0);
+  // Días hacia atrás que vale un comprobante (school_settings.receipt_date_window_days,
+  // el mismo que usa el BFF). Sin esto el validador del navegador aplicaba «hoy o
+  // ayer» aunque la escuela aceptara más (Monster 7 días, 2026-11-09).
+  const [receiptWindowDays, setReceiptWindowDays] = useState<number | undefined>(undefined);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
   // Resultado del OCR del comprobante manual. Se persiste en el pago para que
   // el admin vea el monto detectado y la alerta de discrepancia en Cobros por
@@ -418,7 +422,7 @@ export function PaymentCheckoutModal({
     if (!open || !schoolId) return;
     const loadBankDetails = async () => {
       const { data } = await supabase.from('school_settings')
-        .select('bank_name, bank_account_type, bank_account_number, nequi_number, daviplata_number, breb_number, breb_key, transfer_key, bank_titular_name, bank_titular_id, payment_qr_url, wompi_enabled, online_fee_pct, allow_installments, min_installment_amount, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
+        .select('bank_name, bank_account_type, bank_account_number, nequi_number, daviplata_number, breb_number, breb_key, transfer_key, bank_titular_name, bank_titular_id, payment_qr_url, wompi_enabled, online_fee_pct, allow_installments, min_installment_amount, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode, receipt_date_window_days')
         .eq('school_id', schoolId).single();
 
       // payment_accounts (migración 20260809095613) va en un select APARTE: si el
@@ -434,6 +438,10 @@ export function PaymentCheckoutModal({
       setOnlineFeePct(Number((data as any)?.online_fee_pct ?? 3));
       setAllowInstallments(!!(data as any)?.allow_installments);
       setMinInstallmentAmount(Number((data as any)?.min_installment_amount) || 0);
+      {
+        const w = Number((data as any)?.receipt_date_window_days);
+        setReceiptWindowDays(Number.isFinite(w) && w >= 0 ? w : undefined);
+      }
       setDiscountConfig({
         enabled: !!(data as any)?.early_payment_discount_enabled,
         days: Number((data as any)?.early_payment_discount_days) || 5,
@@ -1525,6 +1533,7 @@ export function PaymentCheckoutModal({
                       }
                       allowPartial={allowInstallments}
                       minPartialAmount={minInstallmentAmount}
+                      dateWindowDays={receiptWindowDays}
                     />
                     {proofUrl && (
                       <p className="text-xs text-green-600 flex items-center gap-1">

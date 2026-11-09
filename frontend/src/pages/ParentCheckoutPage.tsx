@@ -132,6 +132,9 @@ export default function ParentCheckoutPage() {
   // Config de abonos (school_settings). Gatea el OCR: si allow_installments es
   // false, un comprobante por menos del esperado se bloquea.
   const [installmentCfg, setInstallmentCfg] = useState<{ allow_installments: boolean; min_installment_amount: number }>({ allow_installments: false, min_installment_amount: 0 });
+  // Días hacia atrás que vale un comprobante (school_settings.receipt_date_window_days,
+  // el mismo del BFF). Sin pasarlo, el validador del navegador usaba «hoy o ayer».
+  const [receiptWindowDays, setReceiptWindowDays] = useState<number | undefined>(undefined);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [showFullQr, setShowFullQr] = useState(false);
 
@@ -251,7 +254,7 @@ export default function ParentCheckoutPage() {
 
       if (data?.id) {
         const { data: ss } = await supabase.from('school_settings')
-          .select('wompi_enabled, allow_installments, min_installment_amount, bank_name, bank_account_type, bank_account_number, nequi_number, daviplata_number, breb_number, breb_key, transfer_key, bank_titular_name, bank_titular_id, payment_qr_url')
+          .select('wompi_enabled, allow_installments, min_installment_amount, bank_name, bank_account_type, bank_account_number, nequi_number, daviplata_number, breb_number, breb_key, transfer_key, bank_titular_name, bank_titular_id, payment_qr_url, receipt_date_window_days')
           .eq('school_id', data.id)
           .maybeSingle();
 
@@ -274,6 +277,10 @@ export default function ParentCheckoutPage() {
           allow_installments: Boolean(s?.allow_installments),
           min_installment_amount: Number(s?.min_installment_amount) || 0,
         });
+        {
+          const w = Number((s as any)?.receipt_date_window_days);
+          setReceiptWindowDays(Number.isFinite(w) && w >= 0 ? w : undefined);
+        }
         setBankDetails(s);
       } else {
         setPaymentSettings({ allow_online: false, allow_manual: true });
@@ -1113,6 +1120,7 @@ export default function ParentCheckoutPage() {
                               conceptKind={conceptKind}
                               allowPartial={installmentCfg.allow_installments}
                               minPartialAmount={installmentCfg.min_installment_amount}
+                              dateWindowDays={receiptWindowDays}
                             />
                           </div>
                         </div>
