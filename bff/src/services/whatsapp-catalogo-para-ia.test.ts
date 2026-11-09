@@ -61,7 +61,7 @@ describe('fichaDeServicioParaIa', () => {
         expect(f).toContain('Valor hoy (domingo 8 de noviembre): $300.000');
         expect(f).toContain('Precio por fecha: $300.000 hasta el martes 10 de noviembre; desde el miércoles 11, $350.000');
         expect(f).toContain('Abono mínimo para separar el cupo: $150.000 (50 %); el resto ($150.000) queda pendiente.');
-        expect(f).toContain('Cuentas para pagar: por Nequi al número 3194505150 (a nombre de Iván Sossa)');
+        expect(f).toContain('Cuentas para pagar: por Nequi al 319 450 5150, a nombre de Iván Sossa');
         expect(f).toContain('la escuela lo valida y le confirma el cupo');
         expect(f).toContain('*Hombres y mujeres de 14 años en adelante*');
         // El precio de afiliado no se le da a quien no es del club.

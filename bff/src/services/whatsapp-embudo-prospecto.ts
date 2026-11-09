@@ -1107,15 +1107,26 @@ async function tomar(ctx: CtxEmbudo, d: DatosEmbudo, slotId: string): Promise<bo
     return true;
 }
 
-/** «por Nequi o Daviplata al número 319 450 5150» o la lista de cuentas. Pura. */
+/** «3194505150» → «319 450 5150» (celular colombiano); cualquier otro número, como lo escribió la escuela. Pura. */
+export function numeroLegible(numero: string): string {
+    const crudo = String(numero ?? '').trim();
+    const cel = /^(?:57)?(3\d{9})$/.exec(crudo.replace(/[\s()+.-]/g, ''))?.[1];
+    return cel ? `${cel.slice(0, 3)} ${cel.slice(3, 6)} ${cel.slice(6)}` : crudo;
+}
+
+/**
+ * «por Nequi o Daviplata al 319 450 5150, a nombre de Iván Sossa»: TODOS los medios
+ * de ese número (Monster recibe por los dos y el bot decía solo «Nequi», 2026-11-08),
+ * o la lista de cuentas. Pura.
+ */
 export function comoPagar(cuentas: CuentaDePagoEmbudo[]): string {
     const numeros = [...new Set(cuentas.map((c) => c.numero.replace(/\D/g, '') || c.numero))];
     if (numeros.length === 1) {
         const tipos = [...new Set(cuentas.map((c) => c.tipo))];
         const titular = cuentas.find((c) => c.titular)?.titular;
-        return `por ${tipos.join(', ').replace(/, ([^,]*)$/, ' o $1')} al número ${cuentas[0].numero}${titular ? ` (a nombre de ${titular})` : ''}`;
+        return `por ${tipos.join(', ').replace(/, ([^,]*)$/, ' o $1')} al ${numeroLegible(cuentas[0].numero)}${titular ? `, a nombre de ${titular}` : ''}`;
     }
-    return 'a una de estas cuentas:\n' + cuentas.map((c) => `• ${c.tipo}: ${c.numero}${c.titular ? ` (a nombre de ${c.titular})` : ''}`).join('\n') + '\n';
+    return 'a una de estas cuentas:\n' + cuentas.map((c) => `• ${c.tipo}: ${numeroLegible(c.numero)}${c.titular ? ` (a nombre de ${c.titular})` : ''}`).join('\n') + '\n';
 }
 
 async function instruccionesDePago(ctx: CtxEmbudo, d: DatosEmbudo, prefijo: string): Promise<boolean> {

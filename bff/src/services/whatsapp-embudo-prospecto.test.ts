@@ -355,7 +355,7 @@ describe('cupo con valor: consentimiento primero, después las cuentas', () => {
         await c.turno('Sí, claro', BOTON_EMBUDO.OPTIN_SI);
         expect(c.ctx.registrarOptIn).toHaveBeenCalledTimes(1);
         expect(c.ctx.marcarLead).toHaveBeenCalledWith('lead-1', expect.objectContaining({ consentimiento: 'si' }));
-        expect(c.ultimo().texto).toBe('¡Listo! 🙌 Para confirmarlo, paga la clase de prueba ($15.000) por Nequi o Daviplata al número 319 450 5150 ' +
+        expect(c.ultimo().texto).toBe('¡Listo! 🙌 Para confirmarlo, paga la clase de prueba ($15.000) por Nequi o Daviplata al 319 450 5150 ' +
             'y envíame aquí mismo la foto o el PDF del comprobante 📸');
         expect(c.ultimo().estado).toMatchObject({ paso: 'esperando_pago', datos: { slotId: 's-sab31', consentimiento: 'si' } });
     });
@@ -769,9 +769,12 @@ describe('lecturas puras', () => {
 
     it('comoPagar: un número para varias billeteras, o la lista', () => {
         expect(comoPagar([{ tipo: 'Nequi', numero: '319 450 5150' }, { tipo: 'Daviplata', numero: '3194505150' }]))
-            .toBe('por Nequi o Daviplata al número 319 450 5150');
+            .toBe('por Nequi o Daviplata al 319 450 5150');
+        // Monster 2026-11-08: Nequi y Daviplata al MISMO número, con titular → los dos medios y «a nombre de».
+        expect(comoPagar([{ tipo: 'Nequi', numero: '3194505150', titular: 'Iván Sossa' }, { tipo: 'Daviplata', numero: '3194505150', titular: 'Iván Sossa' }]))
+            .toBe('por Nequi o Daviplata al 319 450 5150, a nombre de Iván Sossa');
         expect(comoPagar([{ tipo: 'Nequi', numero: '3001112233', titular: 'Club' }, { tipo: 'Bancolombia', numero: '123-456' }]))
-            .toBe('a una de estas cuentas:\n• Nequi: 3001112233 (a nombre de Club)\n• Bancolombia: 123-456\n');
+            .toBe('a una de estas cuentas:\n• Nequi: 300 111 2233 (a nombre de Club)\n• Bancolombia: 123-456\n');
     });
 
     it('bienvenida propia que ya trae cada sede con su dirección: no se repite con la de la base', () => {

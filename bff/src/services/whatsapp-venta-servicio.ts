@@ -48,6 +48,8 @@ import { cop, tokensDistintivos } from './whatsapp-venta-servicios.service';
 import { hoyBogota, opcionesDelItem } from './wa-cobro-desde-comprobante.service';
 import type { Motivo } from './motivos-de-cobro';
 import type { PreguntaDeServicio, RespuestaDeServicio } from './whatsapp-servicio-ia';
+import { nombreDeAsistente } from './whatsapp-comprobante-de-ficha.service';
+import type { TextosClase } from './textos-clase-prueba';
 
 // ─── Pasos (payload.step) de los salientes de la venta ──────────────────────
 
@@ -59,6 +61,12 @@ export const PASO_VENTA = {
     OTRA_FECHA: 'venta_servicio_otra_fecha',
     YA_PAGO: 'venta_servicio_ya_pago',
     SALUDO: 'venta_servicio_saludo',
+    /** Tocó un botón viejo de un flujo del club en plena venta (una respuesta; los demás toques, nada). */
+    BOTON_CLUB: 'venta_servicio_boton_club',
+    /** Pidió el club por texto en plena venta: «va aparte y cuesta…» antes de agendar nada. */
+    CLUB_APARTE: 'venta_servicio_club_aparte',
+    /** Dio los datos de quien asiste («Nicolás Cubides Ávila / 18 de diciembre de 2006 / Opuesto»). */
+    ASISTENTE: 'venta_servicio_asistente',
 } as const;
 
 /** Minutos entre dos líneas de saludo de la venta («¿Te ayudo con algo de la clínica?»). */
@@ -196,6 +204,76 @@ export const TEXTO_YA_PAGO = '¡Perfecto! Envía aquí la foto o el PDF del comp
 export const TEXTO_COMPROBANTE_YA_RECIBIDO = 'Ya tenemos tu comprobante 📄 La escuela lo valida y te confirma el cupo por aquí.';
 export const TEXTO_CUPO_CON_PAGO =
     'Sí 🙌 Con el pago (o el abono mínimo) y el comprobante con el nombre completo de quien asiste, la escuela lo valida y te confirma el cupo por aquí.';
+
+/** La salida a «entrar al club» que se le deja abierta a quien está en una venta (sin nombrar la clase de prueba). */
+export const SALIDA_AL_CLUB = 'Si lo que buscas es entrar al club, escríbemelo y te cuento aparte.';
+
+/**
+ * La respuesta a un botón viejo de un flujo del CLUB tocado en plena venta (Monster
+ * 2026-11-08, Nicolás: pagó la clínica, tocó «⚫ Sede Suba» de un mensaje anterior y
+ * terminó con una clase de prueba de $15.000 que nunca pidió). El botón no avanza
+ * nada: se sigue en la venta. `pagado`: ya mandó el comprobante. Pura.
+ */
+export function textoBotonDelClubEnVenta(item: ItemConFicha, o: { pagado: boolean }): string {
+    const seguimos = `Ese botón era de un mensaje anterior 🙌 Seguimos con lo ${deLaDelServicio(item)}`;
+    return o.pagado
+        ? `${seguimos}: la escuela valida tu comprobante y te confirma el cupo por aquí. ${SALIDA_AL_CLUB}`
+        : `${seguimos}. ¿Te paso los datos para separar tu cupo? ${SALIDA_AL_CLUB}`;
+}
+
+/**
+ * Pidió el club por TEXTO en plena venta («quiero la clase de prueba», «entrar al
+ * club»): antes de agendar nada se le dice que va aparte del servicio y cuánto cuesta
+ * (Nicolás terminó pagando $15.000 creyendo que eran parte de la clínica). Pura.
+ */
+export function textoClubAparteDeLaVenta(item: ItemConFicha, t: Pick<TextosClase, 'nombre' | 'precio' | 'gratis'>): string {
+    const valor = t.gratis || !t.precio ? 'que es gratis' : `que cuesta *${t.precio}*`;
+    return `Claro 🙌 Lo del club va aparte ${deLaDelServicio(item)}: para empezar se agenda una *${t.nombre}*, ${valor}.`;
+}
+
+// ─── Los datos de quien asiste (pura) ───────────────────────────────────────
+
+/** Año de nacimiento, fecha («18 de diciembre del 2006», «18/12/2006»), edad o posición de juego. */
+const DATO_DE_ASISTENTE = new RegExp('\\b(' + [
+    '(19|20)\\d{2}',
+    '\\d{1,2} \\d{1,2}( \\d{2,4})?',
+    '\\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)',
+    'armador|armadora|opuesto|opuesta|atacante|atacantes|central|libero|punta|receptor|receptora|levantador|levantadora',
+    '\\d{1,2} anos',
+].join('|') + ')\\b');
+
+/** «…el nombre completo de quien asiste»: el bot ya lo pidió (un nombre suelto es la respuesta). */
+const PIDE_NOMBRE_DE_ASISTENTE = /nombre completo de quien asiste/i;
+/** Palabras de cortesía que `nombreDeAsistente` deja pasar y que, solas, no son un nombre («Mucho gusto»). */
+const NO_ES_NOMBRE_SUELTO = /\b(mucho|mucha|muchos|gusto|feliz|saludos|bendiciones|igualmente|amable|amables|tranquilo|tranquila|hecho|ahora|luego|despues|manana|hoy|ayer|claro|verdad|seguro|segura)\b/;
+
+/**
+ * ¿El mensaje son los DATOS DE QUIEN ASISTE al servicio? («Nicolás Cubides Ávila /
+ * 18 de Diciembre del 2006 / Opuesto»: antes «Eso te lo confirma la escuela».) Un
+ * nombre de dos palabras o más al comienzo (`nombreDeAsistente`: «Sede Suba»,
+ * «Hombre», «Club y torneos» no lo son) y además: una fecha, un año, una edad o una
+ * posición después del nombre; o el mensaje es SOLO el nombre y lo último que dijo
+ * el bot pidió «el nombre completo de quien asiste». null = no lo es. Pura.
+ */
+export function datosDeAsistenteEnVenta(texto: string | null | undefined, recientes: FilaReciente[] = []): { nombre: string } | null {
+    const crudo = String(texto ?? '').trim();
+    if (!crudo || crudo.length > 200 || /[?¿]/.test(crudo)) return null;
+    const nombre = nombreDeAsistente(crudo);
+    if (!nombre) return null;
+    const sinNombre = ` ${normalizarFrase(crudo)} `.replace(` ${normalizarFrase(nombre)} `, ' ');
+    if (DATO_DE_ASISTENTE.test(sinNombre)) return { nombre };
+    if (!nombreDeAsistente(crudo, { entero: true }) || NO_ES_NOMBRE_SUELTO.test(normalizarFrase(nombre))) return null;
+    const ultimo = [...recientes].filter((f) => f.direction === 'outbound').sort((a, b) => momento(b) - momento(a))[0];
+    return ultimo && PIDE_NOMBRE_DE_ASISTENTE.test(String(ultimo.text_body ?? '')) ? { nombre } : null;
+}
+
+/** «¡Gracias! 🙌 Anoté a *Nicolás Cubides Ávila* como asistente de la Clínica…» + el pago con una pregunta o la validación. Pura. */
+export function textoAsistenteAnotado(item: ItemConFicha, nombre: string, o: { pagado: boolean }): string {
+    const anotado = `¡Gracias! 🙌 Anoté a *${nombre}* como asistente ${deLaDelServicio(item)}.`;
+    return o.pagado
+        ? `${anotado} La escuela valida tu comprobante y te confirma el cupo por aquí.`
+        : `${anotado} ¿Te paso los datos para separar el cupo?`;
+}
 
 /**
  * El seguimiento de ~20 h de una venta: DETERMINISTA (sin IA y sin la clase de
@@ -503,12 +581,18 @@ export interface CtxVentaServicio {
     avisarEscuela: (detalle: string) => Promise<void>;
     /** ¿La cola tiene (o va a procesar) un comprobante de este número? Lo contesta ella. */
     comprobanteEnCurso?: () => Promise<boolean>;
+    /**
+     * Deja el nombre de quien asiste donde lo toma la cola de comprobantes de la venta
+     * (`atenderComprobanteDeVenta`: el prospecto con `asistente_servicio`). Familias y
+     * simulación: no escribe. Nunca lanza.
+     */
+    anotarAsistente?: (nombre: string, item: ItemConFicha) => Promise<void>;
     ahora?: () => Date;
 }
 
 export type ResultadoVenta =
     | 'venta_pago' | 'venta_sin_precio' | 'venta_respuesta' | 'venta_a_la_escuela' | 'venta_otra_fecha'
-    | 'venta_ya_pago' | 'venta_saludo' | 'venta_silencio';
+    | 'venta_ya_pago' | 'venta_saludo' | 'venta_silencio' | 'venta_boton_club' | 'venta_asistente';
 
 async function seguro<T>(fn: () => Promise<T>, siFalla: T): Promise<T> {
     try { return await fn(); } catch { return siFalla; }
@@ -572,6 +656,38 @@ export async function enviarPagoDeServicio(
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /**
+ * ¿Ya pagó en esta venta? Llegó un comprobante (foto o PDF) desde que empezó la venta
+ * (o en las últimas 24 h), o la cola ya le contestó un comprobante de ESTE servicio. Pura.
+ */
+export function pagoRecibidoEnVenta(recientes: FilaReciente[], venta: VentaActiva, ahora = Date.now()): boolean {
+    const desde = Math.min(venta.desde ? new Date(venta.desde).getTime() : ahora, ahora - 24 * 3600_000);
+    return recientes.some((f) => {
+        const m = momento(f);
+        if (!(m >= desde && m <= ahora + 60_000)) return false;
+        if (f.direction === 'inbound') return f.type === 'image' || f.type === 'document';
+        return f.payload?.[MARCA_VENTA] === venta.item.id && /^venta_comprobante_(recibido|repetido)$/.test(String(f.payload?.step ?? ''));
+    });
+}
+
+/**
+ * Un botón viejo de un flujo del CLUB (sede, franja, opciones del embudo, recordatorio,
+ * cortesía, puerta) tocado en plena venta: no avanza NADA. La primera vez en la venta,
+ * una respuesta dentro de la venta (`textoBotonDelClubEnVenta`); los demás toques,
+ * silencio (Nicolás tocó cinco seguidos). Quien llama ya comprobó que la persona no
+ * pidió el club con un texto suyo.
+ */
+export async function atenderBotonDelClubEnVenta(ctx: CtxVentaServicio, venta: VentaActiva): Promise<ResultadoVenta> {
+    const ahora = (ctx.ahora ?? (() => new Date()))().getTime();
+    const desde = Math.min(venta.desde ? new Date(venta.desde).getTime() : ahora, ahora - 24 * 3600_000);
+    const yaRespondido = ctx.recientes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_VENTA.BOTON_CLUB
+        && momento(f) >= desde);
+    if (yaRespondido) return 'venta_silencio';
+    await ctx.enviar(textoBotonDelClubEnVenta(venta.item, { pagado: pagoRecibidoEnVenta(ctx.recientes, venta, ahora) }),
+        { [MARCA_VENTA]: venta.item.id, step: PASO_VENTA.BOTON_CLUB });
+    return 'venta_boton_club';
+}
+
+/**
  * Atiende un mensaje dentro de la venta de un servicio. null = no es de la venta
  * (pidió el club de forma explícita): sigue el bot de siempre. Cada camino manda a
  * lo sumo UN mensaje (el pago puede llevar una nota de lo que queda pendiente).
@@ -617,6 +733,19 @@ export async function atenderVentaDeServicio(
 
         case 'detalle':
         default: {
+            // Los datos de quien asiste: se agradecen y se anotan (la cola los usa para el
+            // cobro). Sin pago todavía, el pago se OFRECE con una pregunta; los datos, cuando los pida.
+            const asistente = datosDeAsistenteEnVenta(texto, ctx.recientes);
+            if (asistente) {
+                const yaAnotado = ctx.recientes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_VENTA.ASISTENTE
+                    && f.payload?.asistente === asistente.nombre && momento(f) >= ahora - 30 * 60_000);
+                if (yaAnotado) return 'venta_silencio';
+                if (ctx.anotarAsistente) await seguro(() => ctx.anotarAsistente!(asistente.nombre, item), undefined);
+                const pagado = pagoRecibidoEnVenta(ctx.recientes, venta, ahora);
+                await ctx.enviar(textoAsistenteAnotado(item, asistente.nombre, { pagado }),
+                    { ...marca, intencion_venta: 'asistente', step: PASO_VENTA.ASISTENTE, asistente: asistente.nombre });
+                return 'venta_asistente';
+            }
             const hoy = hoyBogota(ahora);
             const afiliado = await afiliadoSiHaceFalta(ctx, item);
             const cuentas = await seguro(() => ctx.cuentas(motivoDeServicio(item)), [] as CuentaDePagoEmbudo[]);

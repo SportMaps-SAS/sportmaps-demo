@@ -154,15 +154,17 @@ import {
     PASO_FORMULARIO_ENVIADO, PASO_FORMULARIO_RESPALDO,
     type CtxRespuestaFormulario, type ResultadoFormulario,
 } from './whatsapp-formulario-servicio';
-import { hoyBogota } from './wa-cobro-desde-comprobante.service';
+import { asegurarLeadDeVenta, hoyBogota, leadDeVenta } from './wa-cobro-desde-comprobante.service';
 import {
     atenderOleada1Desconocido, atenderOleada1Familia, preguntarReferidoTrasTurno, type IoDelBot,
 } from './whatsapp-bot-oleada1';
 import { contextoDeVenta, mensajesParaVenta } from './whatsapp-venta-contexto.db';
-import { pideElClub, type VentaActiva } from './whatsapp-venta-contexto';
 import {
-    atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes, ventaCedeAlEmbudo, ventaDeFamilia,
-    textoDePagoDeServicio, tienePrecioDeAfiliado,
+    botonDelClubQuietoEnVenta, pideElClub, pidioElClubConTexto, ventaAntesDelPedidoDelClub, type VentaActiva,
+} from './whatsapp-venta-contexto';
+import {
+    atenderBotonDelClubEnVenta, atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes,
+    ventaCedeAlEmbudo, ventaDeFamilia, textoClubAparteDeLaVenta, textoDePagoDeServicio, tienePrecioDeAfiliado, PASO_VENTA,
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
 import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
@@ -226,6 +228,8 @@ interface EscuelaDelTurno {
      * vendiendo en este turno (la presentación va sin la clase de prueba).
      */
     ventas?: Map<string, Promise<VentaDelTurno | null>>;
+    /** Los mensajes de 7 días (columnas mínimas) de cada conversación, leídos UNA vez por turno. */
+    mensajesVenta?: Map<string, Promise<FilaReciente[]>>;
     serviciosVigentes?: Promise<ItemConFicha[]>;
     ventaServicio?: ItemConFicha | null;
 }
@@ -2846,6 +2850,18 @@ function serviciosDelTurno(schoolId: string): Promise<ItemConFicha[]> {
     return serviciosDeAnuncio(schoolId).catch(() => []);
 }
 
+/** Los mensajes de 7 días de la conversación para la venta, leídos UNA vez por turno. Nunca lanza. */
+function mensajesVentaDelTurno(conversationId: string): Promise<FilaReciente[]> {
+    const s = escuelaDelTurno.getStore();
+    if (!s) return mensajesParaVenta(conversationId);
+    const mapa = (s.mensajesVenta ??= new Map());
+    const previa = mapa.get(conversationId);
+    if (previa) return previa;
+    const leida = mensajesParaVenta(conversationId).catch(() => [] as FilaReciente[]);
+    mapa.set(conversationId, leida);
+    return leida;
+}
+
 /**
  * La venta activa de la conversación (desconocido): catálogo vigente + mensajes de
  * 7 días + servicio del lead, leídos UNA vez por turno (regla de Disk IO: sin
@@ -2859,7 +2875,7 @@ function ventaDelTurno(integration: WhatsAppIntegration, conversationId: string,
         try {
             const items = await serviciosDelTurno(integration.school_id);
             if (!items.length) return null;
-            const mensajes = await mensajesParaVenta(conversationId);
+            const mensajes = await mensajesVentaDelTurno(conversationId);
             const { venta } = await contextoDeVenta(integration.school_id, conversationId, contactWaId, { items, mensajes });
             return venta ? { venta, mensajes } : null;
         } catch {
@@ -2914,7 +2930,77 @@ function ctxVentaServicio(
             avisadoHaceRato ? undefined : { motivo: 'puerta_otro', detalle }),
         comprobanteEnCurso: async () => adjuntoEnLaRafaga(recientes, o.waMessageId ?? null)
             || comprobanteEnColaDe(integration, contactWaId),
+        // El nombre de quien asiste queda en el prospecto (`asistente_servicio`): de ahí lo toma
+        // la cola cuando llegue el comprobante (`atenderComprobanteDeVenta`), sin volver a preguntar.
+        anotarAsistente: async (nombre, item) => {
+            if (o.familia || enSimulacion()) return;
+            const lead = await leadDeVenta(schoolId, contactWaId);
+            await asegurarLeadDeVenta({ schoolId, conversationId, telefono: contactWaId, nombre, item, lead });
+        },
     };
+}
+
+/**
+ * Pidió el club por TEXTO en plena venta («quiero la clase de prueba», «entrar al
+ * club»): UNA vez, antes de que el embudo agende nada, se le dice que va aparte del
+ * servicio y cuánto cuesta. Después sigue el bot de siempre (el embudo). Nunca lanza.
+ */
+async function avisarClubAparteDeLaVenta(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+): Promise<void> {
+    try {
+        const items = await serviciosDelTurno(integration.school_id);
+        if (!items.length) return;
+        const mensajes = await mensajesVentaDelTurno(conversationId);
+        const venta = ventaAntesDelPedidoDelClub(mensajes, items);
+        if (!venta) return;
+        const desde = venta.desde ? new Date(venta.desde).getTime() : 0;
+        const yaDicho = mensajes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_VENTA.CLUB_APARTE
+            && new Date(f.wa_timestamp || f.created_at || 0).getTime() >= desde);
+        if (yaDicho) return;
+        // La escuela está escribiendo: la conversación es suya.
+        const recientes = await mensajesRecientes(conversationId);
+        if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return;
+        await deliver(integration, conversationId, contactWaId,
+            textoClubAparteDeLaVenta(venta.item, await textosClase(integration.school_id)),
+            { step: PASO_VENTA.CLUB_APARTE, servicio_aparte_id: venta.item.id });
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo avisar que el club va aparte de la venta', { conversationId, err: e?.message });
+    }
+}
+
+/**
+ * Un botón viejo de un flujo del CLUB (sede, franja, opciones del embudo, recordatorio,
+ * cortesía, puerta) tocado con una venta activa y sin que la persona haya pedido el
+ * club con un texto suyo: no avanza nada (Monster 2026-11-08, Nicolás: «⚫ Sede Suba»
+ * → 5 preguntas → franja → clase de prueba de $15.000 agendada y pagada en plena
+ * compra de la clínica). Una respuesta dentro de la venta; los demás toques, nada.
+ * null = no aplica (sin venta, otro botón, o pidió el club): sigue el bot. Nunca lanza.
+ */
+async function botonDelClubEnLaVenta(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, botonId: string,
+): Promise<ResultadoDesconocido | null> {
+    if (!botonDelClubQuietoEnVenta(botonId)) return null;
+    try {
+        const v = await ventaDelTurno(integration, conversationId, contactWaId);
+        if (!v) return null;
+        const desde = v.venta.desde ? new Date(v.venta.desde).getTime() : 0;
+        const despues = v.mensajes.filter((f) => new Date(f.wa_timestamp || f.created_at || 0).getTime() >= desde);
+        if (pidioElClubConTexto(despues)) return null;
+        const recientes = await mensajesRecientes(conversationId);
+        // La escuela está escribiendo: la conversación es suya (el botón tampoco avanza nada).
+        if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+            return 'escuela_atendiendo';
+        }
+        marcarVentaEnElTurno(v.venta.item);
+        const r = await atenderBotonDelClubEnVenta(
+            ctxVentaServicio(integration, conversationId, contactWaId, [...recientes, ...v.mensajes], { familia: false }), v.venta);
+        console.info('[whatsapp-bot] botón del club en plena venta: no avanza', { conversationId, botonId, servicio: v.venta.item.id, r });
+        return r;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] botón del club en la venta falló; sigue el bot de siempre', { conversationId, err: e?.message });
+        return null;
+    }
 }
 
 /**
@@ -2925,9 +3011,14 @@ async function atenderVentaDelDesconocido(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
     text: string, botonId: string | null, rafaga: string | null,
 ): Promise<ResultadoDesconocido | null> {
-    if (botonId || !text) return null;
-    // «Es posible agendar una clase de prueba?»: sale de la venta (el bot de siempre).
-    if (pideElClub(text) || pideElClub(rafaga)) return null;
+    if (botonId) return botonDelClubEnLaVenta(integration, conversationId, contactWaId, botonId);
+    if (!text) return null;
+    // «Es posible agendar una clase de prueba?»: sale de la venta (el bot de siempre), pero
+    // antes se le aclara UNA vez que el club va aparte del servicio y cuánto cuesta.
+    if (pideElClub(text) || pideElClub(rafaga)) {
+        await avisarClubAparteDeLaVenta(integration, conversationId, contactWaId);
+        return null;
+    }
     try {
         const v = await ventaDelTurno(integration, conversationId, contactWaId);
         if (!v) return null;

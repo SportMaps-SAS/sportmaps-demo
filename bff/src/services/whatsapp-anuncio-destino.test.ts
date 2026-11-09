@@ -378,7 +378,7 @@ describe('atenderDestinoDeAnuncio', () => {
         expect(pago.texto.length).toBeLessThan(600);
         expect(pago.texto).toContain('Valor hoy: *$300.000* (hasta el martes 10 de noviembre; desde el 11, *$350.000*)');
         expect(pago.texto).toContain('abono mínimo de *$150.000* (50 %)');
-        expect(pago.texto).toContain('Nequi al número 3194505150 (a nombre de Iván Sossa)');
+        expect(pago.texto).toContain('Nequi al 319 450 5150, a nombre de Iván Sossa');
         expect(pago.texto).toContain('nombre completo de quien asiste');
         expect(pago.texto).not.toMatch(/9 de noviembre|clase de prueba|sede/i);
         expect(pago.contexto).toMatchObject({ [MARCA_VENTA]: CLINICA.id, step: 'venta_servicio_pago', datos_de_pago: true });
