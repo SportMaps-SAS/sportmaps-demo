@@ -28,6 +28,7 @@ import { runPostTrainingReminders } from './post-training-reminders.job';
 import { runWhatsAppQueue } from './whatsapp-queue.job';
 import { runWhatsAppPaymentOutcome } from './whatsapp-payment-outcome.job';
 import { runReceiptReviewAlerts } from './receipt-review-alerts.job';
+import { runPagosPorValidar, pagosPorValidarActivo, type Tramo as TramoPagosPorValidar } from './pagos-por-validar.job';
 import { runAcuerdosRecordatorios, correrMantenimientoAcuerdos } from './acuerdos-de-pago-recordatorios.job';
 import { runBienvenidaEscuelas } from './bienvenida-escuelas.job';
 import { runWhatsAppMantenimiento } from './whatsapp-mantenimiento.job';
@@ -623,6 +624,39 @@ export function initMaintenanceJobs() {
     });
 
     console.log('[CRON] Avisos de comprobantes por validar registrados (cada 5 min).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Resumen diario de «Pagos por validar» → dueño y admins — 07:30 y 17:00 COT.
+    //
+    // El aviso de arriba es in-app + push y se pierde (Monster, 2026-11-08: 33
+    // comprobantes, ~20 en verde, el dueño entró y no aprobó ninguno). Este
+    // manda UN resumen por escuela: correo branded + in-app (+ WhatsApp de
+    // plataforma, apagado). 07:30 si hay pendientes; 17:00 solo si alguno lleva
+    // más de 48 h. Idempotente por escuela + día + tramo con la reserva en
+    // email_sends (los 3 BFF y los reinicios no duplican).
+    //
+    // Solo producción (`pagosPorValidarActivo`: NODE_ENV=production, porque dev
+    // no tiene CRONS_ENABLED=false). Kill-switch: DISABLE_PAGOS_POR_VALIDAR=true.
+    // ────────────────────────────────────────────────────────────────────────
+    const correrPagosPorValidar = async (tramo: TramoPagosPorValidar) => {
+        if (!pagosPorValidarActivo()) return;
+        try {
+            const r = await runPagosPorValidar({ tramo });
+            if (r.avisadas || r.fallosCorreo) {
+                console.log(`[CRON] Pagos por validar (${tramo}): ${r.avisadas} escuela(s) avisada(s), `
+                    + `${r.fallosCorreo} correo(s) fallido(s), ${r.sinCorreo} sin correo, ${r.duplicadas} ya avisada(s).`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error(`[CRON] Error en el resumen de pagos por validar (${tramo}):`, err?.message || err);
+        }
+    };
+    cron.schedule('30 7 * * *', () => correrPagosPorValidar('manana'), { timezone: 'America/Bogota' });
+    cron.schedule('0 17 * * *', () => correrPagosPorValidar('tarde'), { timezone: 'America/Bogota' });
+
+    console.log(pagosPorValidarActivo()
+        ? '[CRON] Resumen de pagos por validar registrado (07:30 y 17:00 COT).'
+        : '[CRON] Resumen de pagos por validar APAGADO en este servidor (solo NODE_ENV=production; o DISABLE_PAGOS_POR_VALIDAR=true).');
 
     // ────────────────────────────────────────────────────────────────────────
     // Acuerdos de pago por plazos (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md §5).
