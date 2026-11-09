@@ -1,4 +1,5 @@
 import { destinoDelComprobante } from '@/lib/destinoComprobante';
+import { normalizeText } from '@/lib/normalizeText';
 import { useState, useEffect, useRef } from 'react';
 import { BranchChip } from '@/components/common/BranchChip';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -385,6 +386,20 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
   // aclaración del acudiente. Sin esta entrada la tabla mostraba el string crudo.
   glosado: { label: 'En aclaración', className: 'bg-orange-100 text-orange-700 border-orange-200' },
 };
+
+/**
+ * Búsqueda de la lista de pagos: sin distinguir mayúsculas ni tildes («María» encuentra «Maria»)
+ * y también por el nombre del atleta que se ve en la fila (adultos y prospectos no tienen hijo/acudiente).
+ */
+function coincideBusqueda(
+  p: { athlete_name?: string | null; child?: { full_name?: string | null } | null; parent?: { full_name?: string | null } | null; concept?: string | null; program?: { name?: string | null } | null; team?: { name?: string | null } | null },
+  busqueda: string,
+): boolean {
+  const q = normalizeText(busqueda);
+  if (!q) return true;
+  return [p.athlete_name, p.child?.full_name, p.parent?.full_name, p.concept, p.program?.name, p.team?.name]
+    .some((campo) => normalizeText(campo).includes(q));
+}
 
 interface PaymentTransaction {
   id: string;
@@ -1411,12 +1426,7 @@ export default function PaymentsAutomationPage() {
   };
   const pendingSearched = rawPendingPayments.filter(p => {
     if (!pendingSearch) return true;
-    const term = pendingSearch.toLowerCase();
-    return p.child?.full_name?.toLowerCase().includes(term) ||
-      p.parent?.full_name?.toLowerCase().includes(term) ||
-      p.concept?.toLowerCase().includes(term) ||
-      p.program?.name?.toLowerCase().includes(term) ||
-      p.team?.name?.toLowerCase().includes(term);
+    return coincideBusqueda(p, pendingSearch);
   });
   // Conteo por tipo con la búsqueda aplicada y ANTES de filtrar por tipo, para
   // que elegir «Clínica» no esconda cuántas mensualidades quedan.
@@ -1486,12 +1496,7 @@ export default function PaymentsAutomationPage() {
 
   const historyBase = historyInRange.filter(p => {
     if (historyCategoryFilter !== TODOS_LOS_TIPOS && tipoDeCobro(p).clave !== historyCategoryFilter) return false;
-    const searchMatch = !historySearch ||
-      p.child?.full_name?.toLowerCase().includes(historySearch.toLowerCase()) ||
-      p.parent?.full_name?.toLowerCase().includes(historySearch.toLowerCase()) ||
-      p.concept?.toLowerCase().includes(historySearch.toLowerCase()) ||
-      p.program?.name?.toLowerCase().includes(historySearch.toLowerCase()) ||
-      p.team?.name?.toLowerCase().includes(historySearch.toLowerCase());
+    const searchMatch = coincideBusqueda(p, historySearch);
     const teamMatch = historyTeamFilter === 'all' || p.team?.name === historyTeamFilter || p.team_id === historyTeamFilter;
     return searchMatch && teamMatch;
   });
