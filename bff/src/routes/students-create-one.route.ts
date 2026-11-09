@@ -48,6 +48,7 @@ import {
   cancelWaivedFeeRows,
   auditEnrollmentFeeWaiver,
   findActiveInsurance,
+  conceptoDePlan,
 } from '../services/enrollmentBilling';
 import {
   resolverAtleta, verCobrosUnicos, cobrarUnicosDespues, CobroUnicoError, type AthleteType,
@@ -859,7 +860,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: data.full_name, remaining, today,
           }),
         });
@@ -1030,7 +1031,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: profile.full_name, remaining, today,
           }),
         });
@@ -1264,7 +1265,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: data.full_name, remaining, today,
           }),
         });

@@ -113,6 +113,48 @@ export async function billingDue(schoolId: string, startDate: string): Promise<{
     };
 }
 
+/**
+ * Concepto del cobro de un plan. Muchos planes ya se llaman «Plan …» (p. ej. «Plan Mayores mixto»):
+ * anteponer «Plan » otra vez dejaba «Plan Plan Mayores mixto» en todas las pantallas.
+ */
+export function conceptoDePlan(planName?: string | null): string {
+    const n = (planName ?? '').trim() || 'Plan';
+    return /^plan\b/i.test(n) ? n : `Plan ${n}`;
+}
+
+/**
+ * Sede del cobro de plan. Sin `branch_id` el cobro sale «Sin sede» y solo se ve en «Todas las sedes»
+ * (caso María Paula, Monster's, nov-2026). Sale del equipo del atleta: el que llegó en `teamId` o el de su
+ * inscripción activa. Es de mejor esfuerzo: si no se puede deducir, el cobro nace como antes (sin sede).
+ */
+async function sedeDelCobro(opts: {
+    schoolId: string;
+    athleteCol: AthleteCol;
+    athleteId: string;
+    teamId?: string | null;
+}): Promise<string | null> {
+    try {
+        let teamId = opts.teamId ?? null;
+        if (!teamId) {
+            const { data: enr } = await supabase
+                .from('enrollments')
+                .select('team_id')
+                .eq('school_id', opts.schoolId)
+                .eq(opts.athleteCol, opts.athleteId)
+                .eq('status', 'active')
+                .not('team_id', 'is', null)
+                .limit(1)
+                .maybeSingle();
+            teamId = (enr as any)?.team_id ?? null;
+        }
+        if (!teamId) return null;
+        const { data: team } = await supabase.from('teams').select('branch_id').eq('id', teamId).maybeSingle();
+        return (team as any)?.branch_id ?? null;
+    } catch {
+        return null;
+    }
+}
+
 export async function createPendingPayment(opts: {
     schoolId: string;
     athleteCol: AthleteCol;
@@ -161,6 +203,8 @@ export async function createPendingPayment(opts: {
     if (opts.teamId) row.team_id = opts.teamId;
     if (opts.planId) row.offering_plan_id = opts.planId;
     row[opts.athleteCol] = opts.athleteId;
+    const sede = await sedeDelCobro(opts);
+    if (sede) row.branch_id = sede;
 
     // QUIÉN PAGA. Sin esto el cobro nace sin pagador y el guard anti-IDOR de
     // create-session (payments.routes.ts) lo vuelve IMPAGABLE online: responde 403
@@ -234,7 +278,7 @@ export async function emitPlanCharge(
         athleteId,
         planId,
         amount: Number((plan as any)?.price ?? 0),
-        concept: periodo ? `Plan ${planName} - ${periodo}` : `Plan ${planName}`,
+        concept: periodo ? `${conceptoDePlan(planName)} - ${periodo}` : conceptoDePlan(planName),
         startDate,
     });
 }
