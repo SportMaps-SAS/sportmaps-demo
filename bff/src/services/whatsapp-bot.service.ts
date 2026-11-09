@@ -165,6 +165,7 @@ import {
 import {
     atenderBotonDelClubEnVenta, atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes,
     ventaCedeAlEmbudo, ventaDeFamilia, textoClubAparteDeLaVenta, textoDePagoDeServicio, tienePrecioDeAfiliado, PASO_VENTA,
+    atenderBotonDeVenta, parsearBotonDeVenta, TEXTO_SERVICIO_NO_VIGENTE,
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
 import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
@@ -417,6 +418,15 @@ async function cuerpoDelTurno(
     if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
         console.info('[whatsapp-bot] la escuela está atendiendo; el bot se calla', { conversationId });
         await marcarAbiertaSinAviso(conversationId);
+        return;
+    }
+
+    // 0c. Botón de la venta de un servicio ([Separar mi cupo] [Ver detalles] [Hablar con
+    //     alguien] [Ya pagué], Monster 2026-11-09). El id trae el servicio: se atiende acá,
+    //     antes de identificación, embudos y anuncios, para familias y para desconocidos.
+    const botonVenta = parsearBotonDeVenta(botonId);
+    if (botonVenta) {
+        await atenderBotonDeVentaEnBot(integration, conversationId, contactWaId, botonVenta, recientes, waMessageId);
         return;
     }
 
@@ -2925,7 +2935,8 @@ function ctxVentaServicio(
             return registrarConceptoEsperado(schoolId, contactWaId, { motivo: e.motivo, leadId: e.leadId, venceEn: e.venceEn });
         },
         responderPregunta: (p) => responderPreguntaDeServicio(p),
-        enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto, contexto),
+        enviar: (texto, contexto, botones) => deliver(integration, conversationId, contactWaId, texto, contexto,
+            botones?.length ? { botones } : undefined),
         avisarEscuela: (detalle) => abrirEnBuzon(integration, conversationId, contactWaId,
             avisadoHaceRato ? undefined : { motivo: 'puerta_otro', detalle }),
         comprobanteEnCurso: async () => adjuntoEnLaRafaga(recientes, o.waMessageId ?? null)
@@ -3000,6 +3011,33 @@ async function botonDelClubEnLaVenta(
     } catch (e: any) {
         console.warn('[whatsapp-bot] botón del club en la venta falló; sigue el bot de siempre', { conversationId, err: e?.message });
         return null;
+    }
+}
+
+/**
+ * Un botón de la venta (`vs:<item>:<accion>`): el servicio sale del id, no de adivinar
+ * la conversación. Servicio que ya no está vigente: una línea y nada más. Familias
+ * (número con ficha) pagan como afiliadas y no quedan como prospecto. Nunca lanza.
+ */
+async function atenderBotonDeVentaEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    boton: NonNullable<ReturnType<typeof parsearBotonDeVenta>>, recientes: FilaReciente[], waMessageId: string,
+): Promise<void> {
+    try {
+        const item = (await serviciosDelTurno(integration.school_id)).find((i) => i.id === boton.itemId) ?? null;
+        if (!item) {
+            await deliver(integration, conversationId, contactWaId, TEXTO_SERVICIO_NO_VIGENTE, { step: PASO_VENTA.NO_VIGENTE });
+            return;
+        }
+        const { data: conv } = await supabase.from('whatsapp_conversations')
+            .select('parent_id').eq('id', conversationId).maybeSingle();
+        marcarVentaEnElTurno(item);
+        const r = await atenderBotonDeVenta(
+            ctxVentaServicio(integration, conversationId, contactWaId, recientes,
+                { familia: Boolean((conv as any)?.parent_id), waMessageId }), item, boton.accion);
+        console.info('[whatsapp-bot] botón de la venta', { conversationId, servicio: item.id, accion: boton.accion, r });
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] botón de la venta falló', { conversationId, accion: boton.accion, err: e?.message });
     }
 }
 

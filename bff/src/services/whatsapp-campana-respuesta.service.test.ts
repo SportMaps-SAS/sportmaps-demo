@@ -68,6 +68,10 @@ vi.mock('../config/supabase', () => {
 });
 vi.mock('./whatsapp.service', () => ({
     sendTextMessage: vi.fn(async (_i: any, to: string, texto: string) => { est.enviados.push({ to, texto }); return { ok: true, waMessageId: `wamid.r${est.enviados.length}` }; }),
+    sendInteractiveButtons: vi.fn(async (_i: any, to: string, texto: string, botones: any[]) => {
+        est.enviados.push({ to, texto, botones: botones.map((b) => b.title), ids: botones.map((b) => b.id) });
+        return { ok: true, waMessageId: `wamid.r${est.enviados.length}` };
+    }),
     sendRawPayload: vi.fn(),
     decryptToken: () => 't',
 }));
@@ -203,34 +207,44 @@ describe('botones', () => {
         expect(db.t.notifications).toHaveLength(1);
     });
 
-    it('caso 5 (Monster 11-07): «Sí» a la campaña de la clínica → el texto de la escuela con la marca de la venta y DESPUÉS el pago aparte', async () => {
+    it('caso 5 (Monster 11-09): «Sí» a la campaña de la clínica → el texto de la escuela con [Separar mi cupo] [Ver detalles] [Hablar con alguien]; el pago sale al tocar «Separar»', async () => {
         venta.esperados = [];
+        const ITEM = '16766d2e-f8b0-4285-88e3-b1e67dda6d45';
         db.t.school_tournament_items = [{
-            id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45', school_id: ESC, name: 'Clínica de armadores y atacantes', kind: 'clase_extra',
+            id: ITEM, school_id: ESC, name: 'Clínica de armadores y atacantes', kind: 'clase_extra',
             price: '300000.00', active: true, event_id: null, starts_at: '2099-11-21T05:00:00Z', ends_at: '2099-11-23T04:59:00Z',
             allow_installments: true, abono_minimo_pct: 50, precio_afiliado: null, precios_por_fecha: null, opciones: null,
         }];
         db.t.whatsapp_campanas[0].nombre = 'Clínica de armadores';
         db.t.whatsapp_campanas[0].respuesta_si = '🏐 ¡CLÍNICA DE ARMADORES Y ATACANTES MONSTER’S VOLLEY! 21 y 22 de noviembre. '
-            + 'Si quieres reservar tu cupo, responde este mensaje y te enviamos los datos de pago.';
+            + 'Preventa: $300.000 hasta el 10 de noviembre. ¿Qué quieres hacer?';
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        // UN mensaje: el texto de la escuela con los tres botones (los datos de pago, al tocar «Separar mi cupo»).
+        expect(est.enviados).toHaveLength(1);
+        expect(est.enviados[0].texto).toContain('CLÍNICA DE ARMADORES');
+        expect(est.enviados[0].botones).toEqual(['Separar mi cupo', 'Ver detalles', 'Hablar con alguien']);
+        expect(est.enviados[0].ids).toEqual([`vs:${ITEM}:separar`, `vs:${ITEM}:detalles`, `vs:${ITEM}:humano`]);
+        const salientes = db.rpcLlamadas.filter((l) => l.fn === 'wa_record_outbound_message');
+        expect(salientes[0].args.p_type).toBe('interactive');
+        expect(salientes[0].args.p_payload).toMatchObject({ step: 'campana_respuesta_si', campana_id: CAMP, venta_servicio_id: ITEM });
+        // El lead queda con el servicio y el esperado B4 desde el «Sí»: un comprobante sin tocar botones crea el cobro de la clínica.
+        expect(est.leads[0]).toMatchObject({ servicio: { id: ITEM, tipo: 'clase_extra' } });
+        expect(venta.esperados).toEqual([{ motivo: 'clase_extra', leadId: 'lead-1', venceEn: '2099-11-23T04:59:00Z' }]);
+    });
+
+    it('«Sí» con un texto de la escuela más largo de lo que Meta deja bajo botones → el texto y, aparte, «¿Qué quieres hacer?» con los botones', async () => {
+        const ITEM = '16766d2e-f8b0-4285-88e3-b1e67dda6d45';
+        db.t.school_tournament_items = [{
+            id: ITEM, school_id: ESC, name: 'Clínica de armadores y atacantes', kind: 'clase_extra',
+            price: '300000.00', active: true, event_id: null, starts_at: '2099-11-21T05:00:00Z', ends_at: '2099-11-23T04:59:00Z',
+            allow_installments: true, abono_minimo_pct: 50, precio_afiliado: null, precios_por_fecha: null, opciones: null,
+        }];
+        db.t.whatsapp_campanas[0].nombre = 'Clínica de armadores';
+        db.t.whatsapp_campanas[0].respuesta_si = 'CLÍNICA DE ARMADORES Y ATACANTES. ' + 'Texto largo de la escuela. '.repeat(60);
         expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
         expect(est.enviados).toHaveLength(2);
-        expect(est.enviados[0].texto).toContain('CLÍNICA DE ARMADORES');
-        const pago = est.enviados[1].texto;
-        expect(pago).toContain('Valor hoy: *$300.000*.');
-        expect(pago).toContain('abono mínimo de *$150.000* (50 %)');
-        expect(pago).toContain('Nequi al 319 450 5150, a nombre de Iván Sossa');
-        expect(pago).toContain('nombre completo de quien asiste');
-        expect(pago).not.toMatch(/clase de prueba|sede/i);
-        const salientes = db.rpcLlamadas.filter((l) => l.fn === 'wa_record_outbound_message').map((l) => l.args.p_payload);
-        expect(salientes[0]).toMatchObject({ step: 'campana_respuesta_si', campana_id: CAMP, venta_servicio_id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45' });
-        expect(salientes[1]).toMatchObject({
-            step: 'venta_servicio_pago', campana_id: CAMP, automatico: true, datos_de_pago: true,
-            venta_servicio_id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45',
-        });
-        // El lead queda con el servicio y el esperado B4 a su nombre (el comprobante crea el cobro de la clínica).
-        expect(est.leads[0]).toMatchObject({ servicio: { id: '16766d2e-f8b0-4285-88e3-b1e67dda6d45', tipo: 'clase_extra' } });
-        expect(venta.esperados).toEqual([{ motivo: 'clase_extra', leadId: 'lead-1', venceEn: '2099-11-23T04:59:00Z' }]);
+        expect(est.enviados[0].botones).toBeUndefined();
+        expect(est.enviados[1]).toMatchObject({ texto: '¿Qué quieres hacer? 👇', botones: ['Separar mi cupo', 'Ver detalles', 'Hablar con alguien'] });
     });
 
     it('«Sí» con la escuela escribiendo (modo discreto) o tomada: no sale el texto, pero quedan lead y aviso', async () => {
