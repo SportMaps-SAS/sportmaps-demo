@@ -2487,6 +2487,14 @@ async function correrFlows(e: Escuela): Promise<Resultado[]> {
  *    escuela» con aviso al buzón; nunca un dato inventado.
  *  · «Es posible agendar una clase de prueba?» → sale de la venta (el club, permitido).
  *  · «ya te mando el comprobante» → «con el nombre completo de quien asiste».
+ *  · Botones VIEJOS del embudo del club tocados en plena venta (Monster 2026-11-08,
+ *    Nicolás: «⚫ Sede Suba» → 5 preguntas → franja → clase de prueba de $15.000 que nunca
+ *    pidió): no avanzan nada; el primero recibe UNA respuesta de la venta, los demás nada.
+ *  · Los datos de quien asiste («Nicolás Cubides Ávila / 18 de Diciembre del 2006 /
+ *    Opuesto»): se anotan y se OFRECE el pago con una pregunta (sin datos de pago ni
+ *    «te lo confirma la escuela»).
+ *  · Pedir la clase de prueba por texto en plena venta: antes del embudo, «va aparte» y
+ *    su valor.
  *  · Reloj fijo el día ANTES y el día DEL cambio de cada tramo de precio (Monster:
  *    10-nov $300.000 / 11-nov $350.000; nunca «9 de noviembre»).
  *  · Verificador global en TODO mensaje, con la regla de producción (`verificarSalida` +
@@ -2876,6 +2884,43 @@ async function correrVentas(e: Escuela): Promise<Resultado[]> {
                 revisarTurnoVenta(c, r, cv, it);
                 debe(r, c.hablo(), 'a «ya te mando el comprobante» no le contestó nada');
                 if (c.hablo()) debe(r, /nombre completo/i.test(c.ultimoTexto()), `no le pidió el nombre completo de quien asiste: «${cortoQa(c.ultimoTexto())}»`);
+            }, { base: base.ficha }));
+            // Monster 2026-11-08 (Nicolás, 308de503): botones VIEJOS del embudo en plena venta.
+            const sede = cv.e.sedes[0] ?? null;
+            fase2.push(() => correrVenta(`[${it.name}] botones VIEJOS del embudo en plena venta (sede, opción, franja, recordatorio) → no avanzan nada`, cv, it, async (c, r) => {
+                const botonSede = sede ? `${BOTON_EMBUDO.SEDE}${sede.branchId}` : `${BOTON_EMBUDO.SEDE}${randomUUID()}`;
+                await c.decir(sede?.titulo ?? '⚫ Sede Suba', botonSede);
+                revisarTurnoVenta(c, r, cv, it);
+                debe(r, c.hablo(), 'al primer botón viejo del club no le contestó nada (una respuesta dentro de la venta)');
+                const primero = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+                debe(r, primero.some((s) => /bot[oó]n era de un mensaje anterior/i.test(s.texto) && nombraServicio(s.texto, it)),
+                    `al botón viejo no le contestó dentro de la venta: «${cortoQa(c.ultimoTexto())}»`);
+                for (const [titulo, id] of [['Hombre', `${BOTON_EMBUDO.OPCION}sexo:1`], ['Sáb 14 nov · 7:00–9:00', `${BOTON_EMBUDO.FRANJA}${randomUUID()}`],
+                    ['Sí, claro', BOTON_EMBUDO.OPTIN_SI]] as const) {
+                    await c.decir(titulo, id, { silencioOk: true });
+                    revisarTurnoVenta(c, r, cv, it);
+                    debe(r, !paraLaFamilia(c.turnos.at(-1)?.salidas ?? []).length, `el botón viejo «${titulo}» volvió a contestar (o avanzó el embudo)`);
+                }
+            }, { base: base.ficha }));
+            fase2.push(() => correrVenta(`[${it.name}] datos de quien asiste («Nicolás Cubides Ávila / 18 de Diciembre del 2006 / Opuesto») → se anotan y se ofrece el pago con una pregunta`, cv, it, async (c, r) => {
+                await c.decir('Nicolás Cubides Ávila\n18 de Diciembre del 2006\nOpuesto');
+                revisarTurnoVenta(c, r, cv, it);
+                debe(r, c.hablo(), 'a los datos de quien asiste no le contestó nada');
+                if (!c.hablo()) return;
+                const t = c.ultimoTexto();
+                debe(r, /Anot[eé] a \*Nicol[aá]s Cubides [AÁ]vila\*/.test(t), `no dijo que anotó a quien asiste: «${cortoQa(t)}»`);
+                debe(r, !CONFIRMA_ESCUELA.test(t), `lo escaló como pregunta («te lo confirma la escuela»): «${cortoQa(t)}»`);
+                debe(r, /\?\s*$/.test(t) && !traeCuenta(t, cuentasIt), 'no ofreció el pago con una pregunta (o mandó los datos de pago sin que los pidiera)');
+            }, { base: base.ficha }));
+            fase2.push(() => correrVenta(`[${it.name}] en plena venta pide la clase de prueba POR TEXTO → «va aparte» y su valor ANTES del embudo`, cv, it, async (c, r) => {
+                await c.decir('Quiero agendar una clase de prueba para entrar al club');
+                revisarTurnoVenta(c, r, cv, it, { pidioClub: true });
+                const fam = paraLaFamilia(c.turnos.at(-1)?.salidas ?? []);
+                const aparte = fam.findIndex((s) => /va aparte/i.test(s.texto) && nombraServicio(s.texto, it));
+                debe(r, aparte === 0, 'no aclaró ANTES de todo que el club va aparte del servicio');
+                if (aparte >= 0 && cv.e.precio) {
+                    debe(r, mencionaMonto(fam[aparte].texto, cv.e.precio), `no dijo cuánto cuesta la clase (${formatoPesos(cv.e.precio)})`);
+                }
             }, { base: base.ficha }));
             fase2.push(() => correrVenta(`[${it.name}] tras la ficha: «¿Cuánto es y cómo pago?» → el pago aparte`, cv, it, async (c, r) => {
                 await c.decir('¿Cuánto es y cómo pago?');

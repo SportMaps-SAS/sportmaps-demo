@@ -77,7 +77,7 @@ describe('redactarRespuestaDeProspecto con catálogo', () => {
         expect(system).toContain('<catalogo>\n[Servicio 1]\nServicio: Clínica de armadores y atacantes');
         expect(system).toContain('Precio por fecha: $300.000 hasta el martes 10 de noviembre; desde el miércoles 11, $350.000');
         expect(system).toContain('los datos de <catalogo> MANDAN sobre la ficha');
-        expect(system).toContain('Cuentas para pagar: por Nequi al número 3194505150 (a nombre de Iván Sossa)');
+        expect(system).toContain('Cuentas para pagar: por Nequi al 319 450 5150, a nombre de Iván Sossa');
         // Las cuentas se leen por el tipo del servicio (las restringidas a otra cosa no salen).
         expect(medios.mediosDePago).toHaveBeenCalledWith(base.schoolId, { categoria: 'clase_extra' });
     });

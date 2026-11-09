@@ -219,7 +219,7 @@ describe('botones', () => {
         const pago = est.enviados[1].texto;
         expect(pago).toContain('Valor hoy: *$300.000*.');
         expect(pago).toContain('abono mínimo de *$150.000* (50 %)');
-        expect(pago).toContain('Nequi al número 3194505150 (a nombre de Iván Sossa)');
+        expect(pago).toContain('Nequi al 319 450 5150, a nombre de Iván Sossa');
         expect(pago).toContain('nombre completo de quien asiste');
         expect(pago).not.toMatch(/clase de prueba|sede/i);
         const salientes = db.rpcLlamadas.filter((l) => l.fn === 'wa_record_outbound_message').map((l) => l.args.p_payload);

@@ -26,15 +26,18 @@
  *        · lo que dijo el BOT entonces no se siembra: lo vuelve a decir el de hoy.
  *      Fotos, audios y formularios no se reproducen (se cuentan).
  *   3. Revisa TODO lo que el bot mandaría con las reglas prohibidas de la venta:
- *      menú de sedes, «clase de prueba» sin que la pidieran, las preguntas del
- *      embudo, otro servicio, pedir el correo, montos y fechas de precio que no
+ *      menú de sedes, «clase de prueba» sin que la pidieran, la clase de prueba
+ *      ofrecida o agendada (horarios, recordatorio, «se agenda una clase»), las
+ *      preguntas del embudo, otro servicio, pedir el correo, montos y fechas de precio que no
  *      están en los datos (el MISMO verificador de producción del frente B:
  *      `verificarSalida` con `catalogoParaProspecto`, que admite el texto libre de
  *      la escuela salvo las líneas que contradicen el catálogo) y, como guarda, la
  *      fecha del error conocido («9 de noviembre» en Monster).
  *      Las reglas de la venta valen desde que la conversación entra en un
- *      servicio y hasta que la persona pide el club de forma explícita
- *      (`pideElClub`); fechas y montos, siempre. A una familia identificada el bot
+ *      servicio y hasta que la persona pide el club de forma explícita CON UN
+ *      TEXTO SUYO (`pideElClub`, «clase de prueba»); un botón viejo del embudo
+ *      tocado en plena venta no cuenta (`entranteCuentaComoClub`). Fechas y
+ *      montos, siempre. A una familia identificada el bot
  *      le cita sus cobros reales: ahí los montos se revisan solo en salientes
  *      marcados como venta.
  *   Salida: resumen por conversación (teléfono enmascarado a 4 dígitos) y total
@@ -71,7 +74,7 @@ import { simularEnvios, enSimulacion, type SalidaSimulada } from '../src/service
 import { sendTextMessage, type ParsedInboundMessage } from '../src/services/whatsapp.service';
 import { atenderRespuestaDeCampana } from '../src/services/whatsapp-campana-respuesta.service';
 import { serviciosDeAnuncio, eventosNombrados, type ItemConFicha } from '../src/services/whatsapp-anuncio-destino';
-import { itemNombradoEn, pideElClub } from '../src/services/whatsapp-venta-contexto';
+import { esBotonDelClub, itemNombradoEn, pideElClub } from '../src/services/whatsapp-venta-contexto';
 import { tokensDistintivos } from '../src/services/whatsapp-venta-servicios.service';
 import { ajustesWhatsAppDeEscuela, textoDeEscuela } from '../src/services/whatsapp-ajustes-escuela.service';
 import { normalizar } from '../src/services/whatsapp-clase-cortesia.service';
@@ -265,8 +268,41 @@ const PREFIJO_BOTON_SEDE = 'sm_em_sede:';
 /** Los pasos del embudo de la CLASE DE PRUEBA (preguntas, horarios, pago). No `embudo_pregunta_a_la_escuela` (buzón) ni `embudo_a_persona`. */
 const PASOS_EMBUDO_CLASE = new Set(['embudo_pregunta', 'embudo_horarios', 'embudo_otra_sede', 'embudo_consentimiento', 'embudo_esperando_pago', 'embudo_agendada']);
 
-export type CodigoViolacion = 'menu_sedes' | 'clase_prueba' | 'preguntas_embudo' | 'otro_servicio' | 'pide_correo'
+/**
+ * La clase de prueba OFRECIDA o AGENDADA (Monster 2026-11-08, Nicolás: pagó la clínica
+ * y le agendaron y cobraron una clase de prueba de $15.000 que nunca pidió). Aparte de
+ * «clase de prueba» en el texto (`clase_prueba`): los pasos que muestran horarios,
+ * separan el cupo, piden el pago o confirman la clase; el «sí» del recordatorio («Te
+ * escribo antes de la clase para recordártela»), que no dice «de prueba»; la frase del
+ * embudo «Para empezar en el club se agenda una clase…»; y los botones de franja,
+ * recordatorio y cortesía.
+ */
+const PASOS_AGENDA_CLASE = new Set(['embudo_horarios', 'embudo_otra_sede', 'embudo_consentimiento', 'embudo_esperando_pago', 'embudo_agendada']);
+const RE_AGENDA_CLASE = /se agenda una clase|te escribo antes de la clase|record[aá]rtela|\b(tu|la|su) clase (de (prueba|cortes[ií]a) )?(qued[oó]|est[aá]|ya est[aá]) (agendada|separada|reservada|confirmada)/i;
+const BOTON_AGENDA_CLASE = /^sm_em_(f:|mas$|optin_|cambiar$|reprogramar$|ahi$)|^sm_cc_/;
+
+export type CodigoViolacion = 'menu_sedes' | 'clase_prueba' | 'agenda_clase' | 'preguntas_embudo' | 'otro_servicio' | 'pide_correo'
     | 'fecha_tramo' | 'monto_fuera';
+
+/**
+ * ¿Este entrante cuenta como «pidió el club»? (`yaPidioConTexto`: la persona ya lo
+ * pidió con un texto suyo en esta conversación.)
+ *  · Un TEXTO propio con `pideElClub` o «clase de prueba» → sí.
+ *  · Un botón de un flujo del club (`esBotonDelClub`: `sm_em_*`, `sm_cc_*`, puerta) →
+ *    solo si NO hay venta activa, o si ya lo pidió con texto. En plena venta, un botón
+ *    viejo del embudo (de un mensaje anterior) no es pedir el club: antes contaba, y
+ *    esa exención tapó el caso de Nicolás (replay «0 violaciones» con el bot repitiendo
+ *    el error: sede → 5 preguntas → franja → clase de prueba agendada).
+ * Pura.
+ */
+export function entranteCuentaComoClub(
+    m: { texto: string | null | undefined; botonId: string | null | undefined },
+    o: { enVenta: boolean; yaPidioConTexto: boolean },
+): boolean {
+    const propio = m.botonId ? '' : String(m.texto ?? '');
+    if (pideElClub(propio) || RE_CLASE_PRUEBA.test(propio)) return true;
+    return esBotonDelClub(m.botonId) && (!o.enVenta || o.yaPidioConTexto);
+}
 
 export interface Violacion { codigo: CodigoViolacion; detalle: string }
 
@@ -337,6 +373,12 @@ export function violacionesDeVenta(s: Pick<SalidaSimulada, 'texto' | 'step' | 'o
             v.push({ codigo: 'menu_sedes', detalle: `menú de sedes en una venta: «${corto(texto)}»` });
         }
         if (RE_CLASE_PRUEBA.test(texto)) v.push({ codigo: 'clase_prueba', detalle: `«clase de prueba» sin pedirla: «${corto(texto.slice(Math.max(0, texto.search(RE_CLASE_PRUEBA) - 40)))}»` });
+        const botonDeAgenda = ops.find((o) => BOTON_AGENDA_CLASE.test(o.id));
+        if (PASOS_AGENDA_CLASE.has(step) || step.startsWith('cortesia_') || RE_AGENDA_CLASE.test(texto) || botonDeAgenda) {
+            const donde = RE_AGENDA_CLASE.test(texto) ? `«${corto(texto.slice(Math.max(0, texto.search(RE_AGENDA_CLASE) - 30)), 80)}»`
+                : step || `botón ${botonDeAgenda?.id.slice(0, 16)}`;
+            v.push({ codigo: 'agenda_clase', detalle: `clase de prueba ofrecida o agendada en una venta (${step || 'sin paso'}): ${donde}` });
+        }
         const pregunta = c.preguntasEmbudo.find((p) => p && texto.includes(p));
         if (pregunta || PASOS_EMBUDO_CLASE.has(step) || ops.some((o) => o.id.startsWith('sm_em_') && !o.id.startsWith(PREFIJO_BOTON_SEDE))) {
             v.push({ codigo: 'preguntas_embudo', detalle: `preguntas del embudo en una venta (${pregunta ? `«${corto(pregunta, 60)}»` : step || 'botones sm_em_'})` });
@@ -581,6 +623,8 @@ async function reproducir(
     let item: ItemConFicha | null = null;
     let enVenta = false;
     let pidioClub = false;
+    /** La persona pidió el club con un texto SUYO en esta conversación (no se apaga). */
+    let pidioClubConTexto = false;
     const ultimoEnMemoria = () => Math.max(0, ...((sesion.estado.tablas?.whatsapp_messages ?? []) as Fila[]).map((m) => momentoDe(m)));
     const nombrado = (texto: string | null | undefined) => (texto ? itemNombradoEn(texto, base.items) : null);
 
@@ -614,10 +658,12 @@ async function reproducir(
         const referral = f.referral && typeof f.referral === 'object' ? f.referral : null;
         const itEntrada = nombrado(texto) ?? (referral ? nombrado(`${referral.headline ?? ''} ${referral.body ?? ''}`) : null);
         if (itEntrada) { item = itEntrada; enVenta = true; pidioClub = false; }
-        // Un botón del embudo (`sm_em_*`) tocado por la persona cuenta como elegir el club: en el
-        // replay ese botón lo puso el bot de ENTONCES y se reproduce tal cual; sin esto, ya arreglado
-        // el bot, su respuesta al botón seguiría contando como «embudo en una venta».
-        if (pideElClub(texto) || RE_CLASE_PRUEBA.test(texto) || botonId?.startsWith('sm_em_')) pidioClub = true;
+        // Pedir el club: un TEXTO suyo, siempre; un botón de un flujo del club (`sm_em_*`,
+        // `sm_cc_*`, puerta), solo fuera de una venta o si ya lo pidió con texto. Antes cualquier
+        // `sm_em_*` contaba (el botón lo puso el bot de ENTONCES) y eso tapó a Nicolás: el bot de
+        // hoy, en plena venta de la clínica, seguía el botón viejo hasta agendar la clase de prueba.
+        if (!botonId && (pideElClub(texto) || RE_CLASE_PRUEBA.test(texto))) pidioClubConTexto = true;
+        if (entranteCuentaComoClub({ texto, botonId }, { enVenta, yaPidioConTexto: pidioClubConTexto })) pidioClub = true;
 
         let t: ResultadoTurnoSimulado | null = null;
         const entrada = botonId ? `${texto || botonId} [${botonId.slice(0, 28)}]` : texto;

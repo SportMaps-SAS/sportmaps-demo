@@ -105,6 +105,58 @@ export function pideElClub(texto: string | null | undefined): boolean {
 }
 
 /**
+ * Botones de los flujos del CLUB: el embudo de la clase de prueba (`sm_em_*`:
+ * sede, opciones de las preguntas, franjas, recordatorio), la clase de cortesía
+ * (`sm_cc_*`) y las opciones de la puerta que ofrecen el club (información,
+ * cortesía, inscribirse, precios). Los ids son el contrato con el webhook
+ * (BOTON_EMBUDO, BOTON_CC, BOTON_PUERTA; una prueba vigila que coincidan).
+ * «Ya soy del club» (`sm_pd_club`) NO está: es identificarse, y al afiliado le
+ * toca su precio en la venta. Pura.
+ */
+const PREFIJOS_BOTON_CLUB = ['sm_em_', 'sm_cc_'];
+const BOTONES_PUERTA_CLUB = new Set(['sm_pd_info', 'sm_pd_cortesia', 'sm_pd_inscribirme', 'sm_pd_precios']);
+
+export function esBotonDelClub(botonId: string | null | undefined): boolean {
+    const id = String(botonId ?? '');
+    return !!id && (PREFIJOS_BOTON_CLUB.some((p) => id.startsWith(p)) || BOTONES_PUERTA_CLUB.has(id));
+}
+
+/**
+ * ¿La persona pidió el club con un texto SUYO (no un botón) en estos mensajes o en
+ * `extra` (la ráfaga)? Un botón viejo del embudo tocado en plena venta NO es pedir
+ * el club (Monster 2026-11-08, Nicolás: pagó la clínica, tocó «Sede Suba» de un
+ * mensaje anterior y terminó con una clase de prueba de $15.000 que nunca pidió).
+ * Pura.
+ */
+export function pidioElClubConTexto(mensajes: FilaReciente[], extra: (string | null | undefined)[] = []): boolean {
+    if (extra.some((t) => pideElClub(t))) return true;
+    return mensajes.some((f) => f.direction === 'inbound' && (f.type ?? 'text') === 'text' && pideElClub(textoDe(f)));
+}
+
+/**
+ * ¿Este botón, tocado en plena venta, se queda quieto? Los de los flujos del club
+ * (`esBotonDelClub`) salvo «Hablar con una persona» del embudo (`sm_em_persona`):
+ * pedir una persona vale siempre. Pura.
+ */
+export function botonDelClubQuietoEnVenta(botonId: string | null | undefined): boolean {
+    return esBotonDelClub(botonId) && botonId !== 'sm_em_persona';
+}
+
+/**
+ * La venta que había ANTES de que la persona pidiera el club por texto: la misma
+ * lectura de `ventaActiva` sin contar los entrantes que piden el club. Con esto el
+ * bot sabe de qué servicio aclarar «el club va aparte» justo cuando lo piden (con
+ * el pedido contado, `ventaActiva` ya da null). Pura.
+ */
+export function ventaAntesDelPedidoDelClub(
+    mensajes: FilaReciente[],
+    items: ItemConFicha[],
+    o: { ahora?: number; leadServicioId?: string | null; dias?: number } = {},
+): VentaActiva | null {
+    return ventaActiva(mensajes.filter((f) => !(f.direction === 'inbound' && pideElClub(textoDe(f)))), items, o);
+}
+
+/**
  * La venta activa de la conversación, o null. Pura.
  *
  * `mensajes`: los de la conversación (cualquier orden; idealmente hasta

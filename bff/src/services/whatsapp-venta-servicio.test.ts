@@ -17,6 +17,7 @@ import {
     pideDatosDePago, deLaDelServicio, enElServicio, posibleVentaEnRecientes,
     PASO_VENTA, TEXTO_A_LA_ESCUELA, TEXTO_A_LA_ESCUELA_REPETIDO, TEXTO_OTRA_FECHA, TEXTO_YA_PAGO,
     TEXTO_COMPROBANTE_YA_RECIBIDO, TEXTO_CUPO_CON_PAGO, SIN_CUENTAS_DE_PAGO,
+    atenderBotonDelClubEnVenta, textoBotonDelClubEnVenta, textoClubAparteDeLaVenta, datosDeAsistenteEnVenta,
     type CtxVentaServicio, type IntencionVenta,
 } from './whatsapp-venta-servicio';
 import { MARCA_VENTA, ventaActiva, type VentaActiva } from './whatsapp-venta-contexto';
@@ -141,7 +142,7 @@ describe('textoDePagoDeServicio', () => {
             'Para separar tu cupo en la Clínica de armadores y atacantes:',
             'Valor hoy: *$300.000* (hasta el martes 10 de noviembre; desde el 11, *$350.000*).\n' +
                 'Puedes separar el cupo con un abono mínimo de *$150.000* (50 %).',
-            'Transfiere por Nequi o Daviplata al número 3194505150 (a nombre de Iván Sossa).',
+            'Transfiere por Nequi o Daviplata al 319 450 5150, a nombre de Iván Sossa.',
             'Envía aquí la foto del comprobante con el nombre completo de quien asiste y te confirmamos el cupo.',
         ].join('\n\n'));
         expect(t).not.toMatch(/9 de noviembre|undefined|null|NaN|gratis/);
@@ -171,7 +172,7 @@ describe('textoDePagoDeServicio', () => {
             { tipo: 'Nequi', numero: '3194505150', titular: 'Iván Sossa' },
             { tipo: 'Bancolombia ahorros', numero: '123-456789-01', titular: 'Monster Volley SAS' },
         ], { hoy: '2026-11-08' });
-        expect(varias).toContain('Transfiere a una de estas cuentas:\n• Nequi: 3194505150 (a nombre de Iván Sossa)\n• Bancolombia ahorros: 123-456789-01 (a nombre de Monster Volley SAS)');
+        expect(varias).toContain('Transfiere a una de estas cuentas:\n• Nequi: 319 450 5150 (a nombre de Iván Sossa)\n• Bancolombia ahorros: 123-456789-01 (a nombre de Monster Volley SAS)');
     });
 
     it('cualquier servicio: el artículo sale del nombre («en el Torneo…»); sin negrita: «*nombre*» es el título de la ficha', () => {
@@ -448,7 +449,7 @@ describe('caso 6: conversación 932fcd83 — dos dudas seguidas tras los datos d
         const { ctx, reg } = ctxDe({ recientes });
         expect(await atenderVentaDeServicio(ctx, VENTA, 'Me confima los datos del titular de la cuenta y la cc')).toBe('venta_pago');
         const { texto, contexto } = reg.enviados[0];
-        expect(texto).toContain('(a nombre de Iván Sossa)');
+        expect(texto).toContain('Nequi o Daviplata al 319 450 5150, a nombre de Iván Sossa');
         expect(texto).toContain('El documento del titular de la cuenta te lo confirma la escuela por aquí.');
         expect(contexto).toMatchObject({ pendiente_escuela: 'Me confima los datos del titular de la cuenta y la cc' });
         expect(reg.avisos[0]).toContain('documento del titular');
@@ -542,5 +543,97 @@ describe('ventaDeFamilia', () => {
         expect(posibleVentaEnRecientes(normal, '¿cuánto vale la clínica?')).toBe(true);
         expect(posibleVentaEnRecientes([campana], 'hola')).toBe(true);
         expect(posibleVentaEnRecientes([sal(1, 'x', { payload: { [MARCA_VENTA]: CLINICA.id } })], 'ok')).toBe(true);
+    });
+});
+
+// ─── 2026-11-08 (tarde): botones viejos del club, el club aparte y los datos de quien asiste ──
+
+describe('Nicolás (308de503, •••7726): botones viejos del club en plena venta', () => {
+    it('el primer botón del club → UNA respuesta dentro de la venta (sin sedes, sin clase de prueba, sin $15.000)', async () => {
+        const { ctx, reg } = ctxDe({ recientes: [sal(60, FICHA_DE_LA_ESCUELA, { ai_generated: false })] });
+        expect(await atenderBotonDelClubEnVenta(ctx, VENTA)).toBe('venta_boton_club');
+        expect(reg.enviados).toHaveLength(1);
+        expect(reg.enviados[0].texto).toBe(textoBotonDelClubEnVenta(CLINICA, { pagado: false }));
+        expect(reg.enviados[0].texto).toContain('¿Te paso los datos para separar tu cupo?');
+        expect(reg.enviados[0].contexto).toMatchObject({ step: PASO_VENTA.BOTON_CLUB, [MARCA_VENTA]: CLINICA.id });
+        sinProhibidas(reg);
+    });
+
+    it('los toques siguientes (franja, «Hombre», «Sí, claro» del recordatorio) → silencio, sin repetir la respuesta', async () => {
+        const yaRespondido = sal(2, textoBotonDelClubEnVenta(CLINICA, { pagado: false }), { payload: { step: PASO_VENTA.BOTON_CLUB, [MARCA_VENTA]: CLINICA.id } });
+        const { ctx, reg } = ctxDe({ recientes: [yaRespondido] });
+        for (let i = 0; i < 4; i++) expect(await atenderBotonDelClubEnVenta(ctx, VENTA)).toBe('venta_silencio');
+        expect(reg.enviados).toHaveLength(0);
+    });
+
+    it('si ya mandó el comprobante, la respuesta lo dice (la escuela valida) y no ofrece el pago otra vez', async () => {
+        const { ctx, reg } = ctxDe({ recientes: [ent(30, '', { type: 'image' })] });
+        await atenderBotonDelClubEnVenta(ctx, VENTA);
+        expect(reg.enviados[0].texto).toBe(textoBotonDelClubEnVenta(CLINICA, { pagado: true }));
+        expect(reg.enviados[0].texto).toContain('la escuela valida tu comprobante');
+        expect(reg.enviados[0].texto).not.toContain('¿Te paso los datos');
+    });
+
+    it('pedir el club por TEXTO en plena venta: va aparte del servicio y se dice cuánto cuesta ANTES de agendar', () => {
+        expect(textoClubAparteDeLaVenta(CLINICA, { nombre: 'clase de prueba', precio: '$15.000', gratis: false }))
+            .toBe('Claro 🙌 Lo del club va aparte de la Clínica de armadores y atacantes: para empezar se agenda una *clase de prueba*, que cuesta *$15.000*.');
+        expect(textoClubAparteDeLaVenta(CLINICA, { nombre: 'clase de cortesía', precio: null, gratis: true })).toContain('que es gratis');
+    });
+});
+
+describe('los datos de quien asiste en una venta («Nicolás Cubides Ávila / 18 de Diciembre del 2006 / Opuesto»)', () => {
+    const DATOS = 'Nicolás Cubides Ávila\n18 de Diciembre del 2006\nOpuesto';
+
+    it('se reconocen: nombre + fecha, año o posición', () => {
+        expect(datosDeAsistenteEnVenta(DATOS)).toEqual({ nombre: 'Nicolás Cubides Ávila' });
+        expect(datosDeAsistenteEnVenta('Laura Gómez Ruiz 2012')).toEqual({ nombre: 'Laura Gómez Ruiz' });
+        expect(datosDeAsistenteEnVenta('Mariana Pérez, 15 años, armadora')).toEqual({ nombre: 'Mariana Pérez' });
+        expect(datosDeAsistenteEnVenta('Nicolás cubides 18/12/2006')).toEqual({ nombre: 'Nicolás Cubides' });
+    });
+
+    it('falsos positivos que NO lo son: «Sede Suba», «Hombre», «Club y torneos», «Mucho gusto», preguntas', () => {
+        for (const t of ['Sede Suba', '⚫ Sede Suba', 'Hombre', 'Club y torneos', 'Aún no tengo posición', 'Mucho gusto',
+            'Requiero algún otro dato o algo adicional?', 'Esa ya está acabada de pagar', 'Okey muchas gracias quedo atento',
+            'Como asi disculpa', 'Mixto Mayores Profundizacion', 'Buenas tardes', '18/12/2006', 'Opuesto']) {
+            expect(datosDeAsistenteEnVenta(t), t).toBeNull();
+        }
+    });
+
+    it('un nombre suelto cuenta SOLO si el bot acababa de pedir «el nombre completo de quien asiste»', () => {
+        expect(datosDeAsistenteEnVenta('Nicolás cubides')).toBeNull();
+        const pidio = sal(2, TEXTO_YA_PAGO);
+        expect(datosDeAsistenteEnVenta('Nicolás cubides', [pidio])).toEqual({ nombre: 'Nicolás Cubides' });
+        expect(datosDeAsistenteEnVenta('Mucho gusto', [pidio])).toBeNull();
+    });
+
+    it('sin pago todavía: «gracias, anoté a…» + el pago OFRECIDO con una pregunta (sin cuentas ni valores) y se anota', async () => {
+        const anotados: string[] = [];
+        const { ctx, reg } = ctxDe({ recientes: [sal(60, FICHA_DE_LA_ESCUELA, { ai_generated: false })] });
+        ctx.anotarAsistente = async (nombre) => { anotados.push(nombre); };
+        expect(await atenderVentaDeServicio(ctx, VENTA, DATOS)).toBe('venta_asistente');
+        expect(anotados).toEqual(['Nicolás Cubides Ávila']);
+        expect(reg.enviados).toHaveLength(1);
+        expect(reg.enviados[0].texto).toBe('¡Gracias! 🙌 Anoté a *Nicolás Cubides Ávila* como asistente de la Clínica de armadores y atacantes. ¿Te paso los datos para separar el cupo?');
+        expect(reg.enviados[0].texto).not.toMatch(/319|Nequi|\$/);
+        expect(reg.enviados[0].contexto).toMatchObject({ step: PASO_VENTA.ASISTENTE, asistente: 'Nicolás Cubides Ávila' });
+        expect(reg.avisos).toEqual([]);
+        expect(reg.preguntas).toEqual([]); // ni la IA ni «te lo confirma la escuela»
+        sinProhibidas(reg);
+        // «Sí» → ahí sí, los datos de pago.
+        const si = ctxDe({ recientes: [sal(1, reg.enviados[0].texto, { payload: reg.enviados[0].contexto })] });
+        expect(await atenderVentaDeServicio(si.ctx, VENTA, 'Sí')).toBe('venta_pago');
+    });
+
+    it('con el comprobante ya enviado: se anota y se dice que la escuela valida (no se ofrece pagar otra vez)', async () => {
+        const { ctx, reg } = ctxDe({ recientes: [ent(3, '', { type: 'image' })] });
+        await atenderVentaDeServicio(ctx, VENTA, DATOS);
+        expect(reg.enviados[0].texto).toBe('¡Gracias! 🙌 Anoté a *Nicolás Cubides Ávila* como asistente de la Clínica de armadores y atacantes. La escuela valida tu comprobante y te confirma el cupo por aquí.');
+    });
+
+    it('el mismo nombre otra vez en 30 min: no se repite', async () => {
+        const previo = sal(5, 'Anoté…', { payload: { step: PASO_VENTA.ASISTENTE, asistente: 'Nicolás Cubides Ávila' } });
+        const { ctx, reg } = ctxDe({ recientes: [previo] });
+        expect(await atenderVentaDeServicio(ctx, VENTA, DATOS)).toBe('venta_silencio');
+        expect(reg.enviados).toHaveLength(0);
     });
 });

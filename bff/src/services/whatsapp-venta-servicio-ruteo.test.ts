@@ -50,6 +50,7 @@ const h = vi.hoisted(() => {
             return { data: { ai_enabled: true, mode: 'auto', responder_desconocidos: false, responder_prospectos: true }, error: null };
         }
         if (table === 'schools') return { data: { name: 'Monster´s Volley Club', slug: 'monsters-volley-club' }, error: null };
+        if (table === 'school_trial_class_settings') return { data: { nombre_clase: 'prueba', trial_price: 15000 }, error: null };
         if (table === 'whatsapp_inbound_queue' || table === 'school_signup_leads') return { data: single ? null : [], error: null };
         return { data: single ? null : [], error: null };
     }
@@ -144,9 +145,9 @@ const respuestaCampana = (min: number) => sal(min, FICHA + ' Responde este mensa
 
 const PROHIBIDO = /elige la sede|sede que te queda|clase de prueba|5 preguntas|9 de noviembre|\$15\.000/i;
 
-async function turno(texto: string) {
-    h.state.filas.unshift(ent(0, texto));
-    return simularEnvios(() => atenderDesconocido(INTEG, 'conv-1', TEL, texto));
+async function turno(texto: string, botonId: string | null = null) {
+    h.state.filas.unshift(ent(0, texto, botonId ? { type: 'interactive' } : {}));
+    return simularEnvios(() => atenderDesconocido(INTEG, 'conv-1', TEL, texto, botonId));
 }
 
 beforeEach(() => {
@@ -209,7 +210,7 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         const b = await turno('Me confima los datos del titular de la cuenta y la cc');
         expect(b.resultado).toBe('venta_pago');
         const pago = b.salidas.find((s) => s.payload?.step === PASO_VENTA.PAGO)!;
-        expect(pago.texto).toContain('Nequi o Daviplata al número 3194505150 (a nombre de Iván Sossa)');
+        expect(pago.texto).toContain('Nequi o Daviplata al 319 450 5150, a nombre de Iván Sossa');
         expect(pago.texto).toContain('nombre completo de quien asiste');
         expect(pago.payload).toMatchObject({ [MARCA_VENTA]: CLINICA.id, datos_de_pago: true });
         for (const s of [...a.salidas, ...b.salidas]) expect(s.texto).not.toMatch(PROHIBIDO);
@@ -288,6 +289,55 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         const { resultado, salidas } = await turno('Es posible agendar una clase de prueba?');
         expect(String(resultado)).not.toMatch(/^venta_/);
         for (const s of salidas) expect(s.payload?.[MARCA_VENTA]).toBeUndefined();
+    });
+
+    it('Nicolás (308de503): con la venta activa, los botones VIEJOS del embudo no avanzan nada (sede → 1 respuesta; franja, opciones, recordatorio → nada)', async () => {
+        h.state.filas = [sal(4 * 24 * 60, FICHA, { ai_generated: false, payload: { automatico: 'true' } })];
+        const sede = await turno('⚫ Sede Suba', 'sm_em_sede:531a2df9-dab4-47bb-a1cf-5a904b276c46');
+        expect(sede.resultado).toBe('venta_boton_club');
+        const textos = sede.salidas.filter((s) => !s.texto.startsWith('['));
+        expect(textos).toHaveLength(1);
+        expect(textos[0].texto).toContain('Ese botón era de un mensaje anterior');
+        expect(textos[0].payload).toMatchObject({ step: PASO_VENTA.BOTON_CLUB, [MARCA_VENTA]: CLINICA.id });
+        // La respuesta quedó en la conversación: los toques siguientes no la repiten.
+        h.state.filas.unshift(sal(0.5, textos[0].texto, { payload: textos[0].payload }));
+        for (const [t, id] of [['Hombre', 'sm_em_o:sexo:1'], ['Sáb 14 nov · 7:00–9:00', 'sm_em_f:9ff7110c-389c-4fe1-a823-a40696ea6b25'],
+            ['Sí, claro', 'sm_em_optin_si'], ['Ver más horarios', 'sm_cc_mas'], ['Quiero información', 'sm_pd_info']] as const) {
+            const r = await turno(t, id);
+            expect(r.resultado, id).toBe('venta_silencio');
+            expect(r.salidas.filter((s) => !s.texto.startsWith('[')), id).toEqual([]);
+        }
+        for (const s of sede.salidas) {
+            expect(s.texto).not.toMatch(PROHIBIDO);
+            expect(String(s.step ?? '')).not.toMatch(/^embudo_|^clase_prueba|desconocido_tema_escolar/);
+        }
+    });
+
+    it('sin venta activa, el mismo botón del embudo sigue al embudo (no lo toma la venta)', async () => {
+        h.state.filas = [sal(60, 'Elige la sede', { payload: { flujo: 'embudo', paso_embudo: 'sede', datos_embudo: {}, step: 'embudo_bienvenida' } })];
+        const r = await turno('⚫ Sede Suba', 'sm_em_sede:531a2df9-dab4-47bb-a1cf-5a904b276c46');
+        expect(String(r.resultado)).not.toMatch(/^venta_/);
+        for (const s of r.salidas) expect(s.payload?.step).not.toBe(PASO_VENTA.BOTON_CLUB);
+    });
+
+    it('«Hablar con una persona» del embudo (sm_em_persona) en plena venta no se queda quieto', async () => {
+        h.state.filas = [respuestaCampana(60)];
+        const r = await turno('Hablar con una persona', 'sm_em_persona');
+        expect(r.resultado).not.toBe('venta_boton_club');
+        expect(r.resultado).not.toBe('venta_silencio');
+    });
+
+    it('en plena venta pide la clase de prueba POR TEXTO: antes del embudo se le dice que va aparte de la clínica y cuánto cuesta (una vez)', async () => {
+        h.state.filas = [respuestaCampana(60)];
+        const r = await turno('Quiero agendar una clase de prueba para entrar al club');
+        const aparte = r.salidas.find((s) => s.payload?.step === PASO_VENTA.CLUB_APARTE);
+        expect(aparte?.texto).toBe('Claro 🙌 Lo del club va aparte de la Clínica de armadores y atacantes: para empezar se agenda una *clase de prueba*, que cuesta *$15.000*.');
+        expect(r.salidas.indexOf(aparte!)).toBe(0);
+        expect(aparte?.payload?.[MARCA_VENTA]).toBeUndefined();
+        // Ya dicho: no se repite.
+        h.state.filas.unshift(sal(0.5, aparte!.texto, { payload: aparte!.payload }));
+        const otra = await turno('¿qué horarios hay para la clase de prueba?');
+        expect(otra.salidas.some((s) => s.payload?.step === PASO_VENTA.CLUB_APARTE)).toBe(false);
     });
 
     it('servicio vencido (fuera del catálogo vigente) → no hay venta', async () => {

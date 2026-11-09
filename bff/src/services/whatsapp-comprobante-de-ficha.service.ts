@@ -31,7 +31,6 @@ import { normalizeReference } from './receipt-verdict';
 import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.service';
 import type { BotonInteractivo } from './whatsapp.service';
 import { categoriaDelCobro, etiquetaCortaDelCobro } from './tipo-de-cobro';
-import { deportistaElegidoPorBoton } from './whatsapp-comprobante-guiado.service';
 import { normalizarFrase } from './whatsapp-reglas-turno';
 
 /** Las fichas de una familia en `payments` cuando no hay `parent_id`. */
@@ -42,8 +41,6 @@ export const PASO_PREGUNTA_DEPORTISTA = 'ask_deportista';
 export const TEXTO_YA_REGISTRADO = 'Este pago ya estaba registrado ✅';
 
 const tel10 = (s: string | null | undefined) => String(s ?? '').replace(/\D/g, '').slice(-10);
-const hayLlaves = (k: LlavesDeFicha | null | undefined): k is LlavesDeFicha =>
-    !!k && (k.childIds.length > 0 || k.unregisteredIds.length > 0);
 
 // ─── (a) Fichas por teléfono ────────────────────────────────────────────────
 
@@ -102,7 +99,66 @@ export function candidatosPorNombre(
         if (aciertos < 2) continue;
         if (aciertos > mejor) { mejor = aciertos; out = [f]; } else if (aciertos === mejor) out.push(f);
     }
+    // Empate entre parciales: el nombre COMPLETO escrito tal cual gana («Ana María Gómez»
+    // escrito entero contra «Ana María Gómez Ruiz», que comparte las mismas tres palabras).
+    if (out.length > 1) {
+        const exactas = out.filter((f) => nombreCompletoEn(t, f.nombre));
+        if (exactas.length === 1) return exactas;
+    }
     return out;
+}
+
+/** Las palabras de un nombre sin las partículas («de», «la», «del»…), sin tildes. Pura. */
+function palabrasDelNombre(nombre: string | null | undefined): string[] {
+    return [...new Set(plano(String(nombre ?? '')).split(' ').filter((w) => w.length >= 2 && !CONECTORES.has(w)))];
+}
+
+/**
+ * ¿El texto (ya `plano`, con espacios a los lados) trae el nombre COMPLETO de la
+ * ficha? Todas sus palabras (al menos dos), en cualquier orden, sin importar
+ * mayúsculas, tildes ni lo que haya alrededor («DEPORTISTA :\nETHANN MATIAS PEDRAZA
+ * PINTO» trae «Ethann Matías Pedraza Pinto»). Pura.
+ */
+function nombreCompletoEn(textoPlano: string, nombre: string | null | undefined): boolean {
+    const palabras = palabrasDelNombre(nombre);
+    return palabras.length >= 2 && palabras.every((w) => textoPlano.includes(` ${w} `));
+}
+
+/**
+ * La ficha cuyo nombre COMPLETO está escrito en los textos, si es UNA sola (y la que
+ * más palabras tiene si un nombre contiene a otro: «Ana Gómez Ruiz» escrito entero
+ * gana sobre «Ana Gómez»). Es la única coincidencia que vale para un número que NO
+ * está verificado como acudiente: un apellido o dos palabras sueltas no alcanzan
+ * (Monster 2026-11-05: «Ethann Pedraza» terminó aplicado a «Laura Sofía Pedraza
+ * Sanchez», de otra familia). Pura.
+ */
+export function fichaExactaPorNombre(textos: (string | null | undefined)[], fichas: FichaConNombre[]): FichaConNombre | null {
+    const t = ` ${plano(textos.filter(Boolean).join(' '))} `;
+    if (t.trim().length < 3) return null;
+    const exactas = fichas.filter((f) => nombreCompletoEn(t, f.nombre));
+    if (!exactas.length) return null;
+    const largo = (f: FichaConNombre) => palabrasDelNombre(f.nombre).length;
+    const max = Math.max(...exactas.map(largo));
+    const mejores = exactas.filter((f) => largo(f) === max);
+    return mejores.length === 1 ? mejores[0] : null;
+}
+
+/**
+ * Para un número SIN verificar: la ficha con el nombre completo escrito (`exacta`,
+ * la única que permite ligar el comprobante) y, si no la hay, la única parecida
+ * (`parecida`, ≥ 2 palabras; SOLO para la propuesta de la bandeja, nunca para
+ * aplicar ni para mostrarle nada a quien escribe). Una lectura. Nunca lanza.
+ */
+export async function deportistaPorNombreSinVerificar(
+    schoolId: string,
+    textos: (string | null | undefined)[],
+): Promise<{ exacta: FichaConNombre | null; parecida: FichaConNombre | null }> {
+    if (!textos.some((t) => t && String(t).trim())) return { exacta: null, parecida: null };
+    const fichas = await fichasDeLaEscuela(schoolId);
+    const exacta = fichaExactaPorNombre(textos, fichas);
+    if (exacta) return { exacta, parecida: null };
+    const c = candidatosPorNombre(textos, fichas);
+    return { exacta: null, parecida: c.length === 1 ? c[0] : null };
 }
 
 /** Deportistas activos de la escuela (con y sin cuenta), con su nombre. Nunca lanza. */
@@ -412,28 +468,20 @@ export async function resolverRespuestaDeAsistente(
 // ─── La respuesta a «¿De qué deportista es este pago?» ──────────────────────
 
 /**
- * Resuelve una fila `waiting_user` que preguntó por el deportista: un único
- * candidato → se aplica como familia con ficha; si no → a la escuela. No se
- * repregunta (la pregunta va UNA vez). Devuelve true: consumió el turno.
+ * Resuelve una fila `waiting_user` que preguntó por el deportista. La decide la cola
+ * (`resolverDeportistaDeLaFila`): una opción de los botones solo si es un deportista
+ * LIGADO a ese número; un nombre escrito por un número sin verificar, solo con el
+ * nombre COMPLETO y el monto de un cobro abierto de ese deportista (Monster
+ * 2026-11-05: «1. Laura Sofía», de otra familia, terminó con el pago de Ethann). Lo
+ * demás, a la bandeja con la propuesta y sin decirle a quien escribe ningún dato del
+ * deportista. No se repregunta. Devuelve true: consumió el turno.
  */
 export async function resolverRespuestaDeDeportista(
     fila: { id: string; school_id: string },
     texto: string,
     responder: (texto: string, paso: string) => Promise<unknown>,
 ): Promise<boolean> {
-    // Tocó uno de los botones con nombres (spec 3.3, 2026-10-24): «1», «2» o «3».
-    const porBoton = await deportistaElegidoPorBoton(fila.id, texto);
-    const llaves = porBoton ?? await deportistaPorNombre(fila.school_id, [texto]);
-    if (!hayLlaves(llaves)) {
-        await responder('Gracias 🙏 No encontré a ese deportista, así que le paso tu comprobante a la escuela para que lo aplique.',
-            'deportista_a_la_escuela');
-        await supabase.from('whatsapp_inbound_queue').update({
-            status: 'ignored', result_type: 'escalated', processed_at: new Date().toISOString(),
-            error_message: 'sin_familia: el nombre no señala a un único deportista',
-        }).eq('id', fila.id).eq('status', 'waiting_user');
-        return true;
-    }
-    const { aplicarComprobanteDeFicha } = await import('../jobs/whatsapp-queue.job');
-    await aplicarComprobanteDeFicha(fila.id, llaves, responder);
+    const { resolverDeportistaDeLaFila } = await import('../jobs/whatsapp-queue.job');
+    await resolverDeportistaDeLaFila(fila.id, texto, responder);
     return true;
 }
