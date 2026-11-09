@@ -56,6 +56,8 @@ export interface QueueItem {
   status: string;
   amount: number;
   amount_paid?: number | null;
+  /** Pronto pago congelado en el cobro: la familia transfiere amount − esto. */
+  early_payment_discount_applied?: number | null;
   receipt_verdict?: string | null;
   ocr_amount?: number | null;
   receipt_url?: string | null;
@@ -97,9 +99,23 @@ export function waitingLabel(sinceIso: string, now: number = Date.now()): { labe
   return { label, tone, ms };
 }
 
-/** Saldo por cubrir del cobro. */
-export function remainingOf(p: Pick<QueueItem, 'amount' | 'amount_paid'>): number {
-  return Math.max((Number(p.amount) || 0) - (Number(p.amount_paid) || 0), 0);
+/**
+ * Lo que se debe del cobro en total: el valor menos el pronto pago. Es lo que
+ * queda en `amount_paid` cuando se paga completo (igual que
+ * `auto_approve_payment` y el registro en efectivo).
+ */
+export function dueOf(p: Pick<QueueItem, 'amount' | 'early_payment_discount_applied'>): number {
+  return Math.max((Number(p.amount) || 0) - Math.max(Number(p.early_payment_discount_applied) || 0, 0), 0);
+}
+
+/**
+ * Saldo por cubrir del cobro: amount − amount_paid − pronto pago (la regla de
+ * lib/cobrosYPagos y bff/utils/saldo-cobro). Antes ignoraba el pronto pago: un
+ * comprobante de $137.750 sobre un cobro de $145.000 con $7.250 de descuento
+ * salía «no coincide» y la hoja proponía un ABONO con saldo $7.250.
+ */
+export function remainingOf(p: Pick<QueueItem, 'amount' | 'amount_paid' | 'early_payment_discount_applied'>): number {
+  return Math.max(dueOf(p) - (Number(p.amount_paid) || 0), 0);
 }
 
 /**

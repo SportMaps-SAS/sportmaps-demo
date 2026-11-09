@@ -14,12 +14,18 @@ import { supabase } from '@/integrations/supabase/client';
 import { todayColombia } from '@/lib/dateUtils';
 import { formatCurrency } from '@/lib/utils';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
-import { joinSpanish } from '@/lib/receiptReview';
+import { joinSpanish, dueOf, remainingOf } from '@/lib/receiptReview';
 
 export interface ApprovablePayment {
   id: string;
   amount: number;
   amount_paid?: number | null;
+  /**
+   * Pronto pago congelado en el cobro. Lo debido es amount − esto: sin
+   * restarlo, un comprobante de $137.750 sobre $145.000 con $7.250 de
+   * descuento quedaba como ABONO con «saldo $7.250».
+   */
+  early_payment_discount_applied?: number | null;
   concept?: string | null;
   payment_method?: string | null;
   child_id?: string | null;
@@ -56,14 +62,49 @@ export type ApproveResult =
 /** Estados desde los que se puede aprobar. */
 const OPEN_STATUSES = ['awaiting_approval', 'pending', 'overdue', 'partial'];
 
-export async function approvePayment(payment: ApprovablePayment, opts: ApproveOptions): Promise<ApproveResult> {
-  const expected = Number(payment.amount) || 0;
+export interface ApprovalMath {
+  /** Lo debido en total: amount − pronto pago. */
+  due: number;
+  existingPaid: number;
+  /** Saldo antes de esta aprobación. */
+  remaining: number;
+  /** Lo que se acredita con ESTA aprobación. */
+  abono: number;
+  isAbono: boolean;
+  saldoPendiente: number;
+  /** amount_paid a escribir: acumulado en un abono; lo debido en el pago completo. */
+  amountPaid: number;
+}
+
+/**
+ * Las cuentas de una aprobación, con el pronto pago descontado (misma regla que
+ * `auto_approve_payment`: pagado completo = amount − early_payment_discount_applied).
+ * Pura.
+ */
+export function approvalMath(
+  payment: Pick<ApprovablePayment, 'amount' | 'amount_paid' | 'early_payment_discount_applied'>,
+  abonoAmount?: number,
+): ApprovalMath {
+  const due = dueOf(payment);
   const existingPaid = Number(payment.amount_paid) || 0;
-  const remaining = Math.max(expected - existingPaid, 0);
-  const abono = opts.abonoAmount ?? remaining;
+  const remaining = remainingOf(payment);
+  const abono = abonoAmount ?? remaining;
   const newTotalPaid = existingPaid + abono;
-  const isAbono = newTotalPaid < expected;
-  const saldoPendiente = Math.max(expected - newTotalPaid, 0);
+  const isAbono = newTotalPaid < due;
+  return {
+    due,
+    existingPaid,
+    remaining,
+    abono,
+    isAbono,
+    saldoPendiente: Math.max(due - newTotalPaid, 0),
+    // amount_paid ACUMULA los abonos previos; en pago completo se salda lo debido.
+    amountPaid: isAbono ? newTotalPaid : Math.max(due, existingPaid),
+  };
+}
+
+export async function approvePayment(payment: ApprovablePayment, opts: ApproveOptions): Promise<ApproveResult> {
+  const { remaining, abono, isAbono, saldoPendiente, amountPaid } = approvalMath(payment, opts.abonoAmount);
 
   // Conserva el método si ya viene (no se re-pregunta); default transfer.
   const method = payment.payment_method || 'transfer';
@@ -77,8 +118,9 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
     payment_date: todayColombia(),
     approved_by: opts.userId,
     approved_at: nowIso,
-    // amount_paid ACUMULA los abonos previos; en pago completo se salda todo.
-    amount_paid: isAbono ? newTotalPaid : expected,
+    // amount_paid ACUMULA los abonos previos; en pago completo, lo debido
+    // (amount − pronto pago), igual que auto_approve_payment.
+    amount_paid: amountPaid,
     // Aprobar CIERRA la revisión que dejó la pasarela tras un rechazo: el admin
     // ya vio el comprobante. last_failure_* se conserva como auditoría.
     requires_review: false,
@@ -133,9 +175,11 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
     await supabase.rpc('notify_user', {
       p_user_id: recipientId,
       p_title: isAbono ? '💰 Abono registrado' : '✅ Pago confirmado',
+      // Lo que la familia pagó con ESTE comprobante: con pronto pago o con
+      // abonos previos no es `amount`.
       p_message: isAbono
         ? `${escuela} registró un abono de ${formatCurrency(abono)} por ${payment.concept}. Saldo pendiente: ${formatCurrency(saldoPendiente)}.`
-        : `${escuela} confirmó tu pago de ${formatCurrency(expected)} por ${payment.concept}.`,
+        : `${escuela} confirmó tu pago de ${formatCurrency(remaining)} por ${payment.concept}.`,
       p_type: isAbono ? 'payment' : 'success',
       p_link: '/my-payments',
     }).then(() => undefined, () => undefined);
@@ -158,7 +202,7 @@ export async function notifyGroupApproved(
     const recipientId = payment.parent_id || payment.user_id;
     if (!recipientId) continue;
     const entry = byRecipient.get(recipientId) ?? { total: 0, labels: [] };
-    entry.total += Math.max((Number(payment.amount) || 0) - (Number(payment.amount_paid) || 0), 0);
+    entry.total += remainingOf(payment);
     entry.labels.push(label);
     byRecipient.set(recipientId, entry);
   }
