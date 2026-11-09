@@ -9,8 +9,9 @@ import { registrarUsoLlm, tokensDeRespuesta } from './llm-usage.service';
  * para mayor precision con formatos heterogeneos (DaviPlata, Nequi, Bancolombia,
  * BBVA, Movii, etc.).
  *
- * Provider primario: Groq Llama 3.2 Vision (gratis, free tier alcanza).
- * Fallbacks: OpenAI GPT-4o-mini, Google Gemini Flash.
+ * Primero lee Gemini Flash; la doble lectura de la aprobación automática usa a
+ * Claude como segundo lector (`listConfiguredProviders`). OpenAI y Groq entran
+ * solo si están configurados (Groq hoy no tiene modelos de visión).
  */
 
 export interface OcrResult {
@@ -260,48 +261,93 @@ async function extractWithOpenAI(base64Image: string, mimeType: string): Promise
 // «en revisión» en una y «destino ajeno» en otra). Para leer plata de familias
 // vale más una lectura estable que una barata.
 // ─────────────────────────────────────────────────────────────────────────────
-// Sonnet 5.5 por defecto desde el 2026-10-06: el bot y la lectura de
-// comprobantes no necesitan Opus y Sonnet cuesta bastante menos. Se cambia sin
-// desplegar con la variable de entorno. Haiku 4.5 no acepta `effort`.
-const MODELO_CLAUDE_DEFAULT = 'claude-sonnet-5-5';
-function modeloClaude(env?: string): string { return (env || '').trim() || MODELO_CLAUDE_DEFAULT; }
-function conEsfuerzoBajo(modelo: string): Record<string, unknown> {
-    return /haiku/i.test(modelo) ? {} : { output_config: { effort: 'low' } };
+// Haiku 5.5 por defecto desde el 2026-11-09 (antes Sonnet 5.5). Ese día Claude
+// pasó a ser el SEGUNDO lector de la aprobación automática: en producción solo
+// había Gemini, nunca había lectura B y no se aprobaba nada (un comprobante de
+// $165.000 que cuadraba exacto quedó «Por validar»). Como segundo lector lee cada
+// comprobante que Gemini marca verde, y para eso alcanza el modelo rápido y
+// barato: una mala lectura de Haiku no aprueba nada, porque tiene que coincidir
+// campo a campo con la de Gemini o el comprobante va a revisión.
+// Se cambia sin desplegar con `ANTHROPIC_OCR_MODEL`; `CLAUDE_OCR_MODEL`, el
+// nombre anterior, se sigue respetando.
+export const MODELO_CLAUDE_OCR_DEFAULT = 'claude-haiku-5-5';
+export function modeloClaudeOcr(): string {
+    return (process.env.ANTHROPIC_OCR_MODEL || process.env.CLAUDE_OCR_MODEL || '').trim() || MODELO_CLAUDE_OCR_DEFAULT;
+}
+
+/**
+ * `effort` lo aceptan los modelos actuales (Haiku 5.5 incluido) y responde 400
+ * en los viejos: la familia 3, Haiku 4.5, Sonnet 4/4.5 y Opus 4/4.1. Antes la
+ * regla era «ningún Haiku», que con Haiku 5.5 dejaba el esfuerzo en `medium`.
+ */
+const SIN_EFFORT = /claude-3|haiku-4|sonnet-4-5|sonnet-4-2|opus-4-1|opus-4-2/i;
+function conEsfuerzoBajo(modelo: string): { output_config?: { effort: 'low' } } {
+    return SIN_EFFORT.test(modelo) ? {} : { output_config: { effort: 'low' } };
 }
 
 let anthropicClient: Anthropic | null = null;
 function clienteClaude(): Anthropic {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY no configurada');
-    anthropicClient ??= new Anthropic({ timeout: 60_000, maxRetries: 2 });
+    anthropicClient ??= new Anthropic({ maxRetries: 2 });
     return anthropicClient;
+}
+
+const IMAGENES_CLAUDE = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+type ImagenClaude = (typeof IMAGENES_CLAUDE)[number];
+
+/**
+ * Tipo REAL del archivo por sus primeros bytes, o null si no es uno conocido.
+ *
+ * La API de Anthropic responde 400 cuando `media_type` no coincide con la imagen
+ * (Gemini lo deja pasar), y el tipo que llega se deduce de la extensión con que
+ * la familia subió el archivo (`guessMime` en receipt-approval). Un JPEG
+ * guardado como `.png` haría fallar siempre al segundo lector.
+ */
+export function tipoPorFirma(base64: string): string | null {
+    const b = Buffer.from(base64.slice(0, 24), 'base64');
+    const ascii = (desde: number, hasta: number) => b.subarray(desde, hasta).toString('latin1');
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+    if (b[0] === 0x89 && ascii(1, 4) === 'PNG') return 'image/png';
+    if (ascii(0, 4) === 'GIF8') return 'image/gif';
+    if (ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+    if (ascii(0, 5) === '%PDF-') return 'application/pdf';
+    return null;
 }
 
 async function extractWithClaude(base64Image: string, mimeType: string): Promise<OcrResult> {
     const client = clienteClaude();
-    const archivo: any = mimeType === 'application/pdf'
-        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Image } }
-        : {
-            type: 'image',
-            source: {
-                type: 'base64',
-                media_type: (['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(mimeType)
-                    ? mimeType : 'image/jpeg') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-                data: base64Image,
-            },
-        };
+    const tipo = tipoPorFirma(base64Image) ?? mimeType;
+    let archivo: Anthropic.ContentBlockParam;
+    if (tipo === 'application/pdf') {
+        archivo = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Image } };
+    } else if ((IMAGENES_CLAUDE as readonly string[]).includes(tipo)) {
+        archivo = { type: 'image', source: { type: 'base64', media_type: tipo as ImagenClaude, data: base64Image } };
+    } else {
+        // HEIC y compañía: Claude no los lee y la API respondería 400.
+        throw new Error(`Claude no lee archivos ${tipo}`);
+    }
 
-    const res = await client.messages.create({
-        model: modeloClaude(process.env.CLAUDE_OCR_MODEL),
-        max_tokens: 4000,
-        // Extracción de campos: esfuerzo bajo alcanza y abarata.
-        ...conEsfuerzoBajo(modeloClaude(process.env.CLAUDE_OCR_MODEL)),
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: [archivo, { type: 'text', text: USER_PROMPT }] }],
-    } as any);
+    const modelo = modeloClaudeOcr();
+    const res = await client.messages.create(
+        {
+            model: modelo,
+            // Holgura para el pensamiento adaptativo (Haiku 5.5 piensa por
+            // defecto y esos tokens se descuentan de aquí) más el JSON.
+            max_tokens: 4000,
+            // Extracción de campos: esfuerzo bajo alcanza y abarata.
+            ...conEsfuerzoBajo(modelo),
+            system: SYSTEM_PROMPT,
+            messages: [{ role: 'user', content: [archivo, { type: 'text', text: USER_PROMPT }] }],
+        },
+        // Mismo techo que los demás proveedores (OpenAI con PDF: 30 s). La señal
+        // corta el total, reintentos incluidos.
+        { signal: AbortSignal.timeout(tipo === 'application/pdf' ? 30_000 : 20_000) },
+    );
 
     if (res.stop_reason === 'refusal') throw new Error('Claude rechazó leer el comprobante');
-    const texto = (res.content as any[]).map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
-    registrarUsoLlm({ feature: 'ocr', provider: 'claude', model: (res as any).model || modeloClaude(process.env.CLAUDE_OCR_MODEL), tokens: tokensDeRespuesta(res) });
+    // Por tipo, no por posición: la respuesta puede empezar con bloques de pensamiento.
+    const texto = res.content.map((b) => (b.type === 'text' ? b.text : '')).join('').trim();
+    registrarUsoLlm({ feature: 'ocr', provider: 'claude', model: res.model || modelo, tokens: tokensDeRespuesta(res) });
     return parseLlmJson(texto, 'claude');
 }
 
@@ -500,10 +546,18 @@ export type OcrProvider = 'groq' | 'gemini' | 'openai' | 'claude';
  * vision y, como este orden decide quien lee el comprobante en la doble
  * extraccion, tenerlo de primero costaba un intento fallido por comprobante.
  * Groq queda de ultimo: si algun dia vuelve a servir, entra solo.
+ *
+ * CLAUDE ES EL SEGUNDO (2026-11-09). La aprobación automática exige dos
+ * lecturas de proveedores DISTINTOS. Producción tiene GEMINI_API_KEY y
+ * ANTHROPIC_API_KEY pero no OPENAI_API_KEY ni GROQ_OCR_MODEL, y Claude no estaba
+ * en esta lista aunque ya sabía leer comprobantes: quedaba un solo proveedor,
+ * nunca había lectura B y no se aprobaba nada (Monster la tenía encendida con
+ * tope de $400.000). Va detrás de Gemini para no cambiar quién lee primero.
  */
 export function listConfiguredProviders(): OcrProvider[] {
     const out: OcrProvider[] = [];
     if (process.env.GEMINI_API_KEY) out.push('gemini');
+    if (process.env.ANTHROPIC_API_KEY) out.push('claude');
     if (process.env.OPENAI_API_KEY) out.push('openai');
     if (process.env.GROQ_API_KEY && groqPuedeVer()) out.push('groq');
     return out;
