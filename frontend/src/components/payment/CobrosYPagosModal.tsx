@@ -30,6 +30,7 @@ import {
     formatHoras,
     pendingBlockReason,
     primaryButtonState,
+    SKIP_REASON_LABEL,
     requestSignature,
     PREVIEW_DEBOUNCE_MS,
     PREVIEW_RATE_LIMIT_MESSAGE,
@@ -492,7 +493,15 @@ export function CobrosYPagosDialog({
         : (mode === 'single' ? single.toCreate.n : multiCalc.estimatedRows);
     const toPay = mode === 'single' ? (previewFresh ? (preview!.to_pay?.n ?? single.toPay.n) : single.toPay.n) : 0;
     const dupBlock = mode === 'single' && newAthleteOn && hasUnresolvedDuplicates(newAthlete, serverDuplicates);
+    // Lo que el servidor omitió (p. ej. «ya tiene la mensualidad de ese mes»), por línea y en texto.
+    const skippedByLine = new Map<number, string>();
+    if (previewFresh) {
+        for (const s of preview?.skipped ?? []) {
+            if (!skippedByLine.has(s.line_idx)) skippedByLine.set(s.line_idx, SKIP_REASON_LABEL[s.reason] ?? s.reason);
+        }
+    }
     const button = primaryButtonState({
+        skippedReasons: [...skippedByLine.values()],
         mode,
         toCreate,
         toPay,
@@ -772,6 +781,7 @@ export function CobrosYPagosDialog({
                                             defaultDue={defaultDue}
                                             minDue={today}
                                             noMonthly={mode === 'single' && newAthleteOn}
+                                            skippedByLine={skippedByLine}
                                         />
                                         {mode === 'multi' && <p className="text-xs text-muted-foreground">Para registrar pagos, elige un solo atleta.</p>}
                                     </section>
