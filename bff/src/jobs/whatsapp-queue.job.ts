@@ -35,6 +35,7 @@ import { evaluatePaymentReceipt, redRejectionMessage } from '../services/receipt
 import { frenarSiExcedeLimite } from '../services/wa-limite-comprobantes.service';
 import { revinculacionPendiente } from '../services/wa-revinculacion.service';
 import { debeAtender, type TipoDeContacto } from '../services/whatsapp-atencion.service';
+import { rolDePersonal } from '../services/whatsapp-personal-escuela.service';
 import { esMarcaNoFamilia } from '../services/whatsapp-tipo-contacto';
 import {
     anunciaComprobante, normalizarFrase, PASOS_SIN_CUENTA, humanoReciente, type ComprobanteAnunciado, type FilaReciente,
@@ -56,7 +57,8 @@ import {
 } from '../services/whatsapp-otro-concepto.service';
 import { ventaAbiertaDeContacto, decidirComprobanteDeVenta } from '../services/whatsapp-venta-servicios.service';
 import {
-    fichasPorTelefono, deportistaPorNombre, pendientesPorLlaves, pagoYaRegistrado, botonesDeCobros,
+    fichasPorTelefono, pendientesPorLlaves, pagoYaRegistrado, botonesDeCobros,
+    deportistaPorNombreSinVerificar, candidatosPorNombre, type FichaConNombre as FichaPorNombre,
     PREGUNTA_DEPORTISTA, PASO_PREGUNTA_DEPORTISTA, TEXTO_YA_REGISTRADO, type LlavesDeFicha,
     PASO_PREGUNTA_ASISTENTE, TEXTO_VENTA_REPETIDO, preguntaAsistenteDeServicio, paraElServicio, nombreDeAsistenteEnTextos,
 } from '../services/whatsapp-comprobante-de-ficha.service';
@@ -73,7 +75,7 @@ import {
 } from '../services/whatsapp-pago-esperado.service';
 import { cargarItemsDeTorneo, cruzarTorneo, motivoTorneo } from '../services/whatsapp-torneos-pago.service';
 import {
-    candidatosParaPreguntar, botonesDeDeportistas, opcionesDeDeportistas, textoPreguntaDeportista,
+    botonesDeDeportistas, opcionesDeDeportistas, textoPreguntaDeportista,
     deportistasParaPreguntar, fichasDesdeDeportistas, guardarPreguntaGuiada, opcionesDeMeses, ultimosMeses,
     botonesDeOpciones, textoPreguntaMes, textoPreguntaConcepto, OPCIONES_CONCEPTO, PASO_PREGUNTA_MES,
     PASO_PREGUNTA_CONCEPTO, PASO_PREGUNTA_DEPORTISTA_BOTONES, textoCierreEnRevision, mesDeCobroEnTexto,
@@ -3564,33 +3566,182 @@ async function comprobanteDeNumeroSinFicha(
     if (b4.activo && await atenderProspecto({
         fila, wa, conversationId, responder, ocr, base64: bajada.base64, storagePath: bajada.storagePath, log,
     }, b4)) return true;
-    const llaves = await deportistaPorNombre(fila.school_id, [...textos, ocr.description, ocr.originName]);
-    if (llaves) {
-        log?.info?.({ queueId: fila.id }, '[wa-queue] número sin ficha: deportista por nombre');
-        await continuarComoComprobante(fila, null, responder, bajada.base64, bajada.mime, bajada.storagePath, ocr, log, { llaves });
+    // PRIVACIDAD (Monster 2026-11-05, Ethann): este número NO es de ninguna familia. Antes
+    // se le ofrecía el botón «1. Laura Sofía» (otra familia, mismo apellido) y el pago se
+    // aplicó a esa niña. Ahora: solo el nombre COMPLETO escrito liga el comprobante (y solo
+    // al cobro abierto de ese deportista por ese monto); nunca se le muestran nombres,
+    // meses ni cobros. Sin el nombre completo, UNA pregunta escrita, sin botones.
+    const porNombre = await deportistaPorNombreSinVerificar(fila.school_id, [...textos, ocr.description, ocr.originName]);
+    if (porNombre.exacta) {
+        log?.info?.({ queueId: fila.id }, '[wa-queue] número sin ficha: nombre completo de un deportista');
+        await comprobantePorNombreSinVerificar({
+            fila, responder, ocr, sha: shaDe(bajada.base64), storagePath: bajada.storagePath,
+            escrito: [fila.media_caption, ...textos].filter(Boolean).join(' · '), exacta: porNombre.exacta, parecida: null,
+            alFallar: (motivo) => reintentar(fila, motivo, log), log,
+        });
         return true;
     }
-    // Spec 3.3: el nombre no señala a UN deportista. Si 2-3 se le parecen →
-    // botones con sus nombres; si ninguno →  «escribe nombre y apellido».
-    const posibles = await candidatosParaPreguntar(fila.school_id, [...textos, ocr.description, ocr.originName]);
-    const paso = posibles.length ? PASO_PREGUNTA_DEPORTISTA_BOTONES : PASO_PREGUNTA_DEPORTISTA;
     // UNA vez: si ya se le preguntó (otra foto de la ráfaga), esta queda esperando la misma respuesta.
     let salida: SalidaDePregunta;
-    if (!(await yaSalioElPaso(conversationId, paso))) {
-        salida = (posibles.length
-            ? await responder(textoPreguntaDeportista(), paso, botonesDeDeportistas(posibles))
-            : await responder(PREGUNTA_DEPORTISTA, paso)) as SalidaDePregunta;
+    if (!(await yaSalioElPaso(conversationId, PASO_PREGUNTA_DEPORTISTA))) {
+        salida = await responder(PREGUNTA_DEPORTISTA, PASO_PREGUNTA_DEPORTISTA) as SalidaDePregunta;
     }
     await esperarAlUsuario(fila.id, {
         opciones: [], ocr,
         sha: crypto.createHash('sha256').update(Buffer.from(bajada.base64, 'base64')).digest('hex'),
         storagePath: bajada.storagePath, parentId: null, tipo: 'deportista',
-        ...(posibles.length
-            ? { guia: { opciones: opcionesDeDeportistas(posibles), monto: ocr.amount ?? null, quienPago: ocr.originName ?? null, parentId: null } }
-            : {}),
         enFila: salida?.enFila,
     });
     return true;
+}
+
+/** Lo único que se le dice a un número sin verificar cuando su comprobante va a la escuela: ningún dato del deportista. */
+export const TEXTO_SIN_VERIFICAR_A_LA_ESCUELA = 'Gracias 🙏 Le paso tu comprobante a la escuela para que lo revise y te confirme por aquí.';
+
+/**
+ * Comprobante de un número que NO está verificado como acudiente, con el nombre que
+ * escribió. Solo se liga si `exacta` (el nombre COMPLETO de UN deportista) y el monto
+ * es el de UN cobro abierto de ESE deportista: se estampa y pasa por la evaluación de
+ * siempre (`aplicarComprobante` → `evaluatePaymentReceipt`: «Por validar», o aprobado
+ * solo si la escuela tiene la auto-aprobación y el comprobante la cumple). Todo lo
+ * demás va a la bandeja con la propuesta (quién parece ser, qué cobros tiene), nunca
+ * huérfano. A quien escribe NUNCA se le dice un dato del deportista: ni su nombre, ni
+ * el mes, ni sus cobros, ni si existe (Monster 2026-11-05, Ethann / Laura Sofía).
+ */
+async function comprobantePorNombreSinVerificar(a: {
+    fila: FilaCola; responder: Responder; ocr: Awaited<ReturnType<typeof extractReceipt>>;
+    sha: string; storagePath: string; escrito: string;
+    exacta: FichaPorNombre | null; parecida: FichaPorNombre | null;
+    alFallar: (motivo: string) => Promise<void>; log?: Logger;
+}): Promise<void> {
+    const { fila, ocr } = a;
+    const monto = montoDelOcr(ocr);
+    const escrito = a.escrito.replace(/\s+/g, ' ').trim().slice(0, 140);
+    const pago = `pagó: ${ocr.originName ?? 'no se leyó'}${monto !== null ? ` · ${pesos(monto)}` : ''}${ocr.date ? ` · ${ocr.date}` : ''}`;
+    const aLaEscuela = async (codigo: string, detalle: string, propuesta: string, childId: string | null = null) => {
+        await a.responder(TEXTO_SIN_VERIFICAR_A_LA_ESCUELA, 'sin_verificar_a_la_escuela');
+        await cerrar(fila.id, 'ignored', {
+            result_type: 'escalated',
+            ...(childId ? { matched_child_id: childId } : {}),
+            error_message: motivoConPropuesta(`sin_familia: ${codigo} — ${detalle}`, `Propuesta → ${pago} · ${propuesta}`),
+            pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr, storagePath: a.storagePath, parentId: null }),
+        });
+        a.log?.info?.({ queueId: fila.id, codigo }, '[wa-queue] número sin verificar: a la bandeja con la propuesta');
+    };
+    if (!a.exacta) {
+        await aLaEscuela('numero_sin_verificar',
+            `comprobante de un número que no es de ninguna familia${escrito ? `; escribió «${escrito}»` : ''}`,
+            a.parecida
+                ? `parece ser ${a.parecida.nombre}, pero no escribió el nombre completo: confirmarlo con quien pagó y aplicar este comprobante`
+                : 'ubicar al deportista y aplicar este comprobante');
+        return;
+    }
+    const ficha = a.exacta;
+    const childId = ficha.tipo === 'child' ? ficha.id : null;
+    const llaves: LlavesDeFicha = ficha.tipo === 'child'
+        ? { childIds: [ficha.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [ficha.id] };
+    const ya = await comprobanteYaRecibido(fila, a.sha, ocr);
+    if (ya) {
+        await a.responder('Ese comprobante ya lo habíamos recibido ✅ La escuela te confirma por aquí.', 'sin_verificar_repetido');
+        await cerrar(fila.id, 'ignored', {
+            result_type: 'none', ...(ya.paymentId ? { result_ref_id: ya.paymentId } : {}),
+            error_message: `numero_sin_verificar: comprobante repetido (misma ${ya.por})`,
+        });
+        return;
+    }
+    if (!(await destinoEsDeLaEscuela(fila.school_id, ocr))) {
+        await aLaEscuela('numero_sin_verificar', `${ficha.nombre}: el destino ${ocr.destination ?? 'sin leer'} no es una cuenta de la escuela`,
+            'revisar el destino antes de aplicar', childId);
+        return;
+    }
+    const pendientes = await pendientesPorLlaves(fila.school_id, llaves);
+    const delMonto = monto === null ? [] : pendientes.filter((p) => mismoMonto(Number(p.amount), monto));
+    if (delMonto.length !== 1) {
+        const abiertos = pendientes.length ? pendientes.map((p) => `${describirPago(p)}`).join(' / ') : 'ningún cobro abierto';
+        await aLaEscuela('numero_sin_verificar',
+            `${ficha.nombre} (nombre completo escrito): ${monto !== null ? pesos(monto) : 'monto sin leer'} no es el valor de UN cobro abierto (${abiertos})`,
+            `revisar a qué cobro de ${ficha.nombre} corresponde y aplicar este comprobante`, childId);
+        return;
+    }
+    const cobro = delMonto[0];
+    const valor = monto !== null ? ` de *${pesos(monto)}*` : '';
+    await aplicarComprobante({
+        queueId: fila.id, schoolId: fila.school_id, parentId: null, storagePath: a.storagePath, sha: a.sha, ocr,
+        responder: a.responder, alFallar: a.alFallar, log: a.log,
+    }, cobro, [], {
+        motivo: `numero_sin_verificar: ligado por el nombre completo (${ficha.nombre}) y el monto del cobro`,
+        alAplicar: async ({ action }) => ({
+            texto: action === 'approved'
+                ? `¡Listo! ✅ Quedó registrado tu pago${valor}. Gracias.`
+                : action === 'rejected'
+                    ? 'Revisé tu comprobante y no lo pude validar. Si crees que hay un error, mándame el comprobante correcto por acá.'
+                    : `Recibí tu comprobante${valor} 📄 La escuela lo valida y te confirma por aquí.`,
+            paso: action === 'rejected' ? 'sin_verificar_rechazado' : 'sin_verificar_recibido',
+        }),
+    });
+}
+
+/**
+ * La respuesta a «¿De qué deportista es este pago?» (fila `waiting_user`, tipo
+ * deportista). Una opción de los botones, o un nombre que coincide con una de ellas:
+ * solo si esas opciones son deportistas LIGADOS a ese número (los hijos del acudiente
+ * o las fichas con ese celular) → se aplica como siempre (`aplicarComprobanteDeFicha`).
+ * Lo demás —un nombre escrito por un número sin verificar— va por
+ * `comprobantePorNombreSinVerificar`. Una fila vieja con botones de otra familia (antes
+ * del arreglo del 2026-11-08) NO aplica nada. Nunca lanza; siempre deja la fila cerrada.
+ */
+export async function resolverDeportistaDeLaFila(
+    queueId: string,
+    texto: string,
+    responder: (texto: string, paso: string) => Promise<unknown>,
+    log?: Logger,
+): Promise<void> {
+    const { data } = await supabase.from('whatsapp_inbound_queue')
+        .select('id, school_id, integration_id, wa_phone_number, status, pregunta_ocr')
+        .eq('id', queueId).eq('status', 'waiting_user').maybeSingle();
+    const leida = data as (Pick<FilaCola, 'id' | 'school_id' | 'integration_id' | 'wa_phone_number'> & { pregunta_ocr?: any }) | null;
+    if (!leida) return;
+    const guardado = leida.pregunta_ocr ?? {};
+    const opciones = ((guardado.guia?.opciones ?? []) as OpcionGuiada[])
+        .map((o) => o.valor as FichaPorNombre).filter((f) => f && typeof f.id === 'string' && typeof f.nombre === 'string');
+    const elegida = (() => {
+        const n = /^\s*(\d)\s*$/.exec(String(texto ?? ''))?.[1];
+        if (n) return opciones[Number(n) - 1] ?? null;
+        const c = opciones.length ? candidatosPorNombre([texto], opciones) : [];
+        return c.length === 1 ? c[0] : null;
+    })();
+    if (elegida) {
+        // ¿La ficha elegida es de este número? Las opciones del acudiente con cuenta salen de
+        // SUS hijos (`parentId`); sin cuenta, tiene que estar en las fichas con ese celular.
+        const ligada = guardado.parentId
+            || (await fichasPorTelefono(leida.school_id, leida.wa_phone_number))[elegida.tipo === 'child' ? 'childIds' : 'unregisteredIds']
+                .includes(elegida.id);
+        if (ligada) {
+            const llaves: LlavesDeFicha = elegida.tipo === 'child'
+                ? { childIds: [elegida.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [elegida.id] };
+            await aplicarComprobanteDeFicha(queueId, llaves, responder, log);
+            return;
+        }
+        log?.warn?.({ queueId }, '[wa-queue] botón de un deportista que no es de este número: no se aplica');
+    }
+    // Un nombre escrito por un número sin verificar: solo el nombre completo liga el comprobante.
+    const { data: tomadas } = await supabase.from('whatsapp_inbound_queue')
+        .update({ status: 'processing', updated_at: new Date().toISOString() })
+        .eq('id', queueId).eq('status', 'waiting_user')
+        .select('*');
+    const fila = (Array.isArray(tomadas) ? tomadas[0] : null) as (FilaCola & { pregunta_ocr?: any }) | null;
+    const g = fila?.pregunta_ocr;
+    if (!fila || !g?.ocr) return;
+    const aLaEscuela = async (motivo: string) => {
+        await responder(TEXTO_SIN_VERIFICAR_A_LA_ESCUELA, 'sin_verificar_a_la_escuela');
+        await cerrar(fila.id, 'ignored', { result_type: 'escalated', error_message: `sin_familia: ${motivo}` });
+    };
+    if (!g.storagePath || !g.sha) { await aLaEscuela('sin archivo guardado'); return; }
+    const porNombre = await deportistaPorNombreSinVerificar(fila.school_id, [texto, g.ocr?.originName]);
+    await comprobantePorNombreSinVerificar({
+        fila, responder: responder as Responder, ocr: g.ocr, sha: g.sha, storagePath: g.storagePath, escrito: texto,
+        exacta: porNombre.exacta, parecida: porNombre.parecida, alFallar: aLaEscuela, log,
+    });
 }
 
 /**
@@ -3977,6 +4128,17 @@ async function procesarFilaInterna(
         const planilla = await intentarPlanillaDeStaff(fila, wa, conversationId, log);
         if (planilla.atendida) return;
         lecturaPrevia = planilla.previo;
+    }
+
+    // Personal que NO administra (un profe, un admin de la plataforma; whatsapp-personal-escuela):
+    // ni la rama de alta por foto de matrícula ni «¿de qué deportista?». Su comprobante, si lo
+    // es, queda en la bandeja sin escribirle (como cualquier contacto que el bot no atiende).
+    if (atencion.botEncendido && atencion.tipo === 'staff') {
+        const rol = await rolDePersonal(fila.school_id, fila.wa_phone_number);
+        if (rol === 'coach' || rol === 'plataforma') {
+            await comprobanteDeContactoNoAtendido(fila, wa, conversationId, log, `staff_${rol}`, false);
+            return;
+        }
     }
 
     const decision = decidirAdjunto({ botEncendido: atencion.botEncendido, tipo: atencion.tipo, esStaffAdmin });

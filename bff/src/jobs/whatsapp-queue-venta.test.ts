@@ -822,6 +822,188 @@ describe('(g) número SIN venta activa → el comportamiento de hoy, intacto', (
     });
 });
 
+// ─── PRIVACIDAD: el comprobante de Ethann (Monster 2026-11-05, conversación bd8a1532, •••1992) ───
+//
+// Un papá cuyo número NO es de ninguna familia escribió «Envío el comprobante de pago de
+// Ethann Pedraza» y mandó la foto. El bot le ofreció el botón «1. Laura Sofía» —una menor
+// de OTRA familia que solo compartía el apellido—, él lo tocó y el pago de $117.750 se
+// aplicó a esa niña (la escuela lo rechazó después). Luego escribió «DEPORTISTA :
+// ETHANN MATIAS PEDRAZA PINTO» y recibió «No encontré a ese deportista».
+
+describe('PRIVACIDAD — número sin verificar (Ethann, bd8a1532): nunca nombres de otros deportistas', () => {
+    const LAURA = {
+        id: 'u-laura', school_id: ESCUELA, full_name: 'Laura Sofía Pedraza Sanchez', is_active: true, linked_profile_id: null,
+        guardian_phone: '3143378717', phone: '3188844466',
+    };
+    const ETHANN = {
+        id: 'a6cfc80d-9c81-4f65-b9bb-138a1c9d6cd1', school_id: ESCUELA, full_name: 'Ethann Matías Pedraza Pinto', is_active: true,
+        parent_id: 'parent-ethann', parent_phone_temp: null,
+    };
+    const COBRO_ETHANN = {
+        id: 'pay-ethann-nov', school_id: ESCUELA, child_id: ETHANN.id, unregistered_athlete_id: null, parent_id: 'parent-ethann',
+        amount: 117750, status: 'pending', concept: 'Mensualidad 11/2026 - Ethann Matías Pedraza Pinto', due_date: '2026-11-10',
+        payment_category: 'mensualidad',
+    };
+    const COBRO_LAURA = {
+        id: 'pay-laura-nov', school_id: ESCUELA, child_id: null, unregistered_athlete_id: LAURA.id, parent_id: null,
+        amount: 155000, status: 'pending', concept: 'Mensualidad 11/2026 - Laura Sofía Pedraza Sanchez', due_date: '2026-11-10',
+        payment_category: 'mensualidad',
+    };
+    const OCR_ETHANN = (extra: Record<string, unknown> = {}) => comprobante(117750, {
+        date: '2026-11-05', originName: 'JOHN PEDRAZA', reference: 'M3456789', ...extra,
+    });
+    const PROHIBIDO_DE_OTRA_FAMILIA = /laura|sof[ií]a|sanchez|155\.000/i;
+
+    /** Las fotos y el texto del 05-nov 18:33. */
+    async function comprobanteDeEthann() {
+        enHora('2026-11-05T18:34:00-05:00');
+        mensaje('inbound', 'Envío el comprobante de pago de Ethann Pedraza.', '2026-11-05T18:33:45-05:00');
+        mensaje('inbound', null, '2026-11-05T18:33:49-05:00');
+        await procesar(foto('e1', 'ethann-117750', '2026-11-05T18:33:49-05:00'), OCR_ETHANN(), 'ethann-117750');
+    }
+
+    it('18:33 (Ethann todavía sin ficha): la pregunta ESCRITA, sin botones ni el nombre de nadie (antes: «1. Laura Sofía»)', async () => {
+        h.tabla('unregistered_athletes').push({ ...LAURA });
+        h.tabla('payments').push({ ...COBRO_LAURA });
+        await comprobanteDeEthann();
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
+        expect(sendInteractiveButtonsMock).not.toHaveBeenCalled();
+        for (const t of textosEnviados()) expect(t).not.toMatch(PROHIBIDO_DE_OTRA_FAMILIA);
+        expect(salientes()[0].payload?.step).toBe('ask_deportista');
+        expect(fila('e1')).toMatchObject({ status: 'waiting_user' });
+        expect(fila('e1').pregunta_ocr.guia).toBeUndefined();
+        // Y el cobro de Laura sigue intacto.
+        expect(pagos().find((p) => p.id === COBRO_LAURA.id)).toMatchObject({ status: 'pending' });
+    });
+
+    it('18:55 «DEPORTISTA :\\nETHANN MATIAS PEDRAZA PINTO» (con su ficha y un cobro de $117.750): se liga a ESE cobro y pasa por la evaluación; sin decirle datos del menor', async () => {
+        h.tabla('unregistered_athletes').push({ ...LAURA });
+        h.tabla('children').push({ ...ETHANN });
+        h.tabla('payments').push({ ...COBRO_LAURA }, { ...COBRO_ETHANN });
+        await comprobanteDeEthann();
+        // «Ethann Pedraza» es parcial (2 de 4 palabras): no liga nada, pregunta escrita.
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
+        sendTextMessageMock.mockClear();
+        enHora('2026-11-05T18:55:10-05:00');
+        const bot = responderDelBot();
+        expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'DEPORTISTA :\nETHANN MATIAS PEDRAZA PINTO', bot.fn as any)).toBe(true);
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(COBRO_ETHANN.id, undefined);
+        expect(pagos().find((p) => p.id === COBRO_ETHANN.id)).toMatchObject({ status: 'awaiting_approval', receipt_url: expect.any(String) });
+        expect(pagos().find((p) => p.id === COBRO_LAURA.id)).toMatchObject({ status: 'pending' });
+        expect(fila('e1')).toMatchObject({ status: 'done', result_ref_id: COBRO_ETHANN.id });
+        expect(bot.enviados.map((e) => e.texto)).toEqual(['Recibí tu comprobante de *$117.750* 📄 La escuela lo valida y te confirma por aquí.']);
+        for (const e of bot.enviados) expect(e.texto).not.toMatch(/ethann|pedraza|noviembre|mensualidad|laura/i);
+    });
+
+    it('con la auto-aprobación de la escuela: el mismo camino lo aprueba (evaluatePaymentReceipt → approved) y se le confirma sin datos del menor', async () => {
+        h.state.accion = 'approved';
+        h.tabla('children').push({ ...ETHANN });
+        h.tabla('payments').push({ ...COBRO_ETHANN });
+        await comprobanteDeEthann();
+        enHora('2026-11-05T18:55:10-05:00');
+        const bot = responderDelBot();
+        await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'ETHANN MATÍAS PEDRAZA PINTO', bot.fn as any);
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledTimes(1);
+        expect(bot.enviados.map((e) => e.texto)).toEqual(['¡Listo! ✅ Quedó registrado tu pago de *$117.750*. Gracias.']);
+    });
+
+    it('nombre completo pero el monto no es el de UN cobro abierto suyo → a la bandeja LIGADA al deportista y con la propuesta (nunca huérfana); a él, nada del menor', async () => {
+        h.tabla('children').push({ ...ETHANN });
+        h.tabla('payments').push({ ...COBRO_ETHANN, amount: 145000 });
+        await comprobanteDeEthann();
+        enHora('2026-11-05T18:55:10-05:00');
+        const bot = responderDelBot();
+        await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'DEPORTISTA :\nETHANN MATIAS PEDRAZA PINTO', bot.fn as any);
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+        const f = fila('e1');
+        expect(f).toMatchObject({ status: 'ignored', result_type: 'escalated', matched_child_id: ETHANN.id });
+        expect(f.error_message).toMatch(/^sin_familia: numero_sin_verificar — Ethann Matías Pedraza Pinto/);
+        expect(f.error_message).toContain('Propuesta → pagó: JOHN PEDRAZA · $117.750');
+        expect(f.pregunta_ocr).toMatchObject({ sha: expect.any(String) });
+        expect(bot.enviados.map((e) => e.texto)).toEqual(['Gracias 🙏 Le paso tu comprobante a la escuela para que lo revise y te confirme por aquí.']);
+    });
+
+    it('fila vieja (antes del arreglo) con el botón «1. Laura Sofía»: tocarlo NO aplica el pago a otra familia', async () => {
+        h.tabla('unregistered_athletes').push({ ...LAURA });
+        h.tabla('payments').push({ ...COBRO_LAURA });
+        await comprobanteDeEthann();
+        // Así quedaba la fila con el código de antes: la guía con la ficha de Laura.
+        Object.assign(fila('e1').pregunta_ocr, {
+            guia: { opciones: [{ n: 1, etiqueta: LAURA.full_name, valor: { id: LAURA.id, nombre: LAURA.full_name, tipo: 'unregistered' } }], monto: 117750, quienPago: 'JOHN PEDRAZA', parentId: null },
+        });
+        enHora('2026-11-05T18:35:53-05:00');
+        const bot = responderDelBot();
+        await resolverRespuestaDeCobro(INTEGRACION as any, TEL, '1', bot.fn as any);
+        expect(pagos().find((p) => p.id === COBRO_LAURA.id)).toMatchObject({ status: 'pending' });
+        expect(pagos().find((p) => p.id === COBRO_LAURA.id).receipt_url).toBeUndefined();
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+        expect(fila('e1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        for (const e of bot.enviados) expect(e.texto).not.toMatch(PROHIBIDO_DE_OTRA_FAMILIA);
+    });
+});
+
+// ─── Aprobación automática en TODOS los caminos del bot (Monster la prendió el 08-nov, tope $400.000) ───
+
+describe('aprobación automática: cada camino de comprobante del bot pasa por evaluatePaymentReceipt (abonos, no)', () => {
+    it('venta de un servicio, valor completo: se evalúa y, si la escuela lo aprueba solo, se le confirma el cupo', async () => {
+        h.state.accion = 'approved';
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00', { media_caption: 'Pago clínica a nombre de Nicolás Cubides Ávila' }),
+            comprobante(300000), 'A');
+        const pago = pagos()[0];
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pago.id, undefined);
+        expect(textosEnviados()).toEqual(['¡Listo! ✅ Quedó registrado tu pago de *$300.000* para la *Clínica de armadores y atacantes* '
+            + 'a nombre de *Nicolás Cubides Ávila*. Tu cupo está confirmado.']);
+    });
+
+    it('venta de un servicio, la respuesta al nombre de quien asiste: también se evalúa', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled(); // todavía sin nombre: no hay cobro
+        const bot = responderDelBot();
+        enHora('2026-11-08T11:59:11-05:00');
+        await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Nicolás Cubides Ávila\n18 de Diciembre del 2006\nOpuesto', bot.fn as any);
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledTimes(1);
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pagos()[0].id, undefined);
+    });
+
+    it('clase de prueba de un prospecto (el bot pidió los $15.000): se evalúa como el camino normal', async () => {
+        const lead = { id: 'lead-cp', school_id: ESCUELA, phone: '3017517726', status: 'contacted', full_name: 'Juan Pérez', source_detail: {} };
+        h.tabla('school_signup_leads').push(lead);
+        h.tabla('whatsapp_conceptos_esperados').push({
+            id: 'e-cp', school_id: ESCUELA, telefono: TEL, motivo: 'clase_prueba', monto: 15000, signup_lead_id: 'lead-cp', child_id: null,
+            origen: 'clase_prueba', vence_en: iso('2026-11-09T09:00:00-05:00'), consumido_at: null, created_at: iso('2026-11-08T08:00:00-05:00'),
+        });
+        enHora('2026-11-08T09:00:00-05:00');
+        await procesar(foto('f1', 'cp', '2026-11-08T08:59:00-05:00'), comprobante(15000, { reference: 'CP1' }), 'cp');
+        expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pagos()[0].id, undefined);
+    });
+
+    it('los datos de quien asiste que el bot anotó ANTES del comprobante (prospecto con asistente_servicio): no se vuelve a preguntar el nombre', async () => {
+        h.tabla('school_signup_leads').push({
+            id: 'lead-nico', school_id: ESCUELA, phone: '3017517726', status: 'respondido', full_name: 'Nicolás Cubides Ávila',
+            source_detail: { asistente_servicio: { nombre: 'Nicolás Cubides Ávila', servicio_id: CLINICA_ID } }, created_at: iso('2026-11-08T11:00:00-05:00'),
+        });
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        expect(textosEnviados()).toEqual([TEXTO_RECIBIDO_NICOLAS]);
+        expect(crearLlamadas()).toEqual([expect.objectContaining({ p_signup_lead_id: 'lead-nico', p_concepto: 'Clínica de armadores y atacantes — Nicolás Cubides Ávila' })]);
+    });
+
+    it('un abono del servicio se queda «Por validar»: NO pasa por la aprobación automática (como hoy)', async () => {
+        h.state.accion = 'approved';
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'AB', '2026-11-08T11:57:24-05:00', { media_caption: 'Abono clínica a nombre de Nicolás Cubides Ávila' }),
+            comprobante(150000), 'AB');
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+        expect(pagos()[0]).toMatchObject({ status: 'awaiting_approval' });
+    });
+});
+
 // ─── Piezas puras ────────────────────────────────────────────────────────────
 
 describe('decidirMontoDeVenta (puro)', () => {

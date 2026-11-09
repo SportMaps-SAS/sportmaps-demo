@@ -9,6 +9,7 @@ const state = {
     sinRegistrar: [] as any[],
     updates: [] as any[],
     rpcPagos: [] as any[],
+    settings: null as any,
 };
 
 function makeChain(result: any, table?: string) {
@@ -27,7 +28,7 @@ vi.mock('../config/supabase', () => ({
         from: vi.fn((table: string) => {
             if (table === 'children') return makeChain({ data: state.fichas, error: null }, table);
             if (table === 'unregistered_athletes') return makeChain({ data: state.sinRegistrar, error: null }, table);
-            if (table === 'school_settings') return makeChain({ data: { payment_accounts: [], nequi_number: '3001112222' }, error: null }, table);
+            if (table === 'school_settings') return makeChain({ data: state.settings ?? { payment_accounts: [], nequi_number: '3001112222' }, error: null }, table);
             return makeChain({ data: null, error: null }, table);
         }),
         rpc: vi.fn((name: string) => Promise.resolve(name === 'wa_get_payment_status'
@@ -36,8 +37,10 @@ vi.mock('../config/supabase', () => ({
 }));
 
 const aplicarComprobanteDeFichaMock = vi.fn((..._a: any[]) => Promise.resolve());
+const resolverDeportistaDeLaFilaMock = vi.fn((..._a: any[]) => Promise.resolve());
 vi.mock('../jobs/whatsapp-queue.job', () => ({
     aplicarComprobanteDeFicha: (...a: any[]) => aplicarComprobanteDeFichaMock(...a),
+    resolverDeportistaDeLaFila: (...a: any[]) => resolverDeportistaDeLaFilaMock(...a),
 }));
 
 const conEnlacesDePagoMock = vi.fn();
@@ -47,7 +50,7 @@ vi.mock('./whatsapp-enlaces-de-pago.service', () => ({
 
 const {
     candidatosPorNombre, botonesDeCobros, textoDeEleccion, resolverRespuestaDeDeportista,
-    fichasPorTelefono, PREGUNTA_DEPORTISTA,
+    fichasPorTelefono, PREGUNTA_DEPORTISTA, fichaExactaPorNombre, deportistaPorNombreSinVerificar,
 } = await import('./whatsapp-comprobante-de-ficha.service');
 const { mediosDePago, mediosDePagoDeFamilia } = await import('./whatsapp-medios-de-pago.service');
 
@@ -133,20 +136,11 @@ describe('fichasPorTelefono — (a) familia sin cuenta', () => {
 describe('resolverRespuestaDeDeportista — la respuesta a la pregunta', () => {
     const responder = vi.fn((..._a: any[]) => Promise.resolve());
 
-    it('un único candidato → se aplica por la ficha', async () => {
-        state.fichas = [{ id: 'c-ana', full_name: 'Ana Lucía Torres Vega' }, { id: 'c-otra', full_name: 'Ana María Rojas' }];
+    it('la decide la cola (un solo lugar): botón solo de deportistas del número; nombre escrito sin verificar, solo completo', async () => {
         expect(await resolverRespuestaDeDeportista({ id: 'q1', school_id: 'school-1' }, 'Ana Lucía Torres', responder)).toBe(true);
-        expect(aplicarComprobanteDeFichaMock).toHaveBeenCalledWith('q1', { childIds: ['c-ana'], unregisteredIds: [] }, responder);
-        expect(responder).not.toHaveBeenCalled();
-    });
-
-    it('ningún candidato (o varios) → a la escuela, sin repreguntar', async () => {
-        state.fichas = [{ id: 'c-ana', full_name: 'Ana Lucía Torres Vega' }];
-        expect(await resolverRespuestaDeDeportista({ id: 'q1', school_id: 'school-1' }, 'Ana', responder)).toBe(true);
+        expect(resolverDeportistaDeLaFilaMock).toHaveBeenCalledWith('q1', 'Ana Lucía Torres', responder);
         expect(aplicarComprobanteDeFichaMock).not.toHaveBeenCalled();
-        expect(responder).toHaveBeenCalledTimes(1);
-        expect(responder.mock.calls[0][1]).toBe('deportista_a_la_escuela');
-        expect(state.updates[0]).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(responder).not.toHaveBeenCalled();
     });
 
     it('la pregunta es corta y pide el nombre completo', () => {
@@ -180,5 +174,77 @@ describe('medios de pago — nunca /my-payments', () => {
         const m = await mediosDePagoDeFamilia('school-1', null);
         expect(m.cobros_pendientes).toEqual([]);
         expect(conEnlacesDePagoMock).not.toHaveBeenCalled();
+    });
+});
+
+// ─── Monster 2026-11-05 (Ethann, bd8a1532): el nombre COMPLETO manda ─────────────
+
+describe('fichaExactaPorNombre / candidatosPorNombre — Ethann y Laura Sofía', () => {
+    const LAURA = { id: 'u-laura', nombre: 'Laura Sofía Pedraza Sanchez', tipo: 'unregistered' as const };
+    const ETHANN = { id: 'c-ethann', nombre: 'Ethann Matías Pedraza Pinto', tipo: 'child' as const };
+
+    it('«DEPORTISTA :\nETHANN MATIAS PEDRAZA PINTO» (mayúsculas, sin tildes, con prefijo) = Ethann exacto', () => {
+        expect(fichaExactaPorNombre(['DEPORTISTA :\nETHANN MATIAS PEDRAZA PINTO'], [LAURA, ETHANN])).toEqual(ETHANN);
+        expect(candidatosPorNombre(['DEPORTISTA :\nETHANN MATIAS PEDRAZA PINTO'], [LAURA, ETHANN])).toEqual([ETHANN]);
+    });
+
+    it('«Envío el comprobante de pago de Ethann Pedraza» NO es exacto (2 de 4 palabras); y el apellido solo nunca señala a Laura', () => {
+        expect(fichaExactaPorNombre(['Envío el comprobante de pago de Ethann Pedraza.'], [LAURA, ETHANN])).toBeNull();
+        expect(fichaExactaPorNombre(['Envío el comprobante de pago de Ethann Pedraza.'], [LAURA])).toBeNull();
+        expect(candidatosPorNombre(['Envío el comprobante de pago de Ethann Pedraza.'], [LAURA])).toEqual([]);
+    });
+
+    it('empate entre parciales: el nombre completo escrito tal cual gana sobre el que solo comparte palabras', () => {
+        const corta = { id: 'c-1', nombre: 'Ana María Gómez', tipo: 'child' as const };
+        const larga = { id: 'c-2', nombre: 'Ana María Gómez Ruiz', tipo: 'child' as const };
+        expect(candidatosPorNombre(['pago de ana maria gomez'], [corta, larga])).toEqual([corta]);
+        expect(fichaExactaPorNombre(['pago de ana maria gomez'], [corta, larga])).toEqual(corta);
+        // Escrito el largo, gana el largo (contiene al corto).
+        expect(fichaExactaPorNombre(['Ana María Gómez Ruiz'], [corta, larga])).toEqual(larga);
+        // Las partículas no cuentan: «María de los Ángeles Ruiz» escrito sin «de los».
+        expect(fichaExactaPorNombre(['maria angeles ruiz'], [{ id: 'c-3', nombre: 'María de los Ángeles Ruiz', tipo: 'child' as const }]))
+            .toMatchObject({ id: 'c-3' });
+    });
+
+    it('deportistaPorNombreSinVerificar: la exacta si la hay; si no, la parecida SOLO para la propuesta', async () => {
+        state.fichas = [{ id: 'c-ethann', full_name: 'Ethann Matías Pedraza Pinto' }];
+        state.sinRegistrar = [{ id: 'u-laura', full_name: 'Laura Sofía Pedraza Sanchez' }];
+        expect(await deportistaPorNombreSinVerificar('school-1', ['ETHANN MATIAS PEDRAZA PINTO']))
+            .toEqual({ exacta: { id: 'c-ethann', nombre: 'Ethann Matías Pedraza Pinto', tipo: 'child' }, parecida: null });
+        expect(await deportistaPorNombreSinVerificar('school-1', ['de Ethann Pedraza']))
+            .toEqual({ exacta: null, parecida: { id: 'c-ethann', nombre: 'Ethann Matías Pedraza Pinto', tipo: 'child' } });
+        expect(await deportistaPorNombreSinVerificar('school-1', ['Pedraza'])).toEqual({ exacta: null, parecida: null });
+    });
+});
+
+describe('medios de pago — Nequi y Daviplata al MISMO número (Monster 2026-11-08)', () => {
+    it('salen los dos medios (antes la Daviplata se perdía por tener el mismo número)', async () => {
+        state.settings = {
+            nequi_number: '3194505150', bank_titular_name: 'Iván Sossa',
+            payment_accounts: [
+                { id: 'a1', type: 'nequi', label: 'Nequi', value: '3194505150', active: true },
+                { id: 'a2', type: 'daviplata', label: 'Daviplata', value: '3194505150', active: true },
+            ],
+        };
+        const m = await mediosDePago('school-1');
+        expect(m.cuentas).toEqual([
+            { tipo: 'Nequi', titular: 'Iván Sossa', numero: '3194505150' },
+            { tipo: 'Daviplata', titular: 'Iván Sossa', numero: '3194505150' },
+        ]);
+        state.settings = null;
+    });
+
+    it('la columna suelta del store viejo no repite la cuenta; una cuenta inactiva no sale', async () => {
+        state.settings = {
+            nequi_number: '3001112222', bank_account_number: '123-456', bank_name: 'Bancolombia',
+            payment_accounts: [
+                { id: 'a1', type: 'nequi', label: 'Nequi', value: '3001112222', active: true },
+                { id: 'a2', type: 'bancolombia', label: 'Ahorros', value: '123-456', active: true },
+                { id: 'a3', type: 'daviplata', label: 'Daviplata', value: '3001112222', active: false },
+            ],
+        };
+        const m = await mediosDePago('school-1');
+        expect(m.cuentas.map((c) => c.numero)).toEqual(['3001112222', '123-456']);
+        state.settings = null;
     });
 });
