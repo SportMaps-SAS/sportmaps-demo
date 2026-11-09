@@ -400,9 +400,10 @@ describe('el destino por anuncio ofrece el formulario DESPUÉS de la ficha', () 
         const vac = { ...VACACIONAL, name: 'Clínica vacacional' };
         const a = ctxAnuncio([vac], async () => true);
         await atenderDestinoDeAnuncio(a.ctx, 'Hola, quiero información', 'anuncio');
-        expect(a.orden).toEqual(['enviar:servicio']);
+        // La ficha y los botones de la venta (sin formulario): Monster 2026-11-09.
+        expect(a.orden).toEqual(['enviar:servicio', 'enviar:undefined']); // el 2.º: «¿Qué quieres hacer?» con botones (sin marca de destino)
         const b = ctxAnuncio([CLINICA]);
         await atenderDestinoDeAnuncio(b.ctx, 'Hola, quiero información', 'anuncio');
-        expect(b.orden).toEqual(['enviar:servicio']);
+        expect(b.orden).toEqual(['enviar:servicio', 'enviar:undefined']);
     });
 });

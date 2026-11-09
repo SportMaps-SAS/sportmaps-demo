@@ -790,7 +790,8 @@ export async function atenderVentaDeServicio(
                 if (ctx.anotarAsistente) await seguro(() => ctx.anotarAsistente!(asistente.nombre, item), undefined);
                 const pagado = pagoRecibidoEnVenta(ctx.recientes, venta, ahora);
                 await ctx.enviar(textoAsistenteAnotado(item, asistente.nombre, { pagado }),
-                    { ...marca, intencion_venta: 'asistente', step: PASO_VENTA.ASISTENTE, asistente: asistente.nombre });
+                    { ...marca, intencion_venta: 'asistente', step: PASO_VENTA.ASISTENTE, asistente: asistente.nombre },
+                    pagado ? undefined : botonesDeCierre(item, ctx.recientes, ahora));
                 return 'venta_asistente';
             }
             const hoy = hoyBogota(ahora);
@@ -801,7 +802,7 @@ export async function atenderVentaDeServicio(
                 recientes: ctx.recientes, afiliado, cuentas, hoy,
             }), { tipo: 'no_se', motivo: 'error' });
             if (r.tipo === 'respuesta' && r.texto.trim()) {
-                await ctx.enviar(r.texto.trim(), { ...marca, step: PASO_VENTA.RESPUESTA, repetible: true });
+                await ctx.enviar(r.texto.trim(), { ...marca, step: PASO_VENTA.RESPUESTA, repetible: true }, botonesDeCierre(item, ctx.recientes, ahora));
                 return 'venta_respuesta';
             }
             // Por qué no contestó la IA del servicio (auditable en el payload del saliente).
@@ -814,7 +815,7 @@ export async function atenderVentaDeServicio(
             const repetido = pasoDeVentaReciente(ctx.recientes, PASO_VENTA.A_LA_ESCUELA, 30, ahora);
             await ctx.enviar(repetido ? TEXTO_A_LA_ESCUELA_REPETIDO : TEXTO_A_LA_ESCUELA, {
                 ...marca, ...motivoIa, step: PASO_VENTA.A_LA_ESCUELA, pendiente_escuela: texto.slice(0, 300),
-            });
+            }, repetido ? undefined : botonesDeCierre(item, ctx.recientes, ahora));
             await seguro(() => ctx.avisarEscuela(
                 `Pregunta sobre «${item.name}» que el asistente no tiene en los datos: «${texto.slice(0, 300)}».`), undefined);
             return 'venta_a_la_escuela';
@@ -873,4 +874,20 @@ export async function atenderBotonDeVenta(
             return 'venta_detalles';
         }
     }
+}
+
+/**
+ * Los botones con que cierra cada respuesta de la venta (Monster 2026-11-09, «ajusta todo con botones,
+ * debemos vender más»): sin pago todavía → [Separar mi cupo] [Hablar con alguien]; con los datos de pago
+ * ya enviados → [Ya pagué] [Hablar con alguien]; con el comprobante recibido → ninguno (ya compró). Pura.
+ */
+export function accionesDeCierre(recientes: FilaReciente[], ahora = Date.now()): AccionBotonVenta[] | null {
+    if (comprobanteRecibido(recientes, 24 * 60, ahora)) return null;
+    const conDatos = recientes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_VENTA.PAGO);
+    return conDatos ? ['ya_pague', 'humano'] : ['separar', 'humano'];
+}
+
+export function botonesDeCierre(item: Pick<ItemConFicha, 'id'>, recientes: FilaReciente[], ahora = Date.now()): BotonDeVenta[] | undefined {
+    const a = accionesDeCierre(recientes, ahora);
+    return a ? botonesDeVenta(item, a) : undefined;
 }

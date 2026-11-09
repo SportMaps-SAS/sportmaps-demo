@@ -535,7 +535,9 @@ describe('anuncios: el destino del anuncio manda (la clínica nunca cae en el em
 
     it('clic en el anuncio de la clínica + «quiero información»: la ficha con el precio de hoy, no las sedes', async () => {
         const r = await respuesta('monster', 'Hola, quiero más información', { payload: ANUNCIO_CLINICA, catalogo: [CLINICA] });
-        expect(r).toHaveLength(1);
+        // La ficha y, aparte, «¿Qué quieres hacer?» con los botones de la venta (Monster 2026-11-09).
+        expect(r).toHaveLength(2);
+        expect((r[1].botones as any[]).map((b) => (typeof b === 'string' ? b : b.title))).toEqual(['Separar mi cupo', 'Hablar con alguien']);
         expect(r[0].step).toBe('desconocido_tema_escolar');
         expect(r[0].flujo).toBeNull();
         expect(r[0].botones ?? []).toEqual([]);
@@ -564,7 +566,7 @@ describe('anuncios: el destino del anuncio manda (la clínica nunca cae en el em
             payload: { referral: { source_id: 'ad-generico', headline: '¡Inscríbete ya!' } },
             catalogo: [CLINICA], mapeo: { destino: 'servicio', servicio_id: 'srv-clinica' },
         });
-        expect(r).toHaveLength(1);
+        expect(r).toHaveLength(2); // la ficha y los botones
         expect(r[0].texto).toContain('*Clínica de armadores y atacantes*');
     });
 
@@ -578,7 +580,7 @@ describe('anuncios: el destino del anuncio manda (la clínica nunca cae en el em
 
     it('«info de la clínica» sin anuncio: la ficha de la clínica', async () => {
         const r = await respuesta('monster', 'Buenas, info de la clínica', { catalogo: [CLINICA] });
-        expect(r).toHaveLength(1);
+        expect(r).toHaveLength(2); // la ficha y los botones de la venta
         expect(r[0].texto).toContain('*Clínica de armadores y atacantes*');
         expect(JSON.stringify(r)).not.toMatch(/sm_em_/);
     });

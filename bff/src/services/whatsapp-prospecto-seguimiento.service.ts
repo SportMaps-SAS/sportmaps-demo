@@ -93,7 +93,8 @@ export interface DepsSeguimiento20h {
     soltar: (lead: LeadCandidato) => Promise<void>;
     redactar: (integ: WhatsAppIntegration, conversationId: string, recientes: FilaReciente[]) => Promise<string | null>;
     /** `extra` va al payload del saliente (la marca de la venta de un servicio). */
-    enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, extra?: Record<string, unknown>) => Promise<void>;
+    enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, extra?: Record<string, unknown>,
+        botones?: import('./whatsapp-venta-servicio').BotonDeVenta[]) => Promise<void>;
     /**
      * ¿El lead o la conversación están en la VENTA de un servicio? Entonces el
      * seguimiento es determinista y solo del servicio (sin IA ni clase de prueba).
@@ -104,7 +105,7 @@ export interface DepsSeguimiento20h {
         => Promise<SeguimientoDeVenta | null>;
 }
 
-export interface SeguimientoDeVenta { itemId: string; texto: string | null }
+export interface SeguimientoDeVenta { itemId: string; texto: string | null; /** Botones con que sale (Monster 2026-11-09): [Separar mi cupo] o [Ya pagué], y [Hablar con alguien]. */ botones?: import('./whatsapp-venta-servicio').BotonDeVenta[] }
 
 const PALABRA_DE_EVENTO = /cl[ií]nica|torneo|campeonato|vacacional|vacaciones|campamento|copa\b/i;
 
@@ -141,7 +142,7 @@ export async function seguimientoDeVentaDelLead(
     try {
         const { serviciosDeAnuncio } = await import('./whatsapp-anuncio-destino');
         const { ventaActiva } = await import('./whatsapp-venta-contexto');
-        const { textoSeguimientoDeVenta, tienePrecioDeAfiliado } = await import('./whatsapp-venta-servicio');
+        const { textoSeguimientoDeVenta, tienePrecioDeAfiliado, botonesDeCierre } = await import('./whatsapp-venta-servicio');
         const { hoyBogota } = await import('./wa-cobro-desde-comprobante.service');
         const items = await serviciosDeAnuncio(lead.schoolId, ahora.getTime());
         if (!items.length) return null;
@@ -158,6 +159,7 @@ export async function seguimientoDeVentaDelLead(
         return {
             itemId: venta.item.id,
             texto: textoSeguimientoDeVenta(venta.item, { recientes, afiliado, hoy: hoyBogota(ahora.getTime()), ahora: ahora.getTime() }),
+            botones: botonesDeCierre(venta.item, recientes, ahora.getTime()),
         };
     } catch {
         return null;
@@ -242,9 +244,9 @@ const DEPS: DepsSeguimiento20h = {
         await supabase.from('school_signup_leads').update({ source_detail: { ...lead.sourceDetail } }).eq('id', lead.id);
     },
     redactar: redactarSeguimiento20h,
-    async enviar(integ, conversationId, waId, texto, extra) {
+    async enviar(integ, conversationId, waId, texto, extra, botones) {
         const { deliver } = await import('./whatsapp-bot.service');
-        await deliver(integ, conversationId, waId, texto, { ...(extra ?? {}), step: PASO_SEGUIMIENTO_20H });
+        await deliver(integ, conversationId, waId, texto, { ...(extra ?? {}), step: PASO_SEGUIMIENTO_20H }, botones?.length ? { botones } : undefined);
     },
     ventaDelLead: seguimientoDeVentaDelLead,
 };
@@ -280,7 +282,8 @@ export async function runSeguimientoProspectos20h(
             if (venta) {
                 if (!venta.texto) { r.omitidos++; continue; }
                 const { MARCA_VENTA } = await import('./whatsapp-venta-contexto');
-                await d.enviar(integ, conv.id, conv.contactWaId, venta.texto, { [MARCA_VENTA]: venta.itemId, seguimiento_de_venta: true });
+                await d.enviar(integ, conv.id, conv.contactWaId, venta.texto, { [MARCA_VENTA]: venta.itemId, seguimiento_de_venta: true },
+                    ...(venta.botones?.length ? [venta.botones] as const : []));
                 r.enviados++;
                 continue;
             }

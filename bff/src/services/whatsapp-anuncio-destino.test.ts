@@ -324,7 +324,7 @@ function ctxDe(o: {
         yaContestado: async () => o.yaContestado ?? false,
         guardarLead: async (l) => { reg.leads.push(l); return 'lead-1'; },
         registrarEsperado: async (e) => { reg.esperados.push(e); return true; },
-        enviar: async (texto, contexto) => { reg.enviados.push({ texto, contexto }); },
+        enviar: async (texto, contexto, botones) => { reg.enviados.push({ texto, contexto, ...(botones ? { botones: botones.map((b) => b.title) } : {}) } as any); },
         avisarEscuela: async (d) => { reg.avisos.push(d); },
         iniciarEmbudo: async () => { reg.embudo++; return o.embudo ?? true; },
         ahora: () => new Date(o.ahora ?? '2026-11-04T15:00:00Z'),
@@ -335,10 +335,13 @@ function ctxDe(o: {
 describe('atenderDestinoDeAnuncio', () => {
     beforeEach(() => { h.tablas = []; });
 
-    it('anuncio de la clínica + «quiero información»: UNA ficha, lead con servicio y anuncio, motivo esperado clase_extra', async () => {
+    it('anuncio de la clínica + «quiero información»: UNA ficha y el cierre con botones, lead con servicio y anuncio, motivo esperado clase_extra', async () => {
         const { ctx, reg } = ctxDe({ recientes: [entrante('Hola, quiero más información', { referral: ANUNCIO_CLINICA })] });
         expect(await atenderDestinoDeAnuncio(ctx, 'Hola, quiero más información')).toBe('anuncio_servicio');
-        expect(reg.enviados).toHaveLength(1);
+        // La ficha y, aparte, «¿Qué quieres hacer?» con [Separar mi cupo] [Hablar con alguien] (Monster 2026-11-09).
+        expect(reg.enviados).toHaveLength(2);
+        expect((reg.enviados[1] as any).botones).toEqual(['Separar mi cupo', 'Hablar con alguien']);
+        expect(reg.enviados[1].texto).toBe('¿Qué quieres hacer? 👇');
         expect(reg.enviados[0].texto).toContain('*Clínica de armadores y atacantes*');
         expect(reg.enviados[0].texto).toContain('Valor hoy: *$300.000*');
         expect(reg.enviados[0].texto).not.toMatch(/sede|nombre completo|clase de prueba|gratis/i);
@@ -385,10 +388,11 @@ describe('atenderDestinoDeAnuncio', () => {
         expect(pago.contexto).not.toHaveProperty(MARCA_DESTINO);
     });
 
-    it('sin pedir el pago («quiero más información»): UNA ficha con el próximo paso, sin la cuenta', async () => {
+    it('sin pedir el pago («quiero más información»): UNA ficha con el próximo paso, sin la cuenta, y los botones aparte', async () => {
         const { ctx, reg } = ctxDe({ recientes: [entrante('Hola, quiero más información', { referral: ANUNCIO_CLINICA })] });
         await atenderDestinoDeAnuncio(ctx, 'Hola, quiero más información');
-        expect(reg.enviados).toHaveLength(1);
+        expect(reg.enviados).toHaveLength(2);
+        expect((reg.enviados[1] as any).botones).toEqual(['Separar mi cupo', 'Hablar con alguien']);
         expect(reg.enviados[0].texto).toContain(CTA_FICHA_DE_SERVICIO);
         expect(reg.enviados[0].texto).not.toContain('3194505150');
         expect(reg.enviados[0].contexto).toMatchObject({ [MARCA_VENTA]: CLINICA.id });

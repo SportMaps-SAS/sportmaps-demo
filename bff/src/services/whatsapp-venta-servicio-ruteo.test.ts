@@ -15,6 +15,7 @@ const h = vi.hoisted(() => {
     const state = {
         filas: [] as any[],
         items: [] as any[],
+        optin: null as any,
     };
     const momento = (f: any) => new Date(f.wa_timestamp || f.created_at || 0).getTime();
     const plano = (f: any) => {
@@ -43,6 +44,7 @@ const h = vi.hoisted(() => {
             return { data: single ? (data[0] ?? null) : data, count: data.length, error: null };
         }
         if (table === 'school_tournament_items') return { data: state.items, error: null };
+        if (table === 'whatsapp_optins') return { data: single ? state.optin : [], error: null };
         if (table === 'whatsapp_conversations') {
             return { data: { id: 'conv-1', contact_wa_id: '573165395912', parent_id: null, identified: false, status: 'open', contact_name: 'Jorge', tomada_por: null, tomada_hasta: null }, error: null };
         }
@@ -155,6 +157,7 @@ beforeEach(() => {
     _olvidarPresentaciones();
     h.state.items = [CLINICA];
     h.state.filas = [];
+    h.state.optin = null;
 });
 
 describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
@@ -373,5 +376,30 @@ describe('ruteo de la venta de un servicio (atenderDesconocido)', () => {
         const { resultado, salidas } = await turno('¿incluye grupo femenino?');
         expect(resultado).toBe('escuela_atendiendo');
         expect(salidas.filter((s) => !s.texto.startsWith('['))).toEqual([]);
+    });
+});
+
+describe('botones de la venta y ACTIVAR de un número sin ficha (Monster 2026-11-09)', () => {
+    it('toca [Separar mi cupo] de la campaña → los datos de pago de hoy con [Ya pagué]', async () => {
+        h.state.filas = [respuestaCampana(5), ent(6, 'Sí, envíame la info', { type: 'button' })];
+        const r = await turno('Separar mi cupo', `vs:${CLINICA.id}:separar`);
+        expect(r.resultado).toBe('venta_pago');
+        const pago = r.salidas.find((x) => x.payload?.step === PASO_VENTA.PAGO)!;
+        expect(pago.texto).toContain('abono mínimo de *$150.000*');
+        expect(pago.botones).toEqual(['Ya pagué']);
+    });
+    it('«*ACTIVAR*» de quien se dio de baja → se reactiva (no «eso te lo confirma la escuela»)', async () => {
+        h.state.optin = { opted_out_at: '2026-11-09T23:31:00Z' };
+        h.state.filas = [respuestaCampana(30)];
+        const r = await turno('*ACTIVAR*');
+        expect(r.resultado).toBe('avisos_reactivados');
+        expect(r.salidas.map((x) => x.texto).join(' ')).toContain('reactivé los mensajes');
+        expect(r.salidas.map((x) => x.texto).join(' ')).not.toContain('te lo confirma la escuela');
+    });
+    it('«activar» de quien NO se dio de baja sigue su camino (la venta), sin reactivar nada', async () => {
+        h.state.optin = null;
+        h.state.filas = [respuestaCampana(30)];
+        const r = await turno('activar');
+        expect(r.resultado).not.toBe('avisos_reactivados');
     });
 });
