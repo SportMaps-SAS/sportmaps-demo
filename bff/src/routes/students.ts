@@ -14,6 +14,7 @@ import {
     INACTIVE_ATHLETE_ERROR,
     PLAN_PERIOD_CHARGE_FILTER,
     repricePendingCharges,
+    conceptoDePlan,
 } from '../services/enrollmentBilling';
 import { previewPlanChange, applyPlanChangeEffects } from '../services/planChange.service';
 
@@ -1357,7 +1358,7 @@ router.put(
                   const amount = planFee ?? planData?.price ?? 0;
                   const created = await createPendingPayment(
                     null, enrollment.offering_plan_id, amount,
-                    `Plan ${planData?.name || 'Plan'}`,
+                    conceptoDePlan(planData?.name),
                     billingStartForChange(planStartDate),
                   );
                   if (!created && amount > 0) {
@@ -1401,7 +1402,7 @@ router.put(
             if (error) throw new Error(`Error creando enrollment plan: ${error.message}`);
             const { data: planData } = await supabase.from('offering_plans').select('name, price').eq('id', enrollment.offering_plan_id).maybeSingle();
             const amount = planFee ?? planData?.price ?? 0;
-            await createPendingPayment(null, enrollment.offering_plan_id, amount, `Plan ${planData?.name || 'Plan'}`, planStartDate);
+            await createPendingPayment(null, enrollment.offering_plan_id, amount, conceptoDePlan(planData?.name), planStartDate);
           }
         }
 

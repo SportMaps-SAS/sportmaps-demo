@@ -15,6 +15,7 @@ import {
     auditEnrollmentFeeWaiver,
     isAthleteActive,
     INACTIVE_ATHLETE_ERROR,
+    conceptoDePlan,
 } from '../services/enrollmentBilling';
 import { previewPlanChange, applyPlanChangeEffects } from '../services/planChange.service';
 
@@ -407,7 +408,7 @@ router.post('/', requireAuth, requireRole('owner', 'admin', 'school_admin', 'coa
                     athleteId: studentId!,
                     planId: data.offering_plan_id!,
                     amount: Number(planInfo?.price ?? 0),
-                    concept: `Plan ${planInfo?.name || 'Plan'}`,
+                    concept: conceptoDePlan(planInfo?.name),
                     startDate,
                 });
                 if (!created && Number(planInfo?.price ?? 0) > 0) {
