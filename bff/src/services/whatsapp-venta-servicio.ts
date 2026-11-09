@@ -67,7 +67,53 @@ export const PASO_VENTA = {
     CLUB_APARTE: 'venta_servicio_club_aparte',
     /** Dio los datos de quien asiste («Nicolás Cubides Ávila / 18 de diciembre de 2006 / Opuesto»). */
     ASISTENTE: 'venta_servicio_asistente',
+    /** Tocó [Ver detalles]: la ficha que escribió la escuela. */
+    DETALLES: 'venta_servicio_detalles',
+    /** Tocó [Hablar con alguien]: aviso a la escuela y la conversación en el buzón. */
+    HUMANO: 'venta_servicio_humano',
+    /** Tocó un botón de un servicio que ya no está vigente. */
+    NO_VIGENTE: 'venta_servicio_no_vigente',
 } as const;
+
+// ─── Botones de la venta (Monster 2026-11-09: «que todo sea más fácil y concreto, vender más rápido») ──
+//
+// [Separar mi cupo] [Ver detalles] [Hablar con alguien] en la entrada (respuesta al «Sí» de la
+// campaña y saludo dentro de la venta) y [Ya pagué] en el mensaje de pago. El id lleva el servicio:
+// `vs:<item_id>:<accion>`; así el toque funciona aunque la conversación no tenga otra señal de venta.
+// Sin preguntas antes de pagar: el afiliado se reconoce por el número y la edad va en la ficha.
+
+export interface BotonDeVenta { id: string; title: string }
+export type AccionBotonVenta = 'separar' | 'detalles' | 'humano' | 'ya_pague';
+export const PREFIJO_BOTON_VENTA = 'vs:';
+/** Títulos de Meta: 20 caracteres como máximo. */
+export const TITULO_BOTON_VENTA: Record<AccionBotonVenta, string> = {
+    separar: 'Separar mi cupo',
+    detalles: 'Ver detalles',
+    humano: 'Hablar con alguien',
+    ya_pague: 'Ya pagué',
+};
+export const BOTONES_DE_ENTRADA: AccionBotonVenta[] = ['separar', 'detalles', 'humano'];
+/** Cuerpo de un mensaje con botones de respuesta (Meta: 1024). Más largo, la ficha sale sola y los botones aparte. */
+export const MAX_CUERPO_CON_BOTONES = 1000;
+
+export function idBotonDeVenta(itemId: string, accion: AccionBotonVenta): string {
+    return `${PREFIJO_BOTON_VENTA}${itemId}:${accion}`;
+}
+
+/** `vs:<uuid>:<accion>` → servicio y acción; cualquier otro id → null. Pura. */
+export function parsearBotonDeVenta(botonId: string | null | undefined): { itemId: string; accion: AccionBotonVenta } | null {
+    const m = /^vs:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(separar|detalles|humano|ya_pague)$/i
+        .exec(String(botonId ?? '').trim());
+    return m ? { itemId: m[1].toLowerCase(), accion: m[2].toLowerCase() as AccionBotonVenta } : null;
+}
+
+export function botonesDeVenta(item: Pick<ItemConFicha, 'id'>, acciones: AccionBotonVenta[]): BotonDeVenta[] {
+    return acciones.map((a) => ({ id: idBotonDeVenta(item.id, a), title: TITULO_BOTON_VENTA[a] }));
+}
+
+export const TEXTO_HUMANO = 'Listo 🙌 Le aviso a la escuela y te escribe por aquí.';
+export const TEXTO_TRAS_DETALLES = '¿Separamos tu cupo?';
+export const TEXTO_SERVICIO_NO_VIGENTE = 'Ese servicio ya no está disponible 🙌 Si quieres, escríbenos y te contamos lo que tenemos.';
 
 /** Minutos entre dos líneas de saludo de la venta («¿Te ayudo con algo de la clínica?»). */
 export const MIN_ENTRE_SALUDOS_DE_VENTA = 30;
@@ -575,8 +621,8 @@ export interface CtxVentaServicio {
     registrarEsperado: (e: { motivo: Motivo; leadId: string | null; venceEn: string | null }) => Promise<boolean>;
     /** IA anclada al ítem (frente B). */
     responderPregunta: (p: PreguntaDeServicio) => Promise<RespuestaDeServicio>;
-    /** UN mensaje; `contexto` va al payload del saliente. */
-    enviar: (texto: string, contexto: Record<string, unknown>) => Promise<void>;
+    /** UN mensaje; `contexto` va al payload del saliente. Con `botones`, botones de respuesta (si no salen, el texto solo). */
+    enviar: (texto: string, contexto: Record<string, unknown>, botones?: BotonDeVenta[]) => Promise<void>;
     /** Buzón con aviso a la escuela (la pregunta queda pendiente y visible). */
     avisarEscuela: (detalle: string) => Promise<void>;
     /** ¿La cola tiene (o va a procesar) un comprobante de este número? Lo contesta ella. */
@@ -592,7 +638,8 @@ export interface CtxVentaServicio {
 
 export type ResultadoVenta =
     | 'venta_pago' | 'venta_sin_precio' | 'venta_respuesta' | 'venta_a_la_escuela' | 'venta_otra_fecha'
-    | 'venta_ya_pago' | 'venta_saludo' | 'venta_silencio' | 'venta_boton_club' | 'venta_asistente';
+    | 'venta_ya_pago' | 'venta_saludo' | 'venta_silencio' | 'venta_boton_club' | 'venta_asistente'
+    | 'venta_detalles' | 'venta_humano';
 
 async function seguro<T>(fn: () => Promise<T>, siFalla: T): Promise<T> {
     try { return await fn(); } catch { return siFalla; }
@@ -643,7 +690,7 @@ export async function enviarPagoDeServicio(
         motivo_esperado: { motivo, monto: null, registrado },
         ...(cuentas.length ? {} : { sin_cuentas: true }),
         ...(faltantes.length ? { pendiente_escuela: o.pregunta?.slice(0, 300) ?? faltantes.join(' y ') } : {}),
-    });
+    }, cuentas.length ? botonesDeVenta(item, ['ya_pague']) : undefined);
     if (!cuentas.length) {
         await seguro(() => ctx.avisarEscuela(
             `Pidió los datos de pago de «${item.name}» y la escuela no tiene cuentas de pago cargadas: escríbele con los datos.`), undefined);
@@ -711,7 +758,7 @@ export async function atenderVentaDeServicio(
         case 'saludo': {
             if (await colaContesta()) return 'venta_silencio';
             if (pasoDeVentaReciente(ctx.recientes, PASO_VENTA.SALUDO, MIN_ENTRE_SALUDOS_DE_VENTA, ahora)) return 'venta_silencio';
-            await ctx.enviar(lineaDeSaludoDeVenta(item), { ...marca, step: PASO_VENTA.SALUDO });
+            await ctx.enviar(lineaDeSaludoDeVenta(item), { ...marca, step: PASO_VENTA.SALUDO }, botonesDeVenta(item, BOTONES_DE_ENTRADA));
             return 'venta_saludo';
         }
 
@@ -771,6 +818,59 @@ export async function atenderVentaDeServicio(
             await seguro(() => ctx.avisarEscuela(
                 `Pregunta sobre «${item.name}» que el asistente no tiene en los datos: «${texto.slice(0, 300)}».`), undefined);
             return 'venta_a_la_escuela';
+        }
+    }
+}
+
+/**
+ * Un botón de la venta ([Separar mi cupo] [Ver detalles] [Hablar con alguien] [Ya pagué]).
+ * Cada toque manda a lo sumo la respuesta de ESE botón (los detalles largos: la ficha y
+ * los botones aparte). Monster 2026-11-09: «que todo sea más fácil y concreto, la idea es
+ * vender más rápido». Nunca lanza por la base.
+ */
+export async function atenderBotonDeVenta(
+    ctx: CtxVentaServicio, item: ItemConFicha, accion: AccionBotonVenta,
+): Promise<ResultadoVenta> {
+    const ahora = (ctx.ahora ?? (() => new Date()))().getTime();
+    const marca = { [MARCA_VENTA]: item.id, boton_venta: accion };
+    switch (accion) {
+        case 'separar':
+            return enviarPagoDeServicio(ctx, item, { extra: { boton_venta: accion } });
+
+        case 'ya_pague': {
+            // Un comprobante en la ráfaga (o en la cola): lo contesta la cola, una sola vez.
+            if (ctx.comprobanteEnCurso && await seguro(() => ctx.comprobanteEnCurso!(), false)) return 'venta_silencio';
+            const yaLlego = comprobanteRecibido(ctx.recientes, 24 * 60, ahora);
+            await ctx.enviar(yaLlego ? TEXTO_COMPROBANTE_YA_RECIBIDO : TEXTO_YA_PAGO, { ...marca, step: PASO_VENTA.YA_PAGO, repetible: true });
+            return 'venta_ya_pago';
+        }
+
+        case 'humano': {
+            // Dos toques seguidos: un solo aviso a la escuela.
+            const repetido = pasoDeVentaReciente(ctx.recientes, PASO_VENTA.HUMANO, 30, ahora);
+            await ctx.enviar(repetido ? TEXTO_A_LA_ESCUELA_REPETIDO : TEXTO_HUMANO, {
+                ...marca, step: PASO_VENTA.HUMANO, pendiente_escuela: `pidió hablar con alguien sobre ${item.name}`,
+            });
+            if (!repetido) {
+                await seguro(() => ctx.avisarEscuela(`Pidió hablar con alguien de la escuela sobre «${item.name}». Escríbele por aquí.`), undefined);
+            }
+            return 'venta_humano';
+        }
+
+        case 'detalles':
+        default: {
+            const ficha = String(item.description ?? '').trim();
+            const botones = botonesDeVenta(item, ['separar', 'humano']);
+            const deLaEscuela = { ...marca, step: PASO_VENTA.DETALLES, texto_de_la_escuela: true, repetible: true };
+            if (ficha && ficha.length <= MAX_CUERPO_CON_BOTONES) {
+                await ctx.enviar(ficha, deLaEscuela, botones);
+            } else {
+                // Meta no deja botones bajo un texto tan largo: la ficha sola y los botones en uno corto.
+                if (ficha) await ctx.enviar(ficha, deLaEscuela);
+                await ctx.enviar(ficha ? TEXTO_TRAS_DETALLES : lineaDeSaludoDeVenta(item),
+                    { ...marca, step: PASO_VENTA.DETALLES, repetible: true }, botones);
+            }
+            return 'venta_detalles';
         }
     }
 }
