@@ -375,6 +375,35 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
             claves: Object.keys(raw),
             errores: Array.isArray(raw.errors) ? (raw.errors as any[]).map((e) => e?.code ?? e?.title ?? null) : null,
         }, 'WhatsApp: inbound message missing required fields');
+        // Antes el mensaje se perdía sin rastro (2026-11-10: @dr_xanl preguntó el precio de la
+        // clínica desde un anuncio y nunca lo vimos). Se guarda SOLO la forma y los identificadores
+        // de Meta —sin texto ni teléfono—, en la misma tabla que los demás eventos, para ver qué
+        // manda Meta (p. ej. `from_user_id` de quien usa nombre de usuario) y poder responderle.
+        try {
+            const integ = msg.phoneNumberId ? await resolveIntegration(msg.phoneNumberId) : null;
+            const referral = (raw.referral ?? null) as Record<string, unknown> | null;
+            await supabase.from('whatsapp_account_events').insert({
+                integration_id: integ?.id ?? null,
+                school_id: integ?.school_id ?? null,
+                field: 'inbound_descartado',
+                phone_number_id: msg.phoneNumberId || null,
+                nuevo_estado: String(raw.type ?? msg.type ?? ''),
+                motivo: [!msg.contactWaId && 'sin_from', !msg.waMessageId && 'sin_id', !msg.phoneNumberId && 'sin_phone_number_id'].filter(Boolean).join(','),
+                payload: {
+                    claves: Object.keys(raw),
+                    tipo: raw.type ?? null,
+                    from_user_id: raw.from_user_id ?? null,
+                    user_id: raw.user_id ?? null,
+                    wa_message_id: msg.waMessageId || null,
+                    timestamp: raw.timestamp ?? null,
+                    texto_largo: typeof (raw.text as any)?.body === 'string' ? (raw.text as any).body.length : null,
+                    referral: referral ? { source_id: referral.source_id ?? null, source_type: referral.source_type ?? null, headline: referral.headline ?? null } : null,
+                    errores: Array.isArray(raw.errors) ? raw.errors : null,
+                },
+            });
+        } catch (err) {
+            req.log?.warn({ err: (err as Error)?.message }, 'WhatsApp: no se pudo guardar el inbound descartado');
+        }
         return;
     }
 
