@@ -56,6 +56,7 @@ import {
 import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
 import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
 import { atenderAdjuntoEntrante } from '../services/whatsapp-bot-oleada1';
+import { esAliasDeUsuario, nombreConUsuario } from '../services/whatsapp-usuario-meta';
 
 /**
  * Corre en segundo plano lo que espera (la ráfaga, el acuse): el webhook
@@ -448,7 +449,9 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
         p_integration_id: integration.id,
         p_school_id: integration.school_id,
         p_contact_wa_id: msg.contactWaId,
-        p_contact_name: msg.contactName,
+        // Sin teléfono (nombre de usuario de WhatsApp): el @usuario va en el nombre de la
+        // conversación; es lo que la escuela ve en su celular y por lo que busca el chat.
+        p_contact_name: esAliasDeUsuario(msg.contactWaId) ? nombreConUsuario(msg.contactName, msg.contactUsername) : msg.contactName,
         p_wa_message_id: msg.waMessageId,
         p_type: msg.type,
         p_text_body: personal ? null : msg.textBody,

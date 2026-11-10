@@ -23,6 +23,7 @@ import crypto from 'crypto';
 import { supabase } from '../config/supabase';
 import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import { aLetrasNormales } from './whatsapp-letras-decorativas';
+import { aliasDeBsuid, conDestinatarioDeMeta } from './whatsapp-usuario-meta';
 
 const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_VERSION || 'v21.0';
 const GRAPH_BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -225,7 +226,8 @@ async function postearMensaje(
                 Authorization: `Bearer ${token}`,
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify(payload),
+            // Contacto sin teléfono (alias del BSUID): Meta pide `recipient` en vez de `to`.
+            body: JSON.stringify(conDestinatarioDeMeta(payload)),
         });
 
         const json: any = await res.json().catch(() => ({}));
@@ -587,7 +589,7 @@ export function parseStatuses(body: any): ParsedStatus[] {
                     // `played` (escucharon la nota de voz) no está en el CHECK de
                     // whatsapp_messages.status: para el medidor es una lectura.
                     status: st?.status === 'played' ? 'read' : (st?.status || 'unknown'),
-                    recipientWaId: st?.recipient_id ?? null,
+                    recipientWaId: st?.recipient_id ?? aliasDeBsuid(st?.recipient_user_id) ?? null,
                     timestamp: epoch ? new Date(epoch * 1000).toISOString() : new Date().toISOString(),
                     // `billable` puede venir ausente; no se asume false, que
                     // reportaria de menos lo que se le paga a Meta.
@@ -761,6 +763,12 @@ export interface ParsedInboundMessage {
     phoneNumberId: string;
     contactWaId: string;
     contactName: string | null;
+    /**
+     * Nombre de usuario de WhatsApp (`contacts[].profile.username`), sin arroba.
+     * Solo viene si la persona adoptó uno. Si además `contactWaId` es un alias
+     * (ver whatsapp-usuario-meta), el contacto no tiene teléfono visible.
+     */
+    contactUsername?: string | null;
     waMessageId: string;
     type: string;
     textBody: string | null;
@@ -802,8 +810,16 @@ export function parseInboundMessages(body: any): ParsedInboundMessage[] {
             const phoneNumberId: string = value?.metadata?.phone_number_id || '';
             const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
             const nameByWaId: Record<string, string> = {};
+            // Quien usa nombre de usuario y no comparte teléfono llega sin `wa_id`:
+            // su contacto viene llaveado por `user_id` (ver whatsapp-usuario-meta).
+            const nameByUserId: Record<string, string> = {};
+            const usuarioByUserId: Record<string, string> = {};
             for (const c of contacts) {
                 if (c?.wa_id) nameByWaId[c.wa_id] = c?.profile?.name || '';
+                if (c?.user_id) {
+                    nameByUserId[c.user_id] = c?.profile?.name || '';
+                    if (c?.profile?.username) usuarioByUserId[c.user_id] = String(c.profile.username);
+                }
             }
             const messages = Array.isArray(value?.messages) ? value.messages : [];
             for (const m of messages) {
@@ -842,10 +858,15 @@ export function parseInboundMessages(body: any): ParsedInboundMessage[] {
                 const mediaCaption: string | null = conArchivo ? aLetrasNormales(mediaNode?.caption ?? null) : null;
 
                 const epoch = Number(m?.timestamp || 0);
+                // Sin `from` pero con `from_user_id`: contacto con nombre de usuario. Entra
+                // con el alias del BSUID; antes se descartaba y nadie le contestaba.
+                const sinTelefono = !m?.from && !!m?.from_user_id;
+                const userId: string | null = m?.from_user_id ? String(m.from_user_id) : null;
                 out.push({
                     phoneNumberId,
-                    contactWaId: m?.from || '',
-                    contactName: nameByWaId[m?.from] || null,
+                    contactWaId: m?.from || (sinTelefono ? aliasDeBsuid(userId) : null) || '',
+                    contactName: (sinTelefono ? nameByUserId[userId!] : nameByWaId[m?.from]) || null,
+                    contactUsername: (userId && usuarioByUserId[userId]) || null,
                     waMessageId: m?.id || '',
                     type,
                     textBody,

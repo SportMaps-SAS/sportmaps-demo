@@ -33,6 +33,7 @@ import * as path from 'path';
 import { supabase } from '../config/supabase';
 import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import { decryptToken, sendRawPayload, type SendTextResult, type WhatsAppIntegration } from './whatsapp.service';
+import { claveDeContacto } from './whatsapp-usuario-meta';
 
 // ─── Constantes de Meta ──────────────────────────────────────────────────────
 
@@ -445,7 +446,7 @@ export function firmarTokenFormulario(
         i: t.id ?? crypto.randomBytes(9).toString('base64url'),
         e: t.schoolId,
         c: t.conversationId,
-        t: String(t.contactWaId).replace(/\D/g, ''),
+        t: claveDeContacto(t.contactWaId),
         f: t.formulario,
         s: t.servicioId,
         x: Math.floor((t.venceEn ?? ahora + HORAS_VIGENCIA_TOKEN * 3600_000) / 1000),

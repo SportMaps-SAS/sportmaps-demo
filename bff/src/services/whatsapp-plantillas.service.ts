@@ -34,6 +34,7 @@
 
 import { supabase } from '../config/supabase';
 import { decryptToken } from './whatsapp.service';
+import { conDestinatarioDeMeta } from './whatsapp-usuario-meta';
 import { esFestivoColombia } from '../utils/festivos-colombia';
 
 const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_VERSION || 'v21.0';
@@ -657,7 +658,8 @@ export async function enviarCobroPorPlantilla(p: EnvioCobro): Promise<ResultadoE
         const r = await fetch(`${GRAPH}/${integ.phone_number_id}/messages`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            // Contacto sin teléfono (alias del BSUID): `recipient` en vez de `to`.
+            body: JSON.stringify(conDestinatarioDeMeta(payload)),
         });
         const j: any = await r.json().catch(() => ({}));
         if (!r.ok) return { enviado: false, motivo: 'error_graph', detalle: j?.error?.message || `graph_${r.status}` };

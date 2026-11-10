@@ -33,6 +33,7 @@ import {
 } from './whatsapp-anuncio-destino';
 import { verificarTokenFormulario, type PreciosMostrados, type RespuestaDeFormulario } from './whatsapp-flows.service';
 import type { Motivo } from './motivos-de-cobro';
+import { claveDeContacto } from './whatsapp-usuario-meta';
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -371,7 +372,7 @@ export async function atenderRespuestaDeFormulario(
         const v = verificarTokenFormulario(r.token, { ahora: ahora.getTime() });
         // El token tiene que ser de ESTA escuela, ESTE contacto y (si la trae) ESTA conversación.
         const ajeno = v.ok && (v.token.schoolId !== ctx.schoolId
-            || v.token.contactWaId !== String(ctx.contactWaId).replace(/\D/g, '')
+            || v.token.contactWaId !== claveDeContacto(ctx.contactWaId)
             || (v.token.conversationId !== null && ctx.conversationId !== null && v.token.conversationId !== ctx.conversationId));
         const tk = v.ok ? v.token : null;
         const datos = leerRespuestaServicio(r.datos, hoy);

@@ -74,6 +74,7 @@ import {
     textosClaseDeEscuela, TEXTOS_POR_DEFECTO, presentacionDeClase, ofertaDeReserva, fraseDeValor, type TextosClase,
 } from './textos-clase-prueba';
 import { excepcionesDeEscuela, ajusteDeSesion, diaDeLaSemana, type ExcepcionSemana } from './semana-equipo.service';
+import { esAliasDeUsuario } from './whatsapp-usuario-meta';
 
 export const FLUJO_CORTESIA = 'clase_cortesia';
 /** Misma ventana de atención de Meta: pasada, el papá ya no recuerda la pregunta. */
@@ -1986,16 +1987,19 @@ export function enriquecerFranja(f: FranjaCortesia, c: {
  * de otra persona (auditoría de privacidad 2026-10-08).
  */
 function telefonoDelLead(waId: string): string {
+    if (esAliasDeUsuario(waId)) return waId; // sin teléfono: el alias es su llave
     const d = String(waId ?? '').replace(/\D/g, '');
     return celular10(d) ?? `+${d}`;
 }
 
 export async function reservaVigenteDeSupabase(schoolId: string, contactWaId: string): Promise<ReservaVigente | null> {
     try {
+        const alias = esAliasDeUsuario(contactWaId);
         const digitos = String(contactWaId ?? '').replace(/\D/g, '');
-        if (digitos.length < 10) return null;
+        if (!alias && digitos.length < 10) return null;
         const t10 = celular10(digitos);
-        const variantes = t10
+        const variantes = alias ? [contactWaId]
+            : t10
             ? [...new Set([t10, `57${t10}`, `+57${t10}`, digitos, `+${digitos}`])]
             : [digitos, `+${digitos}`];
         const { data, error } = await supabase.from('school_signup_leads')

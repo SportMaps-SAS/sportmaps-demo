@@ -23,6 +23,7 @@
  */
 import { supabase } from '../config/supabase';
 import { celular10 } from './factura-pagador.service';
+import { esAliasDeUsuario } from './whatsapp-usuario-meta';
 import {
     interesesDeProspecto, buscaParaAdulto, edadMencionada, type InteresDeProspecto,
 } from './whatsapp-atencion.service';
@@ -41,11 +42,15 @@ const RANGO: Record<string, number> = { new: 0, contacted: 1, converted: 2, disc
  * colombiano de ese número (auditoría de privacidad 2026-10-08).
  */
 export function telefonoDeLeadWa(waId: string): string {
+    // Contacto sin teléfono (nombre de usuario de WhatsApp): `phone` es NOT NULL y es
+    // la llave con la que se vuelve a encontrar el prospecto; va el alias, sin dígitos.
+    if (esAliasDeUsuario(waId)) return waId;
     const d = String(waId ?? '').replace(/\D/g, '');
     return celular10(d) ?? `+${d}`;
 }
 
 export function variantesTelefonoLead(waId: string): string[] {
+    if (esAliasDeUsuario(waId)) return [waId];
     const d = String(waId ?? '').replace(/\D/g, '');
     if (!d) return [];
     const t10 = celular10(d);
