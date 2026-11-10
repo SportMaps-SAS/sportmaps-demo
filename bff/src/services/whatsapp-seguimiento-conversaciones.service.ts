@@ -34,6 +34,7 @@ import { esCierreDeCortesia } from './whatsapp-desconocido-reglas';
 import { TIPOS_MARCADOS } from './whatsapp-tipo-contacto';
 import { serviciosDeAnuncio, type ItemConFicha } from './whatsapp-anuncio-destino';
 import { MARCA_VENTA, ventaActiva } from './whatsapp-venta-contexto';
+import { esAliasDeUsuario } from './whatsapp-usuario-meta';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -275,6 +276,7 @@ export function estadoDeComprobante(c: ComprobanteSeg): string {
 
 /** Llave de teléfono para cruzar conversación, lead y cola: los últimos 10 dígitos. Pura. */
 export function claveTelefono(tel: string | null | undefined): string {
+    if (esAliasDeUsuario(tel)) return tel; // contacto sin teléfono: su alias, no la llave vacía
     const d = String(tel ?? '').replace(/\D/g, '');
     return d.length > 10 ? d.slice(-10) : d;
 }

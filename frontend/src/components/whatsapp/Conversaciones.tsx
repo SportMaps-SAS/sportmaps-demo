@@ -218,6 +218,14 @@ function guardarBandeja(b: Bandeja) {
 }
 
 /** Minúsculas y sin tildes, para buscar «maria» y encontrar «María». */
+/**
+ * Quien usa nombre de usuario de WhatsApp y no comparte su teléfono entra con un
+ * identificador interno («wau-…», ver bff whatsapp-usuario-meta): no es un número
+ * y no se le muestra a la escuela. Su @usuario va en el nombre del contacto.
+ */
+const numeroVisible = (waId: string | null | undefined) =>
+    String(waId ?? '').startsWith('wau-') ? 'Sin teléfono · usuario de WhatsApp' : String(waId ?? '');
+
 const normalizar = (s: string | null | undefined) =>
     (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -745,7 +753,7 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
             >
                 <div className="flex items-start justify-between gap-2 min-w-0">
                     <span className={`text-sm truncate ${sinResponder(c) ? 'font-semibold' : 'font-medium'}`}>
-                        {c.contact_name || c.contact_wa_id}
+                        {c.contact_name || numeroVisible(c.contact_wa_id)}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">{cuando(c.last_message_at)}</span>
                 </div>
@@ -1055,10 +1063,10 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
                     )}
                     <div className="min-w-0 flex-1">
                         <p className="font-medium text-sm truncate">
-                            {abierta.contact_name || abierta.contact_wa_id}
+                            {abierta.contact_name || numeroVisible(abierta.contact_wa_id)}
                         </p>
                         <p className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
-                            <span>{abierta.contact_wa_id}</span>
+                            <span>{numeroVisible(abierta.contact_wa_id)}</span>
                             {abierta.ventana_vence !== undefined && <ChipVentana c={abierta} />}
                         </p>
                     </div>
@@ -1262,7 +1270,7 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
             <TipoDeContactoDialog
                 schoolId={schoolId}
                 conversacionId={tipoDialogo?.c.id ?? null}
-                nombre={tipoDialogo ? (tipoDialogo.c.contact_name || tipoDialogo.c.contact_wa_id) : null}
+                nombre={tipoDialogo ? (tipoDialogo.c.contact_name || numeroVisible(tipoDialogo.c.contact_wa_id)) : null}
                 tipoInicial={tipoDialogo?.tipo ?? 'familia'}
                 tambienFamiliaInicial={tipoDialogo?.c.tambien_familia === true}
                 abierto={!!tipoDialogo}

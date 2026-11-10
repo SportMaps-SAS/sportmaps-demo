@@ -29,6 +29,7 @@ import {
     echosAutomaticos, esSalienteAutomatico, esTextoAutomatico, normalizarTextoEcho,
 } from './whatsapp-buzon';
 import { aLetrasNormales } from './whatsapp-letras-decorativas';
+import { aliasDeBsuid } from './whatsapp-usuario-meta';
 import { correosDeSoporte, enviarConReserva, horaColombia } from './avisos-correo.service';
 
 /**
@@ -305,8 +306,10 @@ export async function procesarEchos(body: any, log?: Logger): Promise<void> {
             if (!integration) continue;
 
             for (const e of echos) {
-                // `to` es la familia; `from` es el número de la escuela.
-                const contacto = String(e?.to ?? '');
+                // `to` es la familia; `from` es el número de la escuela. A quien usa nombre
+                // de usuario Meta lo manda en `to_user_id` (sin `to`): va con su alias, que es
+                // la llave de su conversación (ver whatsapp-usuario-meta).
+                const contacto = String(e?.to ?? '') || aliasDeBsuid(e?.to_user_id) || '';
                 if (!contacto || !e?.id) continue;
 
                 const conv = await conversacionConTipo(integration, contacto);
