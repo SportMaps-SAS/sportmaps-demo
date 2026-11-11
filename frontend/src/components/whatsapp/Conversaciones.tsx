@@ -116,7 +116,7 @@ function textoDeToma(t: Toma): string {
 export type TipoDeContacto =
     | 'familia' | 'familia_sin_cuenta' | 'ambiguo' | 'staff' | 'desconocido'
     // Marcas manuales de no-familia (ver tipoDeContacto.ts).
-    | 'personal' | 'negocio' | 'otro_club' | 'plataforma'
+    | 'personal' | 'negocio' | 'otro_club' | 'plataforma' | 'equipo'
     // Reservado: si el backend llega a guardar la detección de prospectos como tipo.
     | 'prospecto';
 
@@ -131,6 +131,7 @@ const ETIQUETA_TIPO: Record<TipoDeContacto, { texto: string; clase: string }> = 
     negocio:            { texto: 'Negocio',     clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
     otro_club:          { texto: 'Otro club',   clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
     plataforma:         { texto: 'Plataforma',  clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
+    equipo:             { texto: 'Staff',       clase: 'border-violet-300 text-violet-700 dark:text-violet-400' },
     prospecto:          { texto: 'Interesado',   clase: 'border-fuchsia-300 text-fuchsia-700 dark:text-fuchsia-400' },
 };
 

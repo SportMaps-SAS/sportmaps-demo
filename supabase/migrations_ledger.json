@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 918,
-  "head": "20261107180500",
+  "count": 919,
+  "head": "20261111105120",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -921,6 +921,7 @@
     {"v":"20261107104128","file":"20261107104128_dreamers_altas_fin_octubre_a_noviembre.sql","sha256":"3c1e95cd67f24f5b64d3d6b698a5760b0b1527db5883e553ad9d62c879f69ebd","added":"2026-11-07","by":"Brayan Steven Lopez"},
     {"v":"20261107111754","file":"20261107111754_seg31_cupos_reserva_sin_cuenta.sql","sha256":"bc0e4bdd2bf1d702599fe78a19cdf7b1c2355a9d2cb1144bb505e7d6d7bb9e98","added":"2026-11-07","by":"judegor99"},
     {"v":"20261107174916","file":"20261107174916_seg31_session_bookings_escritura_cliente.sql","sha256":"322e52fda60da4ec4781c322035435de93a321e6a961adef0062cef00792876b","added":"2026-11-07","by":"judegor99"},
-    {"v":"20261107180500","file":"20261107180500_access_device_users_credenciales_sin_leer.sql","sha256":"320d91a0c5fdbd4f9a36c02549e0ab4ab8b4e64f5de77bcf6ca809c3d8cc53d0","added":"2026-11-07","by":"judegor99"}
+    {"v":"20261107180500","file":"20261107180500_access_device_users_credenciales_sin_leer.sql","sha256":"320d91a0c5fdbd4f9a36c02549e0ab4ab8b4e64f5de77bcf6ca809c3d8cc53d0","added":"2026-11-07","by":"judegor99"},
+    {"v":"20261111105120","file":"20261111105120_whatsapp_marca_staff.sql","sha256":"ec328d1a6b2082af1a1acc6b94a8f809346edb651b5238c6eaf4ecc5f6c8a8d7","added":"2026-11-11","by":"Brayan Steven Lopez"}
   ]
 }

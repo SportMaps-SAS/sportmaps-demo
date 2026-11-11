@@ -8,7 +8,7 @@
  * negocios, otro club y el propio número de SportMaps (migración
  * 20261013164839_whatsapp_tipos_de_contacto).
  *
- * Las cuatro marcas significan lo mismo para el bot: NO es familia. No se le
+ * Las cinco marcas significan lo mismo para el bot: NO es familia. No se le
  * habla, no se guarda el contenido de sus mensajes, sus adjuntos no se
  * procesan y sus filas no cuentan en la bandeja. Cambian solo la etiqueta.
  *
@@ -21,7 +21,8 @@
  * pregunta `esMarcaNoFamilia(kind)` en vez de comparar con 'personal'.
  */
 
-export const TIPOS_MARCADOS = ['personal', 'negocio', 'otro_club', 'plataforma'] as const;
+/** `equipo` = «Staff» marcado a mano (distinto del `staff` AUTOMÁTICO, que la clasificación pisa). */
+export const TIPOS_MARCADOS = ['personal', 'negocio', 'otro_club', 'plataforma', 'equipo'] as const;
 export type TipoMarcado = typeof TIPOS_MARCADOS[number];
 
 /** Lo que ve la escuela («contacto marcado como …»). */
@@ -30,6 +31,7 @@ export const ETIQUETA_DE_MARCA: Record<TipoMarcado, string> = {
     negocio: 'negocio',
     otro_club: 'otro club',
     plataforma: 'plataforma',
+    equipo: 'staff',
 };
 
 /** ¿La escuela marcó a mano este contacto como no-familia? */

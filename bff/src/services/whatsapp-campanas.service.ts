@@ -924,7 +924,7 @@ export function filtroCoincide(f: Pick<FilaAudiencia, 'intereses' | 'branch_id'>
 }
 
 /** Tipos de contacto que nunca reciben una campaña (los mismos que excluye `wa_campana_aprobar`). */
-const TIPOS_SIN_CAMPANA = ['personal', 'negocio', 'otro_club', 'plataforma', 'staff', 'familia', 'familia_sin_cuenta'];
+const TIPOS_SIN_CAMPANA = ['personal', 'negocio', 'otro_club', 'plataforma', 'equipo', 'staff', 'familia', 'familia_sin_cuenta'];
 
 /**
  * Las filas vigentes de la audiencia, con el MISMO filtro que `wa_campana_aprobar`

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-    FILTRO_SIN_MARCA_MANUAL, TIPOS_MARCADOS, esContactoSinContenido, esMarcaNoFamilia, leerConMarca, marcaPorNombre,
+    ETIQUETA_DE_MARCA, FILTRO_SIN_MARCA_MANUAL, TIPOS_MARCADOS, esContactoSinContenido, esMarcaNoFamilia, leerConMarca, marcaPorNombre,
 } from './whatsapp-tipo-contacto';
 
 describe('esMarcaNoFamilia', () => {
@@ -31,9 +31,21 @@ describe('esContactoSinContenido', () => {
     });
 });
 
+describe('marca «Staff» (equipo)', () => {
+    it('es marca manual distinta del staff automático', () => {
+        expect(esMarcaNoFamilia('equipo')).toBe(true);
+        expect(esMarcaNoFamilia('staff')).toBe(false);
+        expect(ETIQUETA_DE_MARCA.equipo).toBe('staff');
+    });
+    it('sin bandera no se guarda contenido; con «también es familia» sí', () => {
+        expect(esContactoSinContenido('equipo', false)).toBe(true);
+        expect(esContactoSinContenido('equipo', true)).toBe(false);
+    });
+});
+
 describe('FILTRO_SIN_MARCA_MANUAL', () => {
     it('excluye las cuatro marcas', () => {
-        expect(FILTRO_SIN_MARCA_MANUAL).toBe('contact_kind.is.null,contact_kind.not.in.(personal,negocio,otro_club,plataforma)');
+        expect(FILTRO_SIN_MARCA_MANUAL).toBe('contact_kind.is.null,contact_kind.not.in.(personal,negocio,otro_club,plataforma,equipo)');
     });
 });
 

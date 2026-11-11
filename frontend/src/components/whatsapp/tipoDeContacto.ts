@@ -1,8 +1,8 @@
 /**
  * Tipo de contacto que la escuela marca a mano (2026-10-13).
  *
- * Espejo de `bff/src/services/whatsapp-tipo-contacto.ts`. Las cuatro marcas
- * (personal, negocio, otro club, plataforma) significan lo mismo para el
+ * Espejo de `bff/src/services/whatsapp-tipo-contacto.ts`. Las cinco marcas
+ * (personal, negocio, otro club, plataforma, staff) significan lo mismo para el
  * asistente: NO es familia — no le habla, no guarda el contenido y sus fotos no
  * llenan la bandeja de comprobantes. «Familia» = sin marca: el número se
  * clasifica solo con el próximo mensaje.
@@ -12,7 +12,7 @@
  * personales no.
  */
 
-export const MARCAS = ['personal', 'negocio', 'otro_club', 'plataforma'] as const;
+export const MARCAS = ['personal', 'negocio', 'otro_club', 'plataforma', 'equipo'] as const;
 export type MarcaDeContacto = typeof MARCAS[number];
 export type OpcionDeTipo = 'familia' | MarcaDeContacto;
 
@@ -22,10 +22,11 @@ export const OPCIONES_DE_TIPO: { valor: OpcionDeTipo; texto: string; ayuda: stri
     { valor: 'negocio', texto: 'Negocio', ayuda: 'Proveedor, tienda, restaurante, agencia…' },
     { valor: 'otro_club', texto: 'Otro club', ayuda: 'Otro club o escuela deportiva.' },
     { valor: 'plataforma', texto: 'Plataforma', ayuda: 'El número de SportMaps u otra plataforma.' },
+    { valor: 'equipo', texto: 'Staff', ayuda: 'Profe, secretaria o personal de la escuela cuyo número no está en su perfil.' },
 ];
 
 export const TEXTO_DE_MARCA: Record<MarcaDeContacto, string> = {
-    personal: 'personal', negocio: 'negocio', otro_club: 'otro club', plataforma: 'plataforma',
+    personal: 'personal', negocio: 'negocio', otro_club: 'otro club', plataforma: 'plataforma', equipo: 'staff',
 };
 
 export function esMarcaNoFamilia(kind: string | null | undefined): kind is MarcaDeContacto {
