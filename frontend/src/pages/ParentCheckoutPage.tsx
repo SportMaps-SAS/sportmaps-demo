@@ -554,9 +554,9 @@ export default function ParentCheckoutPage() {
       const isPeriodDuplicate = insertError.code === '23505'
         && dupMsg.includes('uniq_payment_active_period_per_child');
       toast({
-        title: isOcrDuplicate ? 'Comprobante ya usado' : isPeriodDuplicate ? 'Ya hay un cobro para este mes' : 'Error',
+        title: isOcrDuplicate ? 'Comprobante ya recibido' : isPeriodDuplicate ? 'Ya hay un cobro para este mes' : 'Error',
         description: isOcrDuplicate
-          ? 'Este comprobante ya está vinculado a otro pago en esta escuela. Si crees que es un error, contacta a la administración.'
+          ? 'Este comprobante ya fue recibido: está vinculado a otro pago de esta escuela (puede haber llegado por WhatsApp o por otro cobro tuyo). Si crees que es un error, contacta a la administración.'
           : isPeriodDuplicate
           ? 'Ya existe un cobro activo para este mes de este atleta. Vuelve a la lista de cobros y paga el que aparece pendiente.'
           : (mensajeErrorDeMonto(insertError) ?? 'No se pudo registrar el pago en la base de datos'),
