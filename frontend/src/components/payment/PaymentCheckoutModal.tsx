@@ -1057,9 +1057,9 @@ export function PaymentCheckoutModal({
       const isDuplicate = err.code === '23505'
         && (dupMsg.includes('ocr_reference') || dupMsg.includes('receipt_hash') || dupMsg.includes('receipt_image_sha256'));
       toast({
-        title: isDuplicate ? "Comprobante ya usado" : "Error en el pago",
+        title: isDuplicate ? "Comprobante ya recibido" : "Error en el pago",
         description: isDuplicate
-          ? "Este comprobante ya está vinculado a otro pago en esta escuela. Si crees que es un error, contacta a la administración."
+          ? "Este comprobante ya fue recibido: está vinculado a otro pago de esta escuela (puede haber llegado por WhatsApp o por otro cobro tuyo). Si crees que es un error, contacta a la administración."
           : (mensajeErrorDeMonto(err) ?? (err.message || "No se pudo procesar tu pago.")),
         variant: "destructive",
       });

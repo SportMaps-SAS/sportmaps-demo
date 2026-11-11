@@ -22,6 +22,7 @@ import {
     type OpcionGuiada,
 } from './whatsapp-comprobante-guiado.service';
 import { esValorMotivoElegido } from './wa-cobro-desde-comprobante.service';
+import { registrarNombreTardio, textoNombreTardioGuardado } from './wa-nombre-tardio.service';
 import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.service';
 import { soloSaludoOCortesia } from './whatsapp-atencion.service';
 import { cargarRecargos, montoEsperado } from './whatsapp-excedente.service';
@@ -119,6 +120,25 @@ export async function resolverRespuestaDeCobro(
     return consumio;
 }
 
+/**
+ * El nombre llegó tarde: se guarda (prospecto + concepto del cobro + acompañante) y SOLO después se responde.
+ * false = no corresponde; el texto sigue al bot general.
+ */
+async function resolverNombreTardio(
+    integration: WhatsAppIntegration, contactWaId: string, texto: string, responder: ResponderCobro,
+): Promise<boolean> {
+    try {
+        const g = await registrarNombreTardio({
+            integrationId: integration.id, schoolId: integration.school_id, contactWaId, texto,
+        });
+        if (!g) return false;
+        await responder(textoNombreTardioGuardado(g), 'nombre_tardio_registrado');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function resolverFilaAbierta(
     integration: WhatsAppIntegration,
     contactWaId: string,
@@ -137,7 +157,9 @@ async function resolverFilaAbierta(
         .maybeSingle();
 
     const fila = data as FilaEsperando | null;
-    if (!fila) return false;
+    // Sin ninguna pregunta abierta: ¿es el nombre de quien asiste que llegó DESPUÉS del comprobante (Aleja,
+    // 2026-11-11)? Solo si el texto parece un nombre y hay un comprobante cerrado reciente con nombre de relleno.
+    if (!fila) return resolverNombreTardio(integration, contactWaId, texto, responder);
     // Una pregunta en fila (todavía no salió) no se contesta: sale cuando se
     // resuelva la anterior, o la vence el worker y va al buzón.
     if (!fila.pregunta_at && fila.pregunta_ocr?.en_fila) return false;

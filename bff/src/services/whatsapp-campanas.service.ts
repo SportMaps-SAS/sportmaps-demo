@@ -395,7 +395,8 @@ export type EstadoEnvio = 'pendiente' | 'enviando' | 'enviado' | 'incierto' | 'f
 export const ESTADOS_ENVIO: readonly EstadoEnvio[] = ['pendiente', 'enviando', 'enviado', 'incierto', 'fallido',
     'omitido', 'respondio_si', 'respondio_luego', 'baja'];
 
-export const INTERESES_AUDIENCIA = ['clase_prueba', 'inscripcion', 'clinica', 'precio', 'horarios', 'informacion'] as const;
+/** 'campamento' = dijo «campamento» sin más (ambiguo: clínica o vacacional); una campaña lo pide aparte. */
+export const INTERESES_AUDIENCIA = ['clase_prueba', 'inscripcion', 'clinica', 'vacacional', 'campamento', 'precio', 'horarios', 'informacion'] as const;
 export type InteresAudiencia = typeof INTERESES_AUDIENCIA[number];
 
 export interface FiltroCampana { intereses?: string[]; branch_ids?: string[] }

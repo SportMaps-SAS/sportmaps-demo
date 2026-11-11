@@ -19,9 +19,10 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import { formatCurrency, maskSensitive } from '@/lib/utils';
 import { chargeLabel, isOneOffCharge } from '@/lib/payment-accounts';
 import { contarPorTipo, nombreDeQuienAsiste, textoDeTipo, tipoDeCobro } from '@/lib/tipoDeCobro';
-import { ExternoBadge, TipoDeCobroBadge } from '@/components/payments/TipoDeCobroBadge';
+import { ExternoBadge, TipoDeCobroBadge } from '@/components/payments/TipoDeCobroBadge'; import { MontoRecibido } from '@/components/payments/MontoRecibido';
 import { FiltroTipoDeCobro, TODOS_LOS_TIPOS } from '@/components/payments/FiltroTipoDeCobro';
 import { normalizeReceiptUrl } from '@/lib/normalizeReceiptUrl';
+import { filtroDeSede } from '@/lib/filtroDeSede';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { getUserFriendlyError } from '@/lib/error-translator';
@@ -564,7 +565,8 @@ export default function PaymentsAutomationPage() {
   useOcultarFabSoporte(useIsMobile());
   const { schoolId, schoolName, activeBranchId, currentUserRole, branches, totalBranches } = useSchoolContext();
   // Multisede: con más de una sede se muestra la columna Sede y lo que no
-  // tiene sede solo aparece en «Todas» (mismo criterio que la consulta de cobros).
+  // tiene sede solo aparece en «Todas» en la vista de equipos/inscripciones. Los
+  // COBROS son distintos: con sede activa también salen los «Sin sede» (filtroDeSede).
   const showBranchCol = totalBranches > 1;
   const inActiveBranch = (branchId?: string | null) =>
     !activeBranchId || branchId === activeBranchId || (!branchId && totalBranches <= 1);
@@ -924,16 +926,17 @@ export default function PaymentsAutomationPage() {
       }
 
       // Sede (multisede S1, docs/specs/multisede-selector-y-sede-del-atleta.md):
-      // con una sede elegida solo salen los cobros de ESA sede. Un cobro sin
-      // sede no se reparte en todas: se ve en «Todas» con la etiqueta «Sin
-      // sede». Excepción: escuela de UNA sola sede (Dynasty: 207 de 499 sin
-      // sede) — ahí NULL es implícitamente esa sede, como en la vista
-      // school_athletes (get_single_branch_id), y se sigue viendo.
-      if (activeBranchId) {
-        query = totalBranches > 1
-          ? query.eq('branch_id', activeBranchId)
-          : query.or(`branch_id.is.null,branch_id.eq.${activeBranchId}`);
-      }
+      // con una sede elegida salen los cobros de ESA sede Y los que no tienen
+      // sede, con la etiqueta «Sin sede» (ver lib/filtroDeSede). Antes, en una
+      // escuela multisede, el filtro era `branch_id = X` y los cobros sin sede
+      // desaparecían apenas se elegía una sede (Monster: 15 de 19 cobros sin
+      // sede eran de la clínica y no se veían). Un cobro sin sede no se asigna
+      // a una sede por adivinación, pero tampoco se esconde: es plata por
+      // gestionar. En escuela de UNA sola sede (Dynasty: 207 de 499 sin sede)
+      // NULL es implícitamente esa sede, como en school_athletes
+      // (get_single_branch_id): misma regla.
+      const filtroSede = filtroDeSede(activeBranchId);
+      if (filtroSede) query = query.or(filtroSede);
       return query;
       };
 
@@ -1763,7 +1766,7 @@ export default function PaymentsAutomationPage() {
                   <Clock className="h-5 w-5 text-amber-600 shrink-0" />
                   Cobros por Aprobar
                 </CardTitle>
-                <CardDescription>Confirma los cobros con pago reportado (comprobantes y abonos). Los cobros emitidos que nadie ha pagado están en la cartera, en Finanzas. Primero los verdes, y dentro de cada color el que más lleva esperando.</CardDescription>
+                <CardDescription>Aquí vive todo comprobante por validar: confirma los cobros con pago reportado (comprobantes y abonos). Los cobros pendientes que todavía no tienen comprobante no están aquí: están en Finanzas, en «Cobros y pagos». Primero los verdes, y dentro de cada color el que más lleva esperando.</CardDescription>
               </div>
               <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
                 {greenSelection.eligible.length > 0 && (
@@ -1947,7 +1950,7 @@ export default function PaymentsAutomationPage() {
                             <TableCell><span className="text-sm">{(payment as any).parent_responsible || <span className="text-muted-foreground text-xs">—</span>}</span></TableCell>
                             <TableCell className="font-bold text-primary whitespace-nowrap align-top">
                               <div className="flex flex-col gap-0.5">
-                                <span>{formatCurrency(payment.amount)}</span>
+                                <MontoRecibido payment={payment} cola />
                                 {(payment.status === 'partial' || (Number(payment.amount_paid) || 0) > 0) && (
                                   <>
                                     <Badge variant="outline" className="w-fit whitespace-nowrap text-[10px] bg-indigo-50 text-indigo-700 border-indigo-200 py-0 h-4 px-1.5 font-semibold">
@@ -2332,9 +2335,15 @@ export default function PaymentsAutomationPage() {
                 <CardDescription>
                   Pagos que entraron: comprobante aprobado (manual o automático), efectivo, QR y pasarela —
                   de cualquier origen, incluido lo que la familia paga directo. Los cobros por cobrar no son
-                  transacciones — están en la cartera de Finanzas.
+                  transacciones — están en la cartera de Finanzas, en «Cobros y pagos».
+                  Un comprobante que aún no se ha validado no aparece aquí: vive en «Por validar» hasta que lo apruebes.
                   {showOperacionesTab && ' Si solo quieres ver lo que el equipo registró desde "Cobros y pagos", esa vista está en la pestaña Operaciones.'}
                 </CardDescription>
+                {rawPendingPayments.length > 0 && (
+                  <p className="text-xs text-amber-700 mt-1" data-testid="aviso-por-validar">
+                    {rawPendingPayments.length} por validar: esos comprobantes están en «Por validar», no en esta lista.
+                  </p>
+                )}
               </div>
               <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <Input
@@ -2480,7 +2489,7 @@ export default function PaymentsAutomationPage() {
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <p className="font-bold text-sm">{formatCurrency(payment.amount)}</p>
+                          <MontoRecibido payment={payment} className="font-bold text-sm" />
                           <Badge variant="outline" className={`text-xs ${cfg.className}`}>{cfg.label}</Badge>
                           {payment.reconciliation_status === 'pendiente' && (
                             <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-700 border-amber-200 py-0 h-4 ml-1" title="Aprobado; pendiente de conciliación bancaria">
@@ -2587,7 +2596,7 @@ export default function PaymentsAutomationPage() {
                           {showBranchCol && (
                             <TableCell><BranchChip branchId={payment.branch_id} branches={branches} /></TableCell>
                           )}
-                          <TableCell className="font-semibold">{formatCurrency(payment.amount)}</TableCell>
+                          <TableCell className="font-semibold"><MontoRecibido payment={payment} /></TableCell>
                           {/* Antes: {payment.payment_method || 'TRANSFER'} — inventaba
                               "TRANSFER" en los pagos sin método registrado. */}
                           <TableCell><PaymentOriginBadge payment={payment} /></TableCell>

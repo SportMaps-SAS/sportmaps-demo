@@ -19,6 +19,7 @@ import {
     GlosaRpcError,
 } from '../services/glosa.service';
 import { evaluatePaymentReceipt } from '../services/receipt-approval.service';
+import { destinatarioDelCobro } from '../utils/destinatarioDelCobro';
 
 const router = Router();
 
@@ -151,8 +152,9 @@ router.post('/auto-evaluate', async (req: AuthenticatedRequest, res: Response) =
     const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId : null;
     if (!paymentId) return res.status(400).json({ error: 'paymentId requerido' });
     // Ownership: solo el acudiente del pago puede disparar su evaluación (evita abuso/DoS de re-OCR).
-    const { data: owner } = await supabase.from('payments').select('parent_id').eq('id', paymentId).single();
-    if (!owner || owner.parent_id !== user.id) {
+    // Dueño = acudiente o, si el cobro no tiene, el adulto titular (user_id).
+    const { data: owner } = await supabase.from('payments').select('parent_id, user_id').eq('id', paymentId).single();
+    if (!owner || destinatarioDelCobro(owner) !== user.id) {
         return res.status(403).json({ error: 'No autorizado sobre este pago.' });
     }
     const result = await evaluatePaymentReceipt(paymentId, req.log);

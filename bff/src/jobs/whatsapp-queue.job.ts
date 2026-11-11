@@ -94,8 +94,12 @@ import {
     conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
     decidirMontoDeVenta, cobroPrevioDelServicio, cobroDeServicioPorId, leadDeVenta, asegurarLeadDeVenta, motivoDelItem,
-    hayPrecioDeAfiliado, type MontoDeVenta, type LeadDeVenta,
+    hayPrecioDeAfiliado, abonoMinimo, type MontoDeVenta, type LeadDeVenta,
 } from '../services/wa-cobro-desde-comprobante.service';
+import {
+    cobroAbiertoDelAtleta, reconocerAtletaDelClub, corregirServicioPorMonto, duenoDelCobro, type CobroAbierto,
+} from '../services/wa-cobro-abierto.service';
+import { esAliasDeUsuario } from '../services/whatsapp-usuario-meta';
 import {
     conceptosEsperadosDe, elegirEsperado, consumirEsperado, type ConceptoEsperado,
 } from '../services/wa-concepto-esperado.service';
@@ -617,12 +621,22 @@ export async function estamparComprobante(
         // ninguna respuesta y ponía la fila a reintentar cinco veces contra una
         // restricción que nunca va a ceder, pagando OCR en cada vuelta.
         if (stampErr.code === '23505') {
-            const { data: yaAplicado } = await supabase
+            let { data: yaAplicado } = await supabase
                 .from('payments')
                 .select('id, concept, amount, status')
                 .eq('school_id', ctx.schoolId)
                 .eq('ocr_reference', ctx.ocr.reference)
                 .maybeSingle();
+            // La otra única, `uq_payments_school_receipt_hash` (misma imagen): también es «ya recibido».
+            if (!yaAplicado && ctx.sha) {
+                ({ data: yaAplicado } = await supabase
+                    .from('payments')
+                    .select('id, concept, amount, status')
+                    .eq('school_id', ctx.schoolId)
+                    .eq('receipt_image_sha256', ctx.sha)
+                    .not('status', 'in', '(rejected,cancelled,failed)')
+                    .limit(1).maybeSingle());
+            }
             return {
                 ok: false,
                 duplicado: true,
@@ -1670,6 +1684,18 @@ async function ventaParaComprobante(
     }
 }
 
+/** El nombre del perfil de WhatsApp de la conversación (`contact_name`). Una lectura; nunca lanza. */
+async function nombreDePerfilDe(conversationId: string | null): Promise<string | null> {
+    if (!conversationId) return null;
+    try {
+        const { data } = await supabase.from('whatsapp_conversations').select('contact_name').eq('id', conversationId).maybeSingle();
+        const n = (data as any)?.contact_name;
+        return typeof n === 'string' && n.trim() ? n.trim() : null;
+    } catch {
+        return null;
+    }
+}
+
 /** El id de la conversación de la fila. Una lectura; nunca lanza. */
 async function conversacionDeLaFila(fila: FilaCola): Promise<string | null> {
     try {
@@ -1700,18 +1726,27 @@ async function comprobanteYaRecibido(
         // La imagen solo cuenta contra cobros vivos (un rechazo la libera para reintentar,
         // igual que el índice único parcial); la referencia, contra cualquiera
         // (`uq_payments_school_ocr_reference`).
-        const [porImagen, porReferencia] = await Promise.all([
+        // Doble canal (2026-11-11): la app guarda la referencia normalizada (`receipt_reference_norm`) y el bot
+        // la leída (`ocr_reference`); la misma operación por los dos canales es UN solo comprobante.
+        const refNorm = refSegura ? normalizeReference(refSegura) : null;
+        const [porImagen, porReferencia, porReferenciaNorm] = await Promise.all([
             supabase.from('payments').select('id')
                 .eq('school_id', fila.school_id).eq('receipt_image_sha256', sha)
                 .not('status', 'in', '(rejected,cancelled,failed)').limit(1),
             refSegura
                 ? supabase.from('payments').select('id').eq('school_id', fila.school_id).eq('ocr_reference', refSegura).limit(1)
                 : Promise.resolve({ data: [] as any[] }),
+            refNorm
+                ? supabase.from('payments').select('id').eq('school_id', fila.school_id).eq('receipt_reference_norm', refNorm)
+                    .not('status', 'in', '(rejected,cancelled,failed)').limit(1)
+                : Promise.resolve({ data: [] as any[] }),
         ]);
         const img = Array.isArray(porImagen.data) ? (porImagen.data[0] as any) : null;
         if (img?.id) return { paymentId: img.id, queueId: null, por: 'imagen' };
         const conRef = Array.isArray(porReferencia.data) ? (porReferencia.data[0] as any) : null;
         if (conRef?.id) return { paymentId: conRef.id, queueId: null, por: 'referencia' };
+        const conNorm = Array.isArray(porReferenciaNorm.data) ? (porReferenciaNorm.data[0] as any) : null;
+        if (conNorm?.id) return { paymentId: conNorm.id, queueId: null, por: 'referencia' };
     } catch { /* sigue con la cola */ }
     try {
         const { data } = await supabase.from('whatsapp_inbound_queue')
@@ -2074,30 +2109,98 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
         return true;
     }
 
-    const lead = fam ? null : await leadDeVenta(schoolId, fila.wa_phone_number, esperado?.leadId ?? null);
-    const dueno: DuenoDelCobro | null = duenoFam?.tipo === 'uno' ? duenoFam.dueno : lead ? { leadId: lead.id } : null;
-    const afiliado = fam ? true
+    // El nombre del perfil de WhatsApp: si el prospecto se llama igual y nadie lo confirmó como quien asiste, no
+    // es el nombre de quien asiste (Aleja 💫, 2026-11-11). Una lectura, solo para un prospecto.
+    const perfil = fam ? null : await nombreDePerfilDe(v.conversationId);
+    const lead = fam ? null : await leadDeVenta(schoolId, fila.wa_phone_number, esperado?.leadId ?? null, perfil);
+    let dueno: DuenoDelCobro | null = duenoFam?.tipo === 'uno' ? duenoFam.dueno : lead ? { leadId: lead.id } : null;
+    let afiliado = fam ? true
         : hayPrecioDeAfiliado([item]) ? (await esAfiliado(schoolId, fila.wa_phone_number)).afiliado : false;
     let previo = dueno ? await cobroPrevioDelServicio(schoolId, dueno, item) : null;
+
+    // (2026-11-11, Carlos Martínez) El cobro que la ESCUELA ya abrió (categoría «otro», dueño usuario, concepto
+    // «Clínica Jorge Mesa — …»): el comprobante se le aplica; NO se crea otro cobro externo.
+    let cobroAbierto: CobroAbierto | null = null;
+    const aLaEscuelaPorAbierto = (codigo: string, detalle: string, accion: string, nombreProp: string | null) => ventaALaEscuela(v, {
+        codigo, detalle, propuesta: propuestaDeVenta(v, nombreProp, accion),
+        texto: textoVentaRecibida({ monto, servicio: item.name, nombre: nombreProp }),
+    });
+    if (dueno && !previo) {
+        const ab = await cobroAbiertoDelAtleta(schoolId, dueno, item);
+        if (ab.tipo === 'uno') {
+            cobroAbierto = ab.cobro; previo = ab.cobro;
+        } else if (!fam && (ab.tipo === 'ambiguo' || ab.tipo === 'error')) {
+            await aLaEscuelaPorAbierto(
+                ab.tipo === 'ambiguo' ? 'venta_cobro_abierto_ambiguo' : 'venta_cobro_abierto_no_leido',
+                ab.tipo === 'ambiguo'
+                    ? `${pesos(monto)} para ${item.name}; hay ${ab.cobros.length} cobros abiertos del mismo servicio: ${ab.cobros.map((c) => `${c.id} (${pesos(c.amount)})`).join(' / ')}`
+                    : `${pesos(monto)} para ${item.name}; no se pudieron leer los cobros abiertos (no se crea nada)`,
+                'elegir a cuál cobro va y aplicar este comprobante', v.nombre ?? (lead?.conocido ? lead.nombre : null));
+            return true;
+        }
+    }
+
+    // Contacto sin teléfono (alias wau-…): no se reconoce por el celular. Con el nombre que dio en la venta
+    // (completo y exacto) se busca al atleta del club; solo se aplica si es UNA persona con UN cobro abierto
+    // de este servicio. Homónimos → a la escuela. Nunca por `is_active`; a quien escribe no se le muestra nada.
+    const esAlias = !fam && esAliasDeUsuario(fila.wa_phone_number);
+    const nombreTemprano = !esAlias ? null
+        : (v.nombre ?? (lead?.conocido ? lead.nombre : null)
+            // El que dio en la venta (`anotarAsistente`), aunque el lead conserve el nombre del perfil.
+            ?? (typeof lead?.sourceDetail?.asistente_servicio?.nombre === 'string' ? lead.sourceDetail.asistente_servicio.nombre as string : null)
+            ?? nombreDeAsistenteEnTextos([fila.media_caption, ocr.description], item.name, v.textos ?? []));
+    let atletaReconocido = false;
+    if (esAlias && !cobroAbierto && nombreTemprano) {
+        const rec = await reconocerAtletaDelClub(schoolId, nombreTemprano, item);
+        if (rec.tipo === 'homonimos' || rec.tipo === 'error' || (rec.tipo === 'uno' && rec.cobros.length > 1)) {
+            await aLaEscuelaPorAbierto(
+                rec.tipo === 'homonimos' ? 'venta_atleta_homonimos' : rec.tipo === 'error' ? 'venta_atleta_no_leido' : 'venta_cobro_abierto_ambiguo',
+                rec.tipo === 'homonimos'
+                    ? `${pesos(monto)} para ${item.name} de un contacto sin teléfono que dice llamarse ${nombreTemprano}; hay ${rec.n} personas del club con ese nombre`
+                    : `${pesos(monto)} para ${item.name} de un contacto sin teléfono (${nombreTemprano}); no se pudo decidir el cobro`,
+                'confirmar quién es, elegir el cobro y aplicar este comprobante', nombreTemprano);
+            return true;
+        }
+        if (rec.tipo === 'uno' && rec.cobros.length === 1) {
+            cobroAbierto = rec.cobros[0]; previo = rec.cobros[0]; dueno = duenoDelCobro(rec.cobros[0]);
+            afiliado = true; atletaReconocido = true;
+            v.log?.info?.({ queueId: fila.id, paymentId: previo.id }, '[wa-queue] venta: contacto sin teléfono reconocido por su nombre; cobro abierto de la escuela');
+        }
+    }
+
     let decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo });
     // Red de seguridad (Monster 2026-11-10, Gabriela: el abono de $150.000 de la clínica se comparó con el
     // Vacacional): si el monto no cuadra con el servicio elegido pero cuadra con UN solo otro servicio vigente,
-    // el comprobante es de ese. Con más de uno o ninguno, sigue a la escuela como siempre.
+    // el comprobante es de ese. Con más de uno o ninguno, sigue a la escuela como siempre. UNA lectura de
+    // cobros para todos los servicios (antes una por servicio).
     if (decision.tipo === 'no_cuadra') {
         try {
             const otros = (await serviciosDeAnuncio(schoolId)).filter((it) => it.id !== item.id);
-            const cuadran: { it: ItemConFicha; d: MontoDeVenta; previo: Awaited<ReturnType<typeof cobroPrevioDelServicio>> }[] = [];
-            for (const it of otros) {
-                const pv = dueno ? await cobroPrevioDelServicio(schoolId, dueno, it) : null;
-                const d = decidirMontoDeVenta(monto, it, { afiliado, fechaPago: ocr.date ?? null, previo: pv });
-                if (d.tipo !== 'no_cuadra' && d.tipo !== 'ambiguo') cuadran.push({ it, d, previo: pv });
-            }
-            if (cuadran.length === 1) {
-                v.log?.warn?.({ queueId: fila.id, de: item.id, a: cuadran[0].it.id, monto }, '[wa-queue] venta: el monto es de otro servicio, se corrige');
-                item = cuadran[0].it; esperado = null; previo = cuadran[0].previo; decision = cuadran[0].d;
+            const c = await corregirServicioPorMonto({ schoolId, monto, otros, dueno, afiliado, fechaPago: ocr.date ?? null });
+            if (c) {
+                v.log?.warn?.({ queueId: fila.id, de: item.id, a: c.item.id, monto }, '[wa-queue] venta: el monto es de otro servicio, se corrige');
+                item = c.item; esperado = null; previo = c.previo; decision = c.decision; cobroAbierto = null;
                 v = { ...v, venta: { item, esperado: null } };
             }
         } catch { /* sin red de seguridad: sigue como estaba */ }
+    }
+
+    // Un cobro abierto de la escuela y un monto que no es su saldo, ni un abono válido: no se crea nada; a la
+    // escuela con la propuesta «aplicar al cobro X» (la familia, si es de lo suyo de siempre, sigue su camino).
+    if (cobroAbierto && !fam && decision.tipo !== 'aplicar_previo' && decision.tipo !== 'saldo' && decision.tipo !== 'saldo_en_revision') {
+        const min = item.allow_installments === true ? abonoMinimo(cobroAbierto.amount, item.abono_minimo_pct) : null;
+        await aLaEscuelaPorAbierto(
+            'venta_cobro_abierto_monto',
+            `${pesos(monto)} para ${item.name}; el cobro abierto de la escuela es de ${pesos(cobroAbierto.amount)}${cobroAbierto.amountPaid > 0 ? ` (abonado ${pesos(cobroAbierto.amountPaid)})` : ''}`
+                + `${min ? ` y el abono mínimo ${pesos(min)}` : ''}`,
+            `aplicar al cobro ${cobroAbierto.id} («${cobroAbierto.concept ?? item.name}», ${pesos(cobroAbierto.amount)}) o registrarlo a mano`,
+            nombreTemprano ?? v.nombre ?? (lead?.conocido ? lead.nombre : null));
+        return true;
+    }
+    // Contacto sin teléfono que no dijo su nombre y cuyo monto no es del catálogo: puede ser el de un atleta del
+    // club (precio de grupo); se pregunta el nombre en vez de mandarlo directo a la escuela.
+    if (esAlias && !nombreTemprano && !cobroAbierto && decision.tipo === 'no_cuadra') {
+        return preguntarNombreDeAsistente(v, monto, lead);
     }
 
     if (fam && (decision.tipo === 'no_cuadra' || decision.tipo === 'ambiguo')) return false;
@@ -2155,13 +2258,13 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
         });
         return true;
     }
-    let nombre = nombreConocido;
+    let nombre = nombreConocido ?? (atletaReconocido ? nombreTemprano : null);
     if (!nombre && !fam) nombre = nombreDeAsistenteEnTextos([fila.media_caption, ocr.description], item.name, v.textos ?? []);
     if (!nombre) return preguntarNombreDeAsistente(v, monto, lead);
 
     // Prospecto: con el nombre, el lead (se crea si no existe; si existe sin ese nombre, se le pone).
     let duenoFinal = dueno;
-    if (!fam) {
+    if (!fam && !atletaReconocido) {
         const leadId = await asegurarLeadDeVenta({
             schoolId, conversationId: v.conversationId, telefono: fila.wa_phone_number, nombre, item, lead,
         });

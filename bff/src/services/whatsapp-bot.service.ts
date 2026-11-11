@@ -169,6 +169,7 @@ import {
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
 import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
+import { esConsultaDePatrocinio, textoDePatrocinio } from './whatsapp-patrocinio';
 
 const OTP_TTL_MIN = 10;
 
@@ -416,8 +417,19 @@ async function cuerpoDelTurno(
     //     Modo discreto (2026-10-29): la ventana es de 12 h y cuenta también sus
     //     respuestas rápidas («Bienvenidos a Dynasty…»), ver `escritoPorLaEscuela`.
     if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+        // Excepción 2026-11-11 (Monster): quien pide un SERVICIO del catálogo («quiero inscribir a mi hijo para el
+        // vacacional») recibe la ficha aunque la escuela haya escrito hace poco; para todo lo demás sigue el silencio.
+        if (await servicioAunqueAtiendaLaEscuela(integration, conversationId, contactWaId, text, botonId, recientes)) return;
         console.info('[whatsapp-bot] la escuela está atendiendo; el bot se calla', { conversationId });
         await marcarAbiertaSinAviso(conversationId);
+        return;
+    }
+
+    // 0b'. Patrocinio / alianza de marca (Monster 2026-11-11, «¿Tu marca juega con nosotros?»): una empresa NO es un
+    //      participante. Se le agradece y se avisa a la escuela; nunca la ficha de inscripción ni el precio.
+    if (!botonId && esConsultaDePatrocinio(text)) {
+        await deliver(integration, conversationId, contactWaId, textoDePatrocinio(await nombreDeEscuela(integration.school_id)), { step: 'patrocinio' });
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle: 'Patrocinio o alianza de marca: ' + text.slice(0, 200) });
         return;
     }
 
@@ -2832,6 +2844,39 @@ async function atenderAnuncioEnBot(
     } catch (e: any) {
         console.warn('[whatsapp-bot] destino por anuncio falló', { conversationId, err: e?.message });
         return null;
+    }
+}
+
+/**
+ * ¿Puede el bot contestar la ficha de un servicio aunque una persona de la escuela haya escrito hace poco (P4)?
+ * Sí, salvo en modo discreto (la escuela pidió que el bot calle), sin texto, con botón o con el interruptor
+ * `WHATSAPP_RESPONDER_SERVICIO_CON_ESCUELA=0`. La conversación TOMADA desde el buzón no pasa por acá: sigue callada. Pura.
+ */
+export function puedeResponderServicioConEscuela(p: { discreto: boolean; texto: string; botonId: string | null; interruptor?: string | undefined }): boolean {
+    if (p.interruptor === '0') return false;
+    return !p.discreto && !p.botonId && !!p.texto.trim();
+}
+
+/**
+ * Excepción a P4 (Monster 2026-11-11): una mamá escribió «quiero inscribir a mi hijo para el vacacional» 44 segundos
+ * después de que la escuela le saludó, el bot calló por P4 y esperó 35 minutos. El bot es de la escuela: la ficha de un
+ * servicio (precio de hoy, cuentas) es información, no una conversación que se pise. Solo con una consulta clara de un
+ * servicio del catálogo (la misma regla del destino por texto, que además no repite una ficha ya enviada). Nunca lanza.
+ */
+async function servicioAunqueAtiendaLaEscuela(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, recientes: FilaReciente[],
+): Promise<boolean> {
+    if (!puedeResponderServicioConEscuela({ discreto: discretoEnBot(), texto: text, botonId, interruptor: process.env.WHATSAPP_RESPONDER_SERVICIO_CON_ESCUELA })) return false;
+    try {
+        const ajustes = await ajustesDeLaEscuela(integration.school_id);
+        if (!embudoActivo(ajustes) && !ajustes.ventasHabilitadas) return false;
+        const r = await atenderDestinoDeAnuncio(ctxAnuncio(integration, conversationId, contactWaId, recientes), text, 'texto');
+        if (r) console.info('[whatsapp-bot] la escuela estaba atendiendo; se contestó la ficha del servicio', { conversationId, r });
+        return r !== null;
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] servicio con la escuela activa falló', { conversationId, err: e?.message });
+        return false;
     }
 }
 

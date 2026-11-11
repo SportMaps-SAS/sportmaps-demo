@@ -307,9 +307,14 @@ describe('4. «el campamento del 21 de nov… hasta qué edades aplica»', () =>
         expect(inf).toMatchObject({ tipo: 'uno', item: { id: 'it-clinica' } });
     });
 
-    it('«campamento» sin fecha sigue como antes (el vacacional; la clínica no)', () => {
-        expect(inferirServicio(['info del campamento'], [clinica])).toMatchObject({ tipo: 'evento_sin_servicio' });
-        expect(inferirServicio(['info del campamento'], [vacacional, clinica])).toMatchObject({ tipo: 'uno', item: { id: 'it-vac' } });
+    // Cambió el 2026-11-11: antes «campamento» sin fecha = el Vacacional y la clínica no; el dueño aclaró que las
+    // familias llaman «campamento» a los DOS, así que ya no se asume ninguno: con los dos activos el bot pregunta cuál.
+    it('«campamento» sin fecha es ambiguo: clínica y vacacional → varios (se pregunta cuál); con uno solo, ese', () => {
+        expect(inferirServicio(['info del campamento'], [clinica])).toMatchObject({ tipo: 'uno', item: { id: 'it-clinica' } });
+        expect(inferirServicio(['info del campamento'], [vacacional])).toMatchObject({ tipo: 'uno', item: { id: 'it-vac' } });
+        const r = inferirServicio(['info del campamento'], [vacacional, clinica]);
+        expect(r.tipo).toBe('varios');
+        if (r.tipo === 'varios') expect(r.items.map((i) => i.id).sort()).toEqual(['it-clinica', 'it-vac']);
     });
 
     it('un vacacional largo que solo CONTIENE la fecha no compite con la clínica que empieza ese día', () => {

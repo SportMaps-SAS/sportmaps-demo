@@ -27,6 +27,15 @@ import { desgloseMora, textoDesgloseMora } from '../utils/desglose-mora';
  */
 export const EVENTO_DE_SERVICIO = /\b(clinicas?|campamentos?|vacacional(es)?|vacaciones recreativas)\b/;
 
+/**
+ * La misma regla partida por servicio, para que una campaña de la clínica no le llegue a
+ * quien solo habló del vacacional (y viceversa). «Campamento» es ambiguo: las familias
+ * llaman así a los dos. La unión de las tres es EVENTO_DE_SERVICIO.
+ */
+export const EVENTO_CLINICA = /\bclinicas?\b/;
+export const EVENTO_VACACIONAL = /\b(vacacional(es)?|vacaciones recreativas)\b/;
+export const EVENTO_CAMPAMENTO = /\bcampamentos?\b/;
+
 export function normalizarFrase(t: string | null | undefined): string {
     return (t || '')
         .toLowerCase()

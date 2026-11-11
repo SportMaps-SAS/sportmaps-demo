@@ -48,8 +48,10 @@ export interface PrecioDeMotivo {
     esAbono?: boolean;
 }
 
-/** Exactamente uno: el cobro va a un deportista con ficha o a un prospecto. */
+/** Exactamente uno: el cobro va a un deportista con ficha, a un adulto con cuenta (`userId`) o a un prospecto. */
 export interface DuenoDelCobro {
+    /** (2026-11-11) Atleta adulto con cuenta: su cobro lleva `payments.user_id` (el de la escuela, categoría «otro»). */
+    userId?: string | null;
     childId?: string | null;
     unregisteredId?: string | null;
     leadId?: string | null;
@@ -69,6 +71,8 @@ export interface ValorMotivoElegido {
 /** Tolerancia de monto en todo el módulo: ±$1 (igual que la RPC). */
 const TOLERANCIA = 1;
 const igual = (a: number, b: number) => Math.abs(a - b) <= TOLERANCIA;
+/** ¿Dos montos son el mismo (±$1)? */
+export const montosIguales = igual;
 
 const num = (v: unknown): number | null => {
     if (v === null || v === undefined || v === '') return null;
@@ -370,6 +374,11 @@ export interface ItemDeServicio {
     precio_afiliado?: number | null;
     /** `[{desde: 'YYYY-MM-DD', precio}]`: desde esa fecha (Bogotá) el precio de lista es otro. */
     precios_por_fecha?: unknown;
+    /**
+     * `[{desde, precio}]` (2026-11-11, Iván): lo mismo para el precio de AFILIADO (250.000 hasta el 15-nov,
+     * 300.000 desde el 16). Migración nueva: puede no existir ni venir.
+     */
+    precios_afiliado_por_fecha?: unknown;
     /** 1–100: con este % del precio se separa el cupo (abono; el resto queda pendiente). Exige `allow_installments`. */
     abono_minimo_pct?: number | null;
     allow_installments?: boolean | null;
@@ -411,13 +420,15 @@ export function tramosPorFecha(raw: unknown): { desde: string; precio: number }[
  *    sin tramos vigentes, `price` (la preventa: $300.000; desde el 10-nov $350.000).
  */
 export function precioVigente(
-    item: Pick<ItemDeServicio, 'price' | 'precio_afiliado' | 'precios_por_fecha'>,
+    item: Pick<ItemDeServicio, 'price' | 'precio_afiliado' | 'precios_por_fecha'> & { precios_afiliado_por_fecha?: unknown },
     o: { afiliado: boolean; hoy: string; opcion?: OpcionDeServicio | null },
 ): number | null {
     const positivo = (v: unknown) => { const n = num(v); return n !== null && n > 0 ? n : null; };
     if (o.opcion) return (o.afiliado ? positivo(o.opcion.precio_afiliado) : null) ?? positivo(o.opcion.precio);
     if (o.afiliado) {
-        const pa = positivo(item.precio_afiliado);
+        // El precio de afiliado también puede cambiar por fecha (`precios_afiliado_por_fecha`, tolerante si falta).
+        let pa = positivo(item.precio_afiliado);
+        for (const t of tramosPorFecha(item.precios_afiliado_por_fecha)) if (t.desde <= o.hoy) pa = t.precio;
         if (pa !== null) return pa;
     }
     let precio = positivo(item.price);
@@ -478,6 +489,7 @@ export function preciosDeServicios(
 
 const COLUMNAS_SERVICIO = 'id, name, kind, price, active, event_id, starts_at, ends_at';
 const COLUMNAS_SERVICIO_M2 = `${COLUMNAS_SERVICIO}, allow_installments, precio_afiliado, precios_por_fecha, abono_minimo_pct, opciones`;
+const COLUMNAS_SERVICIO_M3 = `${COLUMNAS_SERVICIO_M2}, precios_afiliado_por_fecha`;
 
 /**
  * Servicios activos de la escuela. Con las columnas de precio de la migración
@@ -487,7 +499,8 @@ export async function itemsDeServicio(schoolId: string): Promise<ItemDeServicio[
     const leer = (cols: string) => supabase.from('school_tournament_items')
         .select(cols).eq('school_id', schoolId).eq('active', true).is('event_id', null).limit(50);
     try {
-        let { data, error } = await leer(COLUMNAS_SERVICIO_M2);
+        let { data, error } = await leer(COLUMNAS_SERVICIO_M3);
+        if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_SERVICIO_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_SERVICIO));
         if (error || !Array.isArray(data)) return [];
         return data as unknown as ItemDeServicio[];
@@ -557,7 +570,7 @@ export type CobroDesdeComprobante =
  * la RPC no crea nada (`monto_no_coincide`). Nunca lanza.
  */
 export async function crearCobroDesdeComprobante(i: CrearCobroDesdeComprobanteInput): Promise<CobroDesdeComprobante> {
-    const duenos = [i.childId, i.unregisteredId, i.leadId].filter(Boolean).length;
+    const duenos = [i.childId, i.unregisteredId, i.leadId, i.userId].filter(Boolean).length;
     if (!i.schoolId || !i.queueId || duenos !== 1 || !(i.monto > 0)) return { ok: false, codigo: 'datos_invalidos' };
     try {
         const { data, error } = await supabase.rpc('wa_crear_cobro_desde_comprobante', {
@@ -570,6 +583,8 @@ export async function crearCobroDesdeComprobante(i: CrearCobroDesdeComprobanteIn
             p_child_id: i.childId ?? null,
             p_unregistered_id: i.unregisteredId ?? null,
             p_signup_lead_id: i.leadId ?? null,
+            // Solo si el dueño es un adulto con cuenta: con la RPC vieja un parámetro de más sería «función no encontrada».
+            ...(i.userId ? { p_user_id: i.userId } : {}),
             p_concepto: i.concepto && i.concepto.trim() ? i.concepto : null,
             p_concepto_esperado_id: i.conceptoEsperadoId ?? null,
             p_opcion: i.opcion ?? null,
@@ -637,6 +652,7 @@ export async function yaTieneCobroDelMotivo(schoolId: string, dueno: DuenoDelCob
             .gte('created_at', new Date(Date.now() - DIAS_COBRO_PREVIO * 86_400_000).toISOString());
         if (dueno.childId) q = q.eq('child_id', dueno.childId);
         else if (dueno.unregisteredId) q = q.eq('unregistered_athlete_id', dueno.unregisteredId);
+        else if (dueno.userId) q = q.eq('user_id', dueno.userId);
         else if (dueno.leadId) q = q.eq('signup_lead_id', dueno.leadId);
         else return true;
         const { data, error } = await q.limit(1);
@@ -835,7 +851,7 @@ export function decidirMontoDeVenta(
 
 const ESTADOS_VIVOS_SERVICIO = ['pending', 'overdue', 'awaiting_approval', 'partial', 'paid'];
 
-const previoDesdeFila = (p: any): CobroPrevioDeServicio => ({
+export const previoDesdeFila = (p: any): CobroPrevioDeServicio => ({
     id: String(p.id), amount: Number(p.amount) || 0, amountPaid: Number(p.amount_paid) || 0,
     status: String(p.status ?? ''), ocrAmount: num(p.ocr_amount), concept: p.concept ?? null, childId: p.child_id ?? null,
 });
@@ -855,6 +871,7 @@ export async function cobroPrevioDelServicio(
             .in('status', ESTADOS_VIVOS_SERVICIO);
         if (dueno.childId) q = q.eq('child_id', dueno.childId);
         else if (dueno.unregisteredId) q = q.eq('unregistered_athlete_id', dueno.unregisteredId);
+        else if (dueno.userId) q = q.eq('user_id', dueno.userId);
         else if (dueno.leadId) q = q.eq('signup_lead_id', dueno.leadId);
         else return null;
         const { data, error } = await q.order('created_at', { ascending: false }).limit(10);
@@ -890,17 +907,28 @@ export interface LeadDeVenta {
     sourceDetail: Record<string, any>;
 }
 
-/** ¿Nombre de relleno del lead (el que pone el registro cuando no sabe ninguno)? Pura. */
-export function esNombreDeRelleno(n: string | null | undefined): boolean {
+/**
+ * ¿Nombre de relleno del lead (el que pone el registro cuando no sabe ninguno)? Pura.
+ * Ampliado (2026-11-11, Aleja): también lo es el nombre del PERFIL de WhatsApp (`perfil` = el
+ * `contact_name` de la conversación: «Aleja 💫») y cualquier nombre con emoji; no es el de quien asiste.
+ */
+export function esNombreDeRelleno(n: string | null | undefined, perfil?: string | null): boolean {
     const t = normalizarFrase(n);
-    return !t || /^(prospecto( whatsapp)?|sin nombre|cliente|usuario|interesado|interesada)$/.test(t);
+    if (!t || /^(prospecto( whatsapp)?|sin nombre|cliente|usuario|interesado|interesada)$/.test(t)) return true;
+    const p = normalizarFrase(perfil);
+    if (p && t === p) return true;
+    return /\p{Extended_Pictographic}/u.test(String(n ?? ''));
 }
 
 /**
  * El prospecto de la venta: el del motivo esperado (por id) o el del teléfono
  * (el más reciente, no descartado). Una lectura. Nunca lanza.
  */
-export async function leadDeVenta(schoolId: string, telefono: string, leadId?: string | null): Promise<LeadDeVenta | null> {
+export async function leadDeVenta(
+    schoolId: string, telefono: string, leadId?: string | null,
+    /** El nombre del perfil de WhatsApp: si el lead se llama igual y nadie lo confirmó como quien asiste, no es el nombre. */
+    perfil?: string | null,
+): Promise<LeadDeVenta | null> {
     try {
         let q = supabase.from('school_signup_leads').select('id, full_name, status, source_detail').eq('school_id', schoolId);
         if (leadId) {
@@ -915,7 +943,7 @@ export async function leadDeVenta(schoolId: string, telefono: string, leadId?: s
         const l = !error && Array.isArray(data) ? (data[0] as any) : null;
         if (!l?.id || l.status === 'discarded') return null;
         const sd = (l.source_detail && typeof l.source_detail === 'object' ? l.source_detail : {}) as Record<string, any>;
-        const nombre = esNombreDeRelleno(l.full_name) ? null : String(l.full_name).trim();
+        const nombre = esNombreDeRelleno(l.full_name, sd.asistente_servicio ? null : perfil) ? null : String(l.full_name).trim();
         return { id: l.id, nombre, conocido: !!nombre && !!(sd.registro_completo_at || sd.asistente_servicio), sourceDetail: sd };
     } catch {
         return null;

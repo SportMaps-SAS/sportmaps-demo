@@ -8,7 +8,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { chargeLabel } from '@/lib/payment-accounts';
+import { tipoDeCobro } from '@/lib/tipoDeCobro';
 import { formatDayCO } from '@/lib/dateUtils';
 import {
     REASON_OPTIONS,
@@ -109,7 +109,7 @@ export function PendingChargesSection({
                                     </span>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    <Badge variant="outline" className="mr-1.5 text-[10px] py-0">{mensual ? 'Mensualidad' : `Pago único · ${chargeLabel(c)}`}</Badge>
+                                    <Badge variant="outline" className="mr-1.5 text-[10px] py-0">{mensual ? 'Mensualidad' : `Pago único · ${tipoDeCobro(c).etiqueta}`}</Badge>
                                     {c.due_date ? `Vence ${formatDayCO(c.due_date)} · ` : ''}
                                     Valor {formatPesos(list)}
                                     {Number(c.discount_amount) > 0 ? ` − descuentos ${formatPesos(Number(c.discount_amount))}` : ''}
