@@ -81,6 +81,16 @@ export function itemNombradoEn(texto: string | null | undefined, items: ItemConF
     return null;
 }
 
+/**
+ * ¿El ítem salió solo de la palabra «campamento» (que la familia usa para la clínica) y no de
+ * su propio nombre? Entonces la señal es débil. Pura.
+ */
+export function nombradoSoloPorPalabraGenerica(texto: string | null | undefined, it: ItemConFicha): boolean {
+    const t = normalizarFrase(texto);
+    if (!/\bcampamentos?\b/.test(t)) return false;
+    return !/\bcampamentos?\b/.test(normalizarFrase(it.name));
+}
+
 /** El ítem que marca un saliente en su payload (bot o flujo con la marca). Pura. */
 export function itemMarcadoEn(f: FilaReciente, items: ItemConFicha[]): ItemConFicha | null {
     const p = f.payload ?? {};
@@ -183,12 +193,20 @@ export function ventaActiva(
         .sort((a, b) => momento(b) - momento(a));
 
     let senal: VentaActiva | null = null;
+    let debil: VentaActiva | null = null;
     let clubDespues = false;
     for (const f of orden) {
         const texto = textoDe(f);
         if (f.direction === 'inbound') {
             if (!senal && pideElClub(texto)) clubDespues = true;
             const it = itemNombradoEn(texto, items);
+            if (it && nombradoSoloPorPalabraGenerica(texto, it)) {
+                // «campamento» lo dice la familia de la clínica (Monster 2026-11-10, Gabriela: el
+                // comprobante de la clínica se comparó con el Vacacional). Una palabra genérica NO
+                // pasa por encima de una ficha, una plantilla o una marca del bot: solo vale si no hay otra.
+                debil ??= { item: it, origen: 'nombrado', desde: iso(f) };
+                continue;
+            }
             if (it) { senal = { item: it, origen: 'nombrado', desde: iso(f) }; break; }
             continue;
         }
@@ -205,6 +223,7 @@ export function ventaActiva(
             if (it) { senal = { item: it, origen: 'texto_saliente', desde: iso(f) }; break; }
         }
     }
+    if (!senal && debil) senal = debil;
     if (senal) return clubDespues ? null : senal;
     if (clubDespues) return null;
     if (o.leadServicioId) {
