@@ -29,7 +29,7 @@
 import { supabase } from '../config/supabase';
 import { intencionDeProspecto, interesesDeProspecto } from './whatsapp-atencion.service';
 import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
-import { EVENTO_DE_SERVICIO } from './whatsapp-reglas-turno';
+import { EVENTO_DE_SERVICIO, EVENTO_CLINICA, EVENTO_VACACIONAL, EVENTO_CAMPAMENTO } from './whatsapp-reglas-turno';
 import { enmascararNumero } from './avisos-correo.service';
 import {
     leerAjustesCampanas, type InteresAudiencia, type PalabrasDeSede,
@@ -62,6 +62,14 @@ const A_INTERES: Record<string, InteresAudiencia> = {
     edades: 'informacion',
     informacion: 'informacion',
 };
+
+/**
+ * ¿Se guarda el interés partido por servicio (clinica | vacacional | campamento)? Hace falta que
+ * la base acepte 'vacacional' y 'campamento' en `whatsapp_audiencia.intereses` (su CHECK hoy solo
+ * trae 'clinica'): con la migración aplicada se enciende con WA_AUDIENCIA_INTERES_PARTIDO=1.
+ * Apagado, todo evento sigue contando como 'clinica' (como antes).
+ */
+export const interesPartidoPorServicio = (): boolean => process.env.WA_AUDIENCIA_INTERES_PARTIDO === '1';
 
 export interface Clasificacion {
     intereses: InteresAudiencia[];
@@ -106,6 +114,7 @@ export function clasificarConversacion(
     entrantes: (string | null | undefined)[],
     salientes: (string | null | undefined)[],
     palabrasSede: PalabrasDeSede[],
+    partido: boolean = interesPartidoPorServicio(),
 ): Clasificacion | null {
     const evidencia = entrantes.findIndex((t) => entranteConIntencion(t));
     if (evidencia < 0) return null;
@@ -114,7 +123,16 @@ export function clasificarConversacion(
     for (const t of entrantes) {
         if (!t || !t.trim()) continue;
         const p = plano(t);
-        if (!YA_PAGO.test(p) && EVENTO.test(p)) intereses.add('clinica');
+        if (!YA_PAGO.test(p)) {
+            if (!partido) {
+                if (EVENTO.test(p)) intereses.add('clinica');
+            } else {
+                // Un interés por servicio: la campaña de la clínica no le llega a quien solo habló del vacacional.
+                if (EVENTO_CLINICA.test(p)) intereses.add('clinica');
+                if (EVENTO_VACACIONAL.test(p)) intereses.add('vacacional');
+                if (EVENTO_CAMPAMENTO.test(p)) intereses.add('campamento');
+            }
+        }
         if (CLASE_DE_PRUEBA.test(p)) intereses.add('clase_prueba');
         // `interesesDeProspecto` pone 'informacion' cuando no encuentra nada:
         // solo se cuenta si el mensaje tenía intención propia.

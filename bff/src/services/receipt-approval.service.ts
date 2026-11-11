@@ -19,6 +19,7 @@ import { autoCreateGlosaFromReasons, maybeAutoCreateGlosa } from './glosa.servic
 import { emailClient } from '../utils/emailClient';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { saldoPorCobrar } from '../utils/saldo-cobro';
+import { destinatarioDelCobro } from '../utils/destinatarioDelCobro';
 
 const fmtCop = (n?: number | null) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(n || 0);
@@ -35,7 +36,7 @@ type PaymentRow = {
     id: string; school_id: string; status: string; amount: number;
     amount_paid?: number | null; early_payment_discount_applied?: number | null;
     receipt_url: string | null; receipt_image_sha256: string | null;
-    parent_id: string | null; child_id: string | null; team_id: string | null;
+    parent_id: string | null; user_id?: string | null; child_id: string | null; team_id: string | null;
     concept: string | null; ocr_reference: string | null;
     receipt_verdict: string | null; receipt_verdict_reasons: unknown;
 };
@@ -188,7 +189,7 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
     try {
         const { data: pay } = await supabase
             .from('payments')
-            .select('id, school_id, status, amount, amount_paid, early_payment_discount_applied, receipt_url, receipt_image_sha256, parent_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons')
+            .select('id, school_id, status, amount, amount_paid, early_payment_discount_applied, receipt_url, receipt_image_sha256, parent_id, user_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons')
             .eq('id', paymentId)
             .single();
         if (!pay || (pay as PaymentRow).status !== 'awaiting_approval') return { action: 'none' };
@@ -342,8 +343,11 @@ async function glosaFallback(p: PaymentRow, log?: Logger): Promise<EvaluateResul
 /** `pagado`: lo que la familia transfirió (con pronto pago, amount − descuento), no `amount`. */
 async function sendApprovalEmail(p: PaymentRow, pagado: number, log?: Logger): Promise<void> {
     try {
-        if (!p.parent_id) return;
-        const { data: parent } = await supabase.from('profiles').select('full_name, email').eq('id', p.parent_id).single();
+        // Sin acudiente, al adulto dueño del cobro (user_id): un atleta adulto con
+        // cuenta propia tiene parent_id NULL y antes no recibía el aviso.
+        const destinatario = destinatarioDelCobro(p);
+        if (!destinatario) return;
+        const { data: parent } = await supabase.from('profiles').select('full_name, email').eq('id', destinatario).single();
         if (!parent?.email) return;
         const tpl = await BrandedEmailTemplates.paymentConfirmation({
             parentName: parent.full_name || 'Acudiente',

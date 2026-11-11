@@ -13,6 +13,8 @@ const h = vi.hoisted(() => {
         rpcLlamadas: [] as any[],
         items: [] as any[],
         itemsError: null as any,
+        /** Solo falta la columna de la migración M3 (precios_afiliado_por_fecha). */
+        soloFaltaM3: false,
         selects: [] as string[],
     };
     function builder(table: string) {
@@ -22,6 +24,7 @@ const h = vi.hoisted(() => {
         for (const m of ['eq', 'is', 'in', 'neq', 'order', 'limit']) b[m] = () => b;
         const correr = () => {
             if (table !== 'school_tournament_items') return { data: [], error: null };
+            if (state.soloFaltaM3 && cols.includes('precios_afiliado_por_fecha')) return { data: null, error: { code: '42703', message: 'column precios_afiliado_por_fecha does not exist' } };
             if (state.itemsError && cols.includes('precio_afiliado')) return { data: null, error: state.itemsError };
             return { data: state.items, error: null };
         };
@@ -70,6 +73,7 @@ beforeEach(() => {
     h.state.rpcLlamadas = [];
     h.state.items = [];
     h.state.itemsError = null;
+    h.state.soloFaltaM3 = false;
     h.state.selects = [];
 });
 
@@ -156,6 +160,16 @@ describe('preciosDeMotivos con servicios', () => {
         h.state.itemsError = { code: '42703', message: 'column school_tournament_items.precio_afiliado does not exist' };
         const r = await preciosDeMotivos('s1', { leadId: 'l1' }, { motivos: ['clase_extra'], telefono: '573194505150', ahora: OCT30 });
         expect(r.map((p) => p.monto)).toEqual([300000]);
+        // M3 → M2 → las de siempre.
+        expect(h.state.selects.filter((s) => s.includes('kind'))).toHaveLength(3);
+    });
+
+    it('sin la columna M3 (precios_afiliado_por_fecha): relee con las de M2 y conserva el precio de afiliado', async () => {
+        h.state.items = [CLINICA];
+        h.state.soloFaltaM3 = true;
+        h.state.rpc = { data: { afiliado: true }, error: null };
+        const r = await preciosDeMotivos('s1', { leadId: 'l1' }, { motivos: ['clase_extra'], telefono: '573194505150', ahora: OCT30 });
+        expect(r.map((p) => p.monto)).toEqual([250000, 125000]);
         expect(h.state.selects.filter((s) => s.includes('kind'))).toHaveLength(2);
     });
 });

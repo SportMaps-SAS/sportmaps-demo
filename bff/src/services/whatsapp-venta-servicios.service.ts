@@ -212,7 +212,21 @@ export function pideOQuiereServicio(texto: string | null | undefined): boolean {
     const t = normalizarFrase(crudo);
     if (!t) return false;
     if (YA_PAGO.test(t) || anunciaComprobante(crudo)) return false;
-    return PIDE.test(t) || crudo.includes('?');
+    return PIDE.test(t) || crudo.includes('?') || nombraEventoParaInscribirse(t);
+}
+
+/**
+ * Clínica, campamento o vacacional SOLOS («Vacacional», «el vacacional») o con
+ * registro / inscripción / matrícula («registro para el vacacional del 17 de nov…»):
+ * la familia escribió el nombre del evento para preguntar por él (Monster 2026-11-11: el
+ * bot contestaba con los horarios de la clase de prueba). «Torneo» no entra: sin ítem
+ * de torneo en el catálogo siempre pasaría a una persona. Sobre texto ya normalizado.
+ */
+const EVENTO_PALABRA = /\b(clinicas?|campamentos?|vacacional(es)?)\b/;
+const EVENTO_SOLO = /^(?:(?:el|la|los|las|un|una) )?(?:clinicas?|campamentos?|vacacional(?:es)?)$/;
+const REGISTRO_DE_EVENTO = /\b(registro|registrar(?:se|lo|la)?|inscripcion(?:es)?|inscribir(?:se|lo|la)?|matricula|matricular(?:se|lo|la)?)\b/;
+function nombraEventoParaInscribirse(t: string): boolean {
+    return EVENTO_SOLO.test(t) || (EVENTO_PALABRA.test(t) && REGISTRO_DE_EVENTO.test(t));
 }
 
 const VACIAS = new Set([

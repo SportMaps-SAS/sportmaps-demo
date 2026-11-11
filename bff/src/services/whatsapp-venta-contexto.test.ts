@@ -65,9 +65,12 @@ describe('ventaActiva', () => {
         expect(v?.item.id).toBe(CLINICA.id);
     });
 
-    it('«campamento» solo, sin ficha ni marca, sigue señalando el vacacional', () => {
+    // Cambió el 2026-11-11: antes «campamento» solo señalaba el Vacacional (señal débil). Las familias llaman
+    // «campamento» a la clínica Y al vacacional: ya no se asume ninguno; sin ficha ni marca no hay venta activa
+    // (el bot pregunta cuál).
+    it('«campamento» solo, sin ficha ni marca, es ambiguo (clínica o vacacional): no señala ninguno', () => {
         const v = ventaActiva([ent(10, 'info del campamento por favor')], ITEMS, { ahora: AHORA });
-        expect(v?.item.id).toBe(VACACIONAL.id);
+        expect(v).toBeNull();
     });
 
     it('la ficha del bot marcada abre la venta y un «Hola» o «Ok» posterior la mantiene', () => {

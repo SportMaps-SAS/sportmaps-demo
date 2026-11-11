@@ -173,6 +173,8 @@ export interface ItemConFicha extends ItemDeServicio {
 
 const COLUMNAS = 'id, name, kind, price, active, event_id, starts_at, ends_at, description, image_url';
 const COLUMNAS_M2 = `${COLUMNAS}, allow_installments, precio_afiliado, precios_por_fecha, abono_minimo_pct, opciones`;
+/** (2026-11-11) + el precio de afiliado por fecha. Migración nueva: sin ella se lee M2, y sin M2 las de siempre. */
+const COLUMNAS_M3 = `${COLUMNAS_M2}, precios_afiliado_por_fecha`;
 
 /** ¿Sigue vigente? Activo, sin evento, sin terminar. Pura. */
 export function servicioVigente(it: Pick<ItemDeServicio, 'active' | 'event_id' | 'starts_at' | 'ends_at'>, ahora = Date.now()): boolean {
@@ -189,7 +191,8 @@ export async function serviciosDeAnuncio(schoolId: string, ahora = Date.now()): 
     const leer = (cols: string) => supabase.from('school_tournament_items')
         .select(cols).eq('school_id', schoolId).eq('active', true).is('event_id', null).limit(50);
     try {
-        let { data, error } = await leer(COLUMNAS_M2);
+        let { data, error } = await leer(COLUMNAS_M3);
+        if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
         if (error || !Array.isArray(data)) return [];
         return (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora));
@@ -208,7 +211,8 @@ export async function servicioDeAnuncioPorId(schoolId: string, id: string): Prom
     const leer = (cols: string) => supabase.from('school_tournament_items')
         .select(cols).eq('school_id', schoolId).eq('id', id).limit(1);
     try {
-        let { data, error } = await leer(COLUMNAS_M2);
+        let { data, error } = await leer(COLUMNAS_M3);
+        if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
         if (error || !Array.isArray(data) || !data[0]) return null;
         return data[0] as unknown as ItemConFicha;
@@ -309,7 +313,23 @@ export function servicioEmpiezaOTerminaEn(it: Pick<ItemDeServicio, 'starts_at' |
     return fechas.some((f) => bordes.includes(f.mes * 100 + f.dia));
 }
 
-const DETALLE_DE_EVENTO = /\b(edad(es)?|anos|requisitos?|nivel(es)?|principiantes?|experiencia|que incluye|incluye|horarios?|a que hora|hora|donde|lugar|sede|direccion|fechas?|cuando|dias?|duracion|que (llevar|debo llevar|hay que llevar|traer)|aplica|aplican|dirigid[oa]|pueden (ir|participar|asistir)|puede (ir|participar|asistir)|cupos?)\b/;
+/** «del 21 y 22», «el 21 al 22»: días sueltos sin mes (ni «años», horas o plata detrás). Pura. */
+function diasSinMes(t: string): number[] {
+    const dias: number[] = [];
+    for (const m of t.matchAll(/\b(?:del|el|dias?|los) (\d{1,2})(?: (?:y|al|a|e) (\d{1,2}))?(?! (?:anos|ano|am|pm|horas?|h|mil|de|semanas?|min|minutos)\b)(?!\d|:)/g)) {
+        for (const d of [m[1], m[2]]) if (d && Number(d) >= 1 && Number(d) <= 31) dias.push(Number(d));
+    }
+    return dias;
+}
+
+function servicioEmpiezaOTerminaElDia(it: Pick<ItemDeServicio, 'starts_at' | 'ends_at'>, dias: number[]): boolean {
+    if (!it.starts_at) return false;
+    const dia = (iso: string) => Number(hoyBogota(new Date(iso).getTime()).split('-')[2]);
+    const bordes = [dia(it.starts_at), it.ends_at ? dia(it.ends_at) : dia(it.starts_at)];
+    return dias.some((d) => bordes.includes(d));
+}
+
+const DETALLE_DE_EVENTO =/\b(edad(es)?|anos|requisitos?|nivel(es)?|principiantes?|experiencia|que incluye|incluye|horarios?|a que hora|hora|donde|lugar|sede|direccion|fechas?|cuando|dias?|duracion|que (llevar|debo llevar|hay que llevar|traer)|aplica|aplican|dirigid[oa]|pueden (ir|participar|asistir)|puede (ir|participar|asistir)|cupos?)\b/;
 
 /**
  * ¿Pregunta un DETALLE de un evento (edad, requisitos, nivel, fecha, lugar, horario)?
@@ -364,14 +384,65 @@ export type Inferencia =
  *  · Entre los que calzan gana el que más palabras de su nombre aparecen
  *    («armadores», «atacantes»); empate = varios.
  */
+/** Raíz de una palabra para comparar género y número («armadoras» = «armadores»). Pura. */
+const raizDe = (w: string): string => w.replace(/(es|as|os|a|o|s)$/, '');
+
+/** Palabras que no identifican un servicio aunque el nombre del ítem las tenga. */
+const NO_IDENTIFICAN = new Set(['atacantes', 'categoria', 'grupo', 'equipo', 'entrenamiento', 'entrenamientos']);
+
+/**
+ * Raíces de las palabras DISTINTIVAS del nombre de un ítem que el texto nombra
+ * («Clínica de armadores y atacantes» ← «evento para armadoras» → armador). Pura.
+ */
+function raicesNombradas(texto: string, it: Pick<ItemDeServicio, 'name'>): string[] {
+    const raices = new Set(texto.split(' ').filter((w) => w.length >= 5).map(raizDe));
+    return tokensDistintivos(it.name)
+        .filter((k) => k.length >= 6 && !EVENTOS.some((e) => e.raices.includes(k)) && !NO_IDENTIFICAN.has(k))
+        .map(raizDe)
+        .filter((k) => raices.has(k));
+}
+
+/**
+ * Sin palabra de evento («evento para armadoras el 21 de noviembre»): el servicio que
+ * el texto nombra por su NOMBRE (una palabra distintiva suya aparece). Conservador:
+ * solo con una coincidencia clara; si dos servicios empatan, quedan los dos. Pura.
+ */
+function inferirPorNombre(t: string, items: ItemConFicha[]): Inferencia {
+    const puntaje = items.map((it) => ({ it, hits: raicesNombradas(t, it).length })).filter((p) => p.hits > 0);
+    if (!puntaje.length) return { tipo: 'sin_evento' };
+    const max = Math.max(...puntaje.map((p) => p.hits));
+    const mejores = puntaje.filter((p) => p.hits === max).map((p) => p.it);
+    return mejores.length === 1 ? { tipo: 'uno', item: mejores[0] } : { tipo: 'varios', items: mejores.slice(0, 5) };
+}
+
+/**
+ * ¿El texto SUENA a un servicio sin decir «clínica»? Barato, sin catálogo: dice «evento»
+ * (o similar) o trae una fecha. Solo abre la lectura del catálogo; quien decide es
+ * inferirServicio. Pura.
+ */
+export function suenaAServicio(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    return /\b(evento|jornada|taller|encuentro|actividad)\b/.test(t) || fechasDelTexto(t).length > 0;
+}
+
 export function inferirServicio(textos: (string | null | undefined)[], items: ItemConFicha[]): Inferencia {
     const t = normalizarFrase(textos.filter(Boolean).join(' \n '));
     const eventos = EVENTOS.filter((e) => e.re.test(t));
-    if (!eventos.length) return { tipo: 'sin_evento' };
+    if (!eventos.length || !eventos.some((e) => e.clave === 'clinica')) { const pn = inferirPorNombre(t, items); if (pn.tipo !== 'sin_evento' || !eventos.length) return pn; }
+    // Un evento SIN servicio activo («el 22 estará en un torneo», nombrado de pasada) no cuenta si
+    // hay otro evento que sí calza (Monster 2026-11-11). Si ninguno calza, se dejan todos.
+    const nombrePalabras = (it: ItemConFicha) => new Set(normalizarFrase(it.name).split(' '));
+    // «Campamento» lo dicen las familias de la clínica y del vacacional: sirven las dos.
+    const calza = (e: EventoDeServicio, it: ItemConFicha) => e.clave === 'campamento'
+        ? String(it.kind) === 'vacacional' || ['clinica', 'clinicas'].some((r) => nombrePalabras(it).has(r))
+        : e.raices.some((r) => nombrePalabras(it).has(r)) || (e.tipos as string[]).includes(String(it.kind));
+    const sirven = eventos.filter((e) => items.some((it) => calza(e, it)));
+    const eventosUsados = sirven.length ? sirven : eventos;
     // «El campamento del 21 de nov»: la escuela llama clínica a lo que la familia llama campamento
-    // (Monster 2026-11-05). Con una fecha que cae en un servicio activo, ese servicio manda; solo
-    // cuando el evento nombrado es campamento/vacacional (clínica y torneo se reconocen por nombre).
-    if (eventos.every((e) => e.clave === 'campamento' || e.clave === 'vacacional')) {
+    // (Monster 2026-11-05). Con una fecha que cae en un servicio activo, ese servicio manda; SOLO
+    // cuando la palabra es «campamento»: quien dijo «vacacional» explícito recibe el Vacacional
+    // (clínica y torneo se reconocen por nombre).
+    if (eventosUsados.every((e) => e.clave === 'campamento')) {
         const fechas = fechasDelTexto(t);
         const porFecha = fechas.length ? items.filter((it) => servicioCubreFecha(it, fechas)) : [];
         if (porFecha.length === 1) return { tipo: 'uno', item: porFecha[0] };
@@ -381,18 +452,30 @@ export function inferirServicio(textos: (string | null | undefined)[], items: It
             if (exactos.length === 1) return { tipo: 'uno', item: exactos[0] };
             return { tipo: 'varios', items: (exactos.length ? exactos : porFecha).slice(0, 5) };
         }
+        // «El campamento del 21 y 22» (sin mes): los días solo valen contra el día en que EMPIEZA o TERMINA un servicio.
+        if (!fechas.length) {
+            const dias = diasSinMes(t);
+            const porDia = dias.length ? items.filter((it) => calza(eventosUsados[0], it) && servicioEmpiezaOTerminaElDia(it, dias)) : [];
+            if (porDia.length === 1) return { tipo: 'uno', item: porDia[0] };
+        }
+        // «Campamento» solo, sin fecha ni nombre: puede ser la clínica o el vacacional; no se asume
+        // ninguno (el bot pregunta cuál). Con uno solo activo, ese.
+        const posibles = items.filter((it) => calza(eventosUsados[0], it));
+        if (!posibles.length) return { tipo: 'evento_sin_servicio', evento: 'campamento' };
+        return posibles.length === 1 ? { tipo: 'uno', item: posibles[0] } : { tipo: 'varios', items: posibles.slice(0, 5) };
     }
+    const eventosFinal = eventosUsados;
     const palabras = new Set(t.split(' '));
     const candidatos = items.map((it) => {
         const nombre = new Set(normalizarFrase(it.name).split(' '));
         return {
             it,
-            porNombre: eventos.some((e) => e.raices.some((r) => nombre.has(r))),
-            porTipo: eventos.some((e) => (e.tipos as string[]).includes(String(it.kind))),
+            porNombre: eventosFinal.some((e) => e.raices.some((r) => nombre.has(r))),
+            porTipo: eventosFinal.some((e) => (e.tipos as string[]).includes(String(it.kind))),
             hits: tokensDistintivos(it.name).filter((k) => palabras.has(k)).length,
         };
     }).filter((c) => c.porNombre || c.porTipo);
-    if (!candidatos.length) return { tipo: 'evento_sin_servicio', evento: eventos[0].clave };
+    if (!candidatos.length) return { tipo: 'evento_sin_servicio', evento: eventosFinal[0].clave };
     const conNombre = candidatos.filter((c) => c.porNombre);
     const pool = conNombre.length ? conNombre : candidatos;
     const max = Math.max(...pool.map((c) => c.hits));
@@ -426,7 +509,7 @@ export function necesitaCatalogo(p: {
         if (p.mapeo?.destino === 'servicio') return true;
         return eventosNombrados([p.referral.headline, p.referral.body, p.texto]).length > 0;
     }
-    return consultaDeServicio(p.texto) && eventosNombrados([p.texto]).length > 0;
+    return consultaDeServicio(p.texto) && (eventosNombrados([p.texto]).length > 0 || suenaAServicio(p.texto));
 }
 
 /**
@@ -712,7 +795,7 @@ export async function atenderDestinoDeAnuncio(
     const referral = referralDeLaRafaga(recientes);
     if ((fase === 'anuncio' && !referral) || (fase === 'texto' && referral)) return null;
     const eleccion = referral ? null : eleccionPendiente(recientes);
-    if (!referral && !eleccion && !(consultaDeServicio(msg) && eventosNombrados([msg]).length)) return null;
+    if (!referral && !eleccion && !(consultaDeServicio(msg) && (eventosNombrados([msg]).length || suenaAServicio(msg)))) return null;
 
     const mapeo = referral?.sourceId ? await ctx.mapeo(referral.sourceId) : null;
     const items = necesitaCatalogo({ referral, mapeo, texto: msg, eleccion }) ? await ctx.servicios() : [];

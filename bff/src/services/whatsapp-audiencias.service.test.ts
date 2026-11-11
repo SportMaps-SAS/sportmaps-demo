@@ -61,6 +61,7 @@ vi.mock('../config/supabase', () => {
 });
 
 import { clasificarConversacion, clasificarEscuela, entranteConIntencion, sedeDeTextos, ultimoEntrante } from './whatsapp-audiencias.service';
+import { filtroCoincide } from './whatsapp-campanas.service';
 
 const NORTE = '3a1c0b52-6f0e-4c35-9a52-0d0b2a3c4d01';
 const SUBA = '7b2d1c63-7f1f-4d46-8b63-1e1c3b4d5e02';
@@ -85,6 +86,49 @@ describe('clasificarConversacion (pura)', () => {
         expect(clasificarConversacion(['¿Tienen vacacional en diciembre?'], [], SEDES)?.intereses).toEqual(['clinica']);
         // «Ya pagué la clínica» es de una familia, no de un interesado.
         expect(entranteConIntencion('Ya pagué la clínica, te mando el comprobante')).toBe(false);
+    });
+
+    describe('interés partido por servicio (WA_AUDIENCIA_INTERES_PARTIDO; 2026-11-11)', () => {
+        const cl = (t: string[]) => clasificarConversacion(t, [], SEDES, true)?.intereses;
+        const coincide = (intereses: string[], pide: string[]) => filtroCoincide({ intereses, branch_id: null }, { intereses: pide });
+
+        it('clínica, vacacional y campamento son intereses distintos', () => {
+            expect(cl(['Info de la clínica de voleibol porfa'])).toEqual(['clinica']);
+            expect(cl(['¿Tienen vacacional en diciembre?'])).toEqual(['vacacional']);
+            expect(cl(['info del campamento'])).toEqual(['campamento']);
+        });
+
+        it('la campaña de la clínica no incluye a quien solo habló del vacacional, y viceversa', () => {
+            const soloVac = cl(['¿Tienen vacacional en diciembre?'])!;
+            const soloClinica = cl(['Info de la clínica'])!;
+            expect(coincide(soloVac, ['clinica'])).toBe(false);
+            expect(coincide(soloClinica, ['vacacional'])).toBe(false);
+            expect(coincide(soloVac, ['vacacional'])).toBe(true);
+            expect(coincide(soloClinica, ['clinica'])).toBe(true);
+        });
+
+        it('quien habló de ambos entra en las dos campañas', () => {
+            const ambos = cl(['Info de la clínica', 'y también el vacacional']) as string[];
+            expect(ambos).toEqual(['clinica', 'vacacional']);
+            expect(coincide(ambos, ['clinica'])).toBe(true);
+            expect(coincide(ambos, ['vacacional'])).toBe(true);
+        });
+
+        it('«campamento» solo entra a la campaña que lo pide, sin excluir a quien habló del otro servicio', () => {
+            const camp = cl(['info del campamento'])!;
+            expect(coincide(camp, ['clinica'])).toBe(false);
+            expect(coincide(camp, ['clinica', 'campamento'])).toBe(true);
+            const campYVac = cl(['info del campamento', 'el vacacional']) as string[];
+            expect(coincide(campYVac, ['clinica', 'campamento'])).toBe(true);
+        });
+
+        it('«ya pagué la clínica» no suma interés', () => {
+            expect(cl(['Ya pagué la clínica, te mando el comprobante'])).toBeUndefined();
+        });
+
+        it('apagado (por defecto) todo evento sigue contando como clínica, como antes', () => {
+            expect(clasificarConversacion(['¿Tienen vacacional?'], [], SEDES, false)?.intereses).toEqual(['clinica']);
+        });
     });
 
     it('saludo o charla sin intención: no entra', () => {

@@ -168,8 +168,9 @@ export async function listGlosasForParent(parentId: string) {
     // service-role bypassa RLS → filtramos por join a payments del acudiente.
     const { data, error } = await supabase
         .from('payment_glosas')
-        .select('*, payments!inner(parent_id)')
-        .eq('payments.parent_id', parentId)
+        .select('*, payments!inner(parent_id, user_id)')
+        // El acudiente, o el adulto titular del cobro (parent_id NULL, user_id = él).
+        .or(`parent_id.eq.${parentId},and(parent_id.is.null,user_id.eq.${parentId})`, { referencedTable: 'payments' })
         .order('created_at', { ascending: false });
     if (error) throw new GlosaRpcError(error.message, (error as { code?: string }).code);
     return data ?? [];
@@ -178,8 +179,9 @@ export async function listGlosasForParent(parentId: string) {
 // ── Correos branded por evento (fire-and-forget desde las rutas) ─────────────
 
 const GLOSA_EMAIL_SELECT =
-    'reason, responds_by, payments!inner(school_id, concept, amount, ' +
-    'parent:profiles!payments_parent_id_fkey(full_name, email))';
+    'reason, responds_by, payments!inner(school_id, concept, amount, parent_id, user_id, ' +
+    'parent:profiles!payments_parent_id_fkey(full_name, email), ' +
+    'owner:profiles!payments_user_id_fkey(full_name, email))';
 
 /** Glosa creada → correo al acudiente. */
 export async function sendGlosaCreatedEmail(glosaId: string, log?: Logger): Promise<void> {
@@ -190,7 +192,8 @@ export async function sendGlosaCreatedEmail(glosaId: string, log?: Logger): Prom
             .eq('id', glosaId)
             .single();
         const p: any = (g as any)?.payments;
-        const parent = p?.parent;
+        // Sin acudiente, al adulto titular del cobro (user_id).
+        const parent = p?.parent_id ? p?.parent : p?.owner;
         if (!parent?.email) return;
         const tpl = await BrandedEmailTemplates.glosaCreada({
             parentName: parent.full_name || 'Acudiente',
@@ -242,7 +245,8 @@ export async function sendGlosaResolvedEmail(glosaId: string, outcome: GlosaOutc
             .eq('id', glosaId)
             .single();
         const p: any = (g as any)?.payments;
-        const parent = p?.parent;
+        // Sin acudiente, al adulto titular del cobro (user_id).
+        const parent = p?.parent_id ? p?.parent : p?.owner;
         if (!parent?.email) return;
         const common = {
             parentName: parent.full_name || 'Acudiente',
