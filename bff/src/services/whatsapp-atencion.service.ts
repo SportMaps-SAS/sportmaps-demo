@@ -675,8 +675,45 @@ export function buscaParaAdulto(texto: string | null | undefined): boolean {
     if (!texto) return false;
     const t = normalizarTexto(texto);
     if (/\b(mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|nen[ea]s?|sobrin[oa]s?|niet[oa]s?)\b/.test(t)) return false;
-    return /\badultos?\b/.test(t)
+    const explicito = /\badultos?\b/.test(t);
+    // «Para mi y tengo 15 años» es un MENOR que pide para sí mismo, no un adulto (Dynasty
+    // 2026-11-08: el bot le contestó «como buscas clases para adultos»). Con una edad menor
+    // de 18 dicha por la persona, ni «para mi» ni «quiero entrenar» la vuelven adulta: solo
+    // la palabra «adultos» escrita lo hace.
+    const edad = edadDeQuienEscribe(t);
+    if (!explicito && edad !== null && edad < 18) return false;
+    return explicito
         || /\b(para mi|conmigo|yo tengo|yo juego|yo jugaba|quiero (empezar a )?entrenar|quiero aprender)\b/.test(t);
+}
+
+/** Edad que dice el texto ya normalizado («15 anos», «tengo 15», «tiene 9»), o null. Pura. */
+function edadDeQuienEscribe(t: string): number | null {
+    const m = t.match(/\b(\d{1,2}) ?(?:anos|ano)\b/) ?? t.match(/\b(?:tengo|tiene|edad(?: de)?) (\d{1,2})\b/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return n >= 3 && n <= 90 ? n : null;
+}
+
+/**
+ * ¿Pide que lo llamen o hablar con una persona? («regrésame la llamada», «me pueden llamar»,
+ * «quiero hablar con la directora»). Pura. Dynasty 2026-11-04: a «te agradezco si me puedes
+ * regresar la llamada» el bot contestó con la oferta de la clase de cortesía.
+ */
+export function pideLlamada(texto: string | null | undefined): boolean {
+    const t = normalizarTexto(texto || '');
+    if (!t) return false;
+    return /\b(llamame|llamenme|llamarme|me llam(an|as|en|aran|arian)|me (pueden|puedes|podrian|podrias|podria|puede) llamar|(regresar|regresame|devolver|devuelveme|regresarme|devolverme) (me )?la llamada|una llamada|prefiero (una )?llamada|hablar por (telefono|llamada)|hablar contigo|comunicarme (con|a)|hablar con (alguien|una persona|la directora|el director|el profe|la escuela|un asesor|una asesora)|necesito hablar)\b/.test(t);
+}
+
+/**
+ * ¿Pregunta dónde queda la escuela o cómo llegar? («¿dónde queda la cancha?», «¿cuál es la
+ * dirección?»). Pura. Dynasty 2026-11-08: a «donde queda la cancha» el bot contestó con el
+ * enlace de inscripción y la clase de cortesía, sin la dirección.
+ */
+export function pideUbicacion(texto: string | null | undefined): boolean {
+    const t = normalizarTexto(texto || '');
+    if (!t) return false;
+    return /\b(donde (queda|quedan|entrenan|juegan|practican)|donde (es|son|esta|estan) (la |el |las |los )?(cancha|canchas|sede|sedes|escuela|club|coliseo|gimnasio|clase|clases|entrenamiento|entrenamientos|ubicad[oa]s?)|(cual es )?la (direccion|ubicacion)|(su|tu) (direccion|ubicacion)|como (llego|se llega|llegar)|ubicacion de la (cancha|sede|escuela|club))\b/.test(t);
 }
 
 /** Edad que dice el mensaje («mi hija tiene 14 años», «niñas de 8 años»), o null. */

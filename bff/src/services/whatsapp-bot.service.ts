@@ -79,7 +79,7 @@ import {
 } from './whatsapp-bienvenida';
 import {
     botEncendido, debeAtender, temaEscolar, preguntaPrecioComoProspecto, quiereInscribirse,
-    ajustesDeAtencion, puertaDeProspecto, interesesDeProspecto, buscaParaAdulto, DIAS_MARCA_PROSPECTO,
+    ajustesDeAtencion, puertaDeProspecto, interesesDeProspecto, buscaParaAdulto, pideLlamada, pideUbicacion, DIAS_MARCA_PROSPECTO,
     soloSaludoOCortesia, intencionDeProspecto,
     type PuertaDeProspecto,
 } from './whatsapp-atencion.service';
@@ -4365,6 +4365,41 @@ async function atenderDesconocidoEnEscuela(
         return contestar('embudo');
     }
 
+    // «Regrésame la llamada» / «quiero hablar con alguien»: lo atiende una PERSONA. Antes el
+    // bot contestaba con la oferta de la clase de cortesía y el enlace (Dynasty 2026-11-04).
+    // Un solo acuse cada 24 h; la conversación va al buzón con aviso a la escuela.
+    if (pideLlamada(text)) {
+        await abrirEnBuzon(integration, conversationId, contactWaId, {
+            motivo: 'prospecto', detalle: `Pide que lo llamen o hablar con una persona: «${text.slice(0, 300)}».`,
+        });
+        if (await pasoReciente(conversationId, PASO_PROSPECTO_SEGUIMIENTO, 24)) return 'frenado';
+        await deliver(integration, conversationId, contactWaId,
+            S + 'Claro 🙌 Ya le pasé tu mensaje a la escuela para que te llamen o te escriban por aquí.',
+            { step: PASO_PROSPECTO_SEGUIMIENTO, intencion: 'pide_llamada' });
+        return contestar('prospecto_seguimiento');
+    }
+
+    // «¿Dónde queda la cancha?»: la dirección de la escuela (su texto de atención presencial, o la
+    // dirección registrada). Sin ninguna, una persona la confirma. Antes: la oferta de cortesía
+    // y el enlace de inscripción, sin la dirección (Dynasty 2026-11-08).
+    if (pideUbicacion(text)) {
+        const dondeEstamos = (await horarioPresencialDeEscuela(integration.school_id)) ?? (await direccionDeEscuela(integration.school_id));
+        if (dondeEstamos) {
+            await deliver(integration, conversationId, contactWaId,
+                S + `📍 ${dondeEstamos.replace(/[.\s]+$/, '')}.\n\nSi quieres algo más, escríbeme 🙌`,
+                { step: PASO_UBICACION_ESCUELA, intencion: 'ubicacion' });
+            return contestar('prospecto_info');
+        }
+        await abrirEnBuzon(integration, conversationId, contactWaId, {
+            motivo: 'prospecto', detalle: `Pregunta dónde queda y la escuela no tiene dirección cargada: «${text.slice(0, 300)}».`,
+        });
+        if (await pasoReciente(conversationId, PASO_PROSPECTO_SEGUIMIENTO, 24)) return 'frenado';
+        await deliver(integration, conversationId, contactWaId,
+            S + 'Ya le pasé tu pregunta a la escuela para que te confirme la dirección por aquí 🙌',
+            { step: PASO_PROSPECTO_SEGUIMIENTO, intencion: 'ubicacion_a_persona' });
+        return contestar('prospecto_seguimiento');
+    }
+
     // Cortesía «semana por la app» (ajuste por escuela): el paso a paso del
     // enlace de cortesía reemplaza la clase suelta y el enlace genérico. Mismo
     // step, así que cuenta para el freno de 30 días. El adulto sigue el camino
@@ -4447,6 +4482,8 @@ async function atenderDesconocidoEnEscuela(
 
 /** step del acuse al prospecto que sigue escribiendo después de la primera respuesta. */
 export const PASO_PROSPECTO_SEGUIMIENTO = 'prospecto_seguimiento';
+/** step de la respuesta a «¿dónde queda?» (la dirección de la escuela; no cuenta para ningún freno). */
+export const PASO_UBICACION_ESCUELA = 'ubicacion_escuela';
 
 /** step de la bienvenida al prospecto que llegó a su clase de cortesía. */
 export const PASO_LLEGADA_CLASE = 'cortesia_llegada';

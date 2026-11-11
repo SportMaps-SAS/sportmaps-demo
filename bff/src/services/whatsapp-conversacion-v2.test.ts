@@ -110,7 +110,7 @@ import {
 } from './whatsapp-precios.service';
 import { textoSinRespuesta, textoDelAvisoAlEquipo } from './whatsapp-escalaciones.service';
 import {
-    leerOpcionDePuerta, leerQueQuiere, leerNombreDeDeportista, mensajeDePuerta, iniciarPuerta, atenderTurnoPuerta,
+    leerOpcionDePuerta, leerQueQuiere, leerNombreDeDeportista, leerVariosDeportistas, mensajeDePuerta, iniciarPuerta, atenderTurnoPuerta,
     BOTON_PUERTA, PASO_PUERTA_MENU, FLUJO_PUERTA, type CtxPuerta, type EstadoPuerta, type LeadCompleto,
 } from './whatsapp-puerta-desconocido';
 
@@ -146,6 +146,16 @@ describe('puerta única: lectura de respuestas', () => {
         expect(leerQueQuiere('solo precios')).toBe('precios');
         expect(leerQueQuiere('cuánto vale')).toBe('precios');
         expect(leerQueQuiere('mmm no sé')).toBeNull();
+    });
+
+    it('varios deportistas en un mensaje: cada uno con nombre y apellido (Monster 2026-11-09)', () => {
+        expect(leerVariosDeportistas('Valeria Pardo Rojas y Camila Pardo Rojas'))
+            .toEqual(['Valeria Pardo Rojas', 'Camila Pardo Rojas']);
+        expect(leerVariosDeportistas('Ana Ruiz e Isabel Gómez')).toEqual(['Ana Ruiz', 'Isabel Gómez']);
+        expect(leerVariosDeportistas('Ana Ruiz & Isabel Gómez & Luz Mora')).toEqual(['Ana Ruiz', 'Isabel Gómez', 'Luz Mora']);
+        // Uno solo, con un solo nombre, con datos o frases: no son varios.
+        for (const t of ['Valeria Pardo Rojas', 'Juan y Pedro Gómez', 'Ana Ruiz y 14 años', 'Valeria y Camila', 'hola y gracias', 'Ana Ruiz y otro@correo.com', '', null])
+            expect(leerVariosDeportistas(t as any)).toBeNull();
     });
 
     it('nombre del deportista: solo el nombre, o con la edad / fecha en el mismo mensaje', () => {

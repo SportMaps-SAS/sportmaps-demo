@@ -213,6 +213,22 @@ export function leerNombreDeDeportista(
     return nombre ? { nombre, ...(edad != null ? { edad, fechaNacimiento: fechaNacimiento ?? null } : {}) } : null;
 }
 
+/**
+ * Dos (o más) deportistas en UN mensaje: «Valeria Pardo Rojas y Camila Pardo Rojas».
+ * Cada uno con nombre y apellido (2+ palabras): «Juan y Pedro Gómez» no cuenta, porque «Juan»
+ * solo no es un nombre completo. null si no son varios. Pura. Monster 2026-11-09: el embudo
+ * contestó «no alcancé a leer el nombre» y después tomó solo a la primera.
+ */
+export function leerVariosDeportistas(texto: string | null | undefined): string[] | null {
+    const t = String(texto ?? '').replace(/\s+/g, ' ').trim();
+    if (!t || EMAIL.test(t) || /[0-9?¿]/.test(t)) return null;
+    const partes = t.split(/\s+(?:y|e)\s+|\s*[&+/;]\s*/i).map((s) => s.trim()).filter(Boolean);
+    if (partes.length < 2 || partes.length > 4) return null;
+    const nombres = partes.map((p) => leerNombreDeDeportista(p)?.nombre ?? null);
+    if (nombres.some((n) => !n || n.split(' ').length < 2)) return null;
+    return nombres as string[];
+}
+
 // ─── Motor ──────────────────────────────────────────────────────────────────
 
 /** Máximo de veces que se repite una pregunta que no se entendió. */
