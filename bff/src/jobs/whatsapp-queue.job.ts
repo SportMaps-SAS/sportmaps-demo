@@ -2037,7 +2037,7 @@ async function preguntarNombreDeAsistente(v: ArgsVenta, monto: number, lead: Lea
  */
 async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     const { fila, ocr } = v;
-    const { item, esperado } = v.venta;
+    let { item, esperado } = v.venta;
     const schoolId = fila.school_id;
     const monto = montoDelOcr(ocr);
     const fam = v.familia;
@@ -2078,8 +2078,27 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     const dueno: DuenoDelCobro | null = duenoFam?.tipo === 'uno' ? duenoFam.dueno : lead ? { leadId: lead.id } : null;
     const afiliado = fam ? true
         : hayPrecioDeAfiliado([item]) ? (await esAfiliado(schoolId, fila.wa_phone_number)).afiliado : false;
-    const previo = dueno ? await cobroPrevioDelServicio(schoolId, dueno, item) : null;
-    const decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo });
+    let previo = dueno ? await cobroPrevioDelServicio(schoolId, dueno, item) : null;
+    let decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo });
+    // Red de seguridad (Monster 2026-11-10, Gabriela: el abono de $150.000 de la clínica se comparó con el
+    // Vacacional): si el monto no cuadra con el servicio elegido pero cuadra con UN solo otro servicio vigente,
+    // el comprobante es de ese. Con más de uno o ninguno, sigue a la escuela como siempre.
+    if (decision.tipo === 'no_cuadra') {
+        try {
+            const otros = (await serviciosDeAnuncio(schoolId)).filter((it) => it.id !== item.id);
+            const cuadran: { it: ItemConFicha; d: MontoDeVenta; previo: Awaited<ReturnType<typeof cobroPrevioDelServicio>> }[] = [];
+            for (const it of otros) {
+                const pv = dueno ? await cobroPrevioDelServicio(schoolId, dueno, it) : null;
+                const d = decidirMontoDeVenta(monto, it, { afiliado, fechaPago: ocr.date ?? null, previo: pv });
+                if (d.tipo !== 'no_cuadra' && d.tipo !== 'ambiguo') cuadran.push({ it, d, previo: pv });
+            }
+            if (cuadran.length === 1) {
+                v.log?.warn?.({ queueId: fila.id, de: item.id, a: cuadran[0].it.id, monto }, '[wa-queue] venta: el monto es de otro servicio, se corrige');
+                item = cuadran[0].it; esperado = null; previo = cuadran[0].previo; decision = cuadran[0].d;
+                v = { ...v, venta: { item, esperado: null } };
+            }
+        } catch { /* sin red de seguridad: sigue como estaba */ }
+    }
 
     if (fam && (decision.tipo === 'no_cuadra' || decision.tipo === 'ambiguo')) return false;
     if (fam && await repetido()) return true;

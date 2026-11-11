@@ -55,6 +55,21 @@ describe('pideElClub', () => {
 });
 
 describe('ventaActiva', () => {
+    it('«campamento» de la familia NO pasa por encima de la ficha de la clínica (Gabriela, 10-nov)', () => {
+        const m = [
+            sal(300, FICHA_ESCUELA, { ai_generated: false }),
+            ent(200, 'Estoy interesada en inscribir a mi hija para el campamento, te envío el soporte'),
+            ent(5, '', { type: 'image' }),
+        ];
+        const v = ventaActiva(m, ITEMS, { ahora: AHORA });
+        expect(v?.item.id).toBe(CLINICA.id);
+    });
+
+    it('«campamento» solo, sin ficha ni marca, sigue señalando el vacacional', () => {
+        const v = ventaActiva([ent(10, 'info del campamento por favor')], ITEMS, { ahora: AHORA });
+        expect(v?.item.id).toBe(VACACIONAL.id);
+    });
+
     it('la ficha del bot marcada abre la venta y un «Hola» o «Ok» posterior la mantiene', () => {
         const m = [
             ent(30, '¿Cuánto cuesta la clínica? ¿Como aparto mi cupo?'),
