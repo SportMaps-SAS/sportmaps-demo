@@ -169,6 +169,7 @@ import {
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
 import { responderPreguntaDeServicio } from './whatsapp-servicio-ia';
+import { esConsultaDePatrocinio, textoDePatrocinio } from './whatsapp-patrocinio';
 
 const OTP_TTL_MIN = 10;
 
@@ -421,6 +422,14 @@ async function cuerpoDelTurno(
         if (await servicioAunqueAtiendaLaEscuela(integration, conversationId, contactWaId, text, botonId, recientes)) return;
         console.info('[whatsapp-bot] la escuela está atendiendo; el bot se calla', { conversationId });
         await marcarAbiertaSinAviso(conversationId);
+        return;
+    }
+
+    // 0b'. Patrocinio / alianza de marca (Monster 2026-11-11, «¿Tu marca juega con nosotros?»): una empresa NO es un
+    //      participante. Se le agradece y se avisa a la escuela; nunca la ficha de inscripción ni el precio.
+    if (!botonId && esConsultaDePatrocinio(text)) {
+        await deliver(integration, conversationId, contactWaId, textoDePatrocinio(await nombreDeEscuela(integration.school_id)), { step: 'patrocinio' });
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'puerta_otro', detalle: 'Patrocinio o alianza de marca: ' + text.slice(0, 200) });
         return;
     }
 

@@ -48,6 +48,7 @@ import {
 // Ciclo a propósito (venta-servicio usa el precio de acá): solo se usan dentro de funciones.
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
 import { PASO_VENTA, botonesDeVenta, pideDatosDePago, textoDePagoDeServicio, type BotonDeVenta } from './whatsapp-venta-servicio';
+import { esConsultaDePatrocinio } from './whatsapp-patrocinio';
 
 // ─── El anuncio (referral de Meta) ──────────────────────────────────────────
 
@@ -525,6 +526,8 @@ export function decidirDestino(p: {
     eleccion?: string[] | null;
 }): DecisionAnuncio | null {
     const { referral, mapeo, texto: msg, items } = p;
+    // Una empresa que quiere patrocinar («quiero patrocinar la clínica», «mi marca») no es un participante: sin ficha ni precio.
+    if (!referral && esConsultaDePatrocinio(msg)) return null;
 
     // Contesta la lista de la vez pasada («2», «la de armadores»).
     if (!referral && p.eleccion?.length) {
