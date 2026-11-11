@@ -12,7 +12,7 @@ vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
     intencionDeProspecto, puertaDeProspecto, soloSaludoOCortesia, buscaParaAdulto,
-    interesesDeProspecto, edadMencionada,
+    interesesDeProspecto, edadMencionada, pideLlamada, pideUbicacion,
 } from './whatsapp-atencion.service';
 import { resumirProspecto, telefonoDeLeadWa, variantesTelefonoLead } from './whatsapp-prospecto-lead.service';
 
@@ -145,6 +145,28 @@ describe('¿busca para un adulto?', () => {
     it('la ráfaga del adulto → sí', () => expect(buscaParaAdulto(rafaga.join('\n'))).toBe(true));
     it('«Mi hija tiene 14 años» → no', () => expect(buscaParaAdulto('Quisiera información\nMi hija tiene 14 años')).toBe(false));
     it('«para niñas de 8 años» → no', () => expect(buscaParaAdulto('realizan entrenamiento para niñas de 8 años')).toBe(false));
+    // Dynasty 2026-11-08: «Para mi y tengo 15 años» es un menor, no un adulto.
+    it('«Para mi y tengo 15 años» → no (un menor que pide para sí)', () => {
+        expect(buscaParaAdulto('Para mi y tengo 15 años')).toBe(false);
+        expect(buscaParaAdulto('Hola, quiero entrenar, tengo 16')).toBe(false);
+        expect(buscaParaAdulto('yo juego y tengo 14 años')).toBe(false);
+    });
+    it('con edad de adulto o la palabra «adultos» sigue siendo adulto', () => {
+        expect(buscaParaAdulto('Para mi, tengo 40 años')).toBe(true);
+        expect(buscaParaAdulto('quiero entrenar, tengo 18 años')).toBe(true);
+        expect(buscaParaAdulto('curso para adultos')).toBe(true);
+        expect(buscaParaAdulto('para mi')).toBe(true);
+    });
+    it('pideLlamada: «regrésame la llamada», «me pueden llamar», «hablar con alguien»; no el resto', () => {
+        for (const t of ['Te agradezco si me puedes regresar la llamada me gustaría hablar contigo', 'me pueden llamar?', 'Llámame por favor',
+            'quiero hablar con la directora', 'necesito hablar con alguien', 'prefiero una llamada']) expect(pideLlamada(t)).toBe(true);
+        for (const t of ['Hola', '¿Cuánto cuesta la mensualidad?', 'Quiero una clase de cortesía', 'Gracias', null, '']) expect(pideLlamada(t)).toBe(false);
+    });
+    it('pideUbicacion: «dónde queda la cancha», «la dirección», «cómo llego»; no «dónde pago»', () => {
+        for (const t of ['Donde queda la cancha', '¿Dónde queda?', 'cual es la direccion', 'Me das la ubicación', 'como llego', 'donde es la clase', 'dónde entrenan'])
+            expect(pideUbicacion(t)).toBe(true);
+        for (const t of ['Hola', '¿Cuánto cuesta?', 'donde pago', 'donde esta mi hijo', 'quiero información', null, '']) expect(pideUbicacion(t)).toBe(false);
+    });
     it('resumen del lead del adulto', () => {
         const r = resumirProspecto(rafaga);
         expect(r.adulto).toBe(true);

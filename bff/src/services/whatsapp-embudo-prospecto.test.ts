@@ -215,6 +215,51 @@ describe('preguntas', () => {
         });
     });
 
+    // Monster 2026-11-09: «Valeria Pardo Rojas y Camila Pardo Rojas» → «no alcancé a leer el nombre»,
+    // y la segunda, escrita aparte, recibía «necesito la fecha». Ahora se sigue con la primera y la otra se anota.
+    it('dos deportistas en un mensaje: sigue con la primera, avisa y anota a la otra', async () => {
+        const c = crear();
+        await iniciarEmbudo(c.ctx);
+        await c.turno('x', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Valeria Pardo Rojas y Camila Pardo Rojas');
+        const texto = c.ultimo().texto;
+        expect(texto).toContain('¡Mucho gusto, Valeria! 😊');
+        expect(texto).toContain('Camila Pardo Rojas');
+        expect(texto).toContain('2️⃣ ¿Cuál es su fecha de nacimiento?');
+        expect(c.ultimo().estado?.datos).toMatchObject({
+            nombre: 'Valeria Pardo Rojas',
+            respuestas: { nombre: 'Valeria Pardo Rojas', otros_deportistas: 'Camila Pardo Rojas' },
+        });
+    });
+
+    it('el segundo nombre escrito aparte, pidiendo la fecha: se anota y se sigue con el primero (sin gastar un intento)', async () => {
+        const c = crear();
+        await iniciarEmbudo(c.ctx);
+        await c.turno('x', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Valeria Pardo Rojas');
+        await c.turno('Camila Pardo Rojas');
+        const u = c.ultimo();
+        expect(u.texto).toContain('Anoté a *Camila Pardo Rojas* para después');
+        expect(u.texto).toContain('Valeria Pardo Rojas');
+        expect(u.texto).toContain('fecha de nacimiento');
+        expect(u.estado?.datos.respuestas?.otros_deportistas).toBe('Camila Pardo Rojas');
+        expect(u.estado?.datos.intentos ?? 0).toBe(0);
+        // La fecha de la primera sigue funcionando.
+        await c.turno('18/06/2012');
+        expect(c.ultimo().texto).toBe('3️⃣ ¿Es hombre o mujer?');
+        expect(c.ultimo().estado?.datos.respuestas?.otros_deportistas).toBe('Camila Pardo Rojas');
+    });
+
+    it('en la pregunta de la fecha, un texto que no es un nombre completo sigue pidiendo la fecha', async () => {
+        const c = crear();
+        await iniciarEmbudo(c.ctx);
+        await c.turno('x', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Valeria Pardo Rojas');
+        await c.turno('Camila');
+        expect(c.ultimo().texto).toContain('Necesito la *fecha de nacimiento*');
+        expect(c.ultimo().estado?.datos.respuestas?.otros_deportistas).toBeUndefined();
+    });
+
     it('«Mariana, 14/03/2011, punta» llena tres de una vez y pregunta lo que falta', async () => {
         const c = crear();
         await iniciarEmbudo(c.ctx);

@@ -45,7 +45,7 @@ import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import {
     normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia, esPreguntaDeOtroTema,
 } from './whatsapp-clase-cortesia.service';
-import { BOTON_PUERTA, leerNombreDeDeportista, leerOpcionDePuerta } from './whatsapp-puerta-desconocido';
+import { BOTON_PUERTA, leerNombreDeDeportista, leerOpcionDePuerta, leerVariosDeportistas } from './whatsapp-puerta-desconocido';
 import { quierePagarMensualidad } from './whatsapp-pagar-mensualidad';
 
 /**
@@ -456,6 +456,8 @@ export interface Leidas {
     nombre?: string;
     fechaNacimiento?: string | null;
     anio?: number;
+    /** Otros deportistas que vinieron en el mismo mensaje («Valeria … y Camila …»): el embudo sigue con el primero. */
+    otros?: string[];
 }
 
 /**
@@ -488,6 +490,12 @@ export function leerVarias(texto: string | null | undefined, pendientes: Pregunt
         }
         if (usado) continue;
         if (pend('nombre')) {
+            const varios = leerVariosDeportistas(seg);
+            if (varios) {
+                r.respuestas.nombre = varios[0]; r.nombre = varios[0];
+                r.respuestas.otros_deportistas = varios.slice(1).join(', '); r.otros = varios.slice(1);
+                continue;
+            }
             const leido = leerNombreDeDeportista(seg, ahora);
             if (leido) { r.respuestas.nombre = leido.nombre; r.nombre = leido.nombre; }
         }
@@ -858,6 +866,23 @@ async function pasoPregunta(
     if (!(p.clave in leidas.respuestas)) {
         // Un mensaje que es otra conversación («¿cuánto vale?») no gasta un intento: lo contesta el bot.
         if (!Object.keys(leidas.respuestas).length && (texto.includes('?') || texto.split(/\s+/).length > 12)) return false;
+        // Pidiendo la fecha de nacimiento, otro NOMBRE completo es el segundo deportista que quiere
+        // inscribir (Monster 2026-11-09: el segundo nombre recibía «necesito la fecha»): se anota para después
+        // y se sigue con el primero, sin gastar un intento.
+        if (!boton && p.tipo === 'fecha' && !Object.keys(leidas.respuestas).length && d.nombre && !esOtroTema(texto)) {
+            const otro = leerNombreDeDeportista(texto);
+            if (otro && otro.nombre.split(' ').length >= 2 && normalizar(otro.nombre) !== normalizar(d.nombre)) {
+                const previos = String(d.respuestas?.otros_deportistas ?? '').split(', ').filter(Boolean);
+                const todos = [...new Set([...previos, otro.nombre])];
+                const d2: DatosEmbudo = { ...d, respuestas: { ...(d.respuestas ?? {}), otros_deportistas: todos.join(', ') } };
+                const bb = botonesDePregunta(p);
+                await ctx.enviar(`Anoté a *${otro.nombre}* para después 🙌 Sigamos con *${d.nombre}*:
+
+${pista(p)}`, PASO_EMBUDO.PREGUNTA,
+                    { paso: 'pregunta', datos: { ...d2, i, intentos: estado.datos.intentos ?? 0 } }, bb.botones, bb.enTexto);
+                return true;
+            }
+        }
         const intentos = (estado.datos.intentos ?? 0) + 1;
         if (intentos >= MAX_INTENTOS) return aPersona(ctx, d, 'no_entendio', `No entendió: «${recortar(p.texto, 80)}».`);
         const b = botonesDePregunta(p);
@@ -865,7 +890,11 @@ async function pasoPregunta(
         return true;
     }
     const respondida = d.respuestas![p.clave];
-    const encabezado = p.clave === 'nombre' && d.nombre ? `¡Mucho gusto, ${primerNombre(d.nombre)}! 😊` : '';
+    const aviso2 = leidas.otros?.length
+        ? `
+Veo que también quieres inscribir a *${leidas.otros.join('* y a *')}* 🙌 Empecemos con *${d.nombre}*; cuando terminemos, me escribes el nombre y hacemos su registro.`
+        : '';
+    const encabezado = p.clave === 'nombre' && d.nombre ? `¡Mucho gusto, ${primerNombre(d.nombre)}! 😊${aviso2}` : '';
     // Detalle condicional («Club y torneos» → en qué clubes ha entrenado).
     if (p.detalle && !(p.detalle.clave in d.respuestas!)
         && p.detalle.si.some((s) => normalizar(sinEmojis(s)) === normalizar(sinEmojis(respondida)))) {

@@ -234,6 +234,8 @@ async function respuesta(escuela: Escuela, texto: string, op: {
     botonId?: string | null; atender?: boolean; previos?: Fila[]; historia?: boolean;
     /** El payload del entrante (el mensaje crudo de Meta: `referral` si vino de un anuncio). */
     payload?: any; catalogo?: any[]; mapeo?: any;
+    /** La dirección registrada de la escuela (`schools.address`). */
+    direccion?: string | null;
 } = {}) {
     vi.clearAllMocks();
     _olvidarReservasDePaso();
@@ -247,6 +249,12 @@ async function respuesta(escuela: Escuela, texto: string, op: {
     ];
     base(escuela, filas);
     if (op.historia) conHistoria(filas);
+    if (op.direccion !== undefined) {
+        const orig = h.state.resolve;
+        h.state.resolve = (table, ops) => table === 'schools'
+            ? { data: { name: 'CLUB DEMO', owner_id: 'owner-1', slug: 'club-demo', address: op.direccion, payment_settings: {} }, error: null }
+            : orig(table, ops);
+    }
     if (op.catalogo || op.mapeo) conCatalogo(op.catalogo ?? [], op.mapeo);
     h.debeAtender.mockResolvedValue(op.atender
         ? { atender: true, tipo: 'desconocido', botEncendido: true, tomada: false }
@@ -259,6 +267,12 @@ async function respuesta(escuela: Escuela, texto: string, op: {
         botones: (b.tool_context?.botones ?? b.botones ?? null),
     }));
 }
+
+/** Un interesado que ya escribió antes pidiendo información (así el bot lo reconoce como prospecto). */
+const INTERESADO_PREVIO: Fila = {
+    wa_message_id: 'wamid.i', direction: 'inbound', text_body: 'Hola, quiero información de las clases para mi hijo',
+    ai_generated: false, created_at: hace(3600),
+};
 
 const PUERTA_ABIERTA: Fila = {
     wa_message_id: 'wamid.p', direction: 'outbound', text_body: '¿Qué necesitas?', ai_generated: true, created_at: hace(60),
@@ -300,6 +314,32 @@ describe('Dynasty igual: con o sin las columnas del embudo el bot responde lo mi
         expect(r[0]).toMatchObject({ step: 'ask_email', flujo: 'puerta_desconocido' });
         expect(r[0].botones.map((b: any) => b.id)).toEqual([BOTON_PUERTA.CLUB, BOTON_PUERTA.INFO, BOTON_PUERTA.OTRO]);
         expect(await respuesta('columnas_null', 'Hola')).toEqual([]);
+    });
+
+    // Dynasty 2026-11-04/08: «dónde queda la cancha» y «regrésame la llamada» recibían la oferta de
+    // la clase de cortesía y el enlace de inscripción.
+    it('«Donde queda la cancha»: la dirección de la escuela, sin la oferta de cortesía ni el enlace', async () => {
+        const r = await respuesta('columnas_null', 'Donde queda la cancha', { direccion: 'Cl. 12 Bis #71g-09, Bogotá', previos: [INTERESADO_PREVIO] });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('ubicacion_escuela');
+        expect(r[0].texto).toContain('Cl. 12 Bis #71g-09, Bogotá');
+        expect(r[0].texto).not.toMatch(/En este enlace|próximos horarios|Ver opciones/i);
+    });
+
+    it('«Donde queda la cancha» sin dirección cargada: la escuela la confirma (al buzón), sin inventar', async () => {
+        const r = await respuesta('columnas_null', 'Donde queda la cancha', { direccion: null, previos: [INTERESADO_PREVIO] });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('prospecto_seguimiento');
+        expect(r[0].texto).toContain('le pasé tu pregunta a la escuela');
+        expect(r[0].texto).not.toMatch(/En este enlace|próximos horarios|Ver opciones/i);
+    });
+
+    it('«Te agradezco si me puedes regresar la llamada»: pasa a una persona, sin la oferta de cortesía', async () => {
+        const r = await respuesta('columnas_null', 'Te agradezco si me puedes regresar la llamada me gustaría hablar contigo', { previos: [INTERESADO_PREVIO] });
+        expect(r).toHaveLength(1);
+        expect(r[0].step).toBe('prospecto_seguimiento');
+        expect(r[0].texto).toContain('para que te llamen o te escriban');
+        expect(r[0].texto).not.toMatch(/En este enlace|próximos horarios|Ver opciones/i);
     });
 
     it('lo de hoy, fijado: el «Sí, acepto» de un número sin ficha', async () => {

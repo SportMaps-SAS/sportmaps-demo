@@ -44,6 +44,7 @@ vi.mock('../config/supabase', () => ({
 }));
 vi.mock('./whatsapp-atencion.service', () => ({
     interesesDeProspecto: () => [], buscaParaAdulto: () => false, edadMencionada: () => null,
+    pideLlamada: () => false, pideUbicacion: () => false,
 }));
 
 import {
