@@ -582,6 +582,23 @@ export function initMaintenanceJobs() {
         }
     });
 
+    // Barrido de respaldo de conversaciones sin respuesta (el del webhook solo corre con tráfico). Apagado por
+    // defecto: WA_BARRIDO_SIN_RESPUESTA=true. Mismo interruptor de prod.
+    cron.schedule('*/30 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        if (process.env.WA_BARRIDO_SIN_RESPUESTA !== 'true') return;
+        try {
+            const { revisarPendientesSinRespuesta } = await import('../services/whatsapp-modo-discreto');
+            const { hablaDeLaEscuela } = await import('../services/whatsapp-bot.service');
+            const { intencionDeProspecto } = await import('../services/whatsapp-atencion.service');
+            const r = await revisarPendientesSinRespuesta(Date.now(), true, (t) => intencionDeProspecto(t) || hablaDeLaEscuela(t));
+            if (r.avisadas) console.log(`[CRON] WhatsApp: barrido sin respuesta — ${r.avisadas} aviso(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el barrido de pendientes de WhatsApp:', err?.message || err);
+        }
+    });
+
     // Rescate por plantilla del interesado sin respuesta (ventana cerrada o por cerrar): solo con consentimiento
     // vigente y la plantilla `seguimiento_interesado` APROBADA en la WABA. Mismo interruptor: solo prod.
     cron.schedule('12,42 * * * *', async () => {

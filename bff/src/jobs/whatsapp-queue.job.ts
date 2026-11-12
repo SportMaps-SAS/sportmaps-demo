@@ -2473,9 +2473,15 @@ async function continuarComoComprobante(
     if (b4.activo && !opts.motivo) {
         const conversationId = await conversacionDeLaFila(fila);
         const venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados, { familia: true });
+        // Un cobro PARCIAL de la familia cuenta como «lo suyo de siempre» frente a la venta (Monster 2026-11-12, Shara:
+        // $145.000 sobre una mensualidad de $145.000 con $20.000 abonados no es un cupo de la clínica). Solo se lee si hay venta.
+        const delSaldo = venta
+            ? (await cobrosParcialesDe(fila.school_id, parentId, opts.llaves))
+                .map((c) => ({ id: c.id, amount: c.amount, concept: c.concept, due_date: null, child_id: null, atleta: null }) as PagoPendiente)
+            : [];
         if (venta && await atenderComprobanteDeVenta({
             fila, wa: null, conversationId, responder: conMarcaDeVenta(responder, venta.item.id), ocr, sha: shaArchivo,
-            storagePath, venta, cobroActivo: true, familia: { parentId, llaves: opts.llaves, pendientes }, alFallar, log,
+            storagePath, venta, cobroActivo: true, familia: { parentId, llaves: opts.llaves, pendientes: [...pendientes, ...delSaldo] }, alFallar, log,
         })) return;
     }
     if (b4.activo && await atenderMotivoDeFamilia(argsB4, b4, opts.motivo ?? null)) return;

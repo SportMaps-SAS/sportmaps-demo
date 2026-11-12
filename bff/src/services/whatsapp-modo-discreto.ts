@@ -23,6 +23,7 @@ import {
     type FilaReciente, type HorarioDeAtencion,
 } from './whatsapp-reglas-turno';
 import { intencionDeProspecto } from './whatsapp-atencion.service';
+import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
 import { avisarEscalacionAlEquipo } from './whatsapp-escalaciones.service';
 
 /** ¿Está activo? Por defecto sí. */
@@ -159,6 +160,8 @@ export function decidirPendientes(
     conversaciones: ReadonlyMap<string, ConversacionParaPendiente>,
     horarios: ReadonlyMap<string, HorarioDeAtencion | null>,
     ahora = Date.now(),
+    /** «¿Tiene intención?»: el bot pasa uno más ancho (inyectado para no crear un ciclo de imports). */
+    esInteres: (t: string | null | undefined) => boolean = intencionDeProspecto,
 ): Pendiente[] {
     const t = (f: { wa_timestamp?: string | null; created_at?: string | null }) =>
         new Date(f.wa_timestamp || f.created_at || 0).getTime();
@@ -178,10 +181,12 @@ export function decidirPendientes(
     for (const [cid, lista] of porConv) {
         const c = conversaciones.get(cid);
         if (!c || c.status === 'closed') continue;
+        // Personal, negocio, otro club, plataforma o staff marcados a mano: nunca son pendientes de la escuela.
+        if (esMarcaNoFamilia(c.contact_kind)) continue;
         if (c.tomada_por && (!c.tomada_hasta || new Date(c.tomada_hasta).getTime() > ahora)) continue;
         const ordenados = [...lista].sort((a, b) => t(b) - t(a));
         const esCliente = TIPOS_DE_CLIENTE.has(String(c.contact_kind ?? ''))
-            || ordenados.some((e) => intencionDeProspecto(e.text_body));
+            || ordenados.some((e) => esInteres(e.text_body));
         if (!esCliente) continue;
         const ultimo = ordenados.find(entrantePideAlgo);
         if (!ultimo) continue;
@@ -212,7 +217,10 @@ export type ResultadoPendientes = { revisadas: number; avisadas: number };
  * sin contestar. Idempotente entre los BFF: el aviso lleva id determinístico por
  * conversación y día. Como mucho una vuelta cada CADA_MS. Nunca lanza.
  */
-export async function revisarPendientesSinRespuesta(ahora = Date.now(), forzar = false): Promise<ResultadoPendientes> {
+export async function revisarPendientesSinRespuesta(
+    ahora = Date.now(), forzar = false,
+    esInteres: (t: string | null | undefined) => boolean = intencionDeProspecto,
+): Promise<ResultadoPendientes> {
     const r: ResultadoPendientes = { revisadas: 0, avisadas: 0 };
     if (!forzar && ahora - ultimaRevision < CADA_MS) return r;
     ultimaRevision = ahora;
@@ -247,7 +255,7 @@ export async function revisarPendientesSinRespuesta(ahora = Date.now(), forzar =
         const deNoche = hora < 7 || hora >= 21;
 
         const pendientes = decidirPendientes(ent as EntranteParaPendiente[], (sal ?? []) as SalienteParaPendiente[],
-            conversaciones, horarios, ahora);
+            conversaciones, horarios, ahora, esInteres);
         r.revisadas = pendientes.length;
         const { data: escuelas } = pendientes.length
             ? await supabase.from('school_whatsapp_integrations').select('id, school_id')

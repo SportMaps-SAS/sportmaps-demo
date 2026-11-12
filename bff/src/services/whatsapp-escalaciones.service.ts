@@ -298,6 +298,8 @@ export interface AvisoDeEscalacion {
      * esto dice el plazo corto de siempre (10/30 min); el SLA de 2 h hábiles lo pasa.
      */
     minSinRespuesta?: number;
+    /** Nadie le contestó (el asistente calló o falló): el aviso lo dice así. */
+    silencio?: boolean;
 }
 
 /** «30 min» / «2 h» para los avisos. */
@@ -314,9 +316,13 @@ const ETIQUETA_CATEGORIA: Record<CategoriaUrgente, string> = {
 
 /** Título y cuerpo del aviso al equipo. Pura. */
 export function textoDelAvisoAlEquipo(
-    a: Pick<AvisoDeEscalacion, 'etapa' | 'urgencia' | 'categoria' | 'tema' | 'minSinRespuesta'>,
+    a: Pick<AvisoDeEscalacion, 'etapa' | 'urgencia' | 'categoria' | 'tema' | 'minSinRespuesta' | 'silencio'>,
     quien: string,
 ): { titulo: string; cuerpo: string } {
+    if (a.silencio) {
+        return { titulo: `${quien} escribió y nadie le ha respondido`,
+            cuerpo: 'El asistente no le contestó. Abre WhatsApp en SportMaps y respóndele tú.' };
+    }
     const urgente = a.urgencia === 'urgente';
     const espera = duracionLegible(a.minSinRespuesta ?? PLAZO_ESCALACION_MIN[a.urgencia]);
     if (a.tema === 'retiro') {
