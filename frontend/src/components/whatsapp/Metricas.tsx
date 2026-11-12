@@ -57,7 +57,7 @@ const RANGOS = [7, 30, 90] as const;
 const NOMBRE_TIPO: Record<string, string> = {
     familia: 'Familias', familia_sin_cuenta: 'Familias sin cuenta', ambiguo: 'Número en dos cuentas',
     staff: 'Equipo de la escuela', desconocido: 'Desconocidos', personal: 'Personales', negocio: 'Negocios', otro_club: 'Otros clubes',
-    plataforma: 'Plataformas', sin_clasificar: 'Sin clasificar',
+    plataforma: 'Plataformas', equipo: 'Staff (marcado)', sin_clasificar: 'Sin clasificar',
 };
 
 /** Segundos → «45 s», «12 min», «3,5 h», «2,1 días». */

@@ -19,7 +19,7 @@ const fila = (id: string, error_message: string | null, extra: Record<string, an
 
 describe('filaCuentaEnBandeja', () => {
     it('marcado sin bandera: no cuenta; con bandera o sin marca: sí', () => {
-        for (const t of ['personal', 'negocio', 'otro_club', 'plataforma']) {
+        for (const t of ['personal', 'negocio', 'otro_club', 'plataforma', 'equipo']) {
             expect(filaCuentaEnBandeja(t, false)).toBe(false);
             expect(filaCuentaEnBandeja(t, true)).toBe(true);
         }
@@ -30,7 +30,7 @@ describe('filaCuentaEnBandeja', () => {
 
     it('un pago real de un contacto no atendido (sin_familia: contacto_no_atendido…) SÍ entra, de cualquier marca', () => {
         const pago = 'sin_familia: contacto_no_atendido (personal): comprobante de $150.000 a una cuenta de la escuela';
-        for (const t of ['personal', 'negocio', 'otro_club', 'plataforma', 'desconocido']) {
+        for (const t of ['personal', 'negocio', 'otro_club', 'plataforma', 'equipo', 'desconocido']) {
             expect(filaCuentaEnBandeja(t, false, pago)).toBe(true);
         }
     });

@@ -11,6 +11,9 @@ import { formatCurrency } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { esAcudienteV2 } from '@/lib/vistaAcudiente';
 import { EstadoCuentaAcudiente } from '@/components/account-statement/EstadoCuentaAcudiente';
+import { VolverAtras } from '@/components/account-statement/VolverAtras';
+import { ACUDIENTE_V2 } from '@/lib/feature-flags';
+import { canManageCharges } from '@/lib/cobrosYPagos';
 import { printStatement, STATUS_LABELS, type StatementData as Statement } from '@/components/account-statement/statementPrint';
 
 /**
@@ -33,6 +36,31 @@ export default function AccountStatementPage() {
         months={Number(searchParams.get('months') || 12)}
         schoolLoading={schoolLoading}
       />
+    );
+  }
+  // Quien administra la escuela ve la misma presentación que la familia (una
+  // línea por mes, fechas, puntualidad, cómo pagó) pero solo para consultar. Se
+  // apaga con el mismo VITE_ACUDIENTE_V2=false. El deportista adulto que mira su
+  // propia cuenta (`?user_id=`) sigue en la pantalla de siempre.
+  const childParam = searchParams.get('child_id') || undefined;
+  const userParam = searchParams.get('user_id') || undefined;
+  const unregisteredParam = searchParams.get('unregistered_athlete_id') || undefined;
+  if (ACUDIENTE_V2 && canManageCharges(currentUserRole) && (childParam || userParam || unregisteredParam)) {
+    return (
+      <>
+        <div className="mx-auto w-full max-w-page-narrow">
+          <VolverAtras destino="/payments-automation?tab=cierre" etiqueta="Volver" />
+        </div>
+        <EstadoCuentaAcudiente
+          modo="escuela"
+          schoolId={schoolId}
+          childId={childParam}
+          userId={userParam}
+          unregisteredId={unregisteredParam}
+          months={Number(searchParams.get('months') || 12)}
+          schoolLoading={schoolLoading}
+        />
+      </>
     );
   }
   return <AccountStatementClassic />;
