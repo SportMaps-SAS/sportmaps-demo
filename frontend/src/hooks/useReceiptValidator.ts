@@ -391,8 +391,10 @@ export function useReceiptValidator() {
                 const diffPct = Math.abs(amount - expected) / expected * 100;
                 amountMatches = diffPct <= AMOUNT_TOLERANCE_PCT;
             }
-            // En 'fixed', un comprobante por MÁS del esperado siempre se bloquea
-            // (posible comprobante equivocado o reusado de otro pago mayor).
+            // Un comprobante por MÁS del esperado ya NO se bloquea (Monster 2026-11-12): quien abonó
+            // y paga el valor completo, o paga de más, sube igual. Queda como aviso y la escuela lo
+            // revisa (el excedente lo decide ella). Los otros bloqueos duros (moneda, fecha, cuenta) siguen.
+            let avisoMayor: string | null = null;
             if (
                 conceptKind === 'fixed' &&
                 typeof amount === 'number' &&
@@ -400,9 +402,7 @@ export function useReceiptValidator() {
                 amountMatches === false &&
                 amount > expected
             ) {
-                errors.push(
-                    `El comprobante es por ${formatCop(amount)}, mayor al valor esperado ${formatCop(expected)}. Verifica que sea el comprobante correcto.`,
-                );
+                avisoMayor = `El comprobante es por ${formatCop(amount)}, mayor al saldo de ${formatCop(expected)}; la escuela lo revisará y te confirmará el excedente.`;
             }
 
             // Un monto MENOR al esperado sólo es un ABONO válido si la escuela
@@ -485,7 +485,7 @@ export function useReceiptValidator() {
                 // OCR ilegible: sube igual (advisory), la escuela lo revisará. No es un bloqueo.
                 rejectionReason: ocrUnreadable
                     ? 'No pudimos leer todos los datos automáticamente; la escuela revisará tu comprobante.'
-                    : null,
+                    : avisoMayor,
             };
         } catch (err) {
             console.error('Error en OCR:', err);
