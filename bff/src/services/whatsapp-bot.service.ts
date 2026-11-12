@@ -7148,7 +7148,11 @@ export async function revisarEscalacionesVencidas(ahora = Date.now()): Promise<R
     // conversación y por día cuando una familia o un interesado lleva 2 h hábiles
     // sin respuesta de nadie (`revisarPendientesSinRespuesta`).
     if (discretoEnBot()) {
-        await revisarPendientesSinRespuesta(ahora).catch((err) =>
+        // Predicado ancho (también «habla de la escuela») solo con WA_BARRIDO_AMPLIO=true: avisa más.
+        const esInteres = process.env.WA_BARRIDO_AMPLIO === 'true'
+            ? (t: string | null | undefined) => intencionDeProspecto(t) || hablaDeLaEscuela(t)
+            : undefined;
+        await revisarPendientesSinRespuesta(ahora, false, esInteres).catch((err) =>
             console.warn('[whatsapp-bot] no se pudo revisar lo pendiente', { err: err?.message }));
         return r;
     }

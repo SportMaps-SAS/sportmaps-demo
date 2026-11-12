@@ -34,10 +34,12 @@ import {
 import {
     runBotTurn, deliver, atenderDesconocido, mensajesRecientes, SILENCIO_HUMANO_MIN,
     TEXTO_MIME_RECHAZADO, vocativosDeEscuela, revisarEscalacionesVencidas, revisarRetomas,
-    reservarPasoUnaVez, enviarRespuestaStaff, abrirEnBuzon,
+    reservarPasoUnaVez, enviarRespuestaStaff, abrirEnBuzon, mensajeConContenido, hablaDeLaEscuela,
     atenderRespuestaDeFormularioEnBot, seguirPorChatTrasFormularioFallido,
 } from '../services/whatsapp-bot.service';
 import { esRespuestaDeFormulario, sincronizarEstadoDeFlow } from '../services/whatsapp-flows.service';
+import { intencionDeProspecto } from '../services/whatsapp-atencion.service';
+import { salvaguardaHabilitada, decidirSalvaguarda, avisarSilencio } from '../services/whatsapp-salvaguarda-silencio';
 import { debeAtender } from '../services/whatsapp-atencion.service';
 import { encolarAdjunto } from '../services/whatsapp-queue.service';
 import { correrTurnoAgrupado, ESPERA_RAFAGA_MS } from '../services/whatsapp-turno-agrupado.service';
@@ -739,6 +741,21 @@ async function handleBotTurn(
                     return 'error' as const;
                 });
             req.log?.info({ conversationId, resultado }, 'WhatsApp: desconocido');
+            // Salvaguarda (apagada por defecto, por escuela): un turno mudo ante un mensaje con intención avisa a la escuela.
+            // No le escribe al cliente ni guarda su texto (Monster 2026-11-11, @Andrey_0630: 17 h sin respuesta).
+            if (salvaguardaHabilitada(integration.school_id)) {
+                const d = decidirSalvaguarda({
+                    resultado: String(resultado), texto: msg.textBody, botonId: msg.botonId ?? null,
+                    conContenido: (t) => mensajeConContenido(t),
+                    conSenal: (t) => hablaDeLaEscuela(t) || intencionDeProspecto(t),
+                });
+                if (d === 'avisar') {
+                    req.log?.warn?.({ conversationId, resultado }, 'WhatsApp: desconocido sin respuesta; se avisa a la escuela');
+                    await avisarSilencio({ schoolId: integration.school_id, conversationId,
+                        contactWaId: msg.contactWaId, contactName: msg.contactName ?? null })
+                        .catch((err: any) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: salvaguarda falló'));
+                }
+            }
             return;
         }
         req.log?.info(
