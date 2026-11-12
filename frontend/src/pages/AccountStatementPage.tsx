@@ -11,6 +11,7 @@ import { formatCurrency } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { esAcudienteV2 } from '@/lib/vistaAcudiente';
 import { EstadoCuentaAcudiente } from '@/components/account-statement/EstadoCuentaAcudiente';
+import { VolverAtras } from '@/components/account-statement/VolverAtras';
 import { ACUDIENTE_V2 } from '@/lib/feature-flags';
 import { canManageCharges } from '@/lib/cobrosYPagos';
 import { printStatement, STATUS_LABELS, type StatementData as Statement } from '@/components/account-statement/statementPrint';
@@ -46,15 +47,20 @@ export default function AccountStatementPage() {
   const unregisteredParam = searchParams.get('unregistered_athlete_id') || undefined;
   if (ACUDIENTE_V2 && canManageCharges(currentUserRole) && (childParam || userParam || unregisteredParam)) {
     return (
-      <EstadoCuentaAcudiente
-        modo="escuela"
-        schoolId={schoolId}
-        childId={childParam}
-        userId={userParam}
-        unregisteredId={unregisteredParam}
-        months={Number(searchParams.get('months') || 12)}
-        schoolLoading={schoolLoading}
-      />
+      <>
+        <div className="mx-auto w-full max-w-page-narrow">
+          <VolverAtras destino="/payments-automation?tab=cierre" etiqueta="Volver" />
+        </div>
+        <EstadoCuentaAcudiente
+          modo="escuela"
+          schoolId={schoolId}
+          childId={childParam}
+          userId={userParam}
+          unregisteredId={unregisteredParam}
+          months={Number(searchParams.get('months') || 12)}
+          schoolLoading={schoolLoading}
+        />
+      </>
     );
   }
   return <AccountStatementClassic />;
