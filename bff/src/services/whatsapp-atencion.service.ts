@@ -553,8 +553,9 @@ const SOLO_PEDIDO_DE_INFO = new Set([
 ]);
 
 /** «interesado/a» (y «esoty interesada») — se exige contexto o mensaje corto. */
-const INTERES = /\binteresad[oa]s?\b/;
-const INTERES_NEGADO = /\bno (estoy |estamos |me |nos )?(muy )?interesad/;
+// «interesado/a» y también el verbo: «me interesa entrenar con ustedes» (Monster 2026-11-11, @Andrey_0630: el bot calló 17 h).
+const INTERES = /\binteresad[oa]s?\b|\b(me|nos) interesan?\b/;
+const INTERES_NEGADO = /\bno (estoy |estamos |me |nos )?(muy )?interes(ad|an?\b)/;
 
 /** Palabras que, solas, hacen de un mensaje un saludo/cortesía sin contenido. */
 const RELLENO = new Set([

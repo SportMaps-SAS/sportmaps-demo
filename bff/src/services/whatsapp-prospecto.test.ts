@@ -27,6 +27,9 @@ describe('intención clara de prospecto → abre la puerta', () => {
         'Consulta, realizan entrenamiento para niñas de 8 años (en etapa de iniciación)',
         'Consulta, realizan entrenamiento para niñas de 8 años ( en etapa de iniciación)',
         'esoty interesada',
+        'Hola! Me interesa entrenar con ustedes',
+        'Me interesa',
+        'Nos interesa inscribir a mi hijo',
         'Hola buen día no dan una clase de cortesía…',
         'Hola buen día no dan una clase de cortesía quisiera llevar la niña pero ella quiere ver cómo es el entrenamiento?',
         'Disculpa para ustedes resiven menores en formación o no?',
@@ -68,6 +71,8 @@ describe('personal, ambiguo o de familia → NO abre la puerta', () => {
         'Buenas tardes envío comprobante de mes de isabella de 4 dias a la semana',
         // Negación y vendedores.
         'No estoy interesada, gracias',
+        'No me interesa, gracias',
+        'Me interesa saber cuánto debo de mi saldo',
         'Buenas tardes Hablas con Diana Ejecutiva Comercial del Hotel. El motivo del mensaje es ofrecer nuestros servicios de Alojamiento',
         'Colo se llamaba el restaurante',
         'Estoy más estresada',
