@@ -216,6 +216,7 @@ const AdminAccessLogsPage = lazy(() => import("./pages/AdminAccessLogsPage"));
 const AdminWhatsAppPlataformaPage = lazy(() => import("./pages/admin/AdminWhatsAppPlataformaPage"));
 const AthleteCardPublicPage = lazy(() => import("./pages/AthleteCardPublicPage"));
 const CobroPublicoPage = lazy(() => import("./pages/CobroPublicoPage"));
+const EstadoCuentaPublicoPage = lazy(() => import("./pages/EstadoCuentaPublicoPage"));
 // Pizarra: jugada compartida por enlace (pública) y pizarra libre sin sesión.
 const JugadaCompartidaPage = lazy(() => import("./pages/JugadaCompartidaPage"));
 const PizarraLibrePage = lazy(() => import("./pages/PizarraLibrePage"));
@@ -377,6 +378,8 @@ const App = () => (
                     {/* Enlace sin login de UN cobro: botón de las plantillas de cobranza de WhatsApp
                         (sportmaps.co/p/* redirige aquí desde la landing). El token es la credencial. */}
                     <Route path="/p/:token" element={<CobroPublicoPage />} />
+                    {/* Estado de cuenta de una familia, sin login: botón del correo «Ver mi estado de cuenta». El token es la credencial. */}
+                    <Route path="/e/:token" element={<EstadoCuentaPublicoPage />} />
                     {/* Jugada de la pizarra compartida por WhatsApp: solo lectura, sin login. */}
                     <Route path="/jugada/:token" element={<JugadaCompartidaPage />} />
                     <Route path="/cert/:folio" element={<CertificateVerifyPublicPage />} />

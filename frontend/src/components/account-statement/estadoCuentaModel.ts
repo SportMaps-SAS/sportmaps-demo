@@ -20,6 +20,17 @@ export interface CobroCuenta {
   period_year: number | null;
   period_month: number | null;
   created_at: string;
+  /**
+   * Columnas que `resolvePaymentOrigin` (lib/paymentOrigin) lee para decir CÓMO
+   * se pagó. Opcionales: sin ellas el origen sale «Sin registrar», nunca inventado.
+   */
+  payment_method?: string | null;
+  payment_channel?: string | null;
+  payment_provider?: string | null;
+  receipt_url?: string | null;
+  wompi_reference?: string | null;
+  wompi_transaction_id?: string | null;
+  provider_transaction_id?: string | null;
 }
 
 /** Estados que `/my-payments?pay=<id>` abre directo en el checkout (MyPaymentsPage). */
@@ -28,6 +39,7 @@ export const ABRE_CHECKOUT = ['pending', 'overdue', 'rejected', 'failed'];
 export const POR_PAGAR = ['pending', 'overdue', 'partial', 'rejected', 'failed'];
 
 import type { TonoEstado } from '@/components/common/ChipEstado';
+import { resolvePaymentOrigin } from '@/lib/paymentOrigin';
 
 export type { TonoEstado };
 
@@ -134,21 +146,99 @@ function fechaCorta(d: string, now: Date): string {
   return date.getFullYear() !== now.getFullYear() ? `${base} de ${date.getFullYear()}` : base;
 }
 
+/** Formato por defecto de un monto en estas frases; las pantallas pasan `formatCurrency`. */
+const formatoBasico = (n: number) => `$ ${Math.round(n).toLocaleString('es-CO')}`;
+
+/** Parte abonada de un cobro con abono parcial, y lo que falta. null si no hay abono real. */
+export function abonoDe(c: CobroCuenta): { abonado: number; falta: number } | null {
+  const total = Number(c.amount || 0);
+  const abonado = Number(c.amount_paid || 0);
+  // Un «abono» que ya cubre todo el valor es un dato raro, no un abono: no se inventa un «falta $0».
+  if (c.status !== 'partial' || abonado <= 0 || total <= 0 || abonado >= total) return null;
+  return { abonado, falta: Math.max(0, total - abonado) };
+}
+
 /** Línea secundaria de un cobro: «Venció el 10 de octubre», «Pagado el 6 de julio»… */
-export function detalleCobro(c: CobroCuenta, now = new Date()): string {
+export function detalleCobro(
+  c: CobroCuenta,
+  now = new Date(),
+  formato: (n: number) => string = formatoBasico,
+  /**
+   * `escuela`: el mismo dato, sin hablarle a la familia en segunda persona.
+   * `publica`: la página /e/:token, sin sesión: habla a la familia pero no la manda a pantallas
+   * que no existen ahí («se paga desde Pagos», «vuelve a subirlo»).
+   */
+  voz: 'familia' | 'escuela' | 'publica' = 'familia',
+): string {
   const estado = estadoCobro(c, now).label;
+  const escuela = voz === 'escuela';
+  const publica = voz === 'publica';
   if (estado === 'Pagado') return c.payment_date ? `Pagado el ${fechaCorta(c.payment_date, now)}` : 'Pagado';
   if (estado === 'En revisión') {
+    if (escuela) return c.payment_date ? `Comprobante enviado el ${fechaCorta(c.payment_date, now)}, por revisar.` : 'Comprobante por revisar.';
     return c.payment_date
       ? `Enviaste el comprobante el ${fechaCorta(c.payment_date, now)}. La escuela lo está revisando.`
       : 'La escuela está revisando tu comprobante.';
   }
-  if (estado === 'Necesita aclaración') return 'La escuela necesita que aclares el comprobante.';
-  if (estado === 'Rechazado') return 'La escuela rechazó el comprobante. Vuelve a pagarlo o a subirlo.';
-  if (estado === 'No pasó') return 'El pago no pasó. Inténtalo de nuevo.';
-  if (estado === 'Abono parcial') return 'Ya abonaste una parte. El saldo se paga desde Pagos.';
+  if (estado === 'Necesita aclaración') return escuela ? 'El comprobante tiene una aclaración pendiente.' : 'La escuela necesita que aclares el comprobante.';
+  if (estado === 'Rechazado') return escuela ? 'Se rechazó el comprobante.' : publica ? 'La escuela rechazó el comprobante.' : 'La escuela rechazó el comprobante. Vuelve a pagarlo o a subirlo.';
+  if (estado === 'No pasó') return escuela ? 'El pago en línea no pasó.' : publica ? 'El pago no pasó.' : 'El pago no pasó. Inténtalo de nuevo.';
+  if (estado === 'Abono parcial') {
+    const abono = abonoDe(c);
+    if (escuela) return abono ? `Abonó ${formato(abono.abonado)}. Falta ${formato(abono.falta)}.` : 'Tiene un abono parcial.';
+    if (publica) return abono ? `Abonaste ${formato(abono.abonado)}. Falta ${formato(abono.falta)}.` : 'Ya abonaste una parte.';
+    return abono
+      ? `Abonaste ${formato(abono.abonado)}. Falta ${formato(abono.falta)}, que se paga desde Pagos.`
+      : 'Ya abonaste una parte. El saldo se paga desde Pagos.';
+  }
   if (estado === 'Vencido') return c.due_date ? `Venció el ${fechaCorta(c.due_date, now)}` : 'Vencido';
   return c.due_date ? `Vence el ${fechaCorta(c.due_date, now)}` : 'Por pagar';
+}
+
+/** Días de calendario entre dos fechas (negativo si `hasta` es anterior). */
+function diasEntre(desde: Date, hasta: Date): number {
+  const a = new Date(desde.getFullYear(), desde.getMonth(), desde.getDate()).getTime();
+  const b = new Date(hasta.getFullYear(), hasta.getMonth(), hasta.getDate()).getTime();
+  return Math.round((b - a) / 86_400_000);
+}
+
+const dias = (n: number) => `${n} ${n === 1 ? 'día' : 'días'}`;
+
+/**
+ * Una línea que dice, de un vistazo, cuándo era y cuándo se pagó:
+ * «Límite 10 oct · pagó 8 oct», «Límite 10 nov · sin pagar».
+ */
+export function lineaFechas(c: CobroCuenta, now = new Date()): string {
+  const estado = estadoCobro(c, now).label;
+  const limite = c.due_date ? `Límite ${fechaCorta(c.due_date, now)}` : null;
+  let resto: string | null = null;
+  if (estado === 'Pagado') resto = c.payment_date ? `pagó ${fechaCorta(c.payment_date, now)}` : 'pagado';
+  else if (estado === 'Abono parcial') resto = c.payment_date ? `abonó ${fechaCorta(c.payment_date, now)}` : 'con abono';
+  else if (estado === 'En revisión') resto = c.payment_date ? `comprobante enviado ${fechaCorta(c.payment_date, now)}` : 'comprobante en revisión';
+  else if (estado === 'Vencido' || estado === 'Por pagar') resto = 'sin pagar';
+  return [limite, resto].filter(Boolean).join(' · ') || estado;
+}
+
+/**
+ * Puntualidad en palabras: «Pagó a tiempo», «Pagó 3 días tarde», «Lleva 12 días
+ * vencido». null cuando no aplica (en revisión, anulado, sin fechas).
+ */
+export function puntualidad(c: CobroCuenta, now = new Date(), formato: (n: number) => string = formatoBasico): EstadoEnPalabras | null {
+  const estado = estadoCobro(c, now).label;
+  if (estado === 'Pagado' && c.due_date && c.payment_date) {
+    const d = diasEntre(parseDia(c.due_date), parseDia(c.payment_date));
+    return d <= 0 ? { label: 'Pagó a tiempo', tono: 'ok' } : { label: `Pagó ${dias(d)} tarde`, tono: 'aviso' };
+  }
+  if ((estado === 'Vencido' || estado === 'Abono parcial') && c.due_date && estaVencido(c, now)) {
+    const d = diasEntre(parseDia(c.due_date), now);
+    if (d <= 0) return null;
+    const abono = estado === 'Abono parcial' ? abonoDe(c) : null;
+    return {
+      label: abono ? `Falta ${formato(abono.falta)} · vencido hace ${dias(d)}` : `Lleva ${dias(d)} vencido`,
+      tono: 'peligro',
+    };
+  }
+  return null;
 }
 
 /** El valor que se muestra en la fila (dato de la base, no un cálculo). */
@@ -230,4 +320,99 @@ export function resumenCuenta(
     };
   }
   return { titulo: `${quien} está al día`, subtitulo: 'No hay cobros pendientes.', boton: null, tono: 'al-dia' };
+}
+
+/** A quién pertenece un estado de cuenta: hijo, adulto con cuenta o ficha sin cuenta. */
+export interface ObjetivoEstadoCuenta {
+  child_id: string | null;
+  adult_id: string | null;
+  unregistered_athlete_id: string | null;
+  name: string;
+}
+
+/** `?child_id=…` / `?user_id=…` / `?unregistered_athlete_id=…` de /estado-cuenta (gana el hijo). */
+export function parametrosEstadoCuenta(o: ObjetivoEstadoCuenta): string {
+  const p = new URLSearchParams();
+  if (o.child_id) p.set('child_id', o.child_id);
+  else if (o.adult_id) p.set('user_id', o.adult_id);
+  else if (o.unregistered_athlete_id) p.set('unregistered_athlete_id', o.unregistered_athlete_id);
+  return p.toString();
+}
+
+/** Asistencia de un mes, contada de las sesiones que trae la RPC (`events` con tipo «sesion»). */
+export interface AsistenciaMes {
+  /** Estuvo en clase (presente o llegó tarde). */
+  asistio: number;
+  tarde: number;
+  excusada: number;
+  falto: number;
+  total: number;
+}
+
+interface EventoCuenta {
+  tipo: string;
+  fecha: string;
+  attendance_status?: string | null;
+}
+
+/**
+ * Asistencia por mes (`YYYY-MM`). Presente y tarde cuentan como asistió; la
+ * excusada y la falta no. Un estado que no conocemos suma al total pero a ningún
+ * otro grupo: nunca se esconde una clase ni se le inventa un resultado.
+ */
+export function asistenciaPorMes(events: EventoCuenta[]): Map<string, AsistenciaMes> {
+  const out = new Map<string, AsistenciaMes>();
+  for (const e of events) {
+    if (e.tipo !== 'sesion' || !e.fecha) continue;
+    const key = e.fecha.slice(0, 7);
+    const a = out.get(key) ?? { asistio: 0, tarde: 0, excusada: 0, falto: 0, total: 0 };
+    a.total++;
+    if (e.attendance_status === 'present') a.asistio++;
+    else if (e.attendance_status === 'late') { a.asistio++; a.tarde++; }
+    else if (e.attendance_status === 'excused') a.excusada++;
+    else if (e.attendance_status === 'absent') a.falto++;
+    out.set(key, a);
+  }
+  return out;
+}
+
+/** «Asistió a 8 de 12 clases · 3 faltas · 1 excusada · llegó tarde 1 vez». */
+export function textoAsistencia(a: AsistenciaMes): string {
+  const partes = [`Asistió a ${a.asistio} de ${a.total} ${a.total === 1 ? 'clase' : 'clases'}`];
+  if (a.falto) partes.push(`${a.falto} ${a.falto === 1 ? 'falta' : 'faltas'}`);
+  if (a.excusada) partes.push(`${a.excusada} ${a.excusada === 1 ? 'excusada' : 'excusadas'}`);
+  if (a.tarde) partes.push(`llegó tarde ${a.tarde} ${a.tarde === 1 ? 'vez' : 'veces'}`);
+  return partes.join(' · ');
+}
+
+/** Qué respaldo tiene un pago: el comprobante que subieron, la confirmación de la pasarela o nada. */
+export type SoportePago = 'comprobante' | 'en-linea' | 'ninguno';
+
+export interface ComoPago {
+  /** «Transferencia», «Efectivo», «Wompi», «Registrado por la escuela»… */
+  label: string;
+  /** Matiz corto: «con comprobante», «sin comprobante». */
+  nota: string | null;
+  soporte: SoportePago;
+  /** El medio de pago no está registrado: solo le sirve a la escuela, para completarlo. */
+  sinRegistrar: boolean;
+}
+
+/**
+ * Cómo se pagó, a partir de `resolvePaymentOrigin` (nunca el `payment_method` crudo)
+ * con tres ajustes para los datos reales de Besser: un pago registrado a mano que SÍ
+ * tiene comprobante no es «Sin registrar» (hay 3), el efectivo no tiene comprobante, y
+ * lo que pasó por la pasarela se confirma en línea.
+ */
+export function comoPago(c: CobroCuenta): ComoPago {
+  const o = resolvePaymentOrigin(c);
+  const tieneComprobante = !!c.receipt_url;
+  if (o.kind === 'gateway') return { label: o.label, nota: o.qualifier, soporte: 'en-linea', sinRegistrar: false };
+  if (o.kind === 'unknown') {
+    if (tieneComprobante) return { label: 'Comprobante subido', nota: 'sin medio registrado', soporte: 'comprobante', sinRegistrar: true };
+    if (c.payment_channel === 'manual') return { label: 'Registrado por la escuela', nota: 'sin comprobante', soporte: 'ninguno', sinRegistrar: false };
+    return { label: 'Sin registrar', nota: null, soporte: 'ninguno', sinRegistrar: true };
+  }
+  if (tieneComprobante) return { label: o.label, nota: 'con comprobante', soporte: 'comprobante', sinRegistrar: false };
+  return { label: o.label, nota: 'sin comprobante', soporte: 'ninguno', sinRegistrar: false };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  agruparPorMes, resumenCuenta, estadoCobro, detalleCobro, tituloCobro, valorCobro, type CobroCuenta,
+  agruparPorMes, resumenCuenta, estadoCobro, detalleCobro, tituloCobro, valorCobro, lineaFechas, puntualidad, abonoDe, type CobroCuenta,
 } from './estadoCuentaModel';
 
 const HOY = new Date(2026, 9, 24, 10, 0); // 24 de octubre de 2026
@@ -101,5 +101,45 @@ describe('textos de cada cobro', () => {
   it('valor: lo pagado si está pagado, si no el valor del cobro', () => {
     expect(valorCobro(cobro({ status: 'paid', amount: 200_000, amount_paid: 180_000 }))).toBe(180_000);
     expect(valorCobro(cobro({ status: 'overdue', amount: 210_000 }))).toBe(210_000);
+  });
+});
+
+describe('fechas, puntualidad y abono', () => {
+  const pagado = (pago: string) => cobro({ status: 'paid', amount_paid: 210_000, due_date: '2026-10-10', payment_date: pago });
+
+  it('una línea con la fecha límite y la de pago', () => {
+    expect(lineaFechas(pagado('2026-10-08'), HOY)).toBe('Límite 10 de octubre · pagó 8 de octubre');
+    expect(lineaFechas(cobro({ status: 'overdue' }), HOY)).toBe('Límite 10 de octubre · sin pagar');
+    expect(lineaFechas(cobro({ status: 'awaiting_approval', payment_date: '2026-10-12' }), HOY)).toBe('Límite 10 de octubre · comprobante enviado 12 de octubre');
+  });
+
+  it('puntualidad: a tiempo, tarde y vencido, en días', () => {
+    expect(puntualidad(pagado('2026-10-08'), HOY)).toEqual({ label: 'Pagó a tiempo', tono: 'ok' });
+    expect(puntualidad(pagado('2026-10-10'), HOY)?.label).toBe('Pagó a tiempo');
+    expect(puntualidad(pagado('2026-10-13'), HOY)).toEqual({ label: 'Pagó 3 días tarde', tono: 'aviso' });
+    expect(puntualidad(pagado('2026-10-11'), HOY)?.label).toBe('Pagó 1 día tarde');
+    expect(puntualidad(cobro({ status: 'overdue' }), HOY)).toEqual({ label: 'Lleva 14 días vencido', tono: 'peligro' });
+  });
+
+  it('puntualidad no aplica a lo que está en revisión ni a lo que aún no vence', () => {
+    expect(puntualidad(cobro({ status: 'awaiting_approval', payment_date: '2026-10-12' }), HOY)).toBeNull();
+    expect(puntualidad(cobro({ status: 'pending', due_date: '2026-11-10' }), HOY)).toBeNull();
+  });
+
+  it('abono: dice cuánto se abonó y cuánto falta', () => {
+    const parcial = cobro({ status: 'partial', amount: 210_000, amount_paid: 100_000 });
+    expect(abonoDe(parcial)).toEqual({ abonado: 100_000, falta: 110_000 });
+    expect(detalleCobro(parcial, HOY, fmt)).toBe('Abonaste $ 100.000. Falta $ 110.000, que se paga desde Pagos.');
+    expect(detalleCobro(parcial, HOY, fmt, 'escuela')).toBe('Abonó $ 100.000. Falta $ 110.000.');
+    expect(puntualidad(parcial, HOY, fmt)).toEqual({ label: 'Falta $ 110.000 · vencido hace 14 días', tono: 'peligro' });
+  });
+
+  it('abono sin monto abonado no inventa cifras', () => {
+    expect(abonoDe(cobro({ status: 'partial', amount_paid: null }))).toBeNull();
+    expect(detalleCobro(cobro({ status: 'partial', amount_paid: null }), HOY)).toBe('Ya abonaste una parte. El saldo se paga desde Pagos.');
+  });
+
+  it('voz de la escuela: sin segunda persona', () => {
+    expect(detalleCobro(cobro({ status: 'awaiting_approval', payment_date: '2026-10-12' }), HOY, fmt, 'escuela')).toBe('Comprobante enviado el 12 de octubre, por revisar.');
   });
 });

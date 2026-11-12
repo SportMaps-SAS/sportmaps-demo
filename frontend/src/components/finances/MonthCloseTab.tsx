@@ -13,6 +13,8 @@ import { useToast } from '@/hooks/use-toast';
 import { formatCurrency } from '@/lib/utils';
 import { todayColombia } from '@/lib/dateUtils';
 import { PaymentAgingCard } from './PaymentAgingCard';
+import { PagosDelMesCard } from './PagosDelMesCard';
+import { EstadoCuentaDialog } from '@/components/account-statement/EstadoCuentaDialog';
 
 const MESES = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
@@ -32,8 +34,6 @@ interface CloseRow extends CloseTotals {
 interface AthleteTarget {
   child_id: string | null; adult_id: string | null; unregistered_athlete_id: string | null; name: string;
 }
-
-interface AlDiaItem { athlete: string; tipo: string; meses: Array<{ periodo: string; status: string }> }
 
 export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string | null | undefined; activeBranchId: string | null | undefined }) {
   const { toast } = useToast();
@@ -115,30 +115,14 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
     enabled: !!schoolId,
   });
 
-  // "Al día" — mismo roster que la grilla de historial, acotado al período
-  // seleccionado leyendo el estado exacto de ESE mes dentro de `meses`.
-  const mesesAtras = Math.min(12, Math.max(1, (today.y * 12 + today.m) - (period.year * 12 + period.month) + 1));
-  const periodoLabel = `${String(period.month).padStart(2, '0')}/${period.year}`;
-  const { data: grid } = useQuery({
-    queryKey: ['month-close-grid', schoolId, activeBranchId, mesesAtras],
-    queryFn: async () => {
-      const { data, error } = await (supabase as any).rpc('get_school_payment_history_grid', {
-        p_school_id: schoolId, p_branch_id: activeBranchId || null, p_months: mesesAtras,
-      });
-      if (error) throw error;
-      return data as { items: AlDiaItem[] };
-    },
-    enabled: !!schoolId,
-  });
-  const alDia = (grid?.items ?? []).filter((it) =>
-    it.meses.some((m) => m.periodo === periodoLabel && m.status === 'paid'));
-
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [closing, setClosing] = useState(false);
   const [reopenOpen, setReopenOpen] = useState(false);
   const [reopenReason, setReopenReason] = useState('');
   const [reopening, setReopening] = useState(false);
   const [timelineTarget, setTimelineTarget] = useState<AthleteTarget | null>(null);
+  // Estado de cuenta del atleta (modal V2). Desde ahí se puede pasar a las sesiones del mes.
+  const [statementTarget, setStatementTarget] = useState<AthleteTarget | null>(null);
 
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: periodKey });
@@ -264,7 +248,18 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
         </CardContent>
       </Card>
 
-      {/* Cartera pendiente vs al día — dos listas separadas, en vivo */}
+      {/* Quién pagó en el mes: todos los atletas, con fecha límite, fecha de pago y
+          puntualidad. Tocar una fila abre su estado de cuenta. */}
+      <PagosDelMesCard
+        schoolId={schoolId}
+        activeBranchId={activeBranchId}
+        year={period.year}
+        month={period.month}
+        mesLabel={MESES[period.month]}
+        onAthleteClick={setStatementTarget}
+      />
+
+      {/* Cartera pendiente — antigüedad por atleta, en vivo */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Cartera pendiente de {MESES[period.month]}</CardTitle>
@@ -275,35 +270,8 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
             schoolId={schoolId}
             activeBranchId={activeBranchId}
             periodFilter={{ year: period.year, month: period.month }}
-            onAthleteClick={setTimelineTarget}
+            onAthleteClick={setStatementTarget}
           />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-base">Al día en {MESES[period.month]}</CardTitle>
-            <CardDescription>Pagaron ese período — para el detalle de la transacción, ver Historial.</CardDescription>
-          </div>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/payments-automation?tab=history">Ver en Historial</Link>
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader><TableRow><TableHead>Atleta</TableHead><TableHead>Tipo</TableHead></TableRow></TableHeader>
-            <TableBody>
-              {alDia.length === 0 ? (
-                <TableRow><TableCell colSpan={2} className="text-center text-sm text-muted-foreground py-6">Nadie pagó este período todavía.</TableCell></TableRow>
-              ) : alDia.map((it, idx) => (
-                <TableRow key={`${it.athlete}-${idx}`}>
-                  <TableCell className="font-medium">{it.athlete}</TableCell>
-                  <TableCell className="capitalize text-xs text-muted-foreground">{it.tipo.replace('_', ' ')}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
         </CardContent>
       </Card>
 
@@ -387,7 +355,24 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
         </DialogContent>
       </Dialog>
 
-      {/* Drill-down por atleta */}
+      {/* Estado de cuenta del atleta (V2, solo consulta) */}
+      <EstadoCuentaDialog
+        schoolId={schoolId}
+        objetivo={statementTarget}
+        onClose={() => setStatementTarget(null)}
+        pie={statementTarget && (
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 text-xs font-normal"
+            onClick={() => { setTimelineTarget(statementTarget); setStatementTarget(null); }}
+          >
+            Ver sesiones de {MESES[period.month]}
+          </Button>
+        )}
+      />
+
+      {/* Drill-down por atleta: pagos y sesiones del mes */}
       <Dialog open={!!timelineTarget} onOpenChange={(open) => !open && setTimelineTarget(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

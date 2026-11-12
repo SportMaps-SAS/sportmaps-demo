@@ -83,6 +83,7 @@ import { iniciarReferidosCron } from './jobs/referidos.job';
 import { iniciarSoportesRecordatoriosCron } from './jobs/soportes-recordatorios.job';
 import publicBookingRouter from './routes/public-booking.routes';
 import cobroEnlacePublicoRouter from './routes/cobro-enlace-publico.routes';
+import { estadoCuentaPublicoRouter, estadoCuentaAdminRouter } from './routes/estado-cuenta-enlace.routes';
 import storeGuestRouter from './routes/store-guest.routes';
 import { initMaintenanceJobs } from './jobs/maintenance.job';
 import { debenCorrerLosCrons } from './jobs/crons-solo-en-render';
@@ -358,6 +359,8 @@ app.get('/health/ai', requireAuth, requireRole('super_admin'), async (_req: Requ
 app.use('/api/v1', requireOperationalSchool);
 
 app.use('/api/v1/students', generalLimiter, studentsRouter);
+// «Enviar al acudiente»: requireAuth + rol de administración dentro del router.
+app.use('/api/v1/estado-cuenta', generalLimiter, estadoCuentaAdminRouter);
 app.use('/api/v1/students', generalLimiter, createOneRouter);
 app.use('/api/v1/enrollment-intake', generalLimiter, enrollmentIntakeRouter);
 app.use('/api/v1/attendance-sheet-intake', generalLimiter, attendanceSheetIntakeRouter);
@@ -393,6 +396,9 @@ app.use('/api/v1/public/booking', publicBookingLimiter, publicBookingRouter);
 // Enlace público de un cobro (/p/:token, botón de las plantillas de cobranza de
 // WhatsApp). Sin requireAuth: el token es la credencial. Rate limit dentro del router.
 app.use('/api/v1/public/cobro', cobroEnlacePublicoRouter);
+// Enlace público del estado de cuenta de una familia (/e/:token). Sin requireAuth: el token es
+// la credencial. Rate limit por IP y por token dentro del router.
+app.use('/api/v1/public/estado-cuenta', estadoCuentaPublicoRouter);
 // Tienda: compra SIN cuenta y enlace del pedido /pedido/:token (mig. 20261013170553).
 // Rate limit propio por IP real (CF-Connecting-IP) dentro del router. Va antes del
 // reviewsRouter de /api/v1, que le exige sesión a todo lo que pasa por él.
