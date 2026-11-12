@@ -102,7 +102,7 @@ export function useDashboardConfig(
       ],
       organizer: [
         { id: 'complete_profile', title: 'Perfil de Organizador', description: 'Datos fiscales y de contacto.', icon: UserCircle, href: '/profile', completed: false },
-        { id: 'create_event', title: 'Primer Evento', description: 'Organiza tu primera competencia.', icon: Calendar, href: '/organizer/create-event', completed: false }
+        { id: 'create_event', title: 'Primer Evento', description: 'Organiza tu primera competencia.', icon: Calendar, href: '/school/tournaments/nuevo-rapido', completed: false }
       ]
     };
 
@@ -438,8 +438,8 @@ export function useDashboardConfig(
           ],
           activities: [],
           quickActions: [
-            { label: 'Crear Evento', icon: Plus, href: '/organizer/create-event', variant: 'default' },
-            { label: 'Mis Eventos', icon: Trophy, href: '/organizer/home', variant: 'outline' }
+            { label: 'Crear torneo', icon: Plus, href: '/school/tournaments/nuevo-rapido', variant: 'default' },
+            { label: 'Mis torneos', icon: Trophy, href: '/school/tournaments', variant: 'outline' }
           ],
           onboardingSteps: onboardingConfigs.organizer
         };

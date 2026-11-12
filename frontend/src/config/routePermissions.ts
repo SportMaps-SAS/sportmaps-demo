@@ -110,8 +110,8 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
 
     // ── School / Admin ──
     '/school/enroll/:eventId': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Inscripción a evento' },
-    '/school/delegations': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Delegaciones de escuela' },
-    '/school/delegations/:id': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Detalle de delegación' },
+    '/school/delegations': { allowedRoles: ['school', 'admin', 'school_admin', 'organizer'], description: 'Delegaciones de escuela' },
+    '/school/delegations/:id': { allowedRoles: ['school', 'admin', 'school_admin', 'organizer'], description: 'Detalle de delegación' },
     '/school/routines': { allowedRoles: ['school', 'school_admin', 'admin', 'super_admin', 'coach'], description: 'Biblioteca de rutinas del gimnasio' },
     '/students': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'coach'], requiredPermission: 'students:view', description: 'Gestión de deportistas' },
     '/invitations': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'coach'], description: 'Gestión de invitaciones' },

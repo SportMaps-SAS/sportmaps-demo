@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 922,
+  "count": 923,
   "head": "20261112122901",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -925,6 +925,7 @@
     {"v":"20261111105120","file":"20261111105120_whatsapp_marca_staff.sql","sha256":"ec328d1a6b2082af1a1acc6b94a8f809346edb651b5238c6eaf4ecc5f6c8a8d7","added":"2026-11-11","by":"Brayan Steven Lopez"},
     {"v":"20261111114349","file":"20261111114349_cobro_servicio_unificado.sql","sha256":"81784439c003f2db41488fb81cad26ad551aa830cc94dd28bfa992a3c13f63dc","added":"2026-11-11","by":"Brayan Steven Lopez"},
     {"v":"20261111151130","file":"20261111151130_cobro_servicio_seguimiento.sql","sha256":"2f956102fac31f948edd7d8891220a6ffd4c2b7f5b107346e2a6d2ae7b5e87e9","added":"2026-11-11","by":"Brayan Steven Lopez"},
+    {"v":"20261112114054","file":"20261112114054_organizador_entidad_propia.sql","sha256":"1e8332764076003b8a84004e065e09bf24fc94b2068a3eb5cdec92bd76ab2248","added":"2026-11-12","by":"Brayan Steven Lopez"},
     {"v":"20261112122901","file":"20261112122901_estado_cuenta_enlaces.sql","sha256":"0ced08de3f4d33a1ecb918f6e43beeca5897044336a6c092310a844a422003d1","added":"2026-11-12","by":"Brayan Steven Lopez"}
   ]
 }

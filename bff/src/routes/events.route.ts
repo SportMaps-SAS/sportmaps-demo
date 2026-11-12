@@ -10,7 +10,7 @@ import {
     invalidatePublicLive, validateHttpsUrl, validateImageUrl, cleanText, isMissingColumn,
 } from '../services/tournament/tournament-live.service';
 import { resolveConfig } from '../services/tournament/scoring.shared';
-import { schoolOrganizesTournament } from '../services/tournament/tournament-access';
+import { schoolOrganizesTournament, creatorRoleForSchoolType, TOURNAMENT_OWNER_ROLES } from '../services/tournament/tournament-access';
 
 const router = Router();
 
@@ -343,10 +343,13 @@ router.post('/school-tournament', requireAuth, requireRole('school', 'school_adm
         const visibility = p.visibility
             ?? (p.tournament_scope === 'internal' ? 'school_only' : 'public');
 
-        // 1. Insert Event (columnas reales; creator_role='school', organizer_id NULL)
+        // Una escuela guarda creator_role='school'; una organización de torneos ('event_organizer'), 'organizer'.
+        const { data: entidad } = await supabase.from('schools').select('school_type').eq('id', schoolId).maybeSingle();
+
+        // 1. Insert Event (columnas reales; organizer_id NULL)
         const row: Record<string, unknown> = {
                 creator_id: userId,
-                creator_role: 'school',
+                creator_role: creatorRoleForSchoolType(entidad?.school_type),
                 school_id: schoolId,
                 organizer_id: null,
                 title: p.title,
@@ -461,7 +464,7 @@ router.get('/school-tournaments', requireAuth, requireRole('school', 'school_adm
                 delegations:event_delegations(count)
             `)
             .eq('school_id', schoolId)
-            .eq('creator_role', 'school')
+            .in('creator_role', [...TOURNAMENT_OWNER_ROLES])
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -492,7 +495,7 @@ router.get('/school-tournaments/:id', requireAuth, requireRole('school', 'school
             `)
             .eq('id', id)
             .eq('school_id', schoolId)
-            .eq('creator_role', 'school')
+            .in('creator_role', [...TOURNAMENT_OWNER_ROLES])
             .maybeSingle();
 
         if (error) {
@@ -520,7 +523,7 @@ router.post('/school-tournaments/:id/publish', requireAuth, requireRole('school'
             .select('id, status, is_paid, tournament_scope, payment_methods')
             .eq('id', id)
             .eq('school_id', schoolId)
-            .eq('creator_role', 'school')
+            .in('creator_role', [...TOURNAMENT_OWNER_ROLES])
             .maybeSingle();
         if (!ev) return res.status(404).json({ error: 'Torneo no encontrado' });
         const wasAlreadyActive = ev.status === 'active';

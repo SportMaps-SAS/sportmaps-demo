@@ -897,29 +897,23 @@ export function getNavigationByRole(
       }
     ],
 
+    // Organizador: usa el MISMO motor de torneos que la escuela (/school/tournaments*); su organización es
+    // una fila de schools tipo 'event_organizer' (spec organizador-torneos-modulo-aparte §3 y §2.3).
     organizer: [
       {
-        title: 'Principal',
+        title: 'Torneos',
         items: [
-          { title: 'Dashboard', href: '/organizer/dashboard', icon: Home },
-          { title: 'Crear Evento', href: '/organizer/create-event', icon: Plus },
-        ]
-      },
-      {
-        title: 'Gestión',
-        items: [
-          { title: 'Mis Eventos', href: '/organizer/events', icon: Ticket },
-          { title: 'Calendario', href: '/organizer/calendar', icon: Calendar },
-          { title: 'Finanzas', href: '/organizer/finances', icon: DollarSign },
-          { title: 'Reportes', href: '/organizer/reports', icon: BarChart3 },
+          { title: 'Inicio de torneos', href: '/school/tournaments', icon: Home },
+          { title: 'Crear torneo', href: '/school/tournaments/nuevo-rapido', icon: Plus },
+          { title: 'Torneo avanzado', href: '/school/tournaments/new', icon: Trophy },
+          { title: 'Torneos donde participo', href: '/school/delegations', icon: Ticket },
         ]
       },
       {
         title: 'Cuenta',
         items: [
-          { title: 'Perfil', href: '/organizer/profile', icon: Users },
-          { title: 'Facturación', href: '/mi-plan', icon: CreditCard },
-          { title: 'Configuración', href: '/organizer/settings', icon: Settings }
+          { title: 'Mi plan', href: '/mi-plan', icon: CreditCard },
+          { title: 'Configuración', href: '/settings', icon: Settings }
         ]
       }
     ],
