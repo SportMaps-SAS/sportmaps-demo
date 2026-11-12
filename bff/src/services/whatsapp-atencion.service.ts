@@ -511,8 +511,6 @@ const PROSPECTO_FUERTE: RegExp[] = [
     /\b(entrenamientos?|entrenan|clases?|cursos?|grupos?|categorias?|escuela|voley|volley|voleibol|volleyball)\b(\s+\w+){0,3}\s+para\s+(ninos?|ninas?|menores|adultos?|principiantes|jovenes|mayores)\b/,
     /\betapa de iniciacion\b/,
     // «quiero empezar a entrenar», «me gustaría aprender a jugar voleibol»
-    /\b(quiero|quisiera|queremos|deseo|deseamos|me gustaria|nos gustaria)\s+(empezar|iniciar|comenzar|entrar|ingresar|aprender|practicar)\b(\s+\w+){0,3}\s+(entrenar|jugar|voley|volley|voleibol|volleyball|club|academia|escuela|clases?)\b/,
-    /\b(quiero|quisiera|queremos|deseo|me gustaria)\s+(entrenar|practicar (voley|volley|voleibol)\w*|jugar (voley|volley|voleibol)\w*)\b/,
     // «horarios… para poder pasar y mirar las instalaciones»
     /\b(mirar|conocer|visitar|ver) (las )?instalaciones\b/,
     // Dynasty 2026-10-06, 5 prospectos sin respuesta: «me gustaría conocer el
@@ -533,19 +531,54 @@ const PROSPECTO_FUERTE: RegExp[] = [
     // Verbos de querer/buscar + el acto de entrar o practicar (Monster 2026-11-12: ampliar sinónimos):
     // «necesito un lugar donde entrenar», «busco dónde jugar voleibol», «quiero formar parte del equipo»,
     // «me encantaría pertenecer al club», «quisiera participar en sus clases».
-    /\b(quiero|quisiera|queria|queremos|quisieramos|deseo|deseamos|necesito|necesitamos|busco|buscamos|buscando|me gustaria|nos gustaria|me encantaria|nos encantaria|ando buscando|estamos buscando)\b(\s+\w+){0,5}\s+(entrenar\w*|practicar|jugar|aprender|participar|formar parte|hacer parte|ser parte|pertenecer|unirme|unirnos|integrarme|integrarnos|matricular\w*)\b/,
     // Sustantivos de ingreso: «¿hay cupo?», «cupos disponibles», «vacantes para niñas» (el cupo de un servicio lo
     // atiende la venta antes de llegar acá).
+];
+
+/**
+ * Verbo/cupo + entrar o practicar: es ANCHO, por eso solo cuenta si NO_ES_ALUMNO no lo desmiente
+ * (Monster 2026-11-12: la auditoría de 143 frases dejaba pasar otro club, alquiler de cancha, trabajo, torneos…).
+ */
+const PROSPECTO_VERBO: RegExp[] = [
+    // Principiante: «nunca he jugado voleibol, me gustaría empezar».
+    /\b(nunca|jamas) (he|hemos|ha|han) (jugado|entrenado|practicado)\b/,
+    /\b(quiero|quisiera|queremos|deseo|deseamos|me gustaria|nos gustaria)\s+(empezar|iniciar|comenzar|entrar|ingresar|aprender|practicar)\b(\s+\w+){0,3}\s+(entrenar|jugar|voley|volley|voleibol|volleyball|club|academia|escuela|clases?)\b/,
+    /\b(quiero|quisiera|queremos|deseo|me gustaria)\s+(entrenar|practicar (voley|volley|voleibol)\w*|jugar (voley|volley|voleibol)\w*)\b/,
+    /\b(quiero|quisiera|queria|queremos|quisieramos|deseo|deseamos|necesito|necesitamos|busco|buscamos|buscando|me gustaria|nos gustaria|me encantaria|nos encantaria|ando buscando|estamos buscando)\b(\s+\w+){0,5}\s+(entrenar\w*|practicar|jugar|aprender|participar|formar parte|hacer parte|ser parte|pertenecer|unirme|unirnos|integrarme|integrarnos|matricular\w*)\b/,
     /\b(hay|tienen|tendran|quedan|manejan)\b(\s+\w+){0,2}\s+(cupos?|vacantes?|plazas?)\b/,
     /\b(cupos?|vacantes?|plazas?)\s+(disponibles?|libres?|abiertos?|para (ninos?|ninas?|adultos?|menores|jovenes|mi hij[oa]|nuevos?))\b/,
+    // Tercera persona y «que mi hijo + subjuntivo»: «mi hijo quiere entrenar con ustedes», «quiero que mi hijo juegue».
+    /\b(mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|sobrin[oa]s?|niet[oa]s?)\b(\s+\w+){0,3}\s+(quiere|quieren|necesita|necesitan|desea|desean|se quiere|le gustaria|les gustaria)\s+(entrenar\w*|practicar|jugar|aprender|participar|unirse|ingresar|entrar|meterse)\b/,
+    /\b(quiero|quisiera|queremos|quisieramos|necesito|necesitamos|me gustaria|nos gustaria|deseo)\s+que\s+(mi|nuestr[oa]) (hij[oa]|nin[oa]|sobrin[oa])\b(\s+\w+){0,2}\s+(juegue|entrene|practique|aprenda|participe|ingrese|entre|haga parte|hiciera parte|jugara|entrenara|practicara|aprendiera|pudiera)\b/,
+    // «busco un club/academia/escuela para mi hija»
+    /\b(busco|buscamos|buscando|necesito|necesitamos)\b(\s+\w+){0,3}\s+(club|academia|escuela|clases?|curso|grupo)\b(\s+\w+){0,6}\s+para (mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|sobrin[oa]s?)\b/,
+    /\b(equipo|club|academia|escuela|lugar|sitio|donde)\b(\s+\w+){0,3}\s+(mi|nuestr[oa]) (hij[oa]|nin[oa])\b(\s+\w+){0,2}\s+(pueda|puedan) (jugar|entrenar|practicar)\b/,
 ];
+
+/** Quien dice esto NO quiere entrar como alumno: otro club, cancha, trabajo, torneo/evento, conocido, app. */
+const NO_ES_ALUMNO = new RegExp([
+    String.raw`\b(trabajo|empleo|hoja de vida|cuerpo tecnico|staff|ponente|voluntari\w*|practicante|cargo)\b`,
+    String.raw`\b(como|de) (entrenador\w*|profe|profesor\w*|coach|arbitro)\b`,
+    String.raw`\b(vacantes?|plazas?) (de|para) (el |la )?(entrenador\w*|profe\w*|coordinador\w*|trabajo|cargo)\b`,
+    String.raw`\bequipo de (entrenadores|profes|profesores)\b|\bentrenar a (un|una|unos|unas|mi|mis|los|las)\b|\bnecesitan (un |una )?(profe|profesor|entrenador|coach)\b`,
+    String.raw`\b(torneos?|campeonato|cuadrangular|triangular|clinica|rifa|festival|bus|viaje|parqueadero)\b`,
+    String.raw`\b(cancha|canchas|coliseo|alquil\w*|prestan|prestas|prestar|pruebas|saque)\b`,
+    String.raw`\b(mi|mis|nuestro|nuestros) (equipo|jugadores|amigos)\b|\b(con|de) (mis )?amigos\b|\bparche\b|\bcontigo\b|\ben privado\b|\bentrenador personal\b`,
+    String.raw`\b(otro|otra) (club|equipo|escuela|academia)\b|\bcontra (ustedes|nosotros|su equipo|el equipo)\b|\b(rival|partido|amistoso)\b`,
+    String.raw`\b(perro|ingles|parque|plataforma|aplicacion|app|grupo de (whatsapp|padres|papas)|montar una escuela)\b`,
+    // juego puntual: «jugar con ustedes el domingo», «jugar hoy», «jugar el fin de semana»
+    String.raw`\b(jugar|jugamos|juguemos)\b(\s+\w+){0,4}\s+(hoy|manana|(el |este )?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)|(el |este )?fin de semana|esta (tarde|noche))\b`,
+].join('|'));
+
+/** Otro canal o proveedor: «este no es el canal para información…», «somos X, fabricamos/ofrecemos…». */
+const AJENO = /\bno es el canal\b|\bcanal (no )?(oficial )?(para|de) informacion\b|\b(somos|soy de|hablas? con|le escribe de)\b[^.]{0,60}\b(fabricamos|fabricante|vendemos|ofrecemos|distribuimos|proveedor|agencia|empresa de)\b/;
 
 /**
  * Negación o desistimiento (antónimos de «me interesa / quiero»): «no me interesa», «ya no quiero»,
  * «no estoy interesada», «no necesito». Gana sobre cualquier señal de interés: quien dice que no, no es prospecto.
  */
-const DESISTE =
-    /\b(ya )?no (me |nos |les |le )?(interesa\w*|interesad\w*|quiero|queremos|deseo|deseamos|necesito|necesitamos|gracias)\b|\bya no (voy|vamos|estoy|estamos|quiero|queremos|me interesa\w*|necesito|necesitamos)\b|\b(desisto|desistimos|descarto|descartamos|dejo de|dejamos de)\b/;
+export const DESISTE =
+    /\b(ya )?no (me |nos |les |le )?(interesa\w*|interesad\w*|quiero|queremos|quiere|quieren|quisiera|quisieramos|gustaria\w*|busco|buscamos|pienso|pensamos|deseo|deseamos|necesito|necesitamos|gracias)\b|\bno (estoy|estamos) (muy )?interesad\w*|\bya no (voy|vamos|va|estoy|estamos|quiero|queremos|quiere|quieren|busco|buscamos|me interesa\w*|necesito|necesitamos)\b|\b(desisto|desistimos|descarto|descartamos|dejo de|dejamos de|dejaron de)\b|\bnunca (quise|quiero|quisimos|quisiera|me intereso|me intereso\w*|vamos|voy)\b|\b(cancelar|retirar\w*|me retiro|nos retiramos|dar de baja|darla de baja|darlo de baja)\b/;
 
 /** «Soy nuevo», «somos nuevos»: prospecto solo con contexto de escuela/deporte. */
 const SOY_NUEVO = /\b(soy|somos) nuev[oa]s?\b/;
@@ -595,8 +628,11 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     if (YA_LE_PAGA.some((re) => re.test(t))) return false;
     // «No me interesa», «ya no quiero»: dijo que no.
     if (DESISTE.test(t)) return false;
+    // Autorrespuesta de otro canal («este no es el canal para información…») o proveedor que ofrece lo suyo.
+    if (AJENO.test(t)) return false;
 
     if (PROSPECTO_FUERTE.some((re) => re.test(t))) return true;
+    if (PROSPECTO_VERBO.some((re) => re.test(t)) && !NO_ES_ALUMNO.test(t)) return true;
     if (SOY_NUEVO.test(t) && CONTEXTO_PROSPECTO.test(t)) return true;
 
     if (INTERES.test(t) && !INTERES_NEGADO.test(t)) {
@@ -606,7 +642,8 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     }
 
     // «Info», «más información por favor», «información del club».
-    if (PEDIDO_DE_INFO.test(t) && t.split(' ').every((w) => RELLENO.has(w) || SOLO_PEDIDO_DE_INFO.has(w))) return true;
+    // «Vale muchas gracias por la información» es un cierre, no un pedido.
+    if (PEDIDO_DE_INFO.test(t) && !/\b(gracias|agradezco|agradecemos) por\b/.test(t) && t.split(' ').every((w) => RELLENO.has(w) || SOLO_PEDIDO_DE_INFO.has(w))) return true;
 
     // «Estoy averiguando un club de vóley», «quiero averiguar».
     //  Corto solo en primera persona: «averigua eso» es un encargo entre amigos.
@@ -617,15 +654,21 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     }
 
     // Precio/valor/costos de entrenar o del club (no de un cobro: YA_LE_PAGA arriba).
-    if (CONCEPTOS_GENERICOS.precio.test(t) && CONTEXTO_PROSPECTO.test(t)) return true;
+    if (CONCEPTOS_GENERICOS.precio.test(t) && CONTEXTO_PROSPECTO.test(t) && !NO_ES_ALUMNO.test(t)) return true;
     // «horarios … para pasar», «horarios para niñas»
     if (CONCEPTOS_GENERICOS.horario.test(t)
-        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes)\b/.test(t)) {
+        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes)\b/.test(t)
+        && !NO_ES_ALUMNO.test(t)) {
         return true;
     }
 
     // Lo que ya abría la puerta de siempre por inscripción («información de la academia»).
-    return temaEscolar(texto) === 'inscripcion';
+    return temaEscolar(texto) === 'inscripcion' && !NO_ES_ALUMNO.test(t);
+}
+
+/** ¿Dice que NO (o que ya no) quiere entrar? Para que el tema «inscripción» tampoco abra la puerta. */
+export function desisteDeProspecto(texto: string | null | undefined): boolean {
+    return !!texto && DESISTE.test(normalizarTexto(texto));
 }
 
 /** ¿El mensaje es solo saludo, agradecimiento o cortesía? («Hola buenas tardes», «Ok gracias»). */
