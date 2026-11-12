@@ -67,7 +67,7 @@ export type MotivoNoEnvio =
     | 'no_pertenece' | 'sin_correo' | 'fuera_de_horario' | 'ya_enviado_hoy' | 'contactada_hoy' | 'no_disponible' | 'fallo_envio';
 
 export type RespuestaEnvio =
-    | { ok: true; simulado: boolean; canal: 'correo'; destino: string; atletas: string[]; vigenciaDias: number }
+    | { ok: true; simulado: boolean; canal: 'correo'; destino: string; atletas: string[]; vigenciaDias: number; prueba?: boolean }
     | { ok: false; motivo: MotivoNoEnvio; mensaje: string };
 
 export interface PedidoEnvioEstado {
@@ -75,6 +75,8 @@ export interface PedidoEnvioEstado {
     /** false o ausente = simulación (no manda nada). */
     aplicar?: boolean;
     reenviar?: boolean;
+    /** «Enviarme una prueba»: el mismo correo pero solo al correo de quien lo pide (la escuela revisa antes de enviar a la familia). */
+    prueba?: boolean;
 }
 
 /**

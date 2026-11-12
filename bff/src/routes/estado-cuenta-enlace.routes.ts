@@ -21,7 +21,7 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { z } from 'zod';
 import { requireAuth, requireRole } from '../middlewares/authMiddleware';
 import {
-    enviarEstadoAFamilia, TOKEN_ESTADO_RE, vistaPublicaDeEnlace, type MotivoNoEnvio,
+    enviarEstadoAFamilia, enviarPruebaAlAdmin, TOKEN_ESTADO_RE, vistaPublicaDeEnlace, type MotivoNoEnvio,
 } from '../services/estado-cuenta-enlace.service';
 import { UrlNoPublicaError } from '../utils/url-publica-familias';
 
@@ -86,6 +86,8 @@ const EnviarSchema = z.object({
     /** false/ausente = simulación. Solo `true` manda de verdad. */
     aplicar: z.boolean().optional(),
     reenviar: z.boolean().optional(),
+    /** true = «Enviarme una prueba»: el mismo correo, pero SOLO al correo de quien lo pide. Gana sobre `aplicar`. */
+    prueba: z.boolean().optional(),
 }).strict();
 
 const ESTADO_HTTP: Record<MotivoNoEnvio, number> = {
@@ -101,6 +103,12 @@ estadoCuentaAdminRouter.post('/enviar', requireAuth, requireRole('school_admin')
     if (!parsed.success) return res.status(400).json({ error: 'datos_invalidos', detail: parsed.error.issues.map((i) => i.path.join('.')).join(', ') });
     if (!req.schoolId) return res.status(400).json({ error: 'Falta la escuela (x-school-id).' });
     try {
+        if (parsed.data.prueba === true) {
+            const p = await enviarPruebaAlAdmin({
+                schoolId: req.schoolId, atleta: parsed.data.atleta, creadoPor: req.user.id, correoAdmin: req.user.email,
+            });
+            return p.ok ? res.json(p) : res.status(ESTADO_HTTP[p.motivo]).json(p);
+        }
         const r = await enviarEstadoAFamilia({
             schoolId: req.schoolId,
             atleta: parsed.data.atleta,

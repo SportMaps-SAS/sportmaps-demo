@@ -434,3 +434,94 @@ describe('«Enviar al acudiente»: el envío de verdad', () => {
         expect(estado.correos).toHaveLength(0);
     });
 });
+
+describe('«Enviarme una prueba»: el administrador revisa antes de enviar a la familia', () => {
+    const prueba = (extra: Record<string, any> = {}, headers?: Record<string, string>) =>
+        enviar({ atleta: { tipo: 'hijo', id: HIJA }, prueba: true, ...extra }, headers);
+
+    it('manda el correo SOLO al correo de quien lo pide, con asunto y aviso de prueba', async () => {
+        const r = await prueba();
+        expect(r.status).toBe(200);
+        const j = await r.json();
+        expect(j).toMatchObject({ ok: true, prueba: true, simulado: false, canal: 'correo', vigenciaDias: 60 });
+        expect(j.destino).toBe('a••••@club.co');
+        expect(estado.correos).toHaveLength(1);
+        const c = estado.correos[0];
+        expect(c.to).toBe('admin@club.co');
+        expect(c.subject).toBe('[PRUEBA] Estado de cuenta — CLUB DEPORTIVO BESSER');
+        expect(c.html).toContain('Correo de prueba');
+        expect(c.html).toContain('No se envió a nadie más');
+        expect(c.html).toContain('https://app.sportmaps.co/e/EnlaceNuevoEnlaceNuevo12');
+        expect(c.html).toContain('Isabella A.');
+        expect(c.html).toContain('Juan A.');
+    });
+
+    it('nunca toca el correo de la familia ni reserva ni cierra nada en email_sends', async () => {
+        await prueba();
+        expect(estado.correos.every((c) => c.to === 'admin@club.co')).toBe(true);
+        expect(JSON.stringify(estado.correos)).not.toContain('carolina.perez');
+        expect(estado.reservas).toHaveLength(0);
+        expect(estado.cierres).toHaveLength(0);
+    });
+
+    it('usa un enlace APARTE del de la familia: la prueba no crea ni gasta el de ella', async () => {
+        await prueba();
+        const emitir = estado.rpcLlamadas.find((l) => l.nombre === 'estado_cuenta_enlace_emitir')!;
+        expect(emitir.args.p_familia_clave).toBe(`prueba:perfil-admin:${HIJA}`);
+        expect(emitir.args.p_familia_clave).not.toContain('carolina');
+        expect(emitir.args).toMatchObject({ p_school_id: BESSER, p_created_by: 'perfil-admin', p_dias: 60 });
+    });
+
+    it('no depende del horario de cobranza ni de que la familia ya haya sido contactada hoy', async () => {
+        estado.horario = false;
+        estado.contactadosHoy = new Set(['carolina.perez@correo.co']);
+        const r = await prueba();
+        expect(r.status).toBe(200);
+        expect(estado.correos).toHaveLength(1);
+    });
+
+    it('sirve aunque la familia no tenga correo (justo ahí conviene revisar)', async () => {
+        estado.tablas.profiles = [];
+        const r = await prueba();
+        expect(r.status).toBe(200);
+        expect(estado.correos[0].to).toBe('admin@club.co');
+    });
+
+    it('«prueba» gana sobre «aplicar»: aunque pida enviar de verdad, solo sale la prueba', async () => {
+        const r = await prueba({ aplicar: true });
+        expect((await r.json()).prueba).toBe(true);
+        expect(estado.correos).toHaveLength(1);
+        expect(estado.correos[0].to).toBe('admin@club.co');
+        expect(estado.reservas).toHaveLength(0);
+    });
+
+    it('el mismo control de roles: el coach y el padre no pueden ni probar', async () => {
+        for (const rol of ['coach', 'parent', 'accountant']) {
+            const r = await prueba({}, { 'x-test-rol': rol, 'x-school-id': BESSER });
+            expect(r.status, rol).toBe(403);
+        }
+        expect(estado.correos).toHaveLength(0);
+    });
+
+    it('un deportista sin cobros en la escuela: 404, no se manda nada', async () => {
+        const r = await prueba({ atleta: { tipo: 'hijo', id: AJENO } }, { 'x-test-rol': 'school_admin', 'x-school-id': OTRA });
+        expect(r.status).toBe(404);
+        expect(estado.correos).toHaveLength(0);
+    });
+
+    it('si no se puede emitir el enlace (migración sin aplicar): 503 y sin correo', async () => {
+        estado.emitirError = { message: 'relation does not exist' };
+        const r = await prueba();
+        expect(r.status).toBe(503);
+        expect(estado.correos).toHaveLength(0);
+    });
+
+    it('si el correo falla: 502', async () => {
+        estado.correoOk = false;
+        expect((await prueba()).status).toBe(502);
+    });
+
+    it('sin sesión: 401', async () => {
+        expect((await prueba({}, {})).status).toBe(401);
+    });
+});

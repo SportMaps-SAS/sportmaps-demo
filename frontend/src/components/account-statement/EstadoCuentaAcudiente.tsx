@@ -469,6 +469,19 @@ export function EstadoCuentaAcudiente({ schoolId, childId, userId, unregisteredI
           ? 'ready'
           : 'loading';
 
+  // Revisión antes de enviar: el mismo documento que ve la familia, sin abrir el diálogo de impresión.
+  const verDocumento = () => {
+    if (!statement.data || !cobros.data) return;
+    imprimirEstadoConMarca({
+      statement: statement.data, cobros: cobros.data, months, modo: 'familia',
+      marca: {
+        nombre: marca.schoolName, logoUrl: marca.logoUrl,
+        colorPrimario: marca.brandingSettings.primary_color, colorSecundario: marca.brandingSettings.secondary_color,
+        fondoLogo: marca.iconBg ?? null, mostrarMarcaSportmaps: marca.brandingSettings.show_sportmaps_watermark,
+      },
+    }, { imprimir: false });
+  };
+
   // «Enviar al acudiente»: solo la escuela, para el deportista que está mirando.
   const atleta = childId ? { tipo: 'hijo' as const, id: childId }
     : userId ? { tipo: 'adulto' as const, id: userId }
@@ -478,7 +491,7 @@ export function EstadoCuentaAcudiente({ schoolId, childId, userId, unregisteredI
     <>
       {modo === 'escuela' && atleta && state === 'ready' && (
         <div className="mx-auto flex w-full max-w-page-narrow justify-end pb-3">
-          <EnviarAlAcudiente atleta={atleta} />
+          <EnviarAlAcudiente atleta={atleta} onVerDocumento={statement.data && cobros.data ? verDocumento : undefined} />
         </div>
       )}
       <EstadoCuentaAcudienteView

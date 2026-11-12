@@ -1,18 +1,22 @@
 /**
- * «Enviar al acudiente» (solo la escuela).
+ * «Enviar al acudiente» (solo la escuela), con una revisión ANTES de enviar.
  *
- * Primero SIMULA (no escribe nada): dice a qué correo llegaría, qué deportistas
- * incluye y cuánto dura el enlace. Solo si la escuela confirma se envía de verdad.
- * Los motivos por los que no se puede enviar (sin correo, fuera de horario de
- * cobranza, ya se envió hoy, la familia ya fue contactada hoy…) se muestran tal
- * como los dice el servidor, y si ya se envió hoy se ofrece «Reenviar» como una
- * acción aparte y consciente.
+ * Revisar:
+ *   · «Enviarme una prueba»: el mismo correo y la misma página que recibirá la familia, pero SOLO a tu
+ *     correo. No contacta a nadie ni depende del horario de cobranza.
+ *   · «Ver el documento»: el estado de cuenta como lo ve la familia, en otra pestaña, sin imprimir.
  *
- * El correo se muestra enmascarado (c••••@gmail.com): confirma a dónde llega sin
- * exponerlo entero en pantalla.
+ * Enviar:
+ *   · Primero SIMULA (no escribe nada): dice a qué correo llegaría, qué deportistas incluye y cuánto dura el
+ *     enlace. Solo si la escuela confirma se envía de verdad.
+ *   · Los motivos por los que no se puede enviar (sin correo, fuera de horario de cobranza, ya se envió hoy,
+ *     la familia ya fue contactada hoy…) se muestran como los dice el servidor, y si ya se envió hoy se ofrece
+ *     «Reenviar» como una acción aparte.
+ *
+ * El correo se muestra enmascarado (c••••@gmail.com): confirma a dónde llega sin exponerlo entero.
  */
 import { useState } from 'react';
-import { Loader2, Send } from 'lucide-react';
+import { Eye, FlaskConical, Loader2, Send } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { enviarEstadoCuenta, type PedidoEnvioEstado, type RespuestaEnvio } from '@/lib/api/estadoCuentaEnlace';
@@ -23,14 +27,18 @@ type Fase =
   | { fase: 'confirmar'; reenviar: boolean; vista: Extract<RespuestaEnvio, { ok: true }> }
   | { fase: 'enviando'; reenviar: boolean }
   | { fase: 'enviado'; destino: string }
-  | { fase: 'no'; reenviar: boolean; motivo: string; mensaje: string }
+  | { fase: 'probando' }
+  | { fase: 'probado'; destino: string }
+  | { fase: 'no'; reenviar: boolean; motivo: string; mensaje: string; deLaPrueba?: boolean }
   | { fase: 'error' };
 
 export interface EnviarAlAcudienteProps {
   atleta: PedidoEnvioEstado['atleta'];
+  /** Abre el estado de cuenta como lo ve la familia, para revisarlo antes de enviar. */
+  onVerDocumento?: () => void;
 }
 
-export function EnviarAlAcudiente({ atleta }: EnviarAlAcudienteProps) {
+export function EnviarAlAcudiente({ atleta, onVerDocumento }: EnviarAlAcudienteProps) {
   const { toast } = useToast();
   const [estado, setEstado] = useState<Fase>({ fase: 'reposo' });
 
@@ -60,12 +68,33 @@ export function EnviarAlAcudiente({ atleta }: EnviarAlAcudienteProps) {
     }
   };
 
+  const probar = async () => {
+    setEstado({ fase: 'probando' });
+    try {
+      const r = await enviarEstadoCuenta({ atleta, prueba: true });
+      if (r.ok === false) {
+        setEstado({ fase: 'no', reenviar: false, motivo: r.motivo, mensaje: r.mensaje, deLaPrueba: true });
+      } else {
+        setEstado({ fase: 'probado', destino: r.destino });
+        toast({ title: 'Prueba enviada', description: `Revisa tu correo (${r.destino}).` });
+      }
+    } catch {
+      setEstado({ fase: 'error' });
+    }
+  };
+
   if (estado.fase === 'reposo') {
     return (
-      <Button variant="outline" className="min-h-touch rounded-xl" onClick={() => void simular(false)}>
-        <Send className="mr-2 h-4 w-4" aria-hidden="true" />
-        Enviar al acudiente
-      </Button>
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button variant="outline" className="min-h-touch rounded-xl" onClick={() => void probar()}>
+          <FlaskConical className="mr-2 h-4 w-4" aria-hidden="true" />
+          Enviarme una prueba
+        </Button>
+        <Button variant="outline" className="min-h-touch rounded-xl" onClick={() => void simular(false)}>
+          <Send className="mr-2 h-4 w-4" aria-hidden="true" />
+          Enviar al acudiente
+        </Button>
+      </div>
     );
   }
 
@@ -88,6 +117,12 @@ export function EnviarAlAcudiente({ atleta }: EnviarAlAcudienteProps) {
             <Button className="min-h-touch rounded-xl" onClick={() => void enviar(estado.reenviar)}>
               {estado.reenviar ? 'Reenviar' : 'Enviar'}
             </Button>
+            {onVerDocumento && (
+              <Button variant="outline" className="min-h-touch rounded-xl" onClick={onVerDocumento}>
+                <Eye className="mr-2 h-4 w-4" aria-hidden="true" />
+                Ver el documento
+              </Button>
+            )}
             <Button variant="ghost" className="min-h-touch rounded-xl" onClick={() => setEstado({ fase: 'reposo' })}>Cancelar</Button>
           </div>
         </>
@@ -104,6 +139,35 @@ export function EnviarAlAcudiente({ atleta }: EnviarAlAcudienteProps) {
         <>
           <p className="font-semibold text-emerald-700 dark:text-emerald-400">Enviado a {estado.destino}.</p>
           <Button variant="ghost" size="sm" onClick={() => setEstado({ fase: 'reposo' })}>Listo</Button>
+        </>
+      )}
+
+      {estado.fase === 'probando' && (
+        <p className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          Enviándote la prueba…
+        </p>
+      )}
+
+      {estado.fase === 'probado' && (
+        <>
+          <p>
+            <strong>Prueba enviada a {estado.destino}.</strong> Ábrela, mira el correo y toca el botón para ver la página. Si
+            está bien, envíalo a la familia. <i>A la familia no le llegó nada.</i>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button className="min-h-touch rounded-xl" onClick={() => void simular(false)}>
+              <Send className="mr-2 h-4 w-4" aria-hidden="true" />
+              Enviar al acudiente
+            </Button>
+            {onVerDocumento && (
+              <Button variant="outline" className="min-h-touch rounded-xl" onClick={onVerDocumento}>
+                <Eye className="mr-2 h-4 w-4" aria-hidden="true" />
+                Ver el documento
+              </Button>
+            )}
+            <Button variant="ghost" className="min-h-touch rounded-xl" onClick={() => setEstado({ fase: 'reposo' })}>Listo</Button>
+          </div>
         </>
       )}
 

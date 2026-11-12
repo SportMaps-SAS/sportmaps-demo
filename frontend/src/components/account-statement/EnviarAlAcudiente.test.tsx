@@ -101,4 +101,48 @@ describe('EnviarAlAcudiente', () => {
     expect(screen.queryByText(/^Enviado a/)).toBeNull();
     expect(toast).not.toHaveBeenCalled();
   });
+
+  // ── Revisión antes de enviar ──
+  it('«Enviarme una prueba»: pide la prueba (no una simulación ni un envío) y dice que a la familia no le llegó nada', async () => {
+    mock.mockResolvedValue({ ...PREVIA, simulado: false, prueba: true, destino: 'a••••@club.co' });
+    render(<EnviarAlAcudiente atleta={ATLETA} />);
+    fireEvent.click(screen.getByRole('button', { name: /Enviarme una prueba/ }));
+    expect(await screen.findByText(/Prueba enviada a a••••@club.co/)).toBeTruthy();
+    expect(screen.getByText(/A la familia no le llegó nada/)).toBeTruthy();
+    expect(mock).toHaveBeenCalledTimes(1);
+    expect(mock).toHaveBeenCalledWith({ atleta: ATLETA, prueba: true });
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: 'Prueba enviada' }));
+  });
+
+  it('después de la prueba se puede pasar a enviar a la familia (con su simulación y su confirmación)', async () => {
+    mock.mockResolvedValueOnce({ ...PREVIA, simulado: false, prueba: true }).mockResolvedValueOnce(PREVIA);
+    render(<EnviarAlAcudiente atleta={ATLETA} />);
+    fireEvent.click(screen.getByRole('button', { name: /Enviarme una prueba/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Enviar al acudiente/ }));
+    expect(await screen.findByText(/Se enviará por correo a/)).toBeTruthy();
+    expect(mock).toHaveBeenLastCalledWith({ atleta: ATLETA, aplicar: false, reenviar: false });
+  });
+
+  it('si la prueba no se puede enviar, dice por qué', async () => {
+    mock.mockResolvedValue({ ok: false, motivo: 'no_disponible', mensaje: 'El envío del estado de cuenta todavía no está disponible.' });
+    render(<EnviarAlAcudiente atleta={ATLETA} />);
+    fireEvent.click(screen.getByRole('button', { name: /Enviarme una prueba/ }));
+    expect((await screen.findByRole('alert')).textContent).toContain('todavía no está disponible');
+    expect(toast).not.toHaveBeenCalled();
+  });
+
+  it('«Ver el documento» solo aparece si hay documento que mostrar, y lo abre sin enviar nada', async () => {
+    const ver = vi.fn();
+    mock.mockResolvedValue(PREVIA);
+    const { unmount } = render(<EnviarAlAcudiente atleta={ATLETA} onVerDocumento={ver} />);
+    fireEvent.click(screen.getByRole('button', { name: /Enviar al acudiente/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Ver el documento/ }));
+    expect(ver).toHaveBeenCalledTimes(1);
+    expect(mock).toHaveBeenCalledTimes(1); // solo la simulación
+    unmount();
+    render(<EnviarAlAcudiente atleta={ATLETA} />);
+    fireEvent.click(screen.getByRole('button', { name: /Enviar al acudiente/ }));
+    await screen.findByText(/Se enviará por correo a/);
+    expect(screen.queryByRole('button', { name: /Ver el documento/ })).toBeNull();
+  });
 });

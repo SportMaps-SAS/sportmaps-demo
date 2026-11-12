@@ -190,6 +190,13 @@ describe('la asistencia', () => {
     expect(h).not.toContain('Asistencia mes a mes');
     expect(h).toMatch(/Asistencia<\/div><div class="v">—</);
   });
+  it('la falta es siempre roja y la excusada ámbar, sin importar los colores de la marca', () => {
+    const verde = html({ marca: { ...MARCA_SPORTMAPS, nombre: 'Escuela Verde' } });
+    expect(verde).toContain('.bar .f { background: #dc2626; }');
+    expect(verde).toContain('.bar .e { background: #f5b301; }');
+    expect(verde).toContain('<i style="background:#dc2626"></i>Falta');
+    expect(html()).toContain('.bar .f { background: #dc2626; }');
+  });
   it('nunca sale la fecha de una clase', () => {
     expect(html()).not.toMatch(/2026-10-0[29]|2 oct|9 oct/);
   });
@@ -241,6 +248,17 @@ describe('imprimirEstadoConMarca', () => {
     imprimirEstadoConMarca(entrada);
     vi.advanceTimersByTime(3100);
     expect(print).toHaveBeenCalledTimes(1);
+  });
+
+  it('con imprimir:false solo muestra el documento (revisión): no abre el diálogo de impresión', () => {
+    vi.useFakeTimers();
+    const print = vi.fn();
+    const write = vi.fn();
+    vi.stubGlobal('open', () => ({ document: { write, close: vi.fn(), images: [] }, print }));
+    expect(imprimirEstadoConMarca(entrada, { imprimir: false })).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(print).not.toHaveBeenCalled();
   });
 
   it('sin logo imprime enseguida', () => {

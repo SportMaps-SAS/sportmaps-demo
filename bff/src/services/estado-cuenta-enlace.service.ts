@@ -342,7 +342,7 @@ export const MENSAJE_NO_ENVIO: Record<MotivoNoEnvio, string> = {
 };
 
 export type ResultadoEnvio =
-    | { ok: true; simulado: boolean; canal: 'correo'; destino: string; atletas: string[]; vigenciaDias: number }
+    | { ok: true; simulado: boolean; canal: 'correo'; destino: string; atletas: string[]; vigenciaDias: number; prueba?: boolean }
     | { ok: false; motivo: MotivoNoEnvio; mensaje: string };
 
 const noEnvio = (motivo: MotivoNoEnvio): ResultadoEnvio => ({ ok: false, motivo, mensaje: MENSAJE_NO_ENVIO[motivo] });
@@ -414,4 +414,56 @@ export async function enviarEstadoAFamilia(p: PedidoEnvio): Promise<ResultadoEnv
         await cerrarEnvio(reserva, { ok: false, error: e?.message || String(e) });
         return noEnvio('fallo_envio');
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prueba para quien administra: «Enviarme una prueba»
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Antes de mandarle el estado de cuenta a una familia, quien administra la escuela se lo manda A SÍ MISMO
+ * y lo revisa tal como lo recibirá la familia: el mismo correo y la misma página.
+ *
+ *   · Solo va al correo de quien lo pide (nunca al de la familia).
+ *   · No es un contacto de cobranza, así que no depende del horario ni del «un contacto por día», y no
+ *     reserva nada en `email_sends` (el límite de la ruta frena el abuso).
+ *   · El enlace es APARTE del de la familia (`familia_clave = prueba:<quien>:<deportista>`): una prueba no
+ *     deja un enlace de la familia creado ni gastado, y probar dos veces reutiliza el mismo enlace.
+ *   · Sirve aunque la familia no tenga correo: justo ahí conviene revisar.
+ *   · El asunto y un aviso arriba dicen que es una prueba.
+ */
+export async function enviarPruebaAlAdmin(p: {
+    schoolId: string; atleta: AtletaRef; creadoPor: string; correoAdmin: string; ahora?: Date;
+}): Promise<ResultadoEnvio> {
+    const ahora = p.ahora ?? new Date();
+    const correo = String(p.correoAdmin ?? '').trim().toLowerCase();
+    if (!correo.includes('@')) return noEnvio('sin_correo');
+    const appBase = appPublica();
+
+    const familia = await familiaDeAtleta(p.schoolId, p.atleta, ahora);
+    if ('error' in familia) return noEnvio('no_pertenece');
+
+    const [branding, datos] = await Promise.all([
+        resolveSchoolBranding(p.schoolId),
+        leerFamilia(p.schoolId, familia.atletas, ahora, MESES_VENTANA),
+    ]);
+    const escuela = branding.schoolName.replace(/&amp;/g, '&');
+
+    const enlace = await emitirEnlaceEstado({
+        schoolId: p.schoolId, familiaClave: `prueba:${p.creadoPor}:${p.atleta.id}`, atletas: familia.atletas, creadoPor: p.creadoPor,
+    });
+    if (!enlace) return noEnvio('no_disponible');
+
+    const aviso = `<p style="background:#fff7e6;border-left:4px solid #FB9F1E;padding:10px 12px;margin:0 0 16px;"><strong>Correo de prueba.</strong> Así lo recibirá la familia. No se envió a nadie más.</p>`;
+    const html = buildBrandedEmail({
+        branding,
+        title: 'Tu estado de cuenta',
+        greeting: `Hola ${familia.nombre},`,
+        bodyHtml: aviso + cuerpoCorreoEstadoEnlace({ escuela, atletas: datos.atletas.map(resumenParaCorreo), meses: MESES_VENTANA }),
+        cta: { label: 'Ver mi estado de cuenta', url: enlaceDeEstado(appBase, enlace.token) },
+        closingHtml: `Este enlace es solo para ti y funciona durante ${DIAS_VIGENCIA} días. Si ya pagaste, ignora lo que figure pendiente: la escuela lo está revisando.`,
+    });
+    const env = await emailClient.send({ to: correo, subject: `[PRUEBA] Estado de cuenta — ${escuela}`, html });
+    if (!(!!env.success && !(env as any).simulated)) return noEnvio('fallo_envio');
+    return { ok: true, simulado: false, prueba: true, canal: 'correo', destino: enmascararCorreo(correo), atletas: datos.atletas.map((a) => a.nombre), vigenciaDias: DIAS_VIGENCIA };
 }

@@ -183,7 +183,8 @@ export function construirEstadoImprimible(e: EntradaEstadoImprimible): string {
   .fila-a { display: grid; grid-template-columns: 112px 1fr 290px; gap: 12px; align-items: center; font-size: 11px; page-break-inside: avoid; }
   .fila-a .m { font-weight: 600; } .fila-a .t { color: #374151; } .fila-a .t b { color: var(--ink); }
   .bar { display: flex; height: 11px; border-radius: 6px; overflow: hidden; background: var(--line); } .bar i { display: block; height: 100%; }
-  .bar .p { background: var(--ink); } .bar .e { background: var(--s); } .bar .f { background: var(--p); }
+  /* Colores FIJOS de significado (no los de la marca): con el verde de SportMaps una «falta» no puede verse verde. */
+  .bar .p { background: var(--ink); } .bar .e { background: #f5b301; } .bar .f { background: #dc2626; }
   .key { display: flex; gap: 14px; font-size: 10px; color: var(--mute); margin-top: 4px; } .key i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 4px; }
   .foot { margin: 14px 44px 20px; border-top: 2px solid var(--ink); padding-top: 8px; display: flex; justify-content: space-between; font-size: 9.5px; color: var(--mute); }
   .foot b { color: var(--ink); }
@@ -212,7 +213,7 @@ export function construirEstadoImprimible(e: EntradaEstadoImprimible): string {
     </div>
     ${filasAsist ? `<div><h3>Asistencia mes a mes</h3><div class="att">${filasAsist}
       <div class="fila-a" style="border-top:2px solid var(--ink);padding-top:6px"><span class="m">Total</span>${barra(totalAsist)}<span class="t"><b>Asistió a ${totalAsist.asistio} de ${totalAsist.total} clases (${pct} %)</b></span></div></div>
-      <div class="key"><span><i style="background:var(--ink)"></i>Asistió</span><span><i style="background:var(--s)"></i>Excusada</span><span><i style="background:var(--p)"></i>Falta</span></div></div>` : ''}
+      <div class="key"><span><i style="background:var(--ink)"></i>Asistió</span><span><i style="background:#f5b301"></i>Excusada</span><span><i style="background:#dc2626"></i>Falta</span></div></div>` : ''}
   </div>
   <div class="foot"><span>Estado de cuenta de <b>${escuela}</b>. El saldo y las cifras de arriba son las del sistema a la fecha de generación.</span><span>${m.mostrarMarcaSportmaps ? 'Powered by SportMaps' : ''}</span></div>
 </body></html>`;
@@ -223,12 +224,14 @@ export function construirEstadoImprimible(e: EntradaEstadoImprimible): string {
  * antes de imprimir. Devuelve false si el navegador bloqueó la ventana: quien
  * llama decide cómo avisarle a la persona.
  */
-export function imprimirEstadoConMarca(entrada: EntradaEstadoImprimible): boolean {
+export function imprimirEstadoConMarca(entrada: EntradaEstadoImprimible, opciones: { imprimir?: boolean } = {}): boolean {
   let win: Window | null = null;
   try { win = window.open('', '_blank'); } catch { win = null; }
   if (!win) return false;
   win.document.write(construirEstadoImprimible(entrada));
   win.document.close();
+  // `imprimir: false` = solo mostrar el documento (revisión antes de enviar): no se abre el diálogo de impresión.
+  if (opciones.imprimir === false) return true;
   const w = win;
   let impreso = false;
   const imprimir = () => {
