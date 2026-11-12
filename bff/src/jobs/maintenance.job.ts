@@ -582,6 +582,22 @@ export function initMaintenanceJobs() {
         }
     });
 
+    // Rescate por plantilla del interesado sin respuesta (ventana cerrada o por cerrar): solo con consentimiento
+    // vigente y la plantilla `seguimiento_interesado` APROBADA en la WABA. Mismo interruptor: solo prod.
+    cron.schedule('12,42 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runRescateProspectosPorPlantilla } = await import('../services/whatsapp-prospecto-rescate.service');
+            const r = await runRescateProspectosPorPlantilla();
+            if (r.enviados || r.fallidos) {
+                console.log(`[CRON] WhatsApp: rescate por plantilla — ${r.enviados} enviado(s), ${r.fallidos} con error.`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el rescate por plantilla de prospectos:', err?.message || err);
+        }
+    });
+
     // ────────────────────────────────────────────────────────────────────────
     // El desenlace del comprobante vuelve al chat donde entró.
     //
