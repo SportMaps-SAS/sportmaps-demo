@@ -255,22 +255,14 @@ const SchoolStoreSettingsPage = lazy(() => import("./pages/school/SchoolStoreSet
 const SchoolStoreCouponsPage = lazy(() => import("./pages/school/SchoolStoreCouponsPage"));
 
 const OrganizerGuard = lazy(() => import("@/components/organizer/OrganizerGuard").then(module => ({ default: module.OrganizerGuard })));
+const OrganizerEventRedirect = lazy(() => import("@/components/organizer/OrganizerGuard").then(module => ({ default: module.OrganizerEventRedirect })));
 const OrganizerOnboardingPage = lazy(() => import("./pages/organizer/OrganizerOnboardingPage"));
-const OrganizerDashboardPage = lazy(() => import("./pages/organizer/OrganizerDashboardPage"));
-const OrganizerProfilePage = lazy(() => import("./pages/organizer/OrganizerProfilePage"));
-const CreateEventPage = lazy(() => import("./pages/organizer/CreateEventPage"));
 const SchoolTournamentsPage = lazy(() => import("./pages/school/SchoolTournamentsPage"));
 const SchoolEquipmentPage = lazy(() => import("./pages/school/SchoolEquipmentPage"));
 const CoachEquipmentPage = lazy(() => import("./pages/coach/CoachEquipmentPage"));
 const SchoolTournamentDetailPage = lazy(() => import("./pages/school/SchoolTournamentDetailPage"));
 const CreateTournamentPage = lazy(() => import("./pages/school/CreateTournamentPage"));
 const TournamentWizard = lazy(() => import("./components/tournaments/create/TournamentWizard"));
-const EventManagementPage = lazy(() => import("./pages/organizer/EventManagementPage"));
-const OrganizerEventsPage = lazy(() => import("./pages/organizer/OrganizerEventsPage"));
-const OrganizerFinancesPage = lazy(() => import("./pages/organizer/OrganizerFinancesPage"));
-const OrganizerCalendarPage = lazy(() => import("./pages/organizer/OrganizerCalendarPage"));
-const OrganizerReportsPage = lazy(() => import("./pages/organizer/OrganizerReportsPage"));
-const OrganizerSettingsPage = lazy(() => import("./pages/organizer/OrganizerSettingsPage"));
 const EventEnrollmentPage = lazy(() => import("./pages/school/EventEnrollmentPage"));
 const SchoolDelegationsPage = lazy(() => import("./pages/school/SchoolDelegationsPage"));
 const SchoolDelegationDetailPage = lazy(() => import("./pages/school/SchoolDelegationDetailPage"));
@@ -693,28 +685,28 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school/delegations" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolDelegationsPage />
                         </ProtectedRoute>
                       } />
                       <Route path="school/tournaments" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolTournamentsPage />
                         </ProtectedRoute>
                       } />
                       <Route path="school/tournaments/new" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <CreateTournamentPage />
                         </ProtectedRoute>
                       } />
                       {/* Asistente rápido de torneo (4 pasos, celular). */}
                       <Route path="school/tournaments/nuevo-rapido" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <TournamentWizard />
                         </ProtectedRoute>
                       } />
                       <Route path="school/tournaments/:id" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolTournamentDetailPage />
                         </ProtectedRoute>
                       } />
@@ -739,7 +731,7 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school/delegations/:id" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolDelegationDetailPage />
                         </ProtectedRoute>
                       } />
@@ -1188,19 +1180,21 @@ const App = () => (
                         <Route path="vendor/promotions" element={<StoreGate><VendorPromotionsPage /></StoreGate>} />
                       </Route>
 
-                      {/* Organizer routes */}
+                      {/* Organizer routes. El organizador usa el MISMO motor de torneos que la escuela (/school/tournaments*):
+                          su organización es una fila de schools tipo 'event_organizer'. Las pantallas viejas /organizer/* redirigen
+                          (spec organizador-torneos-modulo-aparte, D5: se retiran en F1 con confirmación del usuario). */}
                       <Route element={<OrganizerGuard />}>
                         <Route path="organizer/onboarding" element={<OrganizerOnboardingPage />} />
-                        <Route path="organizer/dashboard" element={<OrganizerDashboardPage />} />
-                        <Route path="organizer/profile" element={<OrganizerProfilePage />} />
-                        <Route path="organizer/create-event" element={<CreateEventPage />} />
-                        <Route path="organizer/torneo-rapido" element={<TournamentWizard />} />
-                        <Route path="organizer/event/:id" element={<EventManagementPage />} />
-                        <Route path="organizer/events" element={<OrganizerEventsPage />} />
-                        <Route path="organizer/finances" element={<OrganizerFinancesPage />} />
-                        <Route path="organizer/calendar" element={<OrganizerCalendarPage />} />
-                        <Route path="organizer/reports" element={<OrganizerReportsPage />} />
-                        <Route path="organizer/settings" element={<OrganizerSettingsPage />} />
+                        <Route path="organizer/dashboard" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/events" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/calendar" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/finances" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/reports" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/create-event" element={<Navigate to="/school/tournaments/new" replace />} />
+                        <Route path="organizer/torneo-rapido" element={<Navigate to="/school/tournaments/nuevo-rapido" replace />} />
+                        <Route path="organizer/event/:id" element={<OrganizerEventRedirect />} />
+                        <Route path="organizer/profile" element={<Navigate to="/settings" replace />} />
+                        <Route path="organizer/settings" element={<Navigate to="/settings" replace />} />
                       </Route>
 
                       {/* Trainer onboarding — accesible si estás autenticado aunque aún no seas trainer "completo" */}

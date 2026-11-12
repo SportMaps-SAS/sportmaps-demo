@@ -108,7 +108,7 @@ const registerSchema = z.object({
   message: 'Tu WhatsApp es obligatorio: por ahí te llegan los cobros y las novedades del menor',
   path: ['phone'],
 }).refine((data) => {
-  if ((data.role === 'school' || data.role === 'facility_manager') && (!data.schoolName || data.schoolName.trim() === '')) {
+  if ((data.role === 'school' || data.role === 'facility_manager' || data.role === 'organizer') && (!data.schoolName || data.schoolName.trim() === '')) {
     return false;
   }
   return true;
@@ -714,6 +714,7 @@ export default function RegisterPage() {
                     { id: 'coach', icon: '📋', label: 'Coach' },
                     { id: 'school', icon: '🏫', label: 'Escuela' },
                     { id: 'facility_manager', icon: '🏟️', label: 'Club / Canchas' },
+                    { id: 'organizer', icon: '🏆', label: 'Organizador' },
                     { id: 'wellness_professional', icon: '💚', label: 'Profesional' },
                     { id: 'store_owner', icon: '🏪', label: 'Tienda' },
                     { id: 'personal_trainer', icon: '🏋️', label: 'Entrenador' },
@@ -836,10 +837,10 @@ export default function RegisterPage() {
               )}
 
               {/* Dueño de espacios: solo el nombre. Sin deporte, equipos ni atletas. */}
-              {roleValue === 'facility_manager' && !inviteId && (
+              {(roleValue === 'facility_manager' || roleValue === 'organizer') && !inviteId && (
                 <div className="md:col-span-2 space-y-3 pt-4 animate-in slide-in-from-top-4 duration-300">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#d4d8d0]">Nombre del club o espacio</label>
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-[#d4d8d0]">{roleValue === 'organizer' ? 'Nombre de tu organización' : 'Nombre del club o espacio'}</label>
                     <div className="relative group">
                       <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
                         <School className="w-4 h-4 text-[#4a5246] group-focus-within:text-[#2ea82d] transition-colors" />
@@ -847,14 +848,14 @@ export default function RegisterPage() {
                       <input
                         {...register('schoolName')}
                         type="text"
-                        placeholder="Ej: Canchas El Campín"
+                        placeholder={roleValue === 'organizer' ? 'Ej: Liga de Voleibol del Valle' : 'Ej: Canchas El Campín'}
                         className="w-full bg-[#0f2614] border border-white/5 rounded-xl py-3.5 pl-11 pr-4 text-sm focus:outline-none focus:border-[#248223] focus:ring-4 focus:ring-[#248223]/10 transition-all placeholder:text-[#4a5246]"
                       />
                     </div>
                     {errors.schoolName && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.schoolName.message}</p>}
                   </div>
                   <p className="text-[11px] text-[#8a9186] px-1">
-                    Publica tus canchas y recibe reservas, sin necesidad de ser una escuela.
+                    {roleValue === 'organizer' ? 'Crea y publica tus torneos con tabla y marcador en vivo, sin necesidad de ser una escuela. Plan Gratis, sin tarjeta.' : 'Publica tus canchas y recibe reservas, sin necesidad de ser una escuela.'}
                   </p>
                 </div>
               )}

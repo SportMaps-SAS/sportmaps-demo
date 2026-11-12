@@ -217,7 +217,11 @@ describe('B9 — autorización y enlace del anotador en una sola lectura', () =>
     const req: any = { schoolId: 'school-1' };
     const q = await countQueries(() => assertTournamentOrganizer(req, ev.id));
     expect(q.tables).toEqual(['events']);
+    // Una organización de torneos (creator_role 'organizer', school_id propio) organiza igual que una escuela.
     db.tables.events.find((e) => e.id === ev.id)!.creator_role = 'organizer';
+    await expect(assertTournamentOrganizer(req, ev.id)).resolves.toMatchObject({ id: ev.id });
+    // Cualquier otro creador NO es dueño.
+    db.tables.events.find((e) => e.id === ev.id)!.creator_role = 'store_owner';
     await expect(assertTournamentOrganizer(req, ev.id)).rejects.toMatchObject({ status: 404 });
     await expect(assertTournamentOrganizer({ schoolId: 'otra' } as any, ev.id)).rejects.toMatchObject({ status: 404 });
   });

@@ -59,7 +59,7 @@ const RoleSelection = ({ onNavigate, onRoleSelect }: RoleSelectionProps) => {
       case "store_owner":
         return { icon: ShoppingBag, bgColor: "bg-purple-50", iconColor: "text-purple-500", route: "store-register" };
       case "organizer":
-        return { icon: CalendarDays, bgColor: "bg-yellow-50", iconColor: "text-yellow-500", route: "organizer-register" };
+        return { icon: CalendarDays, bgColor: "bg-yellow-50", iconColor: "text-yellow-500", route: "organizer/onboarding" };
       default:
         return { icon: Users, bgColor: "bg-gray-50", iconColor: "text-gray-500", route: "register-default" };
     }
