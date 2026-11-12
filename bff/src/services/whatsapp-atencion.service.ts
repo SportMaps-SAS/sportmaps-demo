@@ -530,7 +530,22 @@ const PROSPECTO_FUERTE: RegExp[] = [
     /\bno (es|esta|estudia|pertenece|hace parte)\b(\s+\w+){0,3}\s+(de |en |a )?(la |el )?(escuela|club|academia)\b/,
     // «papá de Sofía Gómez Uribe para información»
     /\b(papa|mama|madre|padre|abuel[oa]|tio|tia) de\b(\s+\w+){1,5}\s+(para )?(info|informacion|informes)\b/,
+    // Verbos de querer/buscar + el acto de entrar o practicar (Monster 2026-11-12: ampliar sinónimos):
+    // «necesito un lugar donde entrenar», «busco dónde jugar voleibol», «quiero formar parte del equipo»,
+    // «me encantaría pertenecer al club», «quisiera participar en sus clases».
+    /\b(quiero|quisiera|queria|queremos|quisieramos|deseo|deseamos|necesito|necesitamos|busco|buscamos|buscando|me gustaria|nos gustaria|me encantaria|nos encantaria|ando buscando|estamos buscando)\b(\s+\w+){0,5}\s+(entrenar\w*|practicar|jugar|aprender|participar|formar parte|hacer parte|ser parte|pertenecer|unirme|unirnos|integrarme|integrarnos|matricular\w*)\b/,
+    // Sustantivos de ingreso: «¿hay cupo?», «cupos disponibles», «vacantes para niñas» (el cupo de un servicio lo
+    // atiende la venta antes de llegar acá).
+    /\b(hay|tienen|tendran|quedan|manejan)\b(\s+\w+){0,2}\s+(cupos?|vacantes?|plazas?)\b/,
+    /\b(cupos?|vacantes?|plazas?)\s+(disponibles?|libres?|abiertos?|para (ninos?|ninas?|adultos?|menores|jovenes|mi hij[oa]|nuevos?))\b/,
 ];
+
+/**
+ * Negación o desistimiento (antónimos de «me interesa / quiero»): «no me interesa», «ya no quiero»,
+ * «no estoy interesada», «no necesito». Gana sobre cualquier señal de interés: quien dice que no, no es prospecto.
+ */
+const DESISTE =
+    /\b(ya )?no (me |nos |les |le )?(interesa\w*|interesad\w*|quiero|queremos|deseo|deseamos|necesito|necesitamos|gracias)\b|\bya no (voy|vamos|estoy|estamos|quiero|queremos|me interesa\w*|necesito|necesitamos)\b|\b(desisto|desistimos|descarto|descartamos|dejo de|dejamos de)\b/;
 
 /** «Soy nuevo», «somos nuevos»: prospecto solo con contexto de escuela/deporte. */
 const SOY_NUEVO = /\b(soy|somos) nuev[oa]s?\b/;
@@ -554,7 +569,7 @@ const SOLO_PEDIDO_DE_INFO = new Set([
 
 /** «interesado/a» (y «esoty interesada») — se exige contexto o mensaje corto. */
 // «interesado/a» y también el verbo: «me interesa entrenar con ustedes» (Monster 2026-11-11, @Andrey_0630: el bot calló 17 h).
-const INTERES = /\binteresad[oa]s?\b|\b(me|nos) interesan?\b/;
+const INTERES = /\binteresad[oa]s?\b|\b(me|nos) (interesan?|interesaria|interesarian?|atrae|atraen|motiva|motivan|animo|animamos|animaria|llama(n)? la atencion)\b|\bestoy (muy )?motivad[oa]\b/;
 const INTERES_NEGADO = /\bno (estoy |estamos |me |nos )?(muy )?interes(ad|an?\b)/;
 
 /** Palabras que, solas, hacen de un mensaje un saludo/cortesía sin contenido. */
@@ -578,6 +593,8 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     if (!t) return false;
     // Un cobro que ya existe es de familia, no de prospecto.
     if (YA_LE_PAGA.some((re) => re.test(t))) return false;
+    // «No me interesa», «ya no quiero»: dijo que no.
+    if (DESISTE.test(t)) return false;
 
     if (PROSPECTO_FUERTE.some((re) => re.test(t))) return true;
     if (SOY_NUEVO.test(t) && CONTEXTO_PROSPECTO.test(t)) return true;
