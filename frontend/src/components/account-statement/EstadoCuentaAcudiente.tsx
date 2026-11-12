@@ -33,6 +33,8 @@ import {
 } from './estadoCuentaModel';
 import { ChipEstado } from '@/components/common/ChipEstado';
 import { printStatement, type StatementData } from './statementPrint';
+import { imprimirEstadoConMarca } from './statementPrintBranded';
+import { usePdfBranding } from '@/hooks/usePdfBranding';
 import { EnviarAlAcudiente } from './EnviarAlAcudiente';
 
 const MESES_VISIBLES = 12;
@@ -420,6 +422,7 @@ export interface EstadoCuentaAcudienteProps {
 
 export function EstadoCuentaAcudiente({ schoolId, childId, userId, unregisteredId, months, schoolLoading = false, modo = 'familia' }: EstadoCuentaAcudienteProps) {
   const { toast } = useToast();
+  const marca = usePdfBranding();
   const haySujeto = !!(childId || userId || unregisteredId);
 
   // Misma RPC y misma llave de caché que la vista clásica de la escuela.
@@ -487,7 +490,25 @@ export function EstadoCuentaAcudiente({ schoolId, childId, userId, unregisteredI
         onRetry={() => { void statement.refetch(); void cobros.refetch(); }}
         onPrint={() => {
           if (!statement.data) return;
-          if (!printStatement(statement.data, months)) {
+          // Con los cobros cargados sale el documento con la marca de la escuela (mes a mes, fechas,
+          // cómo pagó, asistencia); sin ellos, la versión simple de siempre.
+          const impreso = cobros.data
+            ? imprimirEstadoConMarca({
+              statement: statement.data,
+              cobros: cobros.data,
+              months,
+              modo: modo === 'escuela' ? 'escuela' : 'familia',
+              marca: {
+                nombre: marca.schoolName,
+                logoUrl: marca.logoUrl,
+                colorPrimario: marca.brandingSettings.primary_color,
+                colorSecundario: marca.brandingSettings.secondary_color,
+                fondoLogo: marca.iconBg ?? null,
+                mostrarMarcaSportmaps: marca.brandingSettings.show_sportmaps_watermark,
+              },
+            })
+            : printStatement(statement.data, months);
+          if (!impreso) {
             toast({
               title: 'No se pudo abrir la impresión',
               description: 'Tu navegador bloqueó la ventana. Permite las ventanas emergentes para este sitio o ábrelo desde el navegador del celular.',
