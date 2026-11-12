@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 923,
-  "head": "20261112122901",
+  "count": 925,
+  "head": "20261112143719",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -926,6 +926,8 @@
     {"v":"20261111114349","file":"20261111114349_cobro_servicio_unificado.sql","sha256":"81784439c003f2db41488fb81cad26ad551aa830cc94dd28bfa992a3c13f63dc","added":"2026-11-11","by":"Brayan Steven Lopez"},
     {"v":"20261111151130","file":"20261111151130_cobro_servicio_seguimiento.sql","sha256":"2f956102fac31f948edd7d8891220a6ffd4c2b7f5b107346e2a6d2ae7b5e87e9","added":"2026-11-11","by":"Brayan Steven Lopez"},
     {"v":"20261112114054","file":"20261112114054_organizador_entidad_propia.sql","sha256":"1e8332764076003b8a84004e065e09bf24fc94b2068a3eb5cdec92bd76ab2248","added":"2026-11-12","by":"Brayan Steven Lopez"},
-    {"v":"20261112122901","file":"20261112122901_estado_cuenta_enlaces.sql","sha256":"0ced08de3f4d33a1ecb918f6e43beeca5897044336a6c092310a844a422003d1","added":"2026-11-12","by":"Brayan Steven Lopez"}
+    {"v":"20261112122901","file":"20261112122901_estado_cuenta_enlaces.sql","sha256":"0ced08de3f4d33a1ecb918f6e43beeca5897044336a6c092310a844a422003d1","added":"2026-11-12","by":"Brayan Steven Lopez"},
+    {"v":"20261112132803","file":"20261112132803_carmel_marca_propia.sql","sha256":"d8e3e4bb23ebf532115e69f684ad4d6fc5b3445cec3360c6dd225c038d4c53d6","added":"2026-11-12","by":"Brayan Steven Lopez"},
+    {"v":"20261112143719","file":"20261112143719_report_pdf_version.sql","sha256":"ef1e7d713a0ff8abf1cca5d95cc5bf9dee07ac71a1187ff6d94b03263cb60608","added":"2026-11-12","by":"Brayan Steven Lopez"}
   ]
 }
