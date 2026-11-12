@@ -253,6 +253,14 @@ describe('decidirRecuperacion', () => {
 });
 
 describe('pagosQueYaCubren y fechaDeReferencia', () => {
+    it('un cobro PARCIAL no queda «ya registrado» por un comprobante igual a su total (Shara, 2026-11-12)', () => {
+        const parcial = REG({ amount: 145000, amount_paid: 20000, status: 'partial', payment_date: '2026-11-06' });
+        expect(pagosQueYaCubren([parcial], 145000, '2026-11-12')).toHaveLength(0);
+    });
+    it('un parcial sí queda cubierto por un comprobante igual a lo ya abonado (el mismo comprobante)', () => {
+        const parcial = REG({ amount: 145000, amount_paid: 20000, status: 'partial', payment_date: '2026-11-06' });
+        expect(pagosQueYaCubren([parcial], 20000, '2026-11-08')).toHaveLength(1);
+    });
     it('mismo monto dentro de la ventana cubre; fuera de ella o de otro monto, no', () => {
         expect(pagosQueYaCubren([REG({ payment_date: '2026-10-06' })], 180000, '2026-10-04')).toHaveLength(1);
         expect(pagosQueYaCubren([REG({ payment_date: '2026-09-05' })], 180000, '2026-10-04')).toHaveLength(0);

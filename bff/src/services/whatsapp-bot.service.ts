@@ -80,7 +80,7 @@ import {
 import {
     botEncendido, debeAtender, temaEscolar, preguntaPrecioComoProspecto, quiereInscribirse,
     ajustesDeAtencion, puertaDeProspecto, interesesDeProspecto, buscaParaAdulto, pideLlamada, pideUbicacion, DIAS_MARCA_PROSPECTO,
-    soloSaludoOCortesia, intencionDeProspecto,
+    soloSaludoOCortesia, intencionDeProspecto, desisteDeProspecto,
     type PuertaDeProspecto,
 } from './whatsapp-atencion.service';
 import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
@@ -4195,7 +4195,8 @@ async function atenderDesconocidoEnEscuela(
     // la mensualidad» a mitad del registro quedaba solo con el acuse, sin el valor.
     const prospecto = await puertaDeProspectoEn(integration, conversationId, text)
         ?? await seguimientoDelEmbudo(integration, conversationId);
-    if (!tema && !prospecto) {
+    // «Ya no quiero entrenar vóley»: el tema «inscripción» tampoco abre la puerta si dijo que no (Monster 2026-11-12).
+    if ((!tema && !prospecto) || (tema === 'inscripcion' && !prospecto && desisteDeProspecto(text))) {
         // Escuela con embudo (B2, P4): el «Hola» de un número nuevo recibe SU bienvenida con sus sedes.
         if (await darBienvenidaDeEmbudo(integration, conversationId, contactWaId, text, botonId)) return 'bienvenida';
         // Bienvenida al saludo suelto del desconocido (apagada salvo en las escuelas de

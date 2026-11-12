@@ -52,7 +52,7 @@ export type DecisionPorTexto =
     }
     | { tipo: 'preguntar'; opciones: PagoPendiente[] }
     /** No se estampa: lo aplica (o lo revisa) la escuela. */
-    | { tipo: 'a_la_escuela'; resumen: string; mensaje: string; codigo: 'saldo_de_parcial' | 'monto_no_cuadra'; pagoId: string | null }
+    | { tipo: 'a_la_escuela'; resumen: string; mensaje: string; codigo: 'saldo_de_parcial' | 'monto_no_cuadra' | 'excedente_de_parcial'; pagoId: string | null }
     /** Sin opinión: sigue la lógica de siempre (monto, pista, pregunta). */
     | null;
 
@@ -143,6 +143,26 @@ export function decidirCobroPorTexto(e: {
                     'Es un abono a un cobro parcial: aplíquenlo desde Pagos.',
                 mensaje: `Recibí tu comprobante de *${cop(monto)}* para el saldo de *${p.concept ?? 'tu cobro'}* 📄 ` +
                     'Se lo paso a la escuela para que lo aplique y te confirme.',
+            };
+        }
+    }
+
+    // 1a. MAYOR que el saldo de un cobro ya abonado y sin ningún pendiente que cuadre (Monster 2026-11-12, Shara:
+    //     $145.000 sobre un cobro de $145.000 con $20.000 abonados). No se estampa ni se cierra con «ya registrado»:
+    //     la escuela aplica el saldo y decide el excedente.
+    if (monto !== null && !pendientes.some((p) => Number(p.amount) === monto)) {
+        const sobre = parciales.filter((p) => monto > saldoDe(p) && saldoDe(p) > 0);
+        if (sobre.length === 1) {
+            const p = sobre[0];
+            return {
+                tipo: 'a_la_escuela',
+                codigo: 'excedente_de_parcial',
+                pagoId: p.id,
+                resumen: `La familia mandó ${cop(monto)}${cita}; ${p.concept ?? 'un cobro'} tiene un saldo de ${cop(saldoDe(p))} ` +
+                    `(abonado ${cop(Number(p.amount_paid ?? 0))} de ${cop(Number(p.amount))}). Excede el saldo en ${cop(monto - saldoDe(p))}: ` +
+                    'apliquen el saldo y decidan el excedente (saldo a favor o devolución).',
+                mensaje: `Recibí tu comprobante de *${cop(monto)}* 📄 Tu cobro *${p.concept ?? ''}* tenía un saldo de *${cop(saldoDe(p))}*; ` +
+                    'se lo paso a la escuela para que aplique el saldo y revise la diferencia.',
             };
         }
     }

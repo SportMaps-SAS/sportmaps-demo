@@ -14,6 +14,7 @@ import {
     intencionDeProspecto, puertaDeProspecto, soloSaludoOCortesia, buscaParaAdulto,
     interesesDeProspecto, edadMencionada, pideLlamada, pideUbicacion,
 } from './whatsapp-atencion.service';
+import { desisteDeProspecto } from './whatsapp-atencion.service';
 import { resumirProspecto, telefonoDeLeadWa, variantesTelefonoLead } from './whatsapp-prospecto-lead.service';
 
 describe('intención clara de prospecto → abre la puerta', () => {
@@ -202,4 +203,55 @@ describe('teléfono del lead (mismo formato que la reserva de cortesía)', () =>
         expect(telefonoDeLeadWa('13101234567')).toBe('+13101234567');
         expect(variantesTelefonoLead('13101234567')).toEqual(['13101234567', '+13101234567']);
     });
+});
+
+describe('ampliación 2026-11-12: abre la puerta (hijos en 3.ª persona, club para mi hija)', () => {
+    it.each([
+        'quiero que mi hijo juegue con ustedes', 'mi hijo quiere entrenar con ustedes', 'mi hija necesita entrenar',
+        'me gustaría que mi hija practique voleibol', 'queremos que nuestro hijo entrene voleibol',
+        'quisiera que mi hijo hiciera parte del club', 'mi hijo quiere practicar voleibol con ustedes',
+        'necesito una escuela de voleibol para mi hija', 'busco un club para mi hijo de 10 años',
+        'busco una academia de voleibol para mi niña', 'estoy buscando un equipo donde mi hija pueda jugar',
+        'necesito un lugar donde entrenar', 'hay cupos para niñas de 8', 'me encantaría pertenecer al club',
+        'nunca he jugado voleibol, me gustaría empezar',
+    ])('sí: %s', (t) => expect(intencionDeProspecto(t)).toBe(true));
+});
+
+describe('ampliación 2026-11-12: NO abre (otro club, cancha, trabajo, torneo, conocido, app)', () => {
+    it.each([
+        'quiero jugar con ustedes el domingo', 'buscamos jugar un partido contra ustedes', 'necesitamos jugar este sábado, tienen cancha?',
+        'quiero entrenar con mi equipo en su cancha', 'busco un lugar donde entrenar con mi equipo',
+        'necesitamos entrenar en su coliseo, cuánto cuesta alquilarlo?', 'buscamos entrenar el jueves en su cancha, nos prestan?',
+        'quiero entrenar mañana, a qué hora abren la cancha', 'soy de otro club y buscamos entrenar con ustedes',
+        'hay cupo en el torneo?', 'tienen cupos en la clínica?', 'hay cupo para la rifa?', 'hay cupo en el bus?',
+        'necesito saber si tienen cupo en el parqueadero', 'quiero participar como entrenador en su club',
+        'quiero formar parte de su cuerpo técnico', 'busco formar parte del staff', 'tienen vacantes de trabajo?',
+        'hay plazas de entrenador?', 'busco entrenar a un grupo de niñas, necesitan profe?', 'quiero participar en el torneo',
+        'quiero jugar contigo mañana en el parque', 'amigo busco jugar voleibol hoy en la tarde',
+        'busco al profe Carlos, quiero entrenar con él en privado', 'necesito entrenar mi perro', 'quiero practicar mi inglés con ustedes',
+        'necesito aprender a manejar la plataforma', 'quiero unirme al grupo de WhatsApp de los papás',
+        'busco aprender cómo montar una escuela de voleibol', 'buscando equipo para jugar el fin de semana',
+        'mi hijo quiere jugar con ustedes el sábado contra su equipo',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
+});
+
+describe('ampliación 2026-11-12: negaciones', () => {
+    it.each([
+        'no me gustaría entrenar ahí', 'quiero cancelar, mi hija no quiere entrenar más', 'no quisiera entrenar más',
+        'ya no busco donde entrenar', 'no estamos interesados en entrenar', 'nunca quise entrenar vóley',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
+    it.each(['ya no quiero entrenar vóley', 'nunca quise entrenar vóley', 'no estamos interesados en entrenar'])
+        ('desisteDeProspecto: %s', (t) => expect(desisteDeProspecto(t)).toBe(true));
+    it('quien se inscribe a un torneo o clínica sigue abriendo la puerta (inscrib… no pasa por el guardia)', () => {
+        expect(intencionDeProspecto('quiero inscribirme al torneo')).toBe(true);
+    });
+});
+
+describe('falsos positivos medidos en datos reales (2026-11-12)', () => {
+    it.each([
+        '¡Cordial saludo! Somos BCH, fabricamos uniformes para escuelas de fútbol',
+        'Hola, hablas con Stefania entrenadora de Ushuaia, ¿podrían ir a jugar un amistoso?',
+        'Vale muchas gracias por la información',
+        'Este no es el canal para información de Club Monsters Volley',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
 });

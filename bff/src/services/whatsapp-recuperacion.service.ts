@@ -204,7 +204,11 @@ export function pagosQueYaCubren(pagos: PagoRegistrado[], monto: number | null, 
     if (monto === null || !(monto > 0)) return [];
     const ref = aDia(fecha);
     return pagos.filter((p) => {
-        const mismoMonto = Number(p.amount) === monto || (p.amount_paid !== null && Number(p.amount_paid) === monto);
+        // Un cobro PARCIAL no queda cubierto por un comprobante igual a su TOTAL (Monster 2026-11-12, Shara: $145.000
+        // sobre un cobro de $145.000 con $20.000 abonados no es «ya registrado»): solo por lo que ya se abonó.
+        const mismoMonto = p.status === 'partial'
+            ? p.amount_paid !== null && Number(p.amount_paid) === monto
+            : Number(p.amount) === monto || (p.amount_paid !== null && Number(p.amount_paid) === monto);
         if (!mismoMonto) return false;
         // En revisión no tiene payment_date todavía: vale la última edición.
         const cuando = p.payment_date ?? p.updated_at;
