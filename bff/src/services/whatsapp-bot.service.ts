@@ -84,6 +84,11 @@ import {
     type PuertaDeProspecto,
 } from './whatsapp-atencion.service';
 import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
+import {
+    PASO_CONSENT_SEGUIMIENTO, HORAS_FRENO_CONSENT_SEGUIMIENTO, BOTONES_CONSENT_SEGUIMIENTO, ENTEXTO_CONSENT_SEGUIMIENTO,
+    BOTON_CONSENT_SEGUIMIENTO, consentSeguimientoHabilitado, esBotonConsentSeguimiento, textoConsentSeguimiento,
+    textoRespuestaConsentSeguimiento,
+} from './whatsapp-consentimiento-seguimiento';
 import { registrarLeadDeProspecto } from './whatsapp-prospecto-lead.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
 import { invitacionPendienteVigente } from './whatsapp-invitacion-vigente.service';
@@ -3200,6 +3205,59 @@ async function atenderVentaDeFamilia(t: {
 }
 
 /**
+ * Tras la bienvenida del embudo: UNA pregunta de consentimiento de seguimiento (Monster 2026-11-12). Conserva el
+ * estado del embudo en el payload (no lo reinicia). Solo escuelas habilitadas; una vez cada 30 días; nunca si ya
+ * consintió o se dio de baja. Nunca lanza.
+ */
+async function pedirConsentimientoDeSeguimiento(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, escuela: string,
+): Promise<void> {
+    try {
+        if (!consentSeguimientoHabilitado(integration.school_id)) return;
+        const { data: optin } = await supabase.from('whatsapp_optins')
+            .select('opted_in_at, opted_out_at')
+            .eq('integration_id', integration.id).eq('contact_wa_id', contactWaId).maybeSingle();
+        if ((optin as any)?.opted_in_at || (optin as any)?.opted_out_at) return;
+        if (!(await reservarPasoUnaVez(conversationId, PASO_CONSENT_SEGUIMIENTO, HORAS_FRENO_CONSENT_SEGUIMIENTO))) return;
+        const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+        await deliver(integration, conversationId, contactWaId, textoConsentSeguimiento(escuela),
+            { step: PASO_CONSENT_SEGUIMIENTO, ...payloadDeEstado(estado) },
+            { botones: BOTONES_CONSENT_SEGUIMIENTO, enTexto: ENTEXTO_CONSENT_SEGUIMIENTO });
+    } catch (err: any) {
+        console.warn('[whatsapp-bot] consentimiento de seguimiento falló', err?.message || err);
+    }
+}
+
+/**
+ * [Sí, acepto] / [No, gracias] de esa pregunta: «sí» registra el opt-in (prueba = el mensaje del botón, fuente
+ * `bot_prospecto`); «no» solo se agradece (no es una baja del servicio). El estado del embudo se conserva.
+ * true = lo atendió. Nunca lanza.
+ */
+async function responderConsentimientoDeSeguimiento(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, botonId: string | null,
+): Promise<boolean> {
+    try {
+        if (!esBotonConsentSeguimiento(botonId)) return false;
+        const acepto = botonId === BOTON_CONSENT_SEGUIMIENTO.SI;
+        if (acepto && !enSimulacion()) {
+            const waMessageId = await ultimoEntranteWaId(conversationId);
+            if (waMessageId) {
+                await registrarOptInProspecto({
+                    integrationId: integration.id, schoolId: integration.school_id, contactWaId, waMessageId,
+                });
+            }
+        }
+        const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
+        await deliver(integration, conversationId, contactWaId, textoRespuestaConsentSeguimiento(acepto),
+            { step: PASO_CONSENT_SEGUIMIENTO, respuesta: acepto ? 'si' : 'no', ...payloadDeEstado(estado) });
+        return true;
+    } catch (err: any) {
+        console.warn('[whatsapp-bot] respuesta de consentimiento de seguimiento falló', err?.message || err);
+        return false;
+    }
+}
+
+/**
  * Saludo suelto («Hola») de un número nuevo en una escuela con embudo (B2, P4):
  * recibe la bienvenida del embudo con sus sedes, sin la variable de entorno de la
  * bienvenida genérica. Las mismas condiciones que esa (nadie de la escuela le
@@ -3222,8 +3280,10 @@ async function darBienvenidaDeEmbudo(
         if (tomada && new Date(tomada).getTime() > Date.now()) return false;
         if (await yaSeLeContestoEscolar(conversationId)) return false;
         if (!(await reservarPasoUnaVez(conversationId, PASO_DESCONOCIDO_ESCOLAR, 24))) return false;
-        return await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
+        const arranco = await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
             { saludo: await saludoDePresentacion(conversationId, escuela), step: PASO_DESCONOCIDO_ESCOLAR });
+        if (arranco) await pedirConsentimientoDeSeguimiento(integration, conversationId, contactWaId, escuela);
+        return arranco;
     } catch (err) {
         console.error('[whatsapp-bot] bienvenida del embudo falló:', err instanceof Error ? err.message : err);
         return false;
@@ -3804,7 +3864,7 @@ export type ResultadoDesconocido =
     | 'externo' | 'horarios_de_hoy' | 'disputa_de_pago'
     | 'pregunta_de_comprobante'
     | 'llegada_clase'
-    | 'consentimiento_sin_cuenta' | 'avisos_reactivados'
+    | 'consentimiento_sin_cuenta' | 'avisos_reactivados' | 'consentimiento_seguimiento'
     | 'bienvenida'
     | 'puerta' | 'plan_clases'
     | 'embudo' | 'embudo_acuse'
@@ -3931,6 +3991,11 @@ async function atenderDesconocidoEnEscuela(
     //        nunca se reactivaba (Monster 2026-11-09, campaña de la clínica: «*ACTIVAR*» → pendiente falso en el buzón).
     if (!botonId && text && REACTIVAR.has(normalizar(text)) && await reactivarAvisosDelDesconocido(integration, conversationId, contactWaId)) {
         return 'avisos_reactivados';
+    }
+
+    // 0-ter. [Sí, acepto] / [No, gracias] de la pregunta de seguimiento (Monster 2026-11-12): antes que cualquier flujo.
+    if (botonId && await responderConsentimientoDeSeguimiento(integration, conversationId, contactWaId, botonId)) {
+        return 'consentimiento_seguimiento';
     }
 
     // 0a. Contesta «¿De qué deportista es este pago?» (o «¿a cuál cobro?») de un
