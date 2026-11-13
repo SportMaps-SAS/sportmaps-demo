@@ -34,7 +34,7 @@ export function buildStatementPrintHtml(data: StatementData, months: number, gen
   const eventRows = data.events.map((ev) => `
       <tr>
         <td>${new Date(ev.fecha).toLocaleDateString('es-CO')}</td>
-        <td>${ev.tipo === 'pago' ? 'Pago' : 'Sesión'}</td>
+        <td>${ev.tipo === 'pago' ? 'Pago' : 'Clase'}</td>
         <td>${esc(ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : etiquetaAsistencia(ev.attendance_status).label)}</td>
         <td>${ev.tipo === 'pago' && ev.amount != null ? formatCurrency(ev.amount) : ''}</td>
       </tr>`).join('');

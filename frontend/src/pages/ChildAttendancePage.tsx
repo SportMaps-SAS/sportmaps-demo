@@ -1,4 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom';
+import { etiquetaAsistencia } from '@/components/account-statement/estadoCuentaModel';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -96,7 +97,7 @@ export default function ChildAttendancePage() {
       case 'excused':
         return <Badge className="bg-blue-500">Justificada</Badge>;
       default:
-        return <Badge variant="secondary">{status}</Badge>;
+        return <Badge variant="secondary">{etiquetaAsistencia(status).label}</Badge>;
     }
   };
 

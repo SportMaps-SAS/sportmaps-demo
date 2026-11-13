@@ -148,7 +148,7 @@ function AccountStatementClassic() {
               ) : data.events.map((ev, idx) => (
                 <TableRow key={idx}>
                   <TableCell>{new Date(ev.fecha).toLocaleDateString('es-CO')}</TableCell>
-                  <TableCell className="capitalize">{ev.tipo}</TableCell>
+                  <TableCell>{ev.tipo === 'pago' ? 'Pago' : 'Clase'}</TableCell>
                   <TableCell>{ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : etiquetaAsistencia(ev.attendance_status).label}</TableCell>
                   <TableCell>{ev.tipo === 'pago' && ev.amount != null ? formatCurrency(ev.amount) : '—'}</TableCell>
                 </TableRow>
