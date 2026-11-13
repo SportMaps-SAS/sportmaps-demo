@@ -80,7 +80,19 @@ export function tocaSeguimiento(
     if (recientes.some((f) => f.direction === 'outbound' && f.payload?.step === PASO_SEGUIMIENTO_20H)) {
         return { toca: false, motivo: 'ya_enviado' };
     }
+    // Ya tiene un cupo SEPARADO o AGENDADO por el embudo (esperando el pago, o confirmado): este seguimiento no le
+    // ofrece otra reserva (Monster 2026-11-13, Astolfo Tique: separó Suba el sábado 11–1 y a las 20 h el bot le armó
+    // una clase nueva en la sede Norte). Lo atiende la escuela.
+    if (tieneCupoDelEmbudo(recientes)) return { toca: false, motivo: 'cupo_separado' };
     return { toca: true, motivo: 'ok' };
+}
+
+const PASOS_CON_CUPO = new Set(['embudo_esperando_pago', 'embudo_agendada', 'esperando_pago', 'agendada']);
+
+/** ¿Algún saliente deja ver que el embudo ya separó o agendó una clase? Pura. */
+export function tieneCupoDelEmbudo(recientes: FilaReciente[]): boolean {
+    return recientes.some((f) => f.direction === 'outbound' && (
+        PASOS_CON_CUPO.has(String(f.payload?.step ?? '')) || PASOS_CON_CUPO.has(String(f.payload?.paso_embudo ?? ''))));
 }
 
 export interface DepsSeguimiento20h {
@@ -88,6 +100,8 @@ export interface DepsSeguimiento20h {
     conversacion: (conversationId: string) => Promise<ConversacionDelLead | null>;
     recientes: (conversationId: string) => Promise<FilaReciente[]>;
     puedeHablar: (integrationId: string, conversationId: string, waId: string) => Promise<boolean>;
+    /** ¿Hay un cupo separado/agendado por el embudo en los últimos 4 días? (los `recientes` solo cubren 24 h). */
+    cupoSeparado?: (conversationId: string) => Promise<boolean>;
     integracion: (integrationId: string) => Promise<WhatsAppIntegration | null>;
     reclamar: (lead: LeadCandidato, iso: string) => Promise<boolean>;
     soltar: (lead: LeadCandidato) => Promise<void>;
@@ -227,6 +241,14 @@ const DEPS: DepsSeguimiento20h = {
         return await botEncendido(integrationId) && !(await conversacionTomada(conversationId))
             && !(await estaDadoDeBaja(integrationId, waId));
     },
+    async cupoSeparado(conversationId) {
+        const desde = new Date(Date.now() - 4 * 24 * 3600_000).toISOString();
+        const { data, error } = await supabase.from('whatsapp_messages').select('payload')
+            .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
+            .in('payload->>step', ['embudo_esperando_pago', 'embudo_agendada']).limit(1);
+        // Ante la duda (error de lectura) NO se envía.
+        return Boolean(error) || (data ?? []).length > 0;
+    },
     async integracion(integrationId) {
         const { data } = await supabase.from('school_whatsapp_integrations')
             .select('*').eq('id', integrationId).eq('status', 'active').maybeSingle();
@@ -272,6 +294,7 @@ export async function runSeguimientoProspectos20h(
             if (!conv) { r.omitidos++; continue; }
             const recientes = await d.recientes(conv.id);
             if (!tocaSeguimiento(conv, recientes, ahora).toca) { r.omitidos++; continue; }
+            if (d.cupoSeparado && await d.cupoSeparado(conv.id)) { r.omitidos++; continue; }
             if (!(await d.puedeHablar(conv.integrationId, conv.id, conv.contactWaId))) { r.omitidos++; continue; }
             const integ = await d.integracion(conv.integrationId);
             if (!integ) { r.omitidos++; continue; }
