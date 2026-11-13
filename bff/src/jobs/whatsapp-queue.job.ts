@@ -3581,6 +3581,15 @@ async function excedeOcrSinFicha(fila: FilaCola): Promise<boolean> {
     }
 }
 
+/** ¿El embudo ya separó o agendó una clase en este chat (últimos 4 días)? Ante la duda de lectura, sí (no se descarta). */
+async function tieneCupoSeparadoEnChat(conversationId: string): Promise<boolean> {
+    const desde = new Date(Date.now() - 4 * 24 * 3600_000).toISOString();
+    const { data, error } = await supabase.from('whatsapp_messages').select('id')
+        .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
+        .in('payload->>step', ['embudo_esperando_pago', 'embudo_agendada']).limit(1);
+    return Boolean(error) || (data ?? []).length > 0;
+}
+
 /**
  * (b) Número sin ficha. Solo se le escribe si el archivo ES un comprobante
  * hacia una cuenta de la escuela (o el contacto habla de un pago y el destino
@@ -3674,7 +3683,28 @@ async function comprobanteDeNumeroSinFicha(
         });
         return true;
     }
-    if (destino === 'ajena' || (destino !== 'general' && !hablaDePago)) { await silencio(); return true; }
+    if (destino === 'ajena' || (destino !== 'general' && !hablaDePago)) {
+        // Quien tiene un cupo SEPARADO o AGENDADO por el embudo y manda una imagen que no se reconoce como comprobante
+        // (pantallazos de la reserva, un pago raro): nunca se descarta en silencio; se guarda y va a la bandeja de la
+        // escuela (Monster 2026-11-13, Astolfo Tique: 4 imágenes quedaron «contacto_no_atendido» y nadie las vio).
+        if (conversationId && await tieneCupoSeparadoEnChat(conversationId)) {
+            const guardada = await bajarYGuardarArchivo(fila, wa, log);
+            if (!guardada.ok) return true;
+            await cerrar(fila.id, 'ignored', {
+                result_type: 'escalated',
+                error_message: motivoConPropuesta(
+                    'sin_familia: imagen_de_quien_espera_pago — mandó una imagen que no se reconoce como comprobante y tiene un cupo separado por el embudo',
+                    'Propuesta → abrir la imagen: puede ser el comprobante o pantallazos de su reserva'),
+                pregunta_ocr: huellasDelComprobante({
+                    sha: crypto.createHash('sha256').update(Buffer.from(guardada.base64, 'base64')).digest('hex'),
+                    ocr, storagePath: guardada.storagePath, parentId: null,
+                }),
+            });
+            return true;
+        }
+        await silencio();
+        return true;
+    }
 
     const bajada = await bajarYGuardarArchivo(fila, wa, log);
     if (!bajada.ok) return true;

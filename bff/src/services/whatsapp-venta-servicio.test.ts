@@ -307,7 +307,7 @@ describe('caso 3: el seguimiento de 20 h de un interesado de la clínica', () =>
             deps: {
                 candidatos: async () => [lead], conversacion: async () => conv,
                 recientes: async () => [ent(20 * 60, '¿Cuánto cuesta la clínica?'), sal(20 * 60 - 1, 'ficha', { payload: { [MARCA_VENTA]: CLINICA.id } })],
-                puedeHablar: async () => true, integracion: async () => ({ id: 'i1', school_id: 's1' } as any),
+                puedeHablar: async () => true, cupoSeparado: async () => false, integracion: async () => ({ id: 'i1', school_id: 's1' } as any),
                 reclamar, soltar: async () => undefined, redactar,
                 enviar: async (_i, _c, _w, t, extra) => { enviados.push({ texto: t, extra }); },
                 ventaDelLead: async () => ({ itemId: CLINICA.id, texto }),

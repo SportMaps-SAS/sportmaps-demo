@@ -1788,6 +1788,25 @@ async function grupoPorEdadEnBot(
     }
 }
 
+/**
+ * ¿El embudo separó o agendó una clase en este chat (últimos 4 días) y NO hay un flujo de cortesía abierto
+ * (último saliente del bot que no empiece por «cortesia_»)? Ante un error de lectura: false (el flujo sigue como antes).
+ */
+async function hayCupoSeparadoSinFlujoAbierto(conversationId: string): Promise<boolean> {
+    try {
+        const desde = new Date(Date.now() - 4 * 24 * 3600_000).toISOString();
+        const { data } = await supabase.from('whatsapp_messages').select('payload, created_at')
+            .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
+            .order('created_at', { ascending: false }).limit(12);
+        const filas = (data ?? []) as any[];
+        const pasos = filas.map((f) => String(f.payload?.step ?? ''));
+        if (pasos.slice(0, 3).some((p) => p.startsWith('cortesia_'))) return false;
+        return pasos.some((p) => p === 'embudo_esperando_pago' || p === 'embudo_agendada');
+    } catch {
+        return false;
+    }
+}
+
 /** Turno de clase de cortesía. Nunca lanza: si falla, lo atiende el bot normal. */
 async function atenderCortesiaEnBot(
     integration: WhatsAppIntegration,
@@ -1799,6 +1818,20 @@ async function atenderCortesiaEnBot(
     opciones: { iniciar?: boolean; rafaga?: string | null } = {},
 ): Promise<boolean> {
     try {
+        // Quien ya tiene un cupo SEPARADO o AGENDADO por el embudo no arranca otra reserva por edad (Monster 2026-11-13,
+        // Astolfo Tique: separó Suba sábado 11–1 y el bot le armó una clase en la sede Norte). Su pedido va a la escuela.
+        // No aplica a un botón, ni si ya está a mitad de un flujo de cortesía (nombre, acudiente, confirmar).
+        if (opciones.iniciar !== false && !botonId && text && !enSimulacion()
+            && await hayCupoSeparadoSinFlujoAbierto(conversationId)) {
+            await deliver(integration, conversationId, contactWaId,
+                'Ya tienes tu cupo separado para la clase de prueba 🙌 Para confirmarlo o cambiarlo, la escuela te responde por aquí.',
+                { step: 'cupo_separado_a_la_escuela' });
+            await abrirEnBuzon(integration, conversationId, contactWaId, {
+                motivo: 'puerta_otro',
+                detalle: 'Tiene un cupo separado por el embudo y pidió otra clase o un cambio: «' + text.slice(0, 160) + '». Confirmar o cambiar a mano.',
+            });
+            return true;
+        }
         const { rafaga, ...resto } = opciones;
         return await atenderTurnoCortesia(
             ctxCortesia(integration, conversationId, contactWaId, parentId, rafaga ?? null), text, botonId, resto);

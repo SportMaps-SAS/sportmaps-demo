@@ -26,7 +26,7 @@ function deps(p: Partial<DepsSeguimiento20h> = {}) {
             { direction: 'inbound', text_body: 'Es únicamente ir y ya?', created_at: hace(20) },
             { direction: 'outbound', ai_generated: true, text_body: '¡Claro! Solo llegas…', created_at: hace(19.9) },
         ],
-        puedeHablar: async () => true,
+        puedeHablar: async () => true, cupoSeparado: async () => false,
         integracion: async () => ({ id: 'i1', school_id: 's1' } as any),
         reclamar: async () => true,
         soltar: async () => undefined,
