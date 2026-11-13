@@ -1,4 +1,5 @@
 import { BranchChip } from '@/components/common/BranchChip';
+import { etiquetaEstadoPago } from '@/components/account-statement/estadoCuentaModel';
 import { ENTRENADOR_V2 } from '@/lib/feature-flags';
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -1469,7 +1470,7 @@ export default function SchoolStudentsManagementPage() {
       case 'paid':    return <Badge className="bg-green-500 dark:bg-green-600 text-xs text-white">Al día</Badge>;
       case 'overdue': return <Badge variant="destructive" className="text-xs">Vencido</Badge>;
       case 'pending': return <Badge variant="secondary" className="text-xs bg-yellow-50 dark:bg-yellow-950/20 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-500/40">Pendiente</Badge>;
-      default:        return <Badge variant="secondary" className="text-xs">{student.payment_status}</Badge>;
+      default:        return <Badge variant="secondary" className="text-xs">{etiquetaEstadoPago(student.payment_status).label}</Badge>;
     }
   };
 
@@ -1514,22 +1515,6 @@ export default function SchoolStudentsManagementPage() {
           <DropdownMenuItem onClick={() => setAccountStudentId(student.id)}>
             <FileText className="h-4 w-4 mr-2" /> {cobrosYPagosOn ? 'Cobros y pagos' : 'Editar estado de cuenta'}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => navigate(`/estado-cuenta?${buildAccountStatementParams(student)}`)}>
-            <FileText className="h-4 w-4 mr-2" /> Ver estado de cuenta
-          </DropdownMenuItem>
-          {pauseEnabled && canManageStudents && student.enrollment_id && (
-            pauseByEnrollment.has(student.enrollment_id)
-              ? (
-                <DropdownMenuItem onClick={() => reactivar.mutate({ enrollmentId: student.enrollment_id })}>
-                  Reactivar de la pausa
-                </DropdownMenuItem>
-              )
-              : (
-                <DropdownMenuItem onClick={() => setPausingStudent(student)}>
-                  🏖️ Vacaciones / pausa
-                </DropdownMenuItem>
-              )
-          )}
           {/* En escritorio este es el único menú por fila: sin esto, «No asistió»
               solo se alcanzaba desde las tarjetas (< lg). */}
           {canManageStudents && student.enrollment_id && (

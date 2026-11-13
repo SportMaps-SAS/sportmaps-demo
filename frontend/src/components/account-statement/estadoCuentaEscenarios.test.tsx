@@ -13,7 +13,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import {
   agruparPorMes, resumenCuenta, estadoCobro, detalleCobro, lineaFechas, puntualidad, abonoDe, valorCobro,
-  asistenciaPorMes, textoAsistencia, parametrosEstadoCuenta, type CobroCuenta,
+  asistenciaPorMes, textoAsistencia, parametrosEstadoCuenta, etiquetaEstadoPago, etiquetaAsistencia, type CobroCuenta,
 } from './estadoCuentaModel';
 import { EstadoCuentaAcudienteView } from './EstadoCuentaAcudiente';
 import type { StatementData } from './statementPrint';
@@ -175,6 +175,25 @@ describe('voz de la página pública: no manda a pantallas que no existen', () =
   it('rechazado y «no pasó» no piden volver a subir ni reintentar', () => {
     expect(detalleCobro(cobro({ status: 'rejected' }), HOY, fmt, 'publica')).toBe('La escuela rechazó el comprobante.');
     expect(detalleCobro(cobro({ status: 'failed' }), HOY, fmt, 'publica')).toBe('El pago no pasó.');
+  });
+});
+
+describe('estados crudos de la base, siempre en español', () => {
+  it('cada estado de pago conocido tiene su palabra y ninguno sale en inglés', () => {
+    const esperado: Record<string, string> = {
+      paid: 'Pagado', approved: 'Pagado', awaiting_approval: 'En revisión', glosado: 'Necesita aclaración', partial: 'Abono parcial',
+      rejected: 'Rechazado', failed: 'No pasó', cancelled: 'Anulado', overdue: 'Vencido', pending: 'Por pagar',
+    };
+    for (const [crudo, label] of Object.entries(esperado)) expect(etiquetaEstadoPago(crudo).label).toBe(label);
+    for (const raro of [null, undefined, '', 'algo_nuevo']) expect(etiquetaEstadoPago(raro).label).toBe('Sin estado');
+  });
+  it('cada asistencia tiene su palabra, y la falta es la única en rojo', () => {
+    expect(etiquetaAsistencia('present')).toEqual({ label: 'Asistió', tono: 'ok' });
+    expect(etiquetaAsistencia('late').label).toBe('Llegó tarde');
+    expect(etiquetaAsistencia('excused').label).toBe('Excusada');
+    expect(etiquetaAsistencia('absent')).toEqual({ label: 'Faltó', tono: 'peligro' });
+    for (const raro of [null, undefined, 'otro']) expect(etiquetaAsistencia(raro).label).toBe('Sin registrar');
+    for (const s of ['present', 'late', 'excused', 'absent', null]) expect(etiquetaAsistencia(s as any).label).not.toMatch(/present|absent|late|excused/i);
   });
 });
 

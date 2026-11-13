@@ -15,6 +15,8 @@ import { todayColombia } from '@/lib/dateUtils';
 import { PaymentAgingCard } from './PaymentAgingCard';
 import { PagosDelMesCard } from './PagosDelMesCard';
 import { EstadoCuentaDialog } from '@/components/account-statement/EstadoCuentaDialog';
+import { ChipEstado } from '@/components/common/ChipEstado';
+import { etiquetaAsistencia, etiquetaEstadoPago } from '@/components/account-statement/estadoCuentaModel';
 
 const MESES = ['', 'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
@@ -403,9 +405,9 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
                   <div>
                     <span className="font-medium">{new Date(ev.fecha).toLocaleDateString('es-CO')}</span>{' '}
                     {ev.tipo === 'pago' ? (
-                      <span>— Pago <Badge variant="outline" className="ml-1">{ev.status}</Badge></span>
+                      <span>— Pago <ChipEstado className="ml-1" {...etiquetaEstadoPago(ev.status)} /></span>
                     ) : (
-                      <span>— Sesión <Badge variant="outline" className="ml-1">{ev.attendance_status}</Badge></span>
+                      <span>— Clase <ChipEstado className="ml-1" {...etiquetaAsistencia(ev.attendance_status)} /></span>
                     )}
                   </div>
                   {ev.tipo === 'pago' && <span className="font-bold">{formatCurrency(ev.amount)}</span>}

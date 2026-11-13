@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { etiquetaEstadoPago, etiquetaAsistencia } from '@/components/account-statement/estadoCuentaModel';
 import { useParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -135,7 +136,7 @@ export default function SaasInvoiceReceiptPage() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">Factura SportMaps</CardTitle>
-            <Badge variant="outline" className={statusVariant}>{invoice.status}</Badge>
+            <Badge variant="outline" className={statusVariant}>{etiquetaEstadoPago(invoice.status).label}</Badge>
           </div>
           <p className="text-sm text-muted-foreground">{invoice.invoice_number} · {schoolName}</p>
         </CardHeader>
