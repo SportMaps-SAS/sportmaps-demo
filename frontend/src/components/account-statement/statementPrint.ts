@@ -4,6 +4,7 @@
  * (decisión de la mig. 20260827231724, sin backend de PDF).
  */
 import { formatCurrency } from '@/lib/utils';
+import { etiquetaAsistencia } from './estadoCuentaModel';
 
 export interface StatementData {
   athlete_name: string;
@@ -34,7 +35,7 @@ export function buildStatementPrintHtml(data: StatementData, months: number, gen
       <tr>
         <td>${new Date(ev.fecha).toLocaleDateString('es-CO')}</td>
         <td>${ev.tipo === 'pago' ? 'Pago' : 'Sesión'}</td>
-        <td>${esc(ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : (ev.attendance_status || ''))}</td>
+        <td>${esc(ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : etiquetaAsistencia(ev.attendance_status).label)}</td>
         <td>${ev.tipo === 'pago' && ev.amount != null ? formatCurrency(ev.amount) : ''}</td>
       </tr>`).join('');
   const name = esc(data.athlete_name);

@@ -416,3 +416,33 @@ export function comoPago(c: CobroCuenta): ComoPago {
   if (tieneComprobante) return { label: o.label, nota: 'con comprobante', soporte: 'comprobante', sinRegistrar: false };
   return { label: o.label, nota: 'sin comprobante', soporte: 'ninguno', sinRegistrar: false };
 }
+
+/**
+ * Estado de un pago en palabras para listas que traen el estado crudo de la base
+ * (la línea de tiempo del Cierre, el estado de cuenta clásico). Nunca el inglés técnico.
+ */
+export function etiquetaEstadoPago(status: string | null | undefined): EstadoEnPalabras {
+  switch (status) {
+    case 'paid': case 'approved': return { label: 'Pagado', tono: 'ok' };
+    case 'awaiting_approval': return { label: 'En revisión', tono: 'info' };
+    case 'glosado': return { label: 'Necesita aclaración', tono: 'aviso' };
+    case 'partial': return { label: 'Abono parcial', tono: 'aviso' };
+    case 'rejected': return { label: 'Rechazado', tono: 'peligro' };
+    case 'failed': return { label: 'No pasó', tono: 'peligro' };
+    case 'cancelled': return { label: 'Anulado', tono: 'neutro' };
+    case 'overdue': return { label: 'Vencido', tono: 'peligro' };
+    case 'pending': return { label: 'Por pagar', tono: 'aviso' };
+    default: return { label: 'Sin estado', tono: 'neutro' };
+  }
+}
+
+/** Asistencia de UNA clase en palabras: «Asistió», «Faltó», «Llegó tarde», «Excusada». */
+export function etiquetaAsistencia(status: string | null | undefined): EstadoEnPalabras {
+  switch (status) {
+    case 'present': return { label: 'Asistió', tono: 'ok' };
+    case 'late': return { label: 'Llegó tarde', tono: 'aviso' };
+    case 'excused': return { label: 'Excusada', tono: 'info' };
+    case 'absent': return { label: 'Faltó', tono: 'peligro' };
+    default: return { label: 'Sin registrar', tono: 'neutro' };
+  }
+}

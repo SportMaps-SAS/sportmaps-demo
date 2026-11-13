@@ -13,6 +13,7 @@ import { esAcudienteV2 } from '@/lib/vistaAcudiente';
 import { EstadoCuentaAcudiente } from '@/components/account-statement/EstadoCuentaAcudiente';
 import { VolverAtras } from '@/components/account-statement/VolverAtras';
 import { ACUDIENTE_V2 } from '@/lib/feature-flags';
+import { etiquetaAsistencia } from '@/components/account-statement/estadoCuentaModel';
 import { canManageCharges } from '@/lib/cobrosYPagos';
 import { printStatement, STATUS_LABELS, type StatementData as Statement } from '@/components/account-statement/statementPrint';
 
@@ -148,7 +149,7 @@ function AccountStatementClassic() {
                 <TableRow key={idx}>
                   <TableCell>{new Date(ev.fecha).toLocaleDateString('es-CO')}</TableCell>
                   <TableCell className="capitalize">{ev.tipo}</TableCell>
-                  <TableCell>{ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : ev.attendance_status}</TableCell>
+                  <TableCell>{ev.tipo === 'pago' ? (STATUS_LABELS[ev.status || ''] || ev.status) : etiquetaAsistencia(ev.attendance_status).label}</TableCell>
                   <TableCell>{ev.tipo === 'pago' && ev.amount != null ? formatCurrency(ev.amount) : '—'}</TableCell>
                 </TableRow>
               ))}
