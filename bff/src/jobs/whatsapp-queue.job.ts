@@ -89,7 +89,7 @@ import type { Verdict } from '../services/receipt-verdict';
 import type { Motivo } from '../services/motivos-de-cobro';
 import { MOTIVO_DE_OTRO_CONCEPTO } from '../services/whatsapp-otro-concepto.service';
 import {
-    cobroDesdeComprobanteActivo, preciosDeMotivos, motivoPorMonto, decidirConEsperado, opcionesDeMotivo,
+    cobroDesdeComprobanteActivo, preciosDeMotivos, motivoPorMonto, decidirConEsperado, opcionesDeMotivo, sePuedeCrearSoloPorMonto,
     crearCobroDesdeComprobante, anularCobroCreado, pendientesDelLead, leadPorTelefono, destinoExactoDelComprobante,
     conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
@@ -1560,6 +1560,34 @@ async function prospectoALaEscuela(p: ArgsProspecto, a: ArgsB4, codigo: string, 
 }
 
 /**
+ * El bot conoce al prospecto pero NO sabe de qué es el pago (el monto no es un precio de la
+ * escuela, o es un servicio que no se adivina por el monto). En vez de aplicarlo a ojo, o
+ * preguntarle «¿de qué deportista?» a quien ya sabemos quién es, le pregunta de qué es y deja
+ * el comprobante en la bandeja con quién es, cuánto y lo que se le preguntó: la escuela decide
+ * y la conversación sigue con el hilo (Monster 2026-11-14).
+ */
+async function prospectoSinConcepto(
+    p: ArgsProspecto, a: ArgsB4, lead: { id: string; nombre: string | null },
+): Promise<void> {
+    const monto = montoDelOcr(p.ocr);
+    const primerNombre = (lead.nombre ?? '').trim().split(/\s+/)[0] || null;
+    await p.responder(
+        `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''}${primerNombre ? ` de ${primerNombre}` : ''} 📄 ` +
+        '¿Me cuentas para qué es? Por ejemplo matrícula, uniformes, clase de prueba u otro. ' +
+        'Así queda bien anotado; la escuela lo revisa y te confirma por aquí.',
+        'comprobante_a_la_escuela');
+    await cerrar(p.fila.id, 'ignored', {
+        result_type: 'escalated',
+        error_message: motivoConPropuesta(
+            `prospecto_sin_concepto: ${lead.nombre ?? 'prospecto'} mandó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
+            + ` a ${p.ocr.destination ?? 'un destino sin leer'}; el monto no corresponde a un precio de la escuela`,
+            `Propuesta → pagó: ${p.ocr.originName ?? 'no se leyó'} · se le preguntó de qué es; con su respuesta, registrar el cobro del prospecto y aplicar este comprobante`),
+        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+    });
+    await pasarAPersona(p, 'comprobante_prospecto_sin_concepto');
+}
+
+/**
  * B4 para un número sin ficha (prospecto). Con motivo esperado manda la regla
  * de `decidirConEsperado` (monto y destino exacto, o a una persona); sin
  * esperado, el lead por teléfono y el motivo por el monto, solo con destino
@@ -1618,8 +1646,17 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
     // Sin esperado: solo con el dinero en una cuenta general de la escuela (exacta).
     if (destino !== 'exacta') return false;
     const m = motivoPorMonto(monto, precios);
-    if (m.tipo !== 'uno' && m.tipo !== 'varios') return false;
+    if (m.tipo !== 'uno' && m.tipo !== 'varios') {
+        await prospectoSinConcepto(p, a, lead);
+        return true;
+    }
     const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
+    // Un servicio (vacacional, clínica…) no se crea adivinando por el monto: lo decide una persona
+    // (Monster 2026-11-13: $370.000 de matrícula + camisetas quedó como vacacional de 3 + 4 semanas).
+    if (!sePuedeCrearSoloPorMonto(elegidos)) {
+        await prospectoSinConcepto(p, a, lead);
+        return true;
+    }
     const conPrueba = elegidos.some((x) => x.motivo === 'clase_prueba');
     // Una combinación con la clase de prueba no agenda sola: la confirma una persona.
     const agenda: AlAplicar | undefined = !conPrueba ? undefined

@@ -567,11 +567,13 @@ describe('prospecto SIN motivo esperado: el lead por teléfono y el monto', () =
         expect(agendaMock).toHaveBeenCalledWith(expect.objectContaining({ leadId: 'lead-9', paymentId: 'pay-1' }));
     });
 
-    it('un monto que no es ningún precio sigue el camino de hoy', async () => {
+    it('un monto que no es ningún precio: no crea nada y le pregunta de qué es (ya sabemos quién es)', async () => {
         extractReceiptMock.mockResolvedValue(comprobante(42000));
         await runWhatsAppQueue();
         expect(crearLlamadas()).toHaveLength(0);
-        expect(enviados()[0]).toContain('¿De qué deportista es este pago?');
+        // Antes: «¿De qué deportista es este pago?», a alguien que ya es un prospecto conocido.
+        expect(enviados()[0]).toContain('¿Me cuentas para qué es?');
+        expect(enviados()[0]).not.toContain('¿De qué deportista es este pago?');
     });
 });
 

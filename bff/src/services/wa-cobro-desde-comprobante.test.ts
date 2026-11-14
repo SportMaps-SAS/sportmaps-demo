@@ -56,7 +56,7 @@ vi.mock('./receipt-context.service', () => ({
 import {
     motivoPorMonto, decidirConEsperado, opcionesDeMotivo, clasificarDestino, destinoExactoDelComprobante,
     crearCobroDesdeComprobante, anularCobroCreado, cobroDesdeComprobanteActivo, preciosDeMotivos, pendientesDelLead,
-    leadPorTelefono, conceptoDelCobroCreado, esValorMotivoElegido, preciosDeServicios,
+    leadPorTelefono, conceptoDelCobroCreado, esValorMotivoElegido, preciosDeServicios, sePuedeCrearSoloPorMonto,
     type PrecioDeMotivo,
 } from './wa-cobro-desde-comprobante.service';
 import type { PagoPendiente } from './whatsapp-receipt-matching.service';
@@ -73,6 +73,44 @@ beforeEach(() => {
     h.state.updates = [];
     h.state.rpc = { data: null, error: null };
     h.state.rpcLlamadas = [];
+});
+
+// Monster 2026-11-13: el vacacional tiene 4 opciones del MISMO ítem (1–4 semanas).
+const VAC_3: PrecioDeMotivo = { motivo: 'vacacional', monto: 170000, fuente: 'tournament_item', fuenteId: 'vac-1', etiqueta: 'Vacacional — 3 semanas', opcion: '3' };
+const VAC_4: PrecioDeMotivo = { motivo: 'vacacional', monto: 200000, fuente: 'tournament_item', fuenteId: 'vac-1', etiqueta: 'Vacacional — 4 semanas', opcion: '4' };
+
+describe('motivoPorMonto: opciones del mismo servicio', () => {
+    it('3 + 4 semanas del vacacional NO explican $370.000 (son alternativas del mismo ítem)', () => {
+        expect(motivoPorMonto(370000, [PRUEBA, VAC_3, VAC_4, CLINICA])).toEqual({ tipo: 'ninguno' });
+    });
+
+    it('con la matrícula y los uniformes cargados, $370.000 sigue siendo matrícula + uniformes', () => {
+        const r = motivoPorMonto(370000, [PRUEBA, VAC_3, VAC_4, MATRICULA, UNIFORMES]);
+        expect(r.tipo).toBe('varios');
+        expect((r as any).precios.map((p: PrecioDeMotivo) => p.motivo).sort()).toEqual(['articulos', 'inscripcion']);
+    });
+
+    it('servicios DISTINTOS sí pueden sumarse (vacacional + clínica)', () => {
+        expect(motivoPorMonto(470000, [VAC_3, CLINICA])).toMatchObject({ tipo: 'varios' });
+    });
+});
+
+describe('sePuedeCrearSoloPorMonto', () => {
+    it('matrícula, uniformes y clase de prueba sí', () => {
+        expect(sePuedeCrearSoloPorMonto([MATRICULA, UNIFORMES])).toBe(true);
+        expect(sePuedeCrearSoloPorMonto([PRUEBA])).toBe(true);
+    });
+
+    it('un servicio nunca (vacacional, clínica, torneo), ni mezclado con otros', () => {
+        expect(sePuedeCrearSoloPorMonto([VAC_3])).toBe(false);
+        expect(sePuedeCrearSoloPorMonto([CLINICA])).toBe(false);
+        expect(sePuedeCrearSoloPorMonto([SEGURO_TORNEO])).toBe(false);
+        expect(sePuedeCrearSoloPorMonto([MATRICULA, VAC_3])).toBe(false);
+    });
+
+    it('vacío: no', () => {
+        expect(sePuedeCrearSoloPorMonto([])).toBe(false);
+    });
 });
 
 describe('motivoPorMonto (pura)', () => {

@@ -119,6 +119,23 @@ export type MotivoPorMonto =
     | { tipo: 'es_cuota' }
     | { tipo: 'ninguno' };
 
+/** Misma fuente e id = opciones del mismo ítem (p. ej. las semanas del vacacional). Pura. */
+const mismoServicio = (a: PrecioDeMotivo, b: PrecioDeMotivo) =>
+    !!a.fuenteId && a.fuente === b.fuente && a.fuenteId === b.fuenteId;
+
+/** Motivos que son un servicio: se venden por su ficha y su contexto, no por el monto. */
+const MOTIVOS_DE_SERVICIO: readonly Motivo[] = ['torneo', 'viaje', 'clase_extra', 'vacacional', 'otro'];
+
+/**
+ * ¿Se puede CREAR el cobro solo por lo que dice el monto? Un servicio (vacacional,
+ * clínica, torneo…) nunca: lo compra quien lo pidió (venta activa o esperado vivo), y
+ * adivinarlo por el monto deja a la familia con un cobro que no pidió y a la escuela con
+ * un comprobante mal aplicado. Matrícula, uniformes y clase de prueba sí. Pura.
+ */
+export function sePuedeCrearSoloPorMonto(precios: Pick<PrecioDeMotivo, 'motivo'>[]): boolean {
+    return precios.length > 0 && !precios.some((p) => MOTIVOS_DE_SERVICIO.includes(p.motivo));
+}
+
 /** Tope de precios para buscar sumas (con más, casi cualquier monto suma de varias formas). */
 const MAX_PRECIOS_SUMA = 12;
 
@@ -143,9 +160,14 @@ export function motivoPorMonto(
     const n = completos.length;
     for (let i = 0; i < n && sumas.length < 2; i++) {
         for (let j = i + 1; j < n && sumas.length < 2; j++) {
+            // Dos opciones del MISMO servicio (1, 2, 3 o 4 semanas del vacacional) son alternativas:
+            // no se compran juntas, así que su suma no explica un comprobante (Monster 2026-11-13:
+            // 3 semanas + 4 semanas = $370.000 se tomó por cierta y era matrícula + camisetas).
+            if (mismoServicio(completos[i], completos[j])) continue;
             const ij = completos[i].monto + completos[j].monto;
             if (igual(ij, monto)) sumas.push([completos[i], completos[j]]);
             for (let k = j + 1; k < n && sumas.length < 2; k++) {
+                if (mismoServicio(completos[i], completos[k]) || mismoServicio(completos[j], completos[k])) continue;
                 if (igual(ij + completos[k].monto, monto)) sumas.push([completos[i], completos[j], completos[k]]);
             }
         }

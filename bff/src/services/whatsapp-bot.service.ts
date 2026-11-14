@@ -2366,6 +2366,10 @@ async function handleIdentification(
     // SU bienvenida y sus sedes en vez de la puerta de 3 botones. Una sola vez: si
     // ya se le contestó lo escolar (30 días), lo ve la escuela en el buzón.
     if (embudoActivo(await ajustesDeLaEscuela(integration.school_id))) {
+        if (await yaEsDeLaEscuela(integration, conversationId, contactWaId)) {
+            await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+            return 'resuelto';
+        }
         if (await yaSeLeContestoEscolar(conversationId) || !(await reservarPasoUnaVez(conversationId, 'ask_email', 24))) {
             return 'resuelto';
         }
@@ -4504,6 +4508,11 @@ async function atenderDesconocidoEnEscuela(
     // Embudo del interesado (B2): la escuela que lo tiene contesta con SU bienvenida,
     // sus sedes y sus preguntas en vez de la cortesía o el enlace. Mismo step: cuenta
     // para el freno de 30 días.
+    // Quien ya se registró, pagó o habla con la escuela no vuelve al embudo: es de la escuela.
+    if (embudoActivo(ajustesEscuela) && await yaEsDeLaEscuela(integration, conversationId, contactWaId)) {
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+        return 'escuela_atendiendo';
+    }
     if (embudoActivo(ajustesEscuela) && await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
         { saludo, step: PASO_DESCONOCIDO_ESCOLAR })) {
         return contestar('embudo');
@@ -7595,6 +7604,39 @@ async function historiaDeDias(conversationId: string, dias: number): Promise<Fil
 }
 
 /** ¿Una persona de la escuela le escribió a este contacto en los últimos `dias`? Nunca lanza (false). */
+/**
+ * ¿Esta conversación YA es de la escuela? Entonces el embudo del interesado no arranca:
+ * repetirle la bienvenida, las 5 preguntas y los $15.000 de la clase de prueba a alguien que
+ * ya se registró, ya pagó o ya habla con la escuela es lo peor que puede hacer el bot (Monster
+ * 2026-11-14: una mamá con matrícula pagada y clase de prueba hecha recibió el embudo de nuevo).
+ * Cualquiera de tres señales: la escuela le escribió en 30 días, el prospecto ya dejó sus datos
+ * (fecha de nacimiento), o mandó un comprobante en los últimos 14 días. Nunca lanza: ante el
+ * error, false (como antes).
+ */
+async function yaEsDeLaEscuela(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+): Promise<boolean> {
+    try {
+        if (await escuelaLeEscribioEnDias(conversationId, 30)) return true;
+        const { variantesTelefonoLead } = await import('./whatsapp-prospecto-lead.service');
+        const variantes = variantesTelefonoLead(contactWaId);
+        if (variantes.length) {
+            const { data: lead } = await supabase.from('school_signup_leads').select('id')
+                .eq('school_id', integration.school_id).in('phone', variantes)
+                .neq('status', 'discarded').not('birth_date', 'is', null).limit(1);
+            if (Array.isArray(lead) && lead.length > 0) return true;
+        }
+        const desde = new Date(Date.now() - 14 * 24 * 3600_000).toISOString();
+        const { count } = await supabase.from('whatsapp_inbound_queue')
+            .select('id', { count: 'exact', head: true })
+            .eq('school_id', integration.school_id).eq('wa_phone_number', contactWaId)
+            .eq('message_type', 'image').gte('created_at', desde);
+        return (count ?? 0) > 0;
+    } catch {
+        return false;
+    }
+}
+
 async function escuelaLeEscribioEnDias(conversationId: string, dias: number): Promise<boolean> {
     try {
         const { data, error } = await supabase.from('whatsapp_messages')
