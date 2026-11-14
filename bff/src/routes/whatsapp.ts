@@ -607,10 +607,14 @@ async function handleBotTurn(
         // transfiero» y recibió «No pude abrir tu último mensaje»).
         const tipoOriginal = String((msg.raw as any)?.type || '');
         if (tipoOriginal === 'revoke' || tipoOriginal === 'edit') return;
-        const d = await debeAtender(integration, conversationId, msg.contactWaId).catch(() => null);
-        if (!d?.atender || optedOut) return;
+        if (optedOut) return;
+        // El buzón se abre SIEMPRE: abrir no escribe nada al contacto. Antes solo se abría si el asistente
+        // iba a atender, y un comprobante o mensaje ilegible de alguien en un flujo de la escuela (caso
+        // Alexandra, Monster 11-12 10:43) quedaba mudo y sin que nadie lo viera.
         await abrirEnBuzon(integration, conversationId, msg.contactWaId)
             .catch((err) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: no se pudo abrir en el buzón'));
+        const d = await debeAtender(integration, conversationId, msg.contactWaId).catch(() => null);
+        if (!d?.atender) return;
         if (!(await reservarPasoUnaVez(conversationId, `${PASO_TIPO_NO_SOPORTADO}_unsupported`, 24))) return;
         await deliver(integration, conversationId, msg.contactWaId,
             'No pude abrir tu último mensaje: WhatsApp no me deja verlo. 🙏 ¿Me lo escribes, por favor? ' +

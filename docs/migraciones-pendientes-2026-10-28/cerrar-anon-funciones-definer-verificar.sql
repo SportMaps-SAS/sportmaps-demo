@@ -172,9 +172,8 @@ pol_esperada(tablename, policyname) AS (VALUES
     ('school_branches', 'Members can view branches'),
     ('invitations', 'Invitations: manage staff'),
     ('school_staff', 'Staff: manage own school'),
-    ('session_bookings', 'session_bookings_insert_with_enrollment'),
-    ('session_bookings', 'session_bookings_select_own'),
-    ('session_bookings', 'session_bookings_update_cancel')
+    -- SEG-31 (20261107174916) eliminó session_bookings_insert_with_enrollment y _update_cancel a propósito.
+    ('session_bookings', 'session_bookings_select_own')
 ),
 chk_pol AS (
   SELECT 'POLICY'::text AS cat, e.tablename || ' · ' || e.policyname AS sig,

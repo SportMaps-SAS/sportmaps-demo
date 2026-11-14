@@ -1515,6 +1515,22 @@ export default function SchoolStudentsManagementPage() {
           <DropdownMenuItem onClick={() => setAccountStudentId(student.id)}>
             <FileText className="h-4 w-4 mr-2" /> {cobrosYPagosOn ? 'Cobros y pagos' : 'Editar estado de cuenta'}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate(`/estado-cuenta?${buildAccountStatementParams(student)}`)}>
+            <FileText className="h-4 w-4 mr-2" /> Ver estado de cuenta
+          </DropdownMenuItem>
+          {pauseEnabled && canManageStudents && student.enrollment_id && (
+            pauseByEnrollment.has(student.enrollment_id)
+              ? (
+                <DropdownMenuItem onClick={() => reactivar.mutate({ enrollmentId: student.enrollment_id })}>
+                  Reactivar de la pausa
+                </DropdownMenuItem>
+              )
+              : (
+                <DropdownMenuItem onClick={() => setPausingStudent(student)}>
+                  🏖️ Vacaciones / pausa
+                </DropdownMenuItem>
+              )
+          )}
           {/* En escritorio este es el único menú por fila: sin esto, «No asistió»
               solo se alcanzaba desde las tarjetas (< lg). */}
           {canManageStudents && student.enrollment_id && (

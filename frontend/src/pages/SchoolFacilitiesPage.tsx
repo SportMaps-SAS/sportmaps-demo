@@ -257,7 +257,7 @@ function ReservationDetailModal({
           )}
 
           <div className="flex gap-3 pt-4">
-            {reservation.status === 'pending' && (
+            {reservation.status === 'pending' && !reservation.isSessionBooking && (
               <>
                 <Button
                   className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold h-11"
@@ -737,7 +737,7 @@ export default function SchoolFacilitiesPage() {
                                 <DropdownMenuSeparator className="my-1.5 opacity-40" />
 
                                 {/* Approve */}
-                                {res.status === 'pending' && (
+                                {res.status === 'pending' && !res.isSessionBooking && (
                                   <DropdownMenuItem
                                     className="py-2.5 font-bold cursor-pointer text-emerald-600 focus:text-emerald-700 focus:bg-emerald-500/10"
                                     onClick={() => approveReservation(res.id)}
@@ -747,7 +747,7 @@ export default function SchoolFacilitiesPage() {
                                 )}
 
                                 {/* Complete — la reserva ya se usó (confirmed -> completed) */}
-                                {res.status === 'confirmed' && (
+                                {res.status === 'confirmed' && !res.isSessionBooking && (
                                   <DropdownMenuItem
                                     className="py-2.5 font-bold cursor-pointer text-blue-600 focus:text-blue-700 focus:bg-blue-500/10"
                                     onClick={() => completeReservation(res.id)}

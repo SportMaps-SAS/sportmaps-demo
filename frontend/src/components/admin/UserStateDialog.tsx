@@ -59,6 +59,7 @@ interface UserState {
         unregisteredAthletes: Array<{ id: string; schoolId: string; fullName: string | null; docNumber: string | null; isActive: boolean | null; linkedProfileId: string | null }>;
         children: Array<{ id: string; fullName: string | null; parentId: string | null; parentEmailTemp: string | null; docNumber: string | null; schoolId: string | null }>;
         activeEnrollmentCount: number;
+        repeatedEnrollmentGroups: number;
         duplicatePaymentGroups: Array<{ schoolId: string; period: string; amount: number; paymentIds: string[] }>;
         paymentsWithoutPayer: number;
     };
@@ -377,7 +378,7 @@ export default function UserStateDialog({ open, onOpenChange, initialEmail }: Pr
                             <Section title="Duplicidad" icon={UsersRound}>
                                 <Row
                                     label="Inscripciones activas"
-                                    bad={state.duplicity.activeEnrollmentCount > 1}
+                                    bad={state.duplicity.repeatedEnrollmentGroups > 0}
                                 >
                                     {state.duplicity.activeEnrollmentCount}
                                 </Row>
