@@ -89,7 +89,7 @@ import type { Verdict } from '../services/receipt-verdict';
 import type { Motivo } from '../services/motivos-de-cobro';
 import { MOTIVO_DE_OTRO_CONCEPTO } from '../services/whatsapp-otro-concepto.service';
 import {
-    cobroDesdeComprobanteActivo, preciosDeMotivos, motivoPorMonto, decidirConEsperado, opcionesDeMotivo,
+    cobroDesdeComprobanteActivo, preciosDeMotivos, motivoPorMonto, decidirConEsperado, opcionesDeMotivo, sePuedeCrearSoloPorMonto,
     crearCobroDesdeComprobante, anularCobroCreado, pendientesDelLead, leadPorTelefono, destinoExactoDelComprobante,
     conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
@@ -1620,6 +1620,9 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
     const m = motivoPorMonto(monto, precios);
     if (m.tipo !== 'uno' && m.tipo !== 'varios') return false;
     const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
+    // Un servicio (vacacional, clínica…) no se crea adivinando por el monto: lo decide una persona
+    // (Monster 2026-11-13: $370.000 de matrícula + camisetas quedó como vacacional de 3 + 4 semanas).
+    if (!sePuedeCrearSoloPorMonto(elegidos)) return false;
     const conPrueba = elegidos.some((x) => x.motivo === 'clase_prueba');
     // Una combinación con la clase de prueba no agenda sola: la confirma una persona.
     const agenda: AlAplicar | undefined = !conPrueba ? undefined
