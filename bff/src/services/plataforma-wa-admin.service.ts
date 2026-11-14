@@ -184,13 +184,23 @@ export type ResultadoConectar =
 export async function conectarCanal(code: string, sesion: DatosDeSesion | null, actorId: string): Promise<ResultadoConectar> {
     const canje = await canjearCodigo(code);
     if ('error' in canje) return { ok: false, error: canje.error };
-    const activos = await resolverActivos(canje.token, sesion);
+    return conectarCanalConToken(canje.token, sesion, actorId);
+}
+
+/**
+ * Lo mismo que `conectarCanal` pero con el token ya en la mano (usuario del sistema de Meta Business), sin pasar
+ * por el asistente de registro de Meta. Valida con Graph que el token alcanza la cuenta y el número, suscribe los
+ * webhooks y guarda el token CIFRADO. Lo usa `scripts/wa-conectar-canal.ts` (el token sale de una variable de
+ * entorno, nunca del chat ni de un archivo). Nunca imprime el token.
+ */
+export async function conectarCanalConToken(token: string, sesion: DatosDeSesion | null, actorId: string): Promise<ResultadoConectar> {
+    const activos = await resolverActivos(token, sesion);
     if ('error' in activos) return { ok: false, error: activos.error };
 
-    const cifrado = encryptToken(canje.token);
-    if (decryptToken(cifrado) !== canje.token) return { ok: false, error: 'No se pudo cifrar el token' };
+    const cifrado = encryptToken(token);
+    if (decryptToken(cifrado) !== token) return { ok: false, error: 'No se pudo cifrar el token' };
 
-    const webhooksSuscritos = await suscribirWebhooks(canje.token, activos.wabaId);
+    const webhooksSuscritos = await suscribirWebhooks(token, activos.wabaId);
     const numero = soloDigitos(activos.display) || null;
     const ahora = new Date().toISOString();
     const { error } = await supabase.from('platform_wa_canal').upsert({

@@ -2912,6 +2912,61 @@ export const helpArticles: HelpArticle[] = [
     ],
     related: ['inscripcion-padre-paso-a-paso', 'acudiente-app-guia'],
   },
+  {
+    slug: 'instalar-app-celular',
+    categoryId: 'primeros-pasos',
+    title: 'Instalar o descargar la app de SportMaps en el celular (acceso directo en Android y iPhone)',
+    excerpt:
+      'Sí hay aplicación para instalar: SportMaps se instala desde el navegador como acceso directo, en Android con Chrome y en iPhone con Safari. Paso a paso.',
+    readTime: '2 min',
+    targetRole: ['all'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'Sí, SportMaps se puede instalar en el celular. No hace falta buscarla en Play Store ni en App Store: se instala desde el navegador y queda un ícono en la pantalla de inicio, como cualquier app. Se hace una sola vez entrando a app.sportmaps.co.',
+      },
+      { type: 'h2', content: 'En Android (Chrome)' },
+      {
+        type: 'ol',
+        items: [
+          'Abre app.sportmaps.co en Chrome.',
+          'Si sale el aviso «Instalar SportMaps», toca Instalar y confirma. Con eso queda lista.',
+          'Si no sale el aviso, toca el menú ⋮ (arriba a la derecha de Chrome).',
+          'Elige «Instalar app» o «Añadir a pantalla de inicio» y confirma.',
+          'Abre el ícono de SportMaps desde la pantalla de inicio e inicia sesión.',
+        ],
+      },
+      {
+        type: 'callout',
+        variant: 'tip',
+        content:
+          'Si abriste el enlace desde WhatsApp, Instagram o Facebook, no se puede instalar desde ahí: toca ⋮ y elige «Abrir en el navegador» (Chrome), y sigue desde el paso 3.',
+      },
+      { type: 'h2', content: 'En iPhone o iPad (Safari)' },
+      {
+        type: 'ol',
+        items: [
+          'Abre app.sportmaps.co en Safari. En iPhone solo funciona desde Safari, no desde Chrome ni desde WhatsApp.',
+          'Toca el botón Compartir (el cuadrado con la flecha hacia arriba): en iPhone está abajo en el centro, en iPad arriba a la derecha.',
+          'Desliza la lista hacia arriba y toca «Añadir a pantalla de inicio» (en algunas versiones dice «Añadir a inicio»).',
+          'Toca «Añadir», arriba a la derecha.',
+          'Abre el ícono de SportMaps desde la pantalla de inicio e inicia sesión.',
+        ],
+      },
+      { type: 'h2', content: 'Si algo no sale' },
+      {
+        type: 'ul',
+        items: [
+          'En Android no aparece el aviso «Instalar»: puede que ya esté instalada o que Chrome aún no lo ofrezca. Usa el menú ⋮ → «Instalar app».',
+          'En iPhone no aparece «Añadir a pantalla de inicio»: confirma que estás en Safari y no dentro de otra app. Si no la ves en la lista, entra a Compartir → Más y actívala.',
+          'La app se ve desactualizada: ciérrala por completo y ábrela de nuevo con internet; se actualiza sola.',
+          'Si la instalaste desde un enlace de pruebas o de otra dirección, borra ese ícono e instala de nuevo desde app.sportmaps.co.',
+        ],
+      },
+    ],
+    related: ['acudiente-app-guia'],
+  },
 ];
 
 export const helpFAQs: HelpFAQ[] = [
@@ -2923,7 +2978,7 @@ export const helpFAQs: HelpFAQ[] = [
   {
     question: "¿SportMaps funciona en celular?",
     answer:
-      "Sí. SportMaps es una PWA (Progressive Web App): funciona en el navegador del celular y puedes instalarla como app desde Chrome/Safari ('Agregar a pantalla de inicio'). No hay app nativa separada todavía.",
+      "Sí. SportMaps es una PWA (Progressive Web App): funciona en el navegador del celular y puedes instalarla como app: en Android desde Chrome (menú ⋮ → Instalar app) y en iPhone desde Safari (Compartir → Añadir a pantalla de inicio). Se instala una sola vez entrando a app.sportmaps.co. No hay app nativa separada todavía.",
   },
   {
     question: "¿Qué métodos de pago acepta SportMaps?",

@@ -82,7 +82,14 @@ function flecha(doc: PDFKit.PDFDocument, x: number, y: number, delta: number, te
 }
 
 export function renderAthleteReportV2(doc: PDFKit.PDFDocument, o: InformeV2Opciones) {
-    const s = o.snapshot, c = o.marca.primaryColor, inf = o.tono === 'infantil';
+    // Los snapshots viejos (anteriores a calendario / autoevaluación) no traen todos los campos: se rellenan vacíos.
+    const s: ReportSnapshot = {
+        ...o.snapshot,
+        calendar: o.snapshot.calendar ?? [], metrics_session: o.snapshot.metrics_session ?? [], metrics: o.snapshot.metrics ?? [],
+        radar: o.snapshot.radar ?? [], highlights: o.snapshot.highlights ?? [], to_work_on: o.snapshot.to_work_on ?? [],
+        attendance: o.snapshot.attendance ?? { present: 0, total: 0, pct: null },
+    };
+    const c = o.marca.primaryColor, inf = o.tono === 'infantil';
     const W = doc.page.width, CW = W - M * 2;
     const nombre = s.athlete.name, primer = nombre.split(' ')[0];
     const mes = capitalize(s.period.label);

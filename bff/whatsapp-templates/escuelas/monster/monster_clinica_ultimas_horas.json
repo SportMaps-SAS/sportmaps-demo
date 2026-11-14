@@ -1,0 +1,24 @@
+{
+  "name": "monster_clinica_ultimas_horas",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! ⏳ Hoy termina la preventa de la *Clínica de Armadores y Atacantes* de Monster´s Volley (21 y 22 de noviembre, con Jorge Mesa, armador de la Selección Colombia). Con un abono de $150.000 antes de las 11:59 p. m. mantienes el valor de $300.000; desde mañana, $350.000. ¿Te paso los datos para separar tu cupo?",
+      "example": { "body_text": [["Carolina"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir promociones cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, quiero separar" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

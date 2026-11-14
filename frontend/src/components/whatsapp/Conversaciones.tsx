@@ -58,13 +58,14 @@ import { useOcultarFabSoporte } from '@/lib/supportFab';
 import { AdjuntoDelMensaje, type MedioDelMensaje } from './AdjuntoDelMensaje';
 import { EnviarPlantilla } from './EnviarPlantilla';
 import { TipoDeContactoDialog } from './TipoDeContactoDialog';
+import { AgendarClasePruebaDialog } from './AgendarClasePruebaDialog';
 import {
     OPCIONES_DE_TIPO, esMarcaNoFamilia, esSoloNoFamilia, pedidoDeTipo, textoDelResultado,
     type OpcionDeTipo, type RespuestaDeTipo,
 } from './tipoDeContacto';
 import {
     MessageSquare, Send, Bot, User, Clock, Loader2, ChevronLeft, ChevronDown, ChevronRight, Sparkles, X,
-    CheckCircle2, Hand, Unlock, Search, MoreVertical, RefreshCw, MessageCircle, FileText, Tags,
+    CheckCircle2, Hand, Unlock, Search, MoreVertical, RefreshCw, MessageCircle, FileText, Tags, CalendarPlus,
 } from 'lucide-react';
 
 interface UltimoMensaje {
@@ -403,6 +404,7 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
     const [clasificacion, setClasificacion] = useState(true);
     /** Conversación cuyo tipo se está eligiendo (Familia / Personal / Negocio…), con la opción preseleccionada. */
     const [tipoDialogo, setTipoDialogo] = useState<{ c: Conversacion; tipo: OpcionDeTipo } | null>(null);
+    const [agendando, setAgendando] = useState<Conversacion | null>(null);
     const [accionando, setAccionando] = useState(false);
     // Sin la migración de «tomar» el BFF manda toma_disponible=false: el botón se deshabilita.
     const [tomaDisponible, setTomaDisponible] = useState(true);
@@ -1092,6 +1094,11 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
                                     onClick={() => setTipoDialogo({ c: abierta, tipo: tipoActual(abierta) })}>
                                 <Tags className="h-3.5 w-3.5 mr-1" /> Tipo de contacto
                             </Button>
+                            <Button variant="outline" size="sm" disabled={accionando}
+                                    title="Asignarle un cupo de clase de prueba a este contacto"
+                                    onClick={() => setAgendando(abierta)}>
+                                <CalendarPlus className="h-3.5 w-3.5 mr-1" /> Agendar
+                            </Button>
                             <Button variant="outline" size="sm" disabled={accionando || abierta.status === 'closed'}
                                     onClick={() => void cerrar()}>
                                 {accionando
@@ -1268,6 +1275,16 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
             {panelLista}
             {panelHilo}
 
+            {agendando && (
+            <AgendarClasePruebaDialog
+                schoolId={schoolId}
+                conversacionId={agendando?.id ?? null}
+                nombreInicial={agendando?.contact_name ?? null}
+                abierto={!!agendando}
+                onAbiertoChange={(v) => { if (!v) setAgendando(null); }}
+                onHecho={({ mensaje }) => setTexto(mensaje)}
+            />
+            )}
             <TipoDeContactoDialog
                 schoolId={schoolId}
                 conversacionId={tipoDialogo?.c.id ?? null}

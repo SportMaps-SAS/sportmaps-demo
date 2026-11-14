@@ -281,20 +281,13 @@ export function useFacilityReservations() {
 
   const { mutateAsync: updateReservation, isPending: isUpdating } = useMutation({
     mutationFn: async ({ id, payload, isSessionBooking }: { id: string; payload: UpdateReservationPayload; isSessionBooking?: boolean }) => {
-      // Solo clases de cortesía (session_bookings). Las reservas de instalación NUNCA se
-      // escriben desde el navegador: van por el BFF (reservations / reservations-admin).
-      if (!isSessionBooking) throw new Error('Las reservas de instalación se actualizan por el servidor.');
-      const { data, error } = await supabase
-        .from('session_bookings')
-        .update({
-          status: payload.status,
-          updated_at: new Date().toISOString()
-        } as any)
-        .eq('id', id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
+      // Ninguna reserva se escribe desde el navegador: las de instalación van por el BFF
+      // (reservations / reservations-admin) y las clases de cortesía (session_bookings) también,
+      // porque mover su estado mueve el crédito. SEG-31 (mig. 20261107174916) le quitó al
+      // navegador el permiso de escribir esa tabla; antes este UPDATE ya fallaba (mandaba
+      // 'pending'/'completed', que el enum booking_status no tiene).
+      void id; void payload; void isSessionBooking;
+      throw new Error('El estado de una reserva no se cambia desde aquí.');
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
@@ -334,10 +327,8 @@ export function useFacilityReservations() {
   const approveReservation = async (id: string) => {
     if (!user) return;
     const isSessionBooking = reservations.find(r => r.id === id)?.isSessionBooking;
-    if (isSessionBooking) {
-      await updateReservation({ id, payload: { status: 'confirmed' }, isSessionBooking });
-      return;
-    }
+    // Una clase de cortesía nace 'confirmed': no hay nada que aprobar.
+    if (isSessionBooking) return;
     await statusViaBffMutation({ id, action: 'approve' }).catch(() => undefined);
   };
 
@@ -418,10 +409,8 @@ export function useFacilityReservations() {
 
   const completeReservation = async (id: string) => {
     const isSessionBooking = reservations.find(r => r.id === id)?.isSessionBooking;
-    if (isSessionBooking) {
-      await updateReservation({ id, payload: { status: 'completed' }, isSessionBooking });
-      return;
-    }
+    // La asistencia de una clase de cortesía no se marca aquí (el estado vivo es attended/no_show).
+    if (isSessionBooking) return;
     await statusViaBffMutation({ id, action: 'complete' }).catch(() => undefined);
   };
 

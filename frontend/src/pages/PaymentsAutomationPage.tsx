@@ -297,6 +297,14 @@ function FamilyNote({ note }: { note?: { pie: string } | null }) {
   );
 }
 
+/**
+ * Pastilla de «qué se cobra» (equipo, plan, mes) en las tarjetas del celular.
+ * Alto automático y texto que puede partir: con `h-4` fijo, un equipo largo
+ * («MIXTO MAYORES PROFUNDIZACION», Monster) partía en dos líneas que se salían
+ * de la pastilla y quedaban encima del chip del mes.
+ */
+const CHIP_QUE_SE_COBRA = 'h-auto max-w-full py-0.5 text-[10px] leading-tight whitespace-normal break-words text-left';
+
 // ── Qué estados se traen del servidor ────────────────────────────────────────
 // Estados que SIEMPRE se piden: los que representan plata reportada o un
 // desenlace real. Los cobros emitidos y no pagados (pending/overdue sin
@@ -1810,75 +1818,80 @@ export default function PaymentsAutomationPage() {
                   {/* Mobile cards */}
                   <div className="grid grid-cols-1 gap-3 p-4 md:hidden">
                     {pendingPayments.map((payment) => (
-                      <div key={payment.id} className="border rounded-lg p-4 space-y-3 bg-card">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <p className="font-bold text-sm truncate">{payment.athlete_name || 'Sin nombre'}</p>
+                      // En el celular la tarjeta va en franjas a todo el ancho: nombre y monto,
+                      // qué se cobra, estado del comprobante y botones. Antes los chips de estado
+                      // iban en una columna a la derecha que le quitaba ancho al nombre
+                      // («Daniel Feli…») y las pastillas tenían alto fijo (h-4): un equipo largo
+                      // partía en dos líneas y se montaba encima del chip del mes.
+                      <div key={payment.id} className="border rounded-lg p-4 space-y-2.5 bg-card">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <p className="font-bold text-sm leading-snug break-words">{payment.athlete_name || 'Sin nombre'}</p>
                               {payment.asiste_externo && <ExternoBadge />}
                             </div>
-                            <div className="flex gap-1 flex-wrap mt-0.5">
-                              <TipoDeCobroBadge payment={payment} className="max-w-full" />
-                              {payment.team?.name && (
-                                <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200 py-0 h-4">
-                                  <Trophy className="h-2.5 w-2.5 mr-1" /> {payment.team.name}
-                                </Badge>
-                              )}
-                              {(payment as any).plan?.name && (
-                                <Badge variant="outline" className="text-[10px] bg-purple-50 text-purple-700 border-purple-200 py-0 h-4">
-                                  <Zap className="h-2.5 w-2.5 mr-1" /> {(payment as any).plan.name}
-                                </Badge>
-                              )}
-                              {(payment as any).period_label && (
-                                <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200 py-0 h-4">
-                                  {(payment as any).period_label}
-                                </Badge>
-                              )}
-                              {showBranchCol && <BranchChip branchId={payment.branch_id} branches={branches} className="h-4" />}
-                              {!payment.team?.name && !(payment as any).plan?.name && (
-                                <span className="text-xs text-muted-foreground truncate">{payment.concept}</span>
-                              )}
-                            </div>
-                            {(payment as any).period_already_settled && (
-                              <div className="mt-1 flex items-center gap-1 text-[10px] font-bold text-red-600">
-                                <AlertTriangle className="h-3 w-3" /> Este mes ya fue pagado y aprobado
-                              </div>
-                            )}
-                            <p className="text-xs text-muted-foreground">{(payment as any).parent_responsible || '—'}</p>
-                            <FamilyNote note={familyNotes[payment.id]} />
+                            <p className="text-xs text-muted-foreground break-words">{(payment as any).parent_responsible || '—'}</p>
                           </div>
                           <div className="text-right shrink-0">
                             <p className="font-bold text-primary text-sm">{formatCurrency(payment.amount)}</p>
-                            <p className="text-xs text-muted-foreground">{reportedDate(payment)}</p>
-                            <div className="mt-1 flex flex-wrap gap-1 justify-end">
-                              {renderWaitingChip(payment)}
-                              {(payment.receipt_url || payment.status === 'awaiting_approval') ? (
-                                <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">Transferencia</Badge>
-                              ) : (
-                                <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Inscripción QR</Badge>
-                              )}
-                              <DestinoBadge payment={payment} />
-                              <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
-                              {renderReceiptGroupChip(payment)}
-                            </div>
+                            <p className="text-xs text-muted-foreground whitespace-nowrap">{reportedDate(payment)}</p>
                           </div>
                         </div>
-                        <div className="flex gap-2 flex-wrap">
+                        <div className="flex flex-wrap items-start gap-1">
+                          <TipoDeCobroBadge payment={payment} className="max-w-full" />
+                          {payment.team?.name && (
+                            <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-red-50 text-red-700 border-red-200`}>
+                              <Trophy className="h-2.5 w-2.5 mr-1 shrink-0" /> {payment.team.name}
+                            </Badge>
+                          )}
+                          {(payment as any).plan?.name && (
+                            <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-purple-50 text-purple-700 border-purple-200`}>
+                              <Zap className="h-2.5 w-2.5 mr-1 shrink-0" /> {(payment as any).plan.name}
+                            </Badge>
+                          )}
+                          {(payment as any).period_label && (
+                            <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-blue-50 text-blue-700 border-blue-200`}>
+                              {(payment as any).period_label}
+                            </Badge>
+                          )}
+                          {showBranchCol && <BranchChip branchId={payment.branch_id} branches={branches} />}
+                          {!payment.team?.name && !(payment as any).plan?.name && (
+                            <span className="text-xs text-muted-foreground break-words">{payment.concept}</span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1">
+                          {renderWaitingChip(payment)}
+                          {(payment.receipt_url || payment.status === 'awaiting_approval') ? (
+                            <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">Transferencia</Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">Inscripción QR</Badge>
+                          )}
+                          <DestinoBadge payment={payment} />
+                          <VerdictBadge verdict={payment.receipt_verdict} reasons={payment.receipt_verdict_reasons} />
+                          {renderReceiptGroupChip(payment)}
+                        </div>
+                        {(payment as any).period_already_settled && (
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-red-600">
+                            <AlertTriangle className="h-3 w-3 shrink-0" /> Este mes ya fue pagado y aprobado
+                          </div>
+                        )}
+                        <FamilyNote note={familyNotes[payment.id]} />
+                        <div className="grid grid-cols-2 gap-2 pt-1">
                           {payment.receipt_url && (
-                            <Button variant="outline" size="sm" className="h-8 gap-1 text-blue-600 border-blue-200 bg-blue-50" onClick={() => handleShowProof(payment)}>
-                              <Eye className="h-3 w-3" /> Comprobante
+                            <Button variant="outline" size="sm" className="h-9 w-full gap-1 text-blue-600 border-blue-200 bg-blue-50" onClick={() => handleShowProof(payment)}>
+                              <Eye className="h-3.5 w-3.5" /> Comprobante
                             </Button>
                           )}
-                          <Button size="sm" variant="outline" className="h-8 text-green-600 border-green-200 hover:bg-green-50" onClick={() => setPaymentToApprove(payment)}>
-                            <CheckCircle2 className="h-3 w-3 mr-1" />
+                          <Button size="sm" variant="outline" className="h-9 w-full text-green-600 border-green-200 hover:bg-green-50" onClick={() => setPaymentToApprove(payment)}>
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
                             Aprobar
                           </Button>
-                          <Button size="sm" variant="outline" className="h-8 text-red-600 border-red-200 hover:bg-red-50" disabled={!(payment.status === 'awaiting_approval' || ((payment.status === 'pending' || payment.status === 'overdue') && !!payment.receipt_url))} onClick={() => setRejectingPayment(payment)}>
-                            <XCircle className="h-3 w-3 mr-1" />
+                          <Button size="sm" variant="outline" className="h-9 w-full text-red-600 border-red-200 hover:bg-red-50" disabled={!(payment.status === 'awaiting_approval' || ((payment.status === 'pending' || payment.status === 'overdue') && !!payment.receipt_url))} onClick={() => setRejectingPayment(payment)}>
+                            <XCircle className="h-3.5 w-3.5 mr-1" />
                             Rechazar
                           </Button>
-                          <Button size="sm" variant="outline" className="h-8 text-orange-600 border-orange-200 hover:bg-orange-50" onClick={() => setCreatingGlosaPayment(payment)}>
-                            <AlertTriangle className="h-3 w-3 mr-1" />
+                          <Button size="sm" variant="outline" className="h-9 w-full text-orange-600 border-orange-200 hover:bg-orange-50" onClick={() => setCreatingGlosaPayment(payment)}>
+                            <AlertTriangle className="h-3.5 w-3.5 mr-1" />
                             Glosar
                           </Button>
                         </div>
@@ -2460,31 +2473,31 @@ export default function PaymentsAutomationPage() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           {!g?.continua && (
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <p className="font-medium text-sm truncate">{payment.athlete_name || 'Sin nombre'}</p>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <p className="font-medium text-sm leading-snug break-words">{payment.athlete_name || 'Sin nombre'}</p>
                               {payment.asiste_externo && <ExternoBadge />}
                             </div>
                           )}
-                          <div className="flex gap-1 flex-wrap mt-0.5">
+                          <div className="flex gap-1 flex-wrap items-start mt-0.5">
                             <TipoDeCobroBadge payment={payment} className="max-w-full" />
                             {payment.team?.name && (
-                              <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200 py-0 h-4">
-                                <Trophy className="h-2.5 w-2.5 mr-1" /> {payment.team.name}
+                              <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-red-50 text-red-700 border-red-200`}>
+                                <Trophy className="h-2.5 w-2.5 mr-1 shrink-0" /> {payment.team.name}
                               </Badge>
                             )}
                             {(payment as any).plan?.name && (
-                              <Badge variant="outline" className="text-[10px] bg-purple-50 text-purple-700 border-purple-200 py-0 h-4">
-                                <Zap className="h-2.5 w-2.5 mr-1" /> {(payment as any).plan.name}
+                              <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-purple-50 text-purple-700 border-purple-200`}>
+                                <Zap className="h-2.5 w-2.5 mr-1 shrink-0" /> {(payment as any).plan.name}
                               </Badge>
                             )}
                             {(payment as any).period_label && (
-                              <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200 py-0 h-4">
+                              <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-blue-50 text-blue-700 border-blue-200`}>
                                 Cubre {(payment as any).period_label}
                               </Badge>
                             )}
-                            {showBranchCol && <BranchChip branchId={payment.branch_id} branches={branches} className="h-4" />}
+                            {showBranchCol && <BranchChip branchId={payment.branch_id} branches={branches} />}
                             {!payment.team?.name && !(payment as any).plan?.name && (
-                              <span className="text-xs text-muted-foreground truncate">{payment.concept}</span>
+                              <span className="text-xs text-muted-foreground break-words">{payment.concept}</span>
                             )}
                           </div>
                         </div>

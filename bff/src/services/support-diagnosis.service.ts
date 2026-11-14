@@ -73,6 +73,8 @@ export interface UserStateDuplicity {
     unregisteredAthletes: Array<{ id: string; schoolId: string; fullName: string | null; docNumber: string | null; isActive: boolean | null; linkedProfileId: string | null }>;
     children: Array<{ id: string; fullName: string | null; parentId: string | null; parentEmailTemp: string | null; docNumber: string | null; schoolId: string | null }>;
     activeEnrollmentCount: number;
+    /** Inscripciones activas del MISMO sujeto, escuela y equipo: eso sí es un duplicado. Dos equipos o dos hijos no lo son. */
+    repeatedEnrollmentGroups: number;
     /** Cobros mismo mes + mismo monto + misma escuela. */
     duplicatePaymentGroups: Array<{ schoolId: string; period: string; amount: number; paymentIds: string[] }>;
     /** Cobros de menor sin pagador → el papá ve "No tienes permiso para pagar". */
@@ -383,6 +385,16 @@ export async function buildUserState(params: BuildUserStateParams): Promise<User
             schoolId: k.school_id ?? null,
         })),
         activeEnrollmentCount: allEnrollments.filter(e => e.status === 'active').length,
+        repeatedEnrollmentGroups: (() => {
+            const groups: Record<string, number> = {};
+            for (const e of allEnrollments) {
+                if (e.status !== 'active') continue;
+                const subject = e.user_id || e.child_id || e.unregistered_athlete_id || e.id;
+                const key = `${subject}|${e.school_id}|${e.team_id ?? ''}`;
+                groups[key] = (groups[key] || 0) + 1;
+            }
+            return Object.values(groups).filter(n => n > 1).length;
+        })(),
         duplicatePaymentGroups,
         paymentsWithoutPayer: payments.filter(
             p => !p.parent_id && p.child_id && ['pending', 'overdue'].includes(String(p.status)),
@@ -506,12 +518,12 @@ function buildVerdict(
     }
     const duplicatedInView = Object.values(activeSchoolAthletesBySchool).some(n => n > 1);
 
-    if (splitIdentity || duplicatedInView || duplicity.activeEnrollmentCount > 1) {
+    if (splitIdentity || duplicatedInView || duplicity.repeatedEnrollmentGroups > 0) {
         if (splitIdentity) {
             findings.push(`${orphanUnregistered.length} registro(s) precargado(s) activo(s) y sin vincular, existiendo ya un perfil: la misma persona está dos veces y ambas son facturables.`);
         }
-        if (duplicity.activeEnrollmentCount > 1) {
-            findings.push(`${duplicity.activeEnrollmentCount} inscripciones activas — cada una genera cobro.`);
+        if (duplicity.repeatedEnrollmentGroups > 0) {
+            findings.push(`${duplicity.repeatedEnrollmentGroups} inscripción(es) activa(s) repetida(s) en la misma escuela y el mismo equipo — cada una genera cobro.`);
         }
         if (duplicatedInView) {
             findings.push('La vista school_athletes lo trae más de una vez en la misma escuela.');
