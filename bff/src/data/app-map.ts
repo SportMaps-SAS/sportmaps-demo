@@ -283,7 +283,13 @@ export const APP_MAP: Record<string, AppMapRole> = {
                 modulo: 'sedes_sedes',
             },
             {
-                tarea: 'Instalaciones, reservas y clases de prueba',
+                // Fuente: students/ClasePruebaPanel.tsx, school/CanalesClasePrueba.tsx, payment/ClasesDePruebaDialog.tsx (2026-11-14).
+                tarea: 'Clases de prueba: registrar, ver quién vino, cobrar y pasar a deportista',
+                pasos: 'Deportistas > pestaña "Clase de prueba" (ahí caen también las que agenda el bot de WhatsApp) > "Registrar clase de prueba". Cada fila trae la fecha de la clase y "Asistió" / "No vino". "Completar datos" abre el alta normal y lo pasa a deportista. "Configurar" (solo administración): "Recibir clases de prueba", "Valor de la clase de prueba", canales "En la escuela" y "WhatsApp". Cobrarla: Finanzas > Pagos > "Clases de prueba" > "Registrar pago" > "Guardar pago". El ENTRENADOR la ve en su app en Sesiones > "Semana" y ahí marca "Asistió" / "No vino" y el "Grupo recomendado"; solo ve las de sus equipos: si no le aparece, revisa que esté en "Entrenadores Asignados" del equipo del cupo (Mis Equipos > lápiz "Editar Equipo").',
+                palabrasClave: ['clase de prueba', 'clases de prueba', 'prueba', 'cortesía', 'prospecto', 'entrenador no ve', 'profe no ve'],
+            },
+            {
+                tarea: 'Instalaciones, reservas y agenda de clases de prueba con un entrenador',
                 pasos: 'Sedes e Instalaciones > Instalaciones > pestañas "Instalaciones" ("Agregar Instalación"), "Reservas" (aprobar/reprogramar/cancelar) y "Clases de Prueba" ("Agendar Clase de Prueba").',
                 palabrasClave: ['cancha', 'reserva', 'clase de prueba', 'instalación'],
                 modulo: 'sedes_instalaciones',
@@ -331,7 +337,7 @@ export const APP_MAP: Record<string, AppMapRole> = {
             'Pestañas: Hoy · Equipos · Sesiones · Asistencia · Más',
             'Hoy: "Lo que toca ahora" con su botón ("Tomar lista", "Evaluar al equipo" o "Preparar el entreno de mañana"), botón "Pizarra", "Plan de hoy", "Pendientes" (Evaluar · Publicar · Convocar · "Más tarde")',
             'Equipos: "Mis equipos" > toca el equipo > pestañas "Deportistas" · "Partidos y convocatorias" · "Evaluar"',
-            'Sesiones: "Hoy" · "Semana" · "Plan del mes"',
+            'Sesiones: "Hoy" · "Semana" (aquí salen las clases de prueba asignadas) · "Plan del mes"',
             'Asistencia: "Tomar lista" · "Historial"',
             'Más: Mi trabajo (Agenda y citas, Calendario, Informe mensual, Informes del entreno) · Entrenamiento (Pizarra, Rutinas, Mi dotación, Salud del equipo) · Comunicación (Mensajes, Anuncios, Encuestas) · Ayuda (Escribirle a la escuela, Preguntarle a Mapi, Centro de ayuda) · Cuenta (Notificaciones, Mis datos y configuración, Mi perfil, Cambiar de escuela o rol, Cerrar sesión)',
         ].join('\n'),
@@ -399,6 +405,13 @@ export const APP_MAP: Record<string, AppMapRole> = {
                 palabrasClave: ['sesión', 'entrenamiento', 'planificar clase', 'planear', 'modo cancha'],
                 articulo: 'sesiones-entrenador-v2',
                 modulo: 'gestion_deportiva_entrenamiento_metricas',
+            },
+            {
+                // Fuente: coach/v2/semana/ClasesPruebaDelDia.tsx y la RPC clases_prueba_semana (2026-11-14).
+                tarea: 'Clases de prueba que me asignaron (verlas, marcar si vino, recomendar grupo)',
+                pasos: 'Pestaña Sesiones > "Semana" > en el día de la clase sale una tarjeta amarilla con campana: "Clase de prueba · hora · equipo", el nombre y si pagó. Después de la clase, ahí mismo: "Asistió" o "No vino" y "Grupo recomendado" > "Elige el grupo" (la escuela lo ve en Deportistas > "Clase de prueba"). Solo salen las de TUS equipos: si no aparece, el cupo quedó en otro equipo o no estás asignado a ese equipo (lo corrige la administración). Si dice "Falta el comprobante: la clase todavía no está confirmada", aún no se marca. El teléfono de la familia no sale: lo tiene la escuela. En la vista anterior (menú lateral) no salen. NO es la lista de Asistencia: quien viene a prueba todavía no está en el equipo.',
+                palabrasClave: ['clase de prueba', 'clases de prueba', 'prueba', 'cortesía', 'prospecto', 'niño nuevo', 'grupo recomendado', 'asistió', 'no vino'],
+                articulo: 'sesiones-entrenador-v2',
             },
             {
                 tarea: 'Plan del mes / mesociclo (periodización)',

@@ -5,6 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { emailClient } from '@/lib/email-client';
 import { bffClient } from '@/lib/api/bffClient';
 import { normalizeText } from '@/lib/normalizeText';
+import { nombresParecidos } from '@/lib/nombreParecido';
 import { readStoredContextKey, fetchRoleContexts } from '@/lib/roleContexts';
 
 /**
@@ -797,7 +798,10 @@ export async function buscarAtletaExistente(
         const exacto = padron.find(r => normalizarNombreAtleta(r.full_name) === nombre);
         if (exacto) return { ...exacto, coincide_por: 'nombre' };
 
-        const parecido = padron.find(r => nombreContenido(normalizarNombreAtleta(r.full_name), nombre));
+        // «Parecido» = nombre contenido en el otro (con apellido de más) o con UNA errata de tipeo
+        // (Rodriguez / Rodruguez, Dreamers 2026-11-14).
+        const parecido = padron.find(r => nombreContenido(normalizarNombreAtleta(r.full_name), nombre)
+            || nombresParecidos(r.full_name, opts.fullName));
         if (parecido) return { ...parecido, coincide_por: 'nombre_parecido' };
     }
 

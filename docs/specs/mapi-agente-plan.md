@@ -192,6 +192,27 @@ de validar). `seguridad:invariantes` antes de cerrar. Retención de datos en §1
 
 ## 7. Orden de construcción (de corrido)
 
+0. **Tenant primero (pedido del usuario, 2026-11-14): nada se construye antes de esto.**
+   Mapi responde SOLO con datos de la escuela activa de quien habla.
+   - La escuela es `req.schoolId`: el `x-school-id` que manda el front, validado contra
+     `school_members` en `requireAuth`. Nunca la del ticket (`support_tickets.school_id`
+     es la del último vínculo y es informativa), nunca la que diga el mensaje o el
+     modelo, nunca «la primera fila» si falta.
+   - El servidor arma un `Alcance { schoolId, userId, rol, teamIds }` una vez por turno
+     y TODA herramienta lo recibe de ahí; el esquema de la herramienta no tiene
+     parámetro de escuela.
+   - El BFF entra con `service_role` y salta la RLS: cada consulta filtra por
+     `school_id = alcance.schoolId` a mano, o va con el cliente del usuario (JWT) para
+     que la RLS haga de segunda red. Una herramienta sin ese filtro no pasa revisión.
+   - Coach: además, solo sus equipos (`user_coached_team_ids` / `idsDeCoach`), como
+     `clases_prueba_semana`.
+   - Gate de pruebas antes de la primera herramienta: usuario en dos escuelas →
+     cada pregunta responde solo con la activa; cambiar de escuela cambia todo; un id
+     de otra escuela devuelve «no encontrado». Corre en CI.
+   - Ya aplicado en el Mapi de hoy (2026-11-14): `support.routes.ts` pasa
+     `req.schoolId` (antes la del ticket, que a 12 usuarios multiescuela les podía
+     dar pagos, equipos y módulos de la otra) y `construirContextoMapi` no adivina
+     escuela ni acepta una de la que no es miembro.
 1. **Motor:** `agente.ts`, registro, borradores (§10), migración, Sonnet, caché,
    `llm_usage`, encendido por escuela y topes (§13). Pruebas del ciclo con el modelo
    simulado.

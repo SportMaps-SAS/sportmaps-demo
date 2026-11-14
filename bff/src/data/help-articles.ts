@@ -2681,6 +2681,17 @@ export const helpArticles: HelpArticle[] = [
       { type: "p", content: "La pestaña Sesiones tiene tres vistas: Hoy, Semana y Plan del mes. Crear o editar sesiones y el plan se hace en la planificación completa (más cómoda en el computador)." },
       { type: "h2", content: "Semana" },
       { type: "p", content: "Cada día dice qué equipo entrena y si ya tiene sesión planeada. Al tocar un día con sesión ves sus bloques y los botones «Ver sesión» y «Abrir en la cancha». «Planear» te lleva a la planificación completa." },
+      { type: "h2", content: "Clases de prueba que te asignaron" },
+      { type: "p", content: "Cuando la escuela o el bot de WhatsApp agenda una clase de prueba en uno de tus equipos, sale en Semana, dentro del día de la clase: una tarjeta amarilla con campana que dice «Clase de prueba», la hora, el equipo, el nombre y si ya pagó." },
+      {
+        type: "ul",
+        items: [
+          "Después de la clase marca «Asistió» o «No vino» y elige el «Grupo recomendado». La escuela lo ve en Deportistas → Clase de prueba y con eso sigue con la familia.",
+          "Solo ves las clases de tus equipos. Si te dijeron que tenías una y no aparece, pídele a la administración que revise en qué equipo quedó el cupo o que te asigne a ese equipo.",
+          "Si dice «Falta el comprobante: la clase todavía no está confirmada», el cupo está separado pero sin pago: todavía no se puede marcar.",
+          "Quien viene a prueba no está en la lista de Asistencia: todavía no es del equipo.",
+        ],
+      },
       { type: "h2", content: "Modo cancha" },
       { type: "p", content: "«Abrir en la cancha» muestra un bloque a la vez en letra grande, con «Anterior» y «Siguiente». La pantalla no se apaga mientras estás ahí. «Salir» arriba a la derecha." },
       { type: "h2", content: "Plan del mes" },

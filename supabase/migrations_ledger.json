@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 926,
-  "head": "20261112171236",
+  "count": 927,
+  "head": "20261114104111",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -929,6 +929,7 @@
     {"v":"20261112122901","file":"20261112122901_estado_cuenta_enlaces.sql","sha256":"0ced08de3f4d33a1ecb918f6e43beeca5897044336a6c092310a844a422003d1","added":"2026-11-12","by":"Brayan Steven Lopez"},
     {"v":"20261112132803","file":"20261112132803_carmel_marca_propia.sql","sha256":"d8e3e4bb23ebf532115e69f684ad4d6fc5b3445cec3360c6dd225c038d4c53d6","added":"2026-11-12","by":"Brayan Steven Lopez"},
     {"v":"20261112143719","file":"20261112143719_report_pdf_version.sql","sha256":"ef1e7d713a0ff8abf1cca5d95cc5bf9dee07ac71a1187ff6d94b03263cb60608","added":"2026-11-12","by":"Brayan Steven Lopez"},
-    {"v":"20261112171236","file":"20261112171236_agendar_clase_prueba_desde_chat.sql","sha256":"dc5aff3cb63933cba17a66332145ac32fb056e9f9262459de529aa3130941a07","added":"2026-11-12","by":"Brayan Steven Lopez"}
+    {"v":"20261112171236","file":"20261112171236_agendar_clase_prueba_desde_chat.sql","sha256":"dc5aff3cb63933cba17a66332145ac32fb056e9f9262459de529aa3130941a07","added":"2026-11-12","by":"Brayan Steven Lopez"},
+    {"v":"20261114104111","file":"20261114104111_dreamers_vencimiento_mensualidades_noviembre.sql","sha256":"4fc1b53aad3c7ff572146bffc8b56f7ed9b2161c64901b7b7599b673b4d4c94b","added":"2026-11-14","by":"Brayan Steven Lopez"}
   ]
 }

@@ -86,8 +86,11 @@ export async function construirContextoMapi(userId: string, schoolId: string | n
     ctx.nombre = p?.full_name ?? null;
 
     const filas: any[] = Array.isArray(membresias?.data) ? membresias.data : [];
-    // Si el ticket no trae escuela, la del primer vínculo hace de activa.
-    const idActiva = schoolId ?? filas[0]?.school_id ?? null;
+    // La escuela activa la decide la sesión (req.schoolId), nunca se adivina:
+    // antes, sin escuela se tomaba «la primera» y a quien está en dos escuelas
+    // le podía llegar contexto de la otra. Una escuela que no es suya tampoco
+    // vale (defensa extra: el BFF entra con service_role y salta la RLS).
+    const idActiva = schoolId && filas.some((m) => m.school_id === schoolId) ? schoolId : null;
     const enActiva = filas.filter((m) => m.school_id === idActiva);
     const nombreDe = (m: any) => (Array.isArray(m.schools) ? m.schools[0]?.name : m.schools?.name) ?? null;
 
