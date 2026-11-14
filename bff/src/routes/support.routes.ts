@@ -161,12 +161,16 @@ router.post('/messages', async (req: AuthenticatedRequest, res: Response) => {
             });
         }
 
-        const { data: ticketRow } = await client.from('support_tickets').select('school_id').eq('id', ticketId).maybeSingle();
+        // La escuela de Mapi es la ACTIVA de la sesión (x-school-id validado
+        // contra school_members en requireAuth), nunca la del ticket:
+        // support_open_ticket guarda la del último vínculo (joined_at) y es solo
+        // informativa. Con esa, a quien está en dos escuelas Mapi le respondía
+        // con los datos (pagos, equipos, módulos) de la otra (2026-11-14).
         try {
             await runSupportBotTurn({
                 ticketId,
                 requesterId: req.user.id,
-                schoolId: (ticketRow as any)?.school_id ?? null,
+                schoolId: req.schoolId || null,
             });
         } catch (err: any) {
             // El mensaje del usuario ya quedó guardado (S0 no depende del bot);

@@ -65,3 +65,64 @@ describe('mapi-contexto: equipos del coach', () => {
         expect(await idsDeCoach(PERFIL)).toEqual([PERFIL, STAFF]);
     });
 });
+
+// Tenant (2026-11-14): Mapi responde solo con la escuela ACTIVA de la sesión.
+// Antes la escuela salía del ticket (la del último vínculo) o, sin ella, de
+// «la primera fila»: a quien está en dos escuelas le llegaba la otra.
+describe('mapi-contexto: solo la escuela activa', () => {
+    const OTRA = 'de300000-0000-4000-8000-000000000002';
+    const AJENA = 'de300000-0000-4000-8000-000000000099';
+    const STAFF_OTRA = '77f3c7b5-e504-4221-a5a0-74ee53dd6077';
+
+    const conDosEscuelas = () => {
+        h.tablas.school_members = [
+            { profile_id: PERFIL, role: 'coach', school_id: ESCUELA, status: 'active', schools: { name: 'Escuela Demo SportMaps' } },
+            { profile_id: PERFIL, role: 'parent', school_id: OTRA, status: 'active', schools: { name: 'Club Vecino' } },
+        ];
+        h.tablas.school_staff = [{ id: STAFF, coach_auth_id: PERFIL }, { id: STAFF_OTRA, coach_auth_id: PERFIL }];
+        h.tablas.teams = [
+            { name: 'Lightning', coach_id: STAFF, school_id: ESCUELA },
+            { name: 'Equipo del vecino', coach_id: STAFF_OTRA, school_id: OTRA },
+        ];
+        h.tablas.school_module_overrides = [
+            { school_id: ESCUELA, module_key: 'modulo_de_la_activa', enabled: false },
+            { school_id: OTRA, module_key: 'modulo_de_la_otra', enabled: false },
+        ];
+    };
+
+    it('con la escuela activa, nada de la otra: ni rol, ni equipos, ni módulos', async () => {
+        conDosEscuelas();
+        const ctx = await construirContextoMapi(PERFIL, ESCUELA);
+        expect(ctx.escuelaActiva).toBe('Escuela Demo SportMaps');
+        expect(ctx.roles).toEqual(['coach']);
+        expect(ctx.equiposQueEntrena).toEqual(['Lightning']);
+        expect(ctx.modulosApagados).toEqual(['modulo_de_la_activa']);
+        expect(ctx.otrasEscuelas).toEqual(['Club Vecino']);
+    });
+
+    it('al cambiar de escuela, cambia todo el contexto', async () => {
+        conDosEscuelas();
+        const ctx = await construirContextoMapi(PERFIL, OTRA);
+        expect(ctx.escuelaActiva).toBe('Club Vecino');
+        expect(ctx.roles).toEqual(['parent']);
+        expect(ctx.equiposQueEntrena).toEqual([]);
+        expect(ctx.modulosApagados).toEqual(['modulo_de_la_otra']);
+    });
+
+    it('sin escuela en la sesión no adivina ninguna', async () => {
+        conDosEscuelas();
+        h.filtros.length = 0;
+        const ctx = await construirContextoMapi(PERFIL, null);
+        expect(ctx.escuelaActiva).toBeNull();
+        expect(ctx.equiposQueEntrena).toEqual([]);
+        expect(ctx.modulosApagados).toEqual([]);
+        expect(h.filtros.some((f) => f.table === 'teams' || f.table === 'school_module_overrides')).toBe(false);
+    });
+
+    it('una escuela de la que no es miembro no se acepta', async () => {
+        conDosEscuelas();
+        const ctx = await construirContextoMapi(PERFIL, AJENA);
+        expect(ctx.escuelaActiva).toBeNull();
+        expect(ctx.modulosApagados).toEqual([]);
+    });
+});
