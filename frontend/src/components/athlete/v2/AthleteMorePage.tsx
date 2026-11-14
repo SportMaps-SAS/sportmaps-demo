@@ -76,7 +76,7 @@ export interface AthleteMorePageProps {
 }
 
 export function AthleteMorePage({ pagosHref = '/athlete-payments' }: AthleteMorePageProps) {
-  const { signOut } = useAuth();
+  const { signOut, roleContexts } = useAuth();
   const { schoolId, schoolName } = useSchoolContext();
   const { showStore, showMyPurchases } = useMySchoolStore();
   const d = useDeportista();
@@ -128,6 +128,9 @@ export function AthleteMorePage({ pagosHref = '/athlete-payments' }: AthleteMore
     { label: 'Notificaciones', to: '/notifications' },
     { label: 'Mis datos', to: '/profile' },
     { label: 'Configuración', nota: 'Avisos y contraseña', to: '/settings' },
+    // Persona deportista Y acudiente (cambio-de-rol-atleta-acudiente.md): sin esta fila, en el
+    // celular el único camino era el selector del inicio de sesión.
+    ...(roleContexts.length > 1 ? [{ label: 'Cambiar de rol', nota: 'Deportista · Acudiente', to: '/elegir-rol' }] : []),
     { label: 'Cerrar sesión', onClick: () => { void signOut(); }, peligro: true },
   ];
 

@@ -98,6 +98,59 @@ function escapar(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Enlaces del texto que NO están en la lista permitida (comparando sin
+ * protocolo, `www.` ni barra final; un permitido también cubre sus subrutas).
+ * Un enlace que el modelo copió de un mensaje del usuario o armó él mismo es
+ * la vía más directa a un pago falso (auditoría 2026-10-28, P-01). Pura.
+ */
+export function enlacesNoPermitidos(texto: string, permitidos: readonly string[]): string[] {
+    const base = (u: string) => u.toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '')
+        .replace(/[).,;:!?»"'*_]+$/, '').replace(/\/+$/, '');
+    const ok = permitidos.map(base).filter(Boolean);
+    const enlaces = texto.match(/(https?:\/\/\S+|www\.\S+)/gi) ?? [];
+    return enlaces.filter((e) => {
+        const b = base(e);
+        return !ok.some((p) => b === p || b.startsWith(p + '/') || b.startsWith(p + '?'));
+    });
+}
+
+/**
+ * Afirmaciones de dinero que el modelo NUNCA puede hacer por su cuenta
+ * (auditoría 2026-10-28, P-01: una inyección hacía salir «octubre quedó
+ * condonado» desde el número de la dueña). Ninguna herramienta devuelve una
+ * condonación, una exoneración ni una autorización de la escuela: si el texto
+ * las afirma, se lo inventó o se lo dictaron.
+ *
+ * `conDatosDePagos=false` (turno sin consulta de pagos) suma las afirmaciones
+ * de estado: «tu pago quedó aprobado», «estás al día», «no debes nada». Con la
+ * consulta de este turno esas sí pueden ser ciertas. Pura.
+ */
+const DINERO_SIEMPRE_PROHIBIDO: readonly RegExp[] = [
+    /\bcondon\w*/i,
+    /\bexoner\w*/i,
+    /\b(perdon|regal)(amos|aron|ó|o|ado|ada)\b.{0,40}\b(mensualidad|cuota|cobro|deuda|saldo|mes|inscripci[oó]n|recargo|mora)\b/i,
+    /\bconfirmado por la escuela\b/i,
+    /\bla escuela (ya )?(te |le )?(autoriz|aprob|acept)\w*/i,
+    /\b(milena|la (due[nñ]a|directora|administraci[oó]n|secretar[ií]a)) (ya )?(te |le )?(autoriz|aprob|dijo que no (pagues|debes))\w*/i,
+];
+const DINERO_SIN_CONSULTA: readonly RegExp[] = [
+    /\b(tu |el )?(pago|comprobante|abono) (ya )?(qued[oó]|est[aá]|fue) (aprobad|validad|confirmad|registrad)\w*/i,
+    /\best[aá]s (completamente )?al d[ií]a\b/i,
+    /\bno (debes|tienes que pagar|tienes saldo|tienes nada pendiente)\b/i,
+    /\bnada (que pagar|pendiente)\b/i,
+];
+
+export function afirmaDineroSinRespaldo(texto: string, conDatosDePagos: boolean): boolean {
+    if (DINERO_SIEMPRE_PROHIBIDO.some((re) => re.test(texto))) return true;
+    return !conDatosDePagos && DINERO_SIN_CONSULTA.some((re) => re.test(texto));
+}
+
+/** Enlaces (http/https/www) de un texto, tal cual aparecen. Pura. */
+export function enlacesDe(texto: string | null | undefined): string[] {
+    return (texto ?? '').match(/(https?:\/\/[^\s"'<>\\]+|www\.[^\s"'<>\\]+)/gi) ?? [];
+}
+
 export function filtrarSalidaDelModelo(
     texto: string | null | undefined,
     herramientas: readonly string[] = [],

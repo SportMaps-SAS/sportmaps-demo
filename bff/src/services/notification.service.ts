@@ -42,6 +42,12 @@ interface DeliveryRow {
 
 const CLAIMABLE = ['pending', 'failed'];
 
+/** next_attempt_at de una fila que ya no se reintenta. La columna es
+ *  timestamptz NOT NULL, así que no puede ir NULL: 'infinity' la saca para
+ *  siempre del `lte(next_attempt_at, now)` del worker y del índice de drenaje.
+ *  (new Date('infinity') es NaN → isClaimable la descarta también.) */
+export const NEVER_RETRY = 'infinity';
+
 /** Empuja el lease (+2min) y attempts++ con guard optimista. Devuelve la fila
  *  reclamada, o null si otro proceso la reclamó primero. */
 async function leaseRow(row: DeliveryRow): Promise<DeliveryRow | null> {
@@ -160,7 +166,15 @@ async function finalize(
         last_error: patch.lastError ?? null,
     };
     // Solo reprogramamos si va a reintentarse. 'sent'/'skipped' son terminales.
-    if (patch.status === 'failed') update.next_attempt_at = backoffIso(row.attempts);
+    // Un 'failed' que ya agotó intentos (row.attempts viene incrementado por el
+    // lease) tampoco se reintenta: antes se le ponía backoff igual y esas filas
+    // volvían a encabezar la cola para siempre (cola atascada desde 2026-07,
+    // ver docs/migraciones-pendientes-2026-10-27/LEEME.md).
+    if (patch.status === 'failed') {
+        update.next_attempt_at = row.attempts >= row.max_attempts
+            ? NEVER_RETRY
+            : backoffIso(row.attempts);
+    }
     await supabase.from('notification_deliveries').update(update).eq('id', row.id);
 }
 

@@ -185,8 +185,8 @@ class StudentsAPI {
         emergency_contact: student.emergency_contact,
         parent_id: student.parent_id || null,
         medical_info: student.medical_info,
-        sport: student.sport,
-        team_name: student.team_name,
+        // children no tiene sport ni team_name (el equipo va por team_id /
+        // inscripción): mandarlos hacía fallar el insert con «column not found».
         avatar_url: student.avatar_url,
       })
       .select()

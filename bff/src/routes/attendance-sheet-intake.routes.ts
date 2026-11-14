@@ -65,8 +65,8 @@ import { z } from 'zod';
 import { supabase } from '../config/supabase';
 import { requireAuth, requireRole, AuthenticatedRequest } from '../middlewares/authMiddleware';
 import {
-    BUCKET_PLANILLAS, cargarEquipos, cargarRosters, confirmarPlanilla, equiposPermitidos, esTablaAusente,
-    recibirPlanillaDeStaff, type StaffIdentificado, type Correcciones,
+    BUCKET_PLANILLAS, cargarEquipos, cargarRosters, coachPuedeSubirPlanillas, confirmarPlanilla, equiposPermitidos, esTablaAusente,
+    puedeSubirPlanilla, recibirPlanillaDeStaff, TEXTO_SIN_PERMISO_PLANILLA, type StaffIdentificado, type Correcciones,
 } from '../services/whatsapp-asistencia-staff.service';
 
 const router = Router();
@@ -143,6 +143,11 @@ const UploadSchema = z.object({ imageBase64: z.string().min(100), mimeType: z.en
 router.post('/upload', requireAuth, requireRole(...ROLES_ADMIN, 'coach'), async (req: AuthenticatedRequest, res: Response) => {
     const { schoolId } = req;
     if (!schoolId || !req.user?.id) return res.status(400).json({ error: 'Falta la escuela activa.' });
+    // El coach entra por requireRole, pero solo sube si su escuela lo activó
+    // (`coach_can_upload_attendance_sheets`, igual que la hoja de matrícula). El BFF corre con service role: este es el gate.
+    if (req.role === 'coach' && !puedeSubirPlanilla(req.role, await coachPuedeSubirPlanillas(schoolId))) {
+        return res.status(403).json({ error: TEXTO_SIN_PERMISO_PLANILLA, reason: 'coach_sin_permiso' });
+    }
     const parsed = UploadSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Sube una foto (JPG, PNG o WEBP) o un PDF.', details: parsed.error.issues });
     const buffer = Buffer.from(parsed.data.imageBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');

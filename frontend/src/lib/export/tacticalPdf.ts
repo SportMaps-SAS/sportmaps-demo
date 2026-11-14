@@ -16,6 +16,7 @@ import type { TacticalStaticPlayer } from '@/components/school/TacticalStaticSvg
 import { renderTacticalPng } from './tacticalImage';
 import { frameToStatic } from './tacticalInterpolation';
 import { cleanPdfText as clean } from './tacticalExportUtils';
+import { logoDataUrl, wantsWatermark, WATERMARK_TEXT, WATERMARK_URL, type ExportBranding } from './tacticalWatermark';
 import {
   PROVIDER_LABEL, formatClock, noteToPlainLines, publicVideos, watchUrl,
   type PlayNotes, type PlayVideo,
@@ -43,6 +44,8 @@ export interface ExercisePdfInput {
   /** M6c: notas de la jugada y videos (enlaces como texto, nunca incrustados). */
   notes?: PlayNotes | null;
   videos?: PlayVideo[] | null;
+  /** «Hecho con SportMaps · sportmaps.co» en el pie y logo del club en el encabezado. */
+  branding?: ExportBranding;
 }
 
 export interface PdfMediaSections {
@@ -100,6 +103,7 @@ export async function exportExercisePdf(input: ExercisePdfInput): Promise<Blob> 
     thumbImgs.push((await renderTacticalPng(s.players, s.arrows, 300, input.sport, input.teams)).dataUrl);
   }
 
+  const logo = await logoDataUrl(input.branding?.clubLogoUrl);
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
@@ -114,10 +118,17 @@ export async function exportExercisePdf(input: ExercisePdfInput): Promise<Blob> 
   doc.setFontSize(8.5);
   doc.text('FICHA DEL EJERCICIO', MARGIN, 8);
   const team = clean(input.teamName);
-  if (team) doc.text(doc.splitTextToSize(team, 80)[0] ?? '', pageW - MARGIN, 8, { align: 'right' });
+  // Logo del club (solo con el permiso del tier) arriba a la derecha.
+  let logoW = 0;
+  if (logo) {
+    const lh = 16;
+    logoW = Math.min(lh * 3, lh * logo.aspect);
+    try { doc.addImage(logo.dataUrl, 'PNG', pageW - MARGIN - logoW, 4, logoW, lh); } catch { logoW = 0; }
+  }
+  if (team) doc.text(doc.splitTextToSize(team, 80)[0] ?? '', pageW - MARGIN - (logoW ? logoW + 3 : 0), 8, { align: 'right' });
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(16);
-  doc.text(doc.splitTextToSize(clean(input.title) || 'Ejercicio', contentW)[0] ?? '', MARGIN, 17.5);
+  doc.text(doc.splitTextToSize(clean(input.title) || 'Ejercicio', contentW - (logoW ? logoW + 4 : 0))[0] ?? '', MARGIN, 17.5);
 
   // ── Jugada grande ───────────────────────────────────────────────────────
   let y = 30;
@@ -290,7 +301,9 @@ export async function exportExercisePdf(input: ExercisePdfInput): Promise<Blob> 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.5);
     doc.setTextColor(...TEXT_MUTED);
-    doc.text(`SportMaps · Ficha generada el ${format(new Date(), 'dd/MM/yyyy')}${pages > 1 ? ` · ${pg}/${pages}` : ''}`, MARGIN, pageH - 6.5);
+    const footer = `${wantsWatermark(input.branding) ? `${clean(WATERMARK_TEXT)} · ` : ''}Ficha generada el ${format(new Date(), 'dd/MM/yyyy')}${pages > 1 ? ` · ${pg}/${pages}` : ''}`;
+    if (wantsWatermark(input.branding)) doc.textWithLink(footer, MARGIN, pageH - 6.5, { url: WATERMARK_URL });
+    else doc.text(footer, MARGIN, pageH - 6.5);
     if (team) doc.text(doc.splitTextToSize(team, 80)[0] ?? '', pageW - MARGIN, pageH - 6.5, { align: 'right' });
   }
 

@@ -28,6 +28,7 @@ export function setFigureOpacity(g: THREE.Object3D, opacity: number) {
   const fade = g.userData.fade as THREE.Material[] | undefined;
   if (fade) for (const m of fade) m.opacity = opacity;
   const sh = g.userData.shadow as THREE.Material | undefined;
-  if (sh) sh.opacity = 0.3 * opacity;
+  // En el celular vertical la sombra es más marcada (shadowBase): ancla la figura al piso.
+  if (sh) sh.opacity = ((g.userData.shadowBase as number | undefined) ?? 0.3) * opacity;
 }
 

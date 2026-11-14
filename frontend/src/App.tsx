@@ -73,6 +73,8 @@ const RecepcionPage = lazy(() => import("./pages/recepcion/RecepcionPage"));
 const EventsMapPage = lazy(() => import("./pages/events/EventsMapPage"));
 const EventPublicPage = lazy(() => import("./pages/events/EventPublicPage"));
 const PublicFacilityBookingPage = lazy(() => import("./pages/booking/PublicFacilityBookingPage"));
+const ReservarPage = lazy(() => import("./pages/reservar/ReservarPage"));
+const ReservaEstadoPage = lazy(() => import("./pages/reservar/ReservaEstadoPage"));
 const PublicTrialClassBookingPage = lazy(() => import("./pages/booking/PublicTrialClassBookingPage"));
 const EventIndividualRegisterPage = lazy(() => import("./pages/events/EventIndividualRegisterPage"));
 const MyEventRegistrationsPage = lazy(() => import("./pages/events/MyEventRegistrationsPage"));
@@ -80,7 +82,11 @@ const TournamentRegisterPage = lazy(() => import("./pages/events/TournamentRegis
 const TournamentResultsPage = lazy(() => import("./pages/events/TournamentResultsPage"));
 const TournamentLivePage = lazy(() => import("./pages/events/TournamentLivePage"));
 const TournamentTvPage = lazy(() => import("./pages/events/TournamentTvPage"));
+const TournamentMatchPage = lazy(() => import("./pages/events/TournamentMatchPage"));
+const TournamentEmbedPage = lazy(() => import("./pages/events/TournamentEmbedPage"));
 const TournamentScorerPage = lazy(() => import("./pages/events/TournamentScorerPage"));
+const TournamentTeamInvitePage = lazy(() => import("./pages/events/TournamentTeamInvitePage"));
+const TournamentCardValidationPage = lazy(() => import("./pages/events/TournamentCardValidationPage"));
 
 // ─── Polls (lazy) ────────────────────────────────────────────────────────────
 const PollsPage = lazy(() => import("./pages/polls/PollsPage"));
@@ -121,6 +127,8 @@ const PostTrainingDayRecapPage = lazy(() => import("./pages/PostTrainingDayRecap
 const CoachCheckInScanPage = lazy(() => import("./pages/CoachCheckInScanPage"));
 const CoachPlansPage = lazy(() => import("./pages/CoachPlansPage"));
 const ResultsPage = lazy(() => import("./pages/ResultsPage"));
+const PartidoPage = lazy(() => import("./pages/PartidoPage"));
+const PartidoEnVivoPage = lazy(() => import("./pages/PartidoEnVivoPage"));
 const CoachReportsPage = lazy(() => import("./pages/CoachReportsPage"));
 const CoachTeamPostTrainingReportPage = lazy(() => import("./pages/CoachTeamPostTrainingReportPage"));
 const CoachEvaluationsPage = lazy(() => import("./pages/CoachEvaluationsPage"));
@@ -135,6 +143,7 @@ const ProgramsManagementPage = lazy(() => import("./pages/ProgramsManagementPage
 const AttendanceSupervisionPage = lazy(() => import("./pages/AttendanceSupervisionPage"));
 const AttendanceHistoryPage = lazy(() => import("./pages/AttendanceHistoryPage"));
 const CoachActivityPage = lazy(() => import("./pages/CoachActivityPage"));
+const CoachMyEvaluationsPage = lazy(() => import("./pages/CoachMyEvaluationsPage"));
 const ResultsOverviewPage = lazy(() => import("./pages/ResultsOverviewPage"));
 const FinancesPage = lazy(() => import("./pages/FinancesPage"));
 const AccountingPage = lazy(() => import("./pages/AccountingPage"));
@@ -150,6 +159,11 @@ const WhatsAppPage = lazy(() => import("./pages/WhatsAppPage"));
 const ReportsPage = lazy(() => import("./pages/ReportsPage"));
 const MonthlyReportsPage = lazy(() => import("./pages/MonthlyReportsPage"));
 const SchoolFacilitiesPage = lazy(() => import("./pages/SchoolFacilitiesPage"));
+// Dueño de espacios (facility_manager, school_type 'venue')
+const VenueDashboardPage = lazy(() => import("./pages/venue/VenueDashboardPage"));
+const VenueOnboardingPage = lazy(() => import("./pages/venue/VenueOnboardingPage"));
+const VenueReservationsPage = lazy(() => import("./pages/venue/VenueReservationsPage"));
+const VenuePaymentsPage = lazy(() => import("./pages/venue/VenuePaymentsPage"));
 const SchoolBranchesManagementPage = lazy(() => import("./pages/SchoolBranchesManagementPage"));
 const SchoolSettingsPage = lazy(() => import("./pages/SchoolSettingsPage"));
 const PickupMonitorPage = lazy(() => import("./pages/school/PickupMonitorPage"));
@@ -199,8 +213,13 @@ const SaasInvoiceReceiptPage = lazy(() => import("./pages/SaasInvoiceReceiptPage
 const AdminActivityLogsPage = lazy(() => import("./pages/AdminActivityLogsPage"));
 const PayrollConfigPage = lazy(() => import("./pages/admin/PayrollConfigPage"));
 const AdminAccessLogsPage = lazy(() => import("./pages/AdminAccessLogsPage"));
+const AdminWhatsAppPlataformaPage = lazy(() => import("./pages/admin/AdminWhatsAppPlataformaPage"));
 const AthleteCardPublicPage = lazy(() => import("./pages/AthleteCardPublicPage"));
 const CobroPublicoPage = lazy(() => import("./pages/CobroPublicoPage"));
+const EstadoCuentaPublicoPage = lazy(() => import("./pages/EstadoCuentaPublicoPage"));
+// Pizarra: jugada compartida por enlace (pública) y pizarra libre sin sesión.
+const JugadaCompartidaPage = lazy(() => import("./pages/JugadaCompartidaPage"));
+const PizarraLibrePage = lazy(() => import("./pages/PizarraLibrePage"));
 const SchoolCardsAdminPage = lazy(() => import("./pages/SchoolCardsAdminPage"));
 const SchoolCertificatesAdminPage = lazy(() => import("./pages/SchoolCertificatesAdminPage"));
 const CertificateTemplatesPage = lazy(() => import("./pages/CertificateTemplatesPage"));
@@ -209,6 +228,7 @@ const CertificateVerifyPublicPage = lazy(() => import("./pages/CertificateVerify
 const JoinSchoolPublicPage = lazy(() => import("./pages/JoinSchoolPublicPage"));
 const SchoolJoinQRsPage = lazy(() => import("./pages/SchoolJoinQRsPage"));
 const SchoolLeadFormPage = lazy(() => import("./pages/SchoolLeadFormPage"));
+const JoinSchoolByCodePage = lazy(() => import("./pages/JoinSchoolByCodePage"));
 
 // ─── Vendor/Marketplace pages (lazy) ─────────────────────────────────────────
 const MarketplacePage = lazy(() => import("./pages/MarketplacePage"));
@@ -236,21 +256,14 @@ const SchoolStoreSettingsPage = lazy(() => import("./pages/school/SchoolStoreSet
 const SchoolStoreCouponsPage = lazy(() => import("./pages/school/SchoolStoreCouponsPage"));
 
 const OrganizerGuard = lazy(() => import("@/components/organizer/OrganizerGuard").then(module => ({ default: module.OrganizerGuard })));
+const OrganizerEventRedirect = lazy(() => import("@/components/organizer/OrganizerGuard").then(module => ({ default: module.OrganizerEventRedirect })));
 const OrganizerOnboardingPage = lazy(() => import("./pages/organizer/OrganizerOnboardingPage"));
-const OrganizerDashboardPage = lazy(() => import("./pages/organizer/OrganizerDashboardPage"));
-const OrganizerProfilePage = lazy(() => import("./pages/organizer/OrganizerProfilePage"));
-const CreateEventPage = lazy(() => import("./pages/organizer/CreateEventPage"));
 const SchoolTournamentsPage = lazy(() => import("./pages/school/SchoolTournamentsPage"));
 const SchoolEquipmentPage = lazy(() => import("./pages/school/SchoolEquipmentPage"));
 const CoachEquipmentPage = lazy(() => import("./pages/coach/CoachEquipmentPage"));
 const SchoolTournamentDetailPage = lazy(() => import("./pages/school/SchoolTournamentDetailPage"));
 const CreateTournamentPage = lazy(() => import("./pages/school/CreateTournamentPage"));
-const EventManagementPage = lazy(() => import("./pages/organizer/EventManagementPage"));
-const OrganizerEventsPage = lazy(() => import("./pages/organizer/OrganizerEventsPage"));
-const OrganizerFinancesPage = lazy(() => import("./pages/organizer/OrganizerFinancesPage"));
-const OrganizerCalendarPage = lazy(() => import("./pages/organizer/OrganizerCalendarPage"));
-const OrganizerReportsPage = lazy(() => import("./pages/organizer/OrganizerReportsPage"));
-const OrganizerSettingsPage = lazy(() => import("./pages/organizer/OrganizerSettingsPage"));
+const TournamentWizard = lazy(() => import("./components/tournaments/create/TournamentWizard"));
 const EventEnrollmentPage = lazy(() => import("./pages/school/EventEnrollmentPage"));
 const SchoolDelegationsPage = lazy(() => import("./pages/school/SchoolDelegationsPage"));
 const SchoolDelegationDetailPage = lazy(() => import("./pages/school/SchoolDelegationDetailPage"));
@@ -357,10 +370,18 @@ const App = () => (
                     {/* Enlace sin login de UN cobro: botón de las plantillas de cobranza de WhatsApp
                         (sportmaps.co/p/* redirige aquí desde la landing). El token es la credencial. */}
                     <Route path="/p/:token" element={<CobroPublicoPage />} />
+                    {/* Estado de cuenta de una familia, sin login: botón del correo «Ver mi estado de cuenta». El token es la credencial. */}
+                    <Route path="/e/:token" element={<EstadoCuentaPublicoPage />} />
+                    {/* Jugada de la pizarra compartida por WhatsApp: solo lectura, sin login. */}
+                    <Route path="/jugada/:token" element={<JugadaCompartidaPage />} />
                     <Route path="/cert/:folio" element={<CertificateVerifyPublicPage />} />
                     <Route path="/join/:slug" element={<JoinSchoolPublicPage />} />
                     <Route path="/inscripcion/:slug" element={<SchoolLeadFormPage />} />
+                    {/* Código de escuela: cuenta existente → bandeja «Por asignar». La página maneja la sesión (guarda el código si no hay). */}
+                    <Route path="/unirse" element={<JoinSchoolByCodePage />} />
                     <Route path="/agendar/:slug" element={<PublicFacilityBookingPage />} />
+                    <Route path="/reservar/:slug" element={<ReservarPage />} />
+                    <Route path="/r/:token" element={<ReservaEstadoPage />} />
                     <Route path="/agendar-clase/:slug" element={<PublicTrialClassBookingPage />} />
                     <Route path="/terminos-y-condiciones" element={<TermsPage />} />
                     <Route path="/terms" element={<Navigate to="/terminos-y-condiciones" replace />} />
@@ -418,7 +439,11 @@ const App = () => (
                     <Route path="/tournaments/:eventId/results" element={<TournamentResultsPage />} />
                     <Route path="/torneo/:slug/en-vivo" element={<TournamentLivePage />} />
                     <Route path="/torneo/:slug/tv" element={<TournamentTvPage />} />
+                    <Route path="/torneo/:slug/partido/:matchId" element={<TournamentMatchPage />} />
+                    <Route path="/torneo/:slug/embed" element={<TournamentEmbedPage />} />
                     <Route path="/anotador/:token" element={<TournamentScorerPage />} />
+                    <Route path="/torneo/:slug/equipo/:token" element={<TournamentTeamInvitePage />} />
+                    <Route path="/torneo/:slug/validar/:token" element={<TournamentCardValidationPage />} />
                     <Route path="/s/:slug" element={<PublicSchoolPage />} />
                     <Route path="/polls/v/:pollId" element={<PublicPollPage />} />
 
@@ -460,6 +485,12 @@ const App = () => (
                         </ModuleGate>
                       } />
                       <Route path="notifications" element={<NotificationsPage />} />
+                      {/* Pizarra libre: dibujar sin sesión y luego guardar en Mis jugadas o agregar a una sesión. */}
+                      <Route path="pizarra" element={
+                        <ProtectedRoute allowedRoles={['coach', 'school', 'school_admin', 'admin', 'super_admin']}>
+                          <PizarraLibrePage />
+                        </ProtectedRoute>
+                      } />
                       <Route path="settings" element={<SettingsPage />} />
                       <Route path="messages" element={<MessagesPage />} />
 
@@ -621,6 +652,13 @@ const App = () => (
                         </ModuleGate>
                       } />
                       <Route path="results" element={<ResultsPage />} />
+                      {/* Pantalla del partido: Programar → Convocar → Resultado → Evaluar → Reporte.
+                          Sin ProtectedRoute, igual que /results: un entrenador multirol puede no tener
+                          profile.role='coach'. El gate real son la RLS y las RPC (user_staff_school_ids). */}
+                      <Route path="partidos/:matchId" element={<PartidoPage />} />
+                      {/* Partido en vivo (F2-b): pantalla de cancha. La página gatea por flag live_match_enabled + rol staff/coach;
+                          las RPC revalidan adentro (director, alcance, flag). */}
+                      <Route path="partido-en-vivo/:matchId" element={<PartidoEnVivoPage />} />
                       <Route path="training-plans" element={
                         <ModuleGate moduleKey="gestion_deportiva_entrenamiento_metricas">
                           <SesionesSegunRol />
@@ -650,22 +688,28 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school/delegations" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolDelegationsPage />
                         </ProtectedRoute>
                       } />
                       <Route path="school/tournaments" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolTournamentsPage />
                         </ProtectedRoute>
                       } />
                       <Route path="school/tournaments/new" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <CreateTournamentPage />
                         </ProtectedRoute>
                       } />
+                      {/* Asistente rápido de torneo (4 pasos, celular). */}
+                      <Route path="school/tournaments/nuevo-rapido" element={
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
+                          <TournamentWizard />
+                        </ProtectedRoute>
+                      } />
                       <Route path="school/tournaments/:id" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolTournamentDetailPage />
                         </ProtectedRoute>
                       } />
@@ -690,7 +734,7 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school/delegations/:id" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'organizer']}>
                           <SchoolDelegationDetailPage />
                         </ProtectedRoute>
                       } />
@@ -733,7 +777,7 @@ const App = () => (
                           El filtro fino vive en MiPlanPage (rol dentro de la entidad activa);
                           esta lista es solo el primer tamiz. */}
                       <Route path="mi-plan" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'wellness_professional', 'store_owner', 'organizer', 'reporter', 'personal_trainer']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'wellness_professional', 'store_owner', 'organizer', 'reporter', 'personal_trainer', 'facility_manager']}>
                           <MiPlanPage />
                         </ProtectedRoute>
                       } />
@@ -778,6 +822,12 @@ const App = () => (
                       <Route path="seguimiento-deportivo" element={
                         <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
                           <CoachActivityPage />
+                        </ProtectedRoute>
+                      } />
+                      {/* Evaluación de entrenadores (D5): el coach ve solo las publicadas */}
+                      <Route path="mis-evaluaciones" element={
+                        <ProtectedRoute allowedRoles={['coach']}>
+                          <CoachMyEvaluationsPage />
                         </ProtectedRoute>
                       } />
                       <Route path="results-overview" element={
@@ -928,8 +978,29 @@ const App = () => (
                           </ModuleGate>
                         </ProtectedRoute>
                       } />
+                      {/* Dueño de espacios: solo el perfil facility_manager (menú propio, sin módulos de escuela). */}
+                      <Route path="venue/onboarding" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueOnboardingPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/dashboard" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueDashboardPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/reservas" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenueReservationsPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="venue/cobros" element={
+                        <ProtectedRoute allowedRoles={['facility_manager']}>
+                          <VenuePaymentsPage />
+                        </ProtectedRoute>
+                      } />
                       <Route path="facilities" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'facility_manager']}>
                           <ModuleGate moduleKey="sedes_instalaciones">
                             <SchoolFacilitiesPage />
                           </ModuleGate>
@@ -943,7 +1014,7 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="school-config" element={
-                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin', 'facility_manager']}>
                           <SchoolSettingsPage />
                         </ProtectedRoute>
                       } />
@@ -1112,18 +1183,21 @@ const App = () => (
                         <Route path="vendor/promotions" element={<StoreGate><VendorPromotionsPage /></StoreGate>} />
                       </Route>
 
-                      {/* Organizer routes */}
+                      {/* Organizer routes. El organizador usa el MISMO motor de torneos que la escuela (/school/tournaments*):
+                          su organización es una fila de schools tipo 'event_organizer'. Las pantallas viejas /organizer/* redirigen
+                          (spec organizador-torneos-modulo-aparte, D5: se retiran en F1 con confirmación del usuario). */}
                       <Route element={<OrganizerGuard />}>
                         <Route path="organizer/onboarding" element={<OrganizerOnboardingPage />} />
-                        <Route path="organizer/dashboard" element={<OrganizerDashboardPage />} />
-                        <Route path="organizer/profile" element={<OrganizerProfilePage />} />
-                        <Route path="organizer/create-event" element={<CreateEventPage />} />
-                        <Route path="organizer/event/:id" element={<EventManagementPage />} />
-                        <Route path="organizer/events" element={<OrganizerEventsPage />} />
-                        <Route path="organizer/finances" element={<OrganizerFinancesPage />} />
-                        <Route path="organizer/calendar" element={<OrganizerCalendarPage />} />
-                        <Route path="organizer/reports" element={<OrganizerReportsPage />} />
-                        <Route path="organizer/settings" element={<OrganizerSettingsPage />} />
+                        <Route path="organizer/dashboard" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/events" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/calendar" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/finances" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/reports" element={<Navigate to="/school/tournaments" replace />} />
+                        <Route path="organizer/create-event" element={<Navigate to="/school/tournaments/new" replace />} />
+                        <Route path="organizer/torneo-rapido" element={<Navigate to="/school/tournaments/nuevo-rapido" replace />} />
+                        <Route path="organizer/event/:id" element={<OrganizerEventRedirect />} />
+                        <Route path="organizer/profile" element={<Navigate to="/settings" replace />} />
+                        <Route path="organizer/settings" element={<Navigate to="/settings" replace />} />
                       </Route>
 
                       {/* Trainer onboarding — accesible si estás autenticado aunque aún no seas trainer "completo" */}
@@ -1219,6 +1293,11 @@ const App = () => (
                       <Route path="admin/access-logs" element={
                         <ProtectedRoute allowedRoles={['admin', 'super_admin']} strictRoleCheck>
                           <AdminAccessLogsPage />
+                        </ProtectedRoute>
+                      } />
+                      <Route path="admin/whatsapp" element={
+                        <ProtectedRoute allowedRoles={['admin', 'super_admin']} strictRoleCheck>
+                          <AdminWhatsAppPlataformaPage />
                         </ProtectedRoute>
                       } />
                       <Route path="admin/marketplace/moderation" element={

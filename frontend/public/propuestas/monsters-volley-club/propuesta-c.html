@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Monsters Volley Club · Propuesta C</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --amarillo:#F5D90A;
+  --negro:#000000;
+  --carbon:#181818;
+  --blanco:#FFFFFF;
+  --gris:#A3A39C;
+  --gris-oscuro:#4A4A46;
+  --foto-portada:url("https://monstersvolley.com/wp-content/uploads/2023/08/sesion-infantil-y-trofeos-0144.jpg");
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--negro);color:var(--blanco);font-family:"Archivo",system-ui,sans-serif;font-size:18px;line-height:1.55;-webkit-font-smoothing:antialiased}
+img{max-width:100%;display:block}
+a{color:inherit}
+:focus-visible{outline:3px solid var(--amarillo);outline-offset:3px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.envoltura{max-width:1240px;margin:0 auto;padding:0 24px}
+
+/* Botones */
+.boton{display:inline-flex;align-items:center;justify-content:center;min-height:52px;padding:0 28px;border-radius:999px;font-weight:700;font-size:17px;text-decoration:none;transition:transform .25s ease, background-color .25s ease, color .25s ease}
+.boton:hover{transform:translateY(-2px)}
+.boton-amarillo{background:var(--amarillo);color:var(--negro)}
+.boton-amarillo:hover{background:var(--blanco)}
+.boton-borde{border:2px solid var(--blanco);color:var(--blanco)}
+.boton-borde:hover{background:var(--blanco);color:var(--negro)}
+.boton-negro{background:var(--negro);color:var(--blanco)}
+.boton-negro:hover{background:var(--carbon)}
+
+/* Encabezado */
+.encabezado{position:fixed;inset:0 0 auto;z-index:20;transition:background-color .35s ease, border-color .35s ease;border-bottom:1px solid transparent}
+.encabezado.solido{background:rgba(0,0,0,.92);border-color:#222}
+.encabezado .envoltura{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:76px;flex-wrap:wrap}
+.marca{display:flex;align-items:center;gap:12px;text-decoration:none;font-weight:800;font-variation-settings:"wdth" 110;font-size:17px}
+.marca img{width:46px;height:46px;border-radius:50%;background:#fff;object-fit:cover}
+.menu{display:flex;gap:26px;font-weight:500;font-size:15px}
+.menu a{text-decoration:none;opacity:.85}
+.menu a:hover{opacity:1}
+.encabezado .boton{min-height:44px;padding:0 20px;font-size:15px}
+@media (max-width:860px){.menu{display:none}}
+
+/* Portada con zoom */
+.portada{position:relative;height:320vh}
+.portada-fija{position:sticky;top:0;height:100vh;overflow:hidden;background:var(--negro);display:grid;place-items:center}
+.portada-foto{position:absolute;inset:0;background:var(--foto-portada) center/cover no-repeat;opacity:0}
+.portada-sombra{position:absolute;inset:0;background:rgba(0,0,0,.5);opacity:0}
+.palabra{position:relative;margin:0;font-size:12.4vw;line-height:.86;font-weight:900;letter-spacing:-.01em;font-variation-settings:"wdth" 62;background:var(--foto-portada) center/cover no-repeat;-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent;will-change:transform;white-space:nowrap;transform-origin:50% 52%}
+.portada-texto{position:absolute;left:0;right:0;bottom:12vh;opacity:0;transform:translateY(30px)}
+.portada-texto h2{margin:0 0 18px;font-size:clamp(44px,7vw,104px);line-height:.9;font-weight:900;font-variation-settings:"wdth" 118;letter-spacing:-.02em}
+.portada-texto p{margin:0 0 30px;max-width:540px;font-size:20px;color:#E6E6E1}
+.acciones{display:flex;flex-wrap:wrap;gap:14px}
+.pista{position:absolute;bottom:28px;left:50%;transform:translateX(-50%);font-size:14px;color:var(--gris);display:flex;flex-direction:column;align-items:center;gap:8px}
+.pista span{width:2px;height:34px;background:linear-gradient(var(--gris),transparent);animation:bajar 1.6s ease-in-out infinite}
+@keyframes bajar{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}}
+
+/* Frase de valores */
+.valores{background:var(--amarillo);color:var(--negro);padding:18vh 0}
+.frase{margin:0;font-size:clamp(34px,5.4vw,80px);line-height:1.04;font-weight:800;font-variation-settings:"wdth" 100;letter-spacing:-.02em;max-width:1100px}
+.frase .p{opacity:.16;transition:opacity .2s linear}
+
+/* Categorías con desplazamiento horizontal */
+.categorias{position:relative;background:var(--negro)}
+.categorias-fija{position:sticky;top:0;height:100vh;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:5vh}
+.categorias-titulo{display:flex;justify-content:space-between;align-items:end;gap:24px;flex-wrap:wrap}
+.categorias-titulo h2{margin:0;font-size:clamp(40px,5.4vw,84px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116;letter-spacing:-.02em}
+.categorias-titulo p{margin:0;max-width:380px;color:var(--gris)}
+.pista-tarjetas{display:flex;gap:22px;padding:0 24px 0 max(24px,calc((100vw - 1240px)/2 + 24px));will-change:transform}
+.tarjeta{flex:0 0 clamp(280px,30vw,430px);text-decoration:none;color:var(--blanco);display:flex;flex-direction:column;gap:16px}
+.tarjeta-foto{position:relative;aspect-ratio:4/5;border-radius:26px;overflow:hidden;background:var(--carbon)}
+.tarjeta-foto img{width:100%;height:100%;object-fit:cover;transition:transform .6s cubic-bezier(.2,.7,.2,1)}
+.tarjeta:hover .tarjeta-foto img,.tarjeta:focus-visible .tarjeta-foto img{transform:scale(1.06)}
+.tarjeta h3{margin:0;font-size:28px;line-height:1;font-weight:800;font-variation-settings:"wdth" 112;transition:font-variation-settings .4s ease}
+.tarjeta:hover h3{font-variation-settings:"wdth" 125}
+.tarjeta p{margin:6px 0 0;color:var(--gris);font-size:16px}
+.tarjeta-final{flex:0 0 clamp(280px,30vw,430px);background:var(--amarillo);color:var(--negro);border-radius:26px;padding:36px;display:flex;flex-direction:column;justify-content:flex-end;gap:18px;aspect-ratio:4/5}
+.tarjeta-final h3{margin:0;font-size:clamp(30px,2.8vw,42px);line-height:.95;font-weight:900;font-variation-settings:"wdth" 116}
+.tarjeta-final p{margin:0;font-size:17px}
+
+/* Pasos */
+.pasos{background:var(--blanco);color:var(--negro);padding:16vh 0}
+.pasos h2{margin:0 0 56px;font-size:clamp(40px,5vw,76px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116;letter-spacing:-.02em}
+.pasos ol{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:40px}
+.pasos li{border-top:3px solid var(--negro);padding-top:22px;display:flex;flex-direction:column;gap:10px}
+.pasos .n{font-size:64px;line-height:1;font-weight:900;font-variation-settings:"wdth" 125}
+.pasos strong{font-size:23px;line-height:1.15}
+.pasos span.d{color:var(--gris-oscuro)}
+
+/* Sedes */
+.sedes{padding:16vh 0}
+.sedes h2{margin:0 0 56px;font-size:clamp(40px,5vw,76px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116;letter-spacing:-.02em}
+.sedes-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:48px}
+.sede-zona{font-size:clamp(56px,7vw,112px);line-height:.9;font-weight:900;font-variation-settings:"wdth" 62;color:var(--amarillo);margin:0 0 20px;transition:font-variation-settings .8s cubic-bezier(.2,.7,.2,1)}
+.sede-zona.visible{font-variation-settings:"wdth" 125}
+.sede-lista{list-style:none;margin:0;padding:0}
+.sede-lista li{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:18px 0;border-bottom:1px solid #2A2A2A}
+.sede-lista strong{display:block;font-size:20px}
+.sede-lista span{color:var(--gris);font-size:16px}
+.sede-lista a{flex:0 0 auto;font-size:15px;font-weight:700;text-decoration:none;border:2px solid #3A3A3A;border-radius:999px;padding:10px 16px;min-height:44px;display:inline-flex;align-items:center;transition:border-color .25s ease,background-color .25s ease,color .25s ease}
+.sede-lista a:hover{border-color:var(--amarillo);background:var(--amarillo);color:var(--negro)}
+
+/* Staff */
+.staff{background:var(--carbon);padding:14vh 0}
+.staff h2{margin:0 0 40px;font-size:clamp(36px,4.4vw,64px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116}
+.staff-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:24px}
+.persona .foto{aspect-ratio:1/1;border-radius:22px;background:#262626;display:grid;place-items:center;color:var(--gris);font-size:14px}
+.persona strong{display:block;margin-top:14px;font-size:19px}
+.persona span{color:var(--gris);font-size:15px}
+
+/* Preguntas */
+.preguntas{background:var(--blanco);color:var(--negro);padding:16vh 0}
+.preguntas .envoltura{max-width:920px}
+.preguntas h2{margin:0 0 40px;font-size:clamp(40px,5vw,76px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116;letter-spacing:-.02em}
+details{border-top:2px solid var(--negro)}
+details:last-of-type{border-bottom:2px solid var(--negro)}
+summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:20px;padding:24px 0;font-size:21px;font-weight:700}
+summary::-webkit-details-marker{display:none}
+summary .mas{flex:0 0 36px;height:36px;border-radius:50%;background:var(--amarillo);position:relative;transition:transform .35s cubic-bezier(.2,.7,.2,1)}
+summary .mas::before,summary .mas::after{content:"";position:absolute;left:50%;top:50%;width:14px;height:2px;background:var(--negro);transform:translate(-50%,-50%)}
+summary .mas::after{transform:translate(-50%,-50%) rotate(90deg)}
+details[open] summary .mas{transform:rotate(45deg)}
+details p{margin:0 0 24px;color:var(--gris-oscuro);max-width:680px}
+
+/* Cierre */
+.cierre{background:var(--amarillo);color:var(--negro);padding:18vh 0;text-align:left}
+.cierre h2{margin:0 0 40px;font-size:clamp(52px,9vw,150px);line-height:.86;font-weight:900;font-variation-settings:"wdth" 62;letter-spacing:-.03em;transition:font-variation-settings 1.1s cubic-bezier(.2,.7,.2,1)}
+.cierre h2.visible{font-variation-settings:"wdth" 125}
+
+/* Pie */
+.pie{padding:64px 0;color:var(--gris);font-size:15px}
+.pie .envoltura{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:32px}
+.pie strong{display:block;color:var(--blanco);margin-bottom:8px}
+.pie a{display:block;text-decoration:none;margin:4px 0}
+.pie a:hover{color:var(--amarillo)}
+
+.env{max-width:1240px;margin:0 auto;padding:0 24px}
+.tit{margin:0 0 40px;font-size:clamp(40px,5vw,76px);line-height:.92;font-weight:900;font-variation-settings:"wdth" 116;letter-spacing:-.02em}
+.novedades{background:var(--negro);padding:14vh 0}
+.nov-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.nov{border:1px solid #2E2E2E;border-radius:26px;padding:30px;display:flex;flex-direction:column;gap:12px;transition:border-color .3s ease,transform .3s ease}
+.nov:hover{border-color:var(--amarillo);transform:translateY(-4px)}
+.nov h3{margin:0;font-size:26px;line-height:1.05;font-weight:800;font-variation-settings:"wdth" 116}
+.nov p{margin:0;color:var(--gris)}.enlace{margin-top:auto;font-weight:700;color:var(--amarillo);text-decoration:none}
+.marca-prueba,.tag{display:inline-block;margin-top:10px;font-size:13px;font-weight:700;background:var(--amarillo);color:var(--negro);padding:4px 10px;border-radius:999px}
+.horarios{background:var(--carbon);padding:14vh 0}
+.sub{margin:36px 0 14px;font-size:24px;font-weight:800;font-variation-settings:"wdth" 110}
+.tabla-caja{overflow-x:auto;border:1px solid #2E2E2E;border-radius:22px}
+table{border-collapse:collapse;width:100%;min-width:920px;font-size:15px}
+th,td{text-align:left;padding:14px 16px;border-bottom:1px solid #2A2A2A;vertical-align:top}
+thead th{color:var(--gris);font-weight:500}tbody th{font-weight:700}
+tbody tr{transition:background-color .2s ease}tbody tr:hover{background:#222}
+tbody tr:last-child th,tbody tr:last-child td{border-bottom:0}
+.norte-txt{color:var(--gris);margin:0 0 16px}
+.norte{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:10px}
+.norte li{border:1px solid #333;border-radius:999px;padding:10px 16px;display:flex;gap:8px;font-size:15px}.norte span{color:var(--gris)}
+.avatar{background:#262626;color:var(--amarillo);font-size:56px;font-weight:900;font-variation-settings:"wdth" 125}
+
+.etiqueta-demo{position:fixed;right:16px;bottom:16px;z-index:30;background:var(--amarillo);color:var(--negro);font-weight:700;font-size:13px;padding:10px 14px;border-radius:999px}
+
+/* Celular y movimiento reducido: sin efectos fijos */
+@media (max-width:760px){
+  .categorias-fija{position:relative;height:auto;padding:14vh 0}
+  .pista-tarjetas{overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:12px;transform:none!important}
+  .tarjeta,.tarjeta-final{scroll-snap-align:start;flex-basis:78vw}
+  .pista{display:none}
+}
+.quieto .portada{height:100vh}
+.quieto .palabra{display:none}
+.quieto .portada-foto,.quieto .portada-sombra{opacity:1}
+.quieto .portada-texto{opacity:1;transform:none}
+.quieto .pista{display:none}
+.quieto .frase .p{opacity:1}
+.quieto .categorias-fija{position:relative;height:auto;padding:14vh 0}
+.quieto .pista-tarjetas{overflow-x:auto;transform:none!important}
+.quieto .sede-zona,.quieto .cierre h2{font-variation-settings:"wdth" 125;transition:none}
+</style>
+</head>
+<body>
+
+<header class="encabezado" id="encabezado">
+  <div class="envoltura">
+    <a class="marca" href="#inicio"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/306904932_644085713795543_8295023848237529093_n-1.png" alt="">Monsters Volley Club</a>
+    <nav class="menu" aria-label="Principal">
+      <a href="#categorias">Categorías</a>
+      <a href="#sedes">Sedes</a>
+      <a href="#horarios">Horarios</a>
+      <a href="#staff">Staff</a>
+      <a href="#preguntas">Preguntas</a>
+    </nav>
+    <a class="boton boton-amarillo" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Me%20interesa%20una%20clase%20de%20prueba">Clase de prueba</a>
+  </div>
+</header>
+
+<main>
+  <section class="portada" id="inicio">
+    <div class="portada-fija">
+      <div class="portada-foto" id="portadaFoto"></div>
+      <div class="portada-sombra" id="portadaSombra"></div>
+      <h1 class="palabra" id="palabra">MONSTERS<span class="sr"> Volley Club, escuela de voleibol en Bogotá</span></h1>
+      <div class="portada-texto" id="portadaTexto">
+        <div class="envoltura">
+          <h2>Monsters Volley Club</h2>
+          <p>Voleibol en Bogotá para niños, jóvenes y adultos, desde los nacidos en 2020 hasta mayores. Entrenamos en Suba y en el norte.</p>
+          <div class="acciones">
+            <a class="boton boton-amarillo" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Me%20interesa%20una%20clase%20de%20prueba">Agenda tu clase de prueba</a>
+            <a class="boton boton-borde" href="#horarios">Ver horarios</a>
+          </div>
+        </div>
+      </div>
+      <div class="pista" id="pista">Desliza<span></span></div>
+    </div>
+  </section>
+
+  <section class="valores" aria-label="Valores del club">
+    <div class="envoltura">
+      <p class="frase" id="frase">Aquí se entrena con humildad, tolerancia y empatía. Lo demás se aprende en la cancha.</p>
+    </div>
+  </section>
+
+  <section class="novedades" id="novedades"><div class="env"><h2 class="tit">Este noviembre</h2><div class="nov-grid"><article class="nov"><h3>Regalo de cierre de año</h3><p>Hasta el 30 de noviembre, en las dos sedes: si pagas la matrícula en noviembre, no pagas la mensualidad de noviembre. Entrar te cuesta $370.000.</p><a class="enlace" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Quiero%20el%20regalo%20de%20cierre%20de%20a%C3%B1o">Pregunta por WhatsApp</a></article><article class="nov"><h3>Clínica de voleibol</h3><p>21 y 22 de noviembre. Preventa a $300.000 hasta el 9 de noviembre y $350.000 desde el 10. Afiliados, $250.000. Separas el cupo con el 50 % y mantienes el precio.</p><a class="enlace" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Quiero%20info%20de%20la%20cl%C3%ADnica%20de%20noviembre">Pregunta por WhatsApp</a></article><article class="nov"><h3>Vacacional en Suba</h3><p>Del 17 de noviembre al 10 de diciembre en el Parque Pinar de Suba 2, de martes a jueves, de 8 a 11 a. m. Desde $80.000 la semana para afiliados y $100.000 para externos.</p><a class="enlace" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Quiero%20info%20del%20vacacional">Pregunta por WhatsApp</a></article></div></div></section>
+
+  <section class="categorias" id="categorias">
+    <div class="categorias-fija" id="categoriasFija">
+      <div class="envoltura categorias-titulo">
+        <h2>Un grupo<br>para cada edad</h2>
+        <p>22 equipos entre Suba y el norte. Pasa el dedo o sigue bajando para verlos.</p>
+      </div>
+      <div class="pista-tarjetas" id="pistaTarjetas">
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20U9%20y%20U11%20Mixto"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/whatsapp-image-2025-06-02-at-2.23.51-pm.jpeg?w=960" alt=""></div><div><h3>U9 y U11 Mixto</h3><p>Nacidos 2013 a 2020. Grupo de Proyección para empezar. Entrenan Ana Sofía Forero y Julián Torres.</p><span class="marca-prueba">Recibe clase de prueba</span></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20U13%20Mixto"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/sesion-infantil-y-trofeos-0158.jpg" alt=""></div><div><h3>U13 Mixto</h3><p>Nacidos 2013 y 2014. Entrena Sebastián Hurtado.</p></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20Sub-15"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/1-04.jpg?w=1125" alt=""></div><div><h3>Sub-15</h3><p>Nacidos 2011 y 2012. Femenino Proyección, Femenino Competencia y Masculino.</p></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20Sub-17"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/whatsapp-image-2025-11-20-at-12.19.56-pm-2.jpeg" alt=""></div><div><h3>Sub-17</h3><p>Nacidos 2009 y 2010. Femenino y Masculino Profundización, y Masculino Competencia.</p></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20Sub-19%20y%20Sub-21"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/whatsapp-image-2025-07-07-at-5.18.21-pm.jpg?w=1200" alt=""></div><div><h3>Sub-19 y Sub-21</h3><p>Nacidos 2005 a 2008. Femenino y Masculino.</p></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20Mayores"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/whatsapp-image-2025-03-20-at-1.52.12-pm.jpg?w=1600" alt=""></div><div><h3>Mayores</h3><p>Nacidos 2004 y antes. Femenino, Masculino y Mixto Profundización, abierto desde 2012 y antes.</p><span class="marca-prueba">Recibe clase de prueba</span></div></a>
+<a class="tarjeta" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Quiero%20info%20de%20Sede%20Norte"><div class="tarjeta-foto"><img src="https://monstersvolley.com/wp-content/uploads/2023/08/sesion-infantil-y-trofeos-0206.jpg" alt=""></div><div><h3>Sede Norte</h3><p>Nueve equipos, de Mini Voley a Mayores. Sábados y domingos de 8 a 10 a. m., con Iván Felipe Sossa.</p></div></a>
+<div class="tarjeta-final"><h3>¿No sabes en cuál vas?</h3><p>La clase de prueba cuesta $15.000, es sábado o domingo, y ahí te ubicamos según tu año de nacimiento.</p><a class="boton boton-negro" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Me%20interesa%20una%20clase%20de%20prueba">Agenda tu clase</a></div>
+</div>
+    </div>
+  </section>
+
+  <section class="horarios" id="horarios"><div class="env">
+<h2 class="tit">Horarios</h2>
+<h3 class="sub">Sede Suba</h3>
+<div class="tabla-caja"><table><thead><tr><th scope="col">Equipo</th><th scope="col">Nacidos</th><th scope="col">Entre semana</th><th scope="col">Sábado</th><th scope="col">Domingo</th><th scope="col">Entrenador</th></tr></thead><tbody><tr><th scope="row">U9 y U11 Mixto · Proyección <span class=tag>Clase de prueba</span></th><td>2013–2020</td><td>Vie 4–6 p. m. Pinar</td><td>7–9 a. m. Pinar 2</td><td>7:30–9:30 a. m. Fesan</td><td>Ana Sofía Forero y Julián Torres</td></tr><tr><th scope="row">U13 Mixto</th><td>2013–2014</td><td>Lun 4–6 p. m. Pinar 2</td><td>7–9 a. m. Pinar 2</td><td>7:30–9:30 a. m. Fesan</td><td>Sebastián Hurtado</td></tr><tr><th scope="row">U15 Femenino Proyección</th><td>2011–2012</td><td>Lun 4–6 p. m. Pinar 2</td><td>9–11 a. m. Pinar 2</td><td>9:30–11:30 a. m. Fesan</td><td>Sebastián Hurtado</td></tr><tr><th scope="row">U15 Femenino Competencia</th><td>2011–2012</td><td>Mié 4–6 p. m. Fesan</td><td>9–11 a. m. Pinar 2</td><td>9:30–11:30 a. m. Pinar</td><td>Jeffrey Moreno</td></tr><tr><th scope="row">U15 Masculino</th><td>2011–2012</td><td>Vie 4–6 p. m. Pinar 2</td><td>11 a. m.–1 p. m. Pinar 2</td><td>11:30 a. m.–1:30 p. m. Pinar</td><td>Jeffrey Moreno</td></tr><tr><th scope="row">U17 Masculino Profundización</th><td>2009–2010</td><td>Mié 4–6 p. m. Pinar 2</td><td>1–3 p. m. Pinar 2</td><td>11:30 a. m.–1:30 p. m. Fesan</td><td>Sebastián Hurtado</td></tr><tr><th scope="row">U17 Femenino Profundización</th><td>2009–2010</td><td>Vie 4–6 p. m. Fesan</td><td>11 a. m.–1 p. m. Pinar 2</td><td>3:30–5:30 p. m. Fesan</td><td>Laura Gómez</td></tr><tr><th scope="row">U17 Masculino Competencia</th><td>2009–2010</td><td>Vie 4–6 p. m. Pinar 2</td><td>11 a. m.–1 p. m. Pinar 2</td><td>9:30–11:30 a. m. Pinar 2</td><td>Jeffrey Moreno</td></tr><tr><th scope="row">U19 y U21 Masculino</th><td>2005–2008</td><td>Mié 6–8 p. m. Pinar</td><td>3–5 p. m. Fesan</td><td>12–2 p. m. Pinar</td><td>Santiago Carranza</td></tr><tr><th scope="row">U19 y U21 Femenino</th><td>2005–2008</td><td>Mié 6:30–8:30 p. m. Pinar</td><td>1–3 p. m. Pinar 2</td><td>1:30–3:30 p. m. Fesan</td><td>Laura Gómez</td></tr><tr><th scope="row">Mayores Femenino</th><td>2004 y antes</td><td>Mar y Jue 7–9 p. m. Lestonnac</td><td>—</td><td>1:30–3:30 p. m. Fesan</td><td>Laura Gómez</td></tr><tr><th scope="row">Mayores Masculino</th><td>2004 y antes</td><td>Mar y Jue 7–9 p. m. Lestonnac</td><td>3–5 p. m. Fesan</td><td>—</td><td>Santiago Carranza</td></tr><tr><th scope="row">Mixto Mayores Profundización <span class=tag>Clase de prueba</span></th><td>2012 y antes</td><td>Lun 6–8 p. m. Pinar</td><td>7–9 a. m. Pinar-Oxxo</td><td>7–9 a. m. Pinar (1.er domingo) o La Enseñanza (2.º a 4.º)</td><td>Tatiana Díaz</td></tr></tbody></table></div>
+<h3 class="sub">Sede Norte</h3>
+<p class="norte-txt">Todos los equipos entrenan sábados y domingos de 8 a 10 a. m. en el Colegio Bilingüe La Enseñanza, con Iván Felipe Sossa.</p>
+<ul class="norte"><li><strong>Mini Voley Mixto</strong><span>2013–2014</span></li><li><strong>Benjamines Mixto</strong><span>2015–2016</span></li><li><strong>Infantil Femenino</strong><span>2011–2012</span></li><li><strong>Menores Femenino</strong><span>2009–2010</span></li><li><strong>Menores Masculino</strong><span>2009–2010</span></li><li><strong>Juvenil Femenino</strong><span>2007–2008</span></li><li><strong>Juvenil Masculino</strong><span>2007–2008</span></li><li><strong>Mayores Femenino</strong><span>2006 y antes</span></li><li><strong>Mayores Masculino</strong><span>2006 y antes</span></li></ul>
+</div></section>
+
+  <section class="pasos">
+    <div class="envoltura">
+      <h2>Empezar es fácil</h2>
+      <ol>
+        <li><span class="n">1</span><strong>Agenda tu clase de prueba</strong><span class="d">Cuesta $15.000 y es sábado o domingo, en un grupo de Proyección.</span></li>
+        <li><span class="n">2</span><strong>Entrena con el equipo</strong><span class="d">Conoces a los entrenadores y tu grupo según tu año de nacimiento.</span></li>
+        <li><span class="n">3</span><strong>Inscríbete y paga en línea</strong><span class="d">Matrícula y mensualidad desde el celular, sin papeles.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sedes" id="sedes">
+    <div class="envoltura">
+      <h2>Dónde entrenamos</h2>
+      <div class="sedes-grid">
+<div><p class="sede-zona">Suba</p><ul class="sede-lista"><li><div><strong>Pinar</strong><span>Calle 152 # 94A-67, sede principal</span></div><a href="https://www.google.com/maps/search/?api=1&amp;query=Calle+152+94A-67%2C+Bogot%C3%A1" target="_blank" rel="noopener">Cómo llegar</a></li><li><div><strong>Pinar 2</strong><span>Parque Pinar de Suba 2</span></div><a href="https://www.google.com/maps/search/?api=1&amp;query=Parque+Pinar+de+Suba+2%2C+Bogot%C3%A1" target="_blank" rel="noopener">Cómo llegar</a></li><li><div><strong>Fesan</strong><span>Av. Calle 153 # 110-40</span></div><a href="https://www.google.com/maps/search/?api=1&amp;query=Avenida+Calle+153+110-40%2C+Bogot%C3%A1" target="_blank" rel="noopener">Cómo llegar</a></li><li><div><strong>Lestonnac</strong><span>Carrera 87A # 84-81</span></div><a href="https://www.google.com/maps/search/?api=1&amp;query=Carrera+87A+84-81%2C+Bogot%C3%A1" target="_blank" rel="noopener">Cómo llegar</a></li></ul></div>
+<div><p class="sede-zona">Norte</p><ul class="sede-lista"><li><div><strong>Colegio Bilingüe La Enseñanza</strong><span>Av. El Polo, Calle 201 # 67-12</span></div><a href="https://www.google.com/maps/search/?api=1&amp;query=Calle+201+67-12%2C+Bogot%C3%A1" target="_blank" rel="noopener">Cómo llegar</a></li></ul></div>
+</div>
+    </div>
+  </section>
+
+  <section class="staff" id="staff">
+    <div class="envoltura">
+      <h2>Nuestro staff</h2>
+      <div class="staff-grid"><div class="persona"><div class="foto avatar" aria-hidden="true">IS</div><strong>Iván Felipe Sossa Benítez</strong><span>Presidente y entrenador de la sede Norte</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">JM</div><strong>Jeffrey Mauricio Moreno</strong><span>Entrenador y metodólogo</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">JH</div><strong>Juan Sebastián Hurtado</strong><span>Entrenador</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">LG</div><strong>Laura Gómez</strong><span>Entrenadora</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">SC</div><strong>Santiago Carranza Higuita</strong><span>Entrenador</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">TD</div><strong>Tatiana Díaz</strong><span>Asistente</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">JT</div><strong>Julián Torres</strong><span>Asistente</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">AF</div><strong>Ana Sofía Forero Orozco</strong><span>Asistente</span></div><div class="persona"><div class="foto avatar" aria-hidden="true">AL</div><strong>Alejandra Losada Mejía</strong><span>Administración y secretaría</span></div></div>
+    </div>
+  </section>
+
+  <section class="preguntas" id="preguntas">
+    <div class="envoltura">
+      <h2>Preguntas frecuentes</h2>
+<details><summary>¿Desde qué edad pueden entrenar?<span class="mas" aria-hidden="true"></span></summary><p>Desde los nacidos en 2020, en el grupo U9 y U11 Mixto de Proyección. En la sede Norte, Benjamines recibe nacidos en 2015 y 2016.</p></details><details><summary>¿Cómo es la clase de prueba?<span class="mas" aria-hidden="true"></span></summary><p>Cuesta $15.000 y se toma sábado o domingo en un grupo de Proyección. Si tienes de Sub-15 en adelante, la tomas con Mixto Mayores Profundización.</p></details><details><summary>¿Cuánto cuesta entrenar?<span class="mas" aria-hidden="true"></span></summary><p>La matrícula vale $310.000 e incluye kit de competencia, sudadera y póliza; las dos camisetas de entrenamiento valen $60.000. La mensualidad en Suba es de $145.000 e incluye una sesión de psicología deportiva; Mixto Mayores paga $135.000. En la sede Norte la mensualidad es de $165.000.</p></details><details><summary>¿Y si quiero entrenar en dos categorías?<span class="mas" aria-hidden="true"></span></summary><p>En Suba, la doble categoría cuesta $165.000 al mes, y $155.000 en Mixto Mayores.</p></details><details><summary>¿Cuánto cuesta renovar?<span class="mas" aria-hidden="true"></span></summary><p>La renovación, a finales de enero, cuesta $170.000 y ya no incluye sudadera.</p></details><details><summary>¿Dónde entrenan?<span class="mas" aria-hidden="true"></span></summary><p>En Suba: Pinar, Pinar 2, Fesan y Lestonnac. En el norte: Colegio Bilingüe La Enseñanza, sobre la Av. El Polo.</p></details><details><summary>¿Cómo se paga?<span class="mas" aria-hidden="true"></span></summary><p>Por Nequi o Daviplata al 319 450 5150. Después mandas el comprobante por WhatsApp al 318 868 2241 o lo subes en <a href="https://app.sportmaps.co">app.sportmaps.co</a>, donde también ves tus cobros y tus pagos.</p></details>
+    </div>
+  </section>
+
+  <section class="cierre">
+    <div class="envoltura">
+      <h2 id="cierreTitulo">Tu primera clase te espera</h2>
+      <a class="boton boton-negro" href="https://api.whatsapp.com/send?phone=573188682241&amp;text=Hola%21%20Me%20interesa%20una%20clase%20de%20prueba">Agenda tu clase de prueba</a>
+    </div>
+  </section>
+</main>
+
+<footer class="pie">
+  <div class="envoltura">
+    <div><strong>Monsters Volley Club</strong>Escuela de voleibol en Bogotá</div>
+    <div><strong>Contacto</strong><a href="https://api.whatsapp.com/send?phone=573188682241">318 868 2241</a><a href="mailto:monstersvolleyclub@gmail.com">monstersvolleyclub@gmail.com</a></div>
+    <div><strong>Redes</strong><a href="https://www.instagram.com/clubmonstersvolley/">Instagram</a><a href="https://www.facebook.com/monstersvolley/">Facebook</a><a href="https://www.tiktok.com/@monstersvolley">TikTok</a></div>
+    <div><strong>Inscripciones y pagos</strong><a href="https://app.sportmaps.co">Gestionados con SportMaps</a></div>
+  </div>
+</footer>
+
+<nav class="selector-propuestas" aria-label="Cambiar de propuesta"><a href="index.html">Todas</a><a href="propuesta-a.html">A</a><a href="propuesta-b.html">B</a><a href="propuesta-c.html" aria-current="page">C</a></nav>
+<style>
+.selector-propuestas{position:fixed;right:16px;bottom:16px;z-index:40;display:flex;gap:4px;align-items:center;background:#111;border:1px solid #444;border-radius:999px;padding:4px;font:700 14px/1 "Archivo",system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.3)}
+.selector-propuestas a{display:inline-flex;align-items:center;justify-content:center;min-width:40px;min-height:40px;padding:0 12px;border-radius:999px;color:#fff;text-decoration:none}
+.selector-propuestas a:hover{background:#2a2a2e}
+.selector-propuestas a[aria-current="page"]{background:#F5D90A;color:#111}
+</style>
+
+<script>
+(function(){
+  var reducido = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var celular = function(){ return window.innerWidth <= 760; };
+  var raiz = document.documentElement;
+  if (reducido) raiz.classList.add("quieto");
+
+  // Palabras de la frase
+  var frase = document.getElementById("frase");
+  var palabras = frase.textContent.trim().split(/\s+/);
+  frase.innerHTML = palabras.map(function(p){ return '<span class="p">' + p + '</span>'; }).join(" ");
+  var spans = frase.querySelectorAll(".p");
+
+  // Títulos que se expanden al aparecer
+  var expandibles = document.querySelectorAll(".sede-zona, #cierreTitulo");
+  if ("IntersectionObserver" in window && !reducido) {
+    var io = new IntersectionObserver(function(entradas){
+      entradas.forEach(function(e){ if (e.isIntersecting) { e.target.classList.add("visible"); io.unobserve(e.target); } });
+    }, { threshold: 0.4 });
+    expandibles.forEach(function(el){ io.observe(el); });
+  } else {
+    expandibles.forEach(function(el){ el.classList.add("visible"); });
+  }
+
+  var portada = document.getElementById("inicio");
+  var palabra = document.getElementById("palabra");
+  var foto = document.getElementById("portadaFoto");
+  var sombra = document.getElementById("portadaSombra");
+  var texto = document.getElementById("portadaTexto");
+  var pista = document.getElementById("pista");
+  var encabezado = document.getElementById("encabezado");
+  var categorias = document.getElementById("categorias");
+  var pistaTarjetas = document.getElementById("pistaTarjetas");
+
+  function limitar(v){ return Math.max(0, Math.min(1, v)); }
+  function tramo(p, a, b){ return limitar((p - a) / (b - a)); }
+  function suave(t){ return t * t * (3 - 2 * t); }
+
+  function medirCategorias(){
+    if (reducido || celular()) { categorias.style.height = ""; return; }
+    var recorrido = pistaTarjetas.scrollWidth - window.innerWidth;
+    categorias.style.height = (window.innerHeight + Math.max(0, recorrido)) + "px";
+  }
+
+  function pintar(){
+    var y = window.scrollY;
+    var alto = window.innerHeight;
+
+    // Portada
+    var finPortada = portada.offsetTop + portada.offsetHeight - alto;
+    encabezado.classList.toggle("solido", y > finPortada - 40);
+    if (!reducido) {
+      var p = limitar((y - portada.offsetTop) / (portada.offsetHeight - alto));
+      var ancho = 62 + 63 * suave(tramo(p, 0, 0.3));
+      var zoom = 1 + Math.pow(tramo(p, 0.3, 0.72), 2.2) * 26;
+      palabra.style.fontVariationSettings = '"wdth" ' + ancho.toFixed(1);
+      palabra.style.transform = "scale(" + zoom.toFixed(3) + ")";
+      palabra.style.opacity = (1 - suave(tramo(p, 0.58, 0.74))).toFixed(3);
+      var f = suave(tramo(p, 0.5, 0.74));
+      foto.style.opacity = f.toFixed(3);
+      foto.style.transform = "scale(" + (1.15 - 0.15 * f).toFixed(3) + ")";
+      sombra.style.opacity = suave(tramo(p, 0.68, 0.84)).toFixed(3);
+      var t = suave(tramo(p, 0.76, 0.92));
+      texto.style.opacity = t.toFixed(3);
+      texto.style.transform = "translateY(" + (30 * (1 - t)).toFixed(1) + "px)";
+      texto.style.pointerEvents = t > 0.5 ? "auto" : "none";
+      pista.style.opacity = (1 - tramo(p, 0, 0.08)).toFixed(3);
+
+      // Frase
+      var r = frase.getBoundingClientRect();
+      var avance = limitar((alto * 0.85 - r.top) / (r.height + alto * 0.45));
+      var encendidas = Math.round(avance * spans.length);
+      spans.forEach(function(s, i){ s.style.opacity = i < encendidas ? 1 : 0.16; });
+
+      // Categorías
+      if (!celular()) {
+        var inicio = categorias.offsetTop;
+        var recorrido = categorias.offsetHeight - alto;
+        var pc = limitar((y - inicio) / Math.max(1, recorrido));
+        pistaTarjetas.style.transform = "translateX(" + (-pc * Math.max(0, pistaTarjetas.scrollWidth - window.innerWidth)).toFixed(1) + "px)";
+      }
+    }
+  }
+
+  var pendiente = false;
+  function alDesplazar(){
+    if (!pendiente) { pendiente = true; requestAnimationFrame(function(){ pendiente = false; pintar(); }); }
+  }
+  window.addEventListener("scroll", alDesplazar, { passive: true });
+  window.addEventListener("resize", function(){ medirCategorias(); pintar(); });
+  window.addEventListener("load", function(){ medirCategorias(); pintar(); });
+  medirCategorias();
+  pintar();
+})();
+</script>
+</body>
+</html>

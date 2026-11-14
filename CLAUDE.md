@@ -10,7 +10,13 @@ Roles: athlete, parent, coach, school (owner/admin), wellness_professional, stor
 - **Migraciones inmutables:** nunca editar ni borrar archivos en `supabase/migrations/`, aunque estén corruptos. Todo fix va en una migración **nueva** con timestamp posterior (`YYYYMMDDHHMMSS`).
 - **Ledger de migraciones:** crear siempre con `npm run migrations:new -- <slug>` (reserva versión única y posterior al head) y commitear el `.sql` junto a `supabase/migrations_ledger.json`. Inventario: `npm run migrations:list`. El gate `npm run migrations:check` corre en pre-commit y CI. Flujo completo en `docs/migrations-workflow.md`.
 - **`search_path`:** toda `CREATE FUNCTION` nueva debe incluir `SET search_path = pg_catalog, public, pg_temp` (evita warnings del linter).
-- **`GRANT EXECUTE`:** explícito por RPC (`GRANT EXECUTE ON FUNCTION … TO authenticated`). `SECURITY DEFINER` NO exime al caller de tener `EXECUTE`.
+- **`GRANT EXECUTE` OBLIGATORIO por RPC:** desde `20261029101115` toda función nueva nace **sin `EXECUTE` para nadie** salvo el dueño (y `service_role`). Sin `GRANT EXECUTE ON FUNCTION … TO authenticated` la pantalla da **42501 / 403**. `SECURITY DEFINER` NO exime al caller de tener `EXECUTE`. Plantilla en `docs/migrations-workflow.md` §2.
+- **`anon` sin `EXECUTE`** salvo flujo público demostrado (pantalla sin sesión que la llama).
+- **Helpers: dos casos, no mezclarlos.**
+  - **Helper que usa una POLICY** (aparece en un `USING` o `WITH CHECK`): **SÍ** lleva `GRANT EXECUTE … TO authenticated`, y también `TO anon` si la policy alcanza a `anon` sobre una tabla que `anon` lee. Las policies se evalúan con el rol de quien consulta: sin ese GRANT, **toda** consulta a la tabla da 42501.
+  - **Helper que solo llama otra función `SECURITY DEFINER`**: `REVOKE ALL … FROM PUBLIC, anon, authenticated` y sin GRANT (lo ejecuta el dueño).
+- **Toda RPC que recibe un id de escuela/usuario valida el alcance del caller ADENTRO** (`user_*_school_ids()`, `is_school_admin()`, `is_platform_admin()`…) y lo ata a **ese** id. Un gate que solo pregunta «¿es admin de alguna escuela?» no es gate (así estaba `notify_user`).
+- **`notify_user` solo a destinatarios con relación** (a sí mismo, gente de una escuela que administras, staff de tu escuela, cita de wellness) y con `p_link` interno (`/…`). Para avisos desde el BFF, `INSERT` en `notifications` con `service_role`.
 - **Helpers de RLS:** nunca revocar `is_school_admin()`, `is_super_admin()`, etc. al rol que las invoca desde policies, o rompe con 403 todas las queries.
 - **RLS sin self-recursion:** una policy sobre la tabla X nunca hace `SELECT FROM X` en su `USING`. Usar funciones `SECURITY DEFINER`.
 - **Estados/enums en tablas nuevas:** usar `text + CHECK`, **no** `CREATE TYPE`. (Historia: `payments.status` es `TEXT` por el dolor de castear a `pay_status`.)

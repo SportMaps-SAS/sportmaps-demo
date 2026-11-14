@@ -96,6 +96,25 @@ export function toggleFocus(a: EvalAnswers, key: string): EvalAnswers {
   return { ...a, focus: a.focus.includes(key) ? a.focus.filter((f) => f !== key) : [...a.focus, key] };
 }
 
+/** Colombia no tiene horario de verano: UTC−5 todo el año. */
+const BOGOTA_UTC_OFFSET_MS = 5 * 3_600_000;
+
+/**
+ * Hasta cuándo se puede responder: fin del día siguiente (Bogotá) al cierre real
+ * de la lista. Misma regla que `post_training_plazo_respuesta` (migración
+ * 20261029211413). El cierre real es el mayor entre finalized_at y updated_at:
+ * el cierre automático de las 23:55 deja finalized_at en la hora del entreno.
+ * Sin ninguna de las dos fechas no hay plazo (la RPC tampoco lo exige).
+ */
+export function plazoAutoeval(finalizedAt: string | null | undefined, updatedAt: string | null | undefined): Date | null {
+  const tiempos = [finalizedAt, updatedAt]
+    .map((t) => (t ? new Date(t).getTime() : Number.NaN))
+    .filter((t) => !Number.isNaN(t));
+  if (tiempos.length === 0) return null;
+  const local = new Date(Math.max(...tiempos) - BOGOTA_UTC_OFFSET_MS);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate() + 2) + BOGOTA_UTC_OFFSET_MS);
+}
+
 /** «Viernes 31 de julio» desde «2026-07-31» sin correrse de día (no usar new Date(fecha) directo). */
 export function sessionDateLabel(value: string | null | undefined): string {
   if (!value) return '';

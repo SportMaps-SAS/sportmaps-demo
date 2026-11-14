@@ -561,7 +561,7 @@ export async function cobrosAbiertos(schoolId: string, atleta: AtletaInput) {
                 .then(({ data: d, error: e }) => (e ? [] : (d ?? []) as Record<string, any>[]))
             : Promise.resolve([] as Record<string, any>[]),
         supabase.from('school_settings')
-            .select('early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+            .select('early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
             .eq('school_id', schoolId).maybeSingle()
             .then(({ data: d }) => (d ?? null) as Record<string, any> | null),
     ]);
@@ -600,7 +600,10 @@ export async function cobrosAbiertos(schoolId: string, atleta: AtletaInput) {
         if (s?.early_payment_discount_enabled && Number(s.early_payment_discount_percentage) > 0 && !(pronto > 0)) {
             const dias = Number(s.early_payment_discount_days ?? 0);
             const creado = String(p.created_at ?? '').slice(0, 10);
-            if (creado && addDaysToDateString(creado, dias) >= hoy) {
+            const limite = (s as any).early_payment_discount_mode === 'day_of_month'
+                ? `${creado.slice(0, 8)}${String(Math.min(Math.max(dias, 1), 28)).padStart(2, '0')}`
+                : addDaysToDateString(creado, dias);
+            if (creado && limite >= hoy) {
                 sugerencia = { basis: 'porcentaje', value: Number(s.early_payment_discount_percentage), reason_code: 'pronto_pago' };
             }
         }
@@ -688,7 +691,8 @@ export async function sugerenciasDeCobro(schoolId: string, atleta: AtletaInput) 
     const planIds = [...new Set(inscripciones.map((e) => e.offering_plan_id).filter(Boolean))] as string[];
     const teamIds = [...new Set(inscripciones.map((e) => e.team_id).filter(Boolean))] as string[];
     const enrollmentIds = inscripciones.map((e) => e.id);
-    const [planes, equipos, primarias, ocupados, excedentes] = await Promise.all([
+    const hoyBanco = todayInZone();
+    const [planes, equipos, primarias, ocupados, excedentes, periodosBanco] = await Promise.all([
         planIds.length ? supabase.from('offering_plans').select('id, name, price, included_minutes_per_period').in('id', planIds).then(({ data }) => (data ?? []) as Record<string, any>[]) : Promise.resolve([]),
         teamIds.length ? supabase.from('teams').select('id, name, price_monthly').in('id', teamIds).then(({ data }) => (data ?? []) as Record<string, any>[]) : Promise.resolve([]),
         enrollmentIds.length ? supabase.from('enrollment_categories').select('enrollment_id, is_primary').in('enrollment_id', enrollmentIds).eq('is_primary', true).then(({ data, error: e }) => (e ? [] : (data ?? []) as Record<string, any>[])) : Promise.resolve([]),
@@ -702,8 +706,18 @@ export async function sugerenciasDeCobro(schoolId: string, atleta: AtletaInput) 
                 .eq('school_id', schoolId).in('enrollment_id', enrollmentIds).eq('status', 'suggested')
                 .then(({ data, error: e }) => (e ? [] : (data ?? []) as Record<string, any>[]))
             : Promise.resolve([]),
+        // Saldo del banco del periodo vigente: «Ya las usó» lo muestra para no cobrar
+        // horas que todavía caben en el plan (Airi, Dreamers, 2026-10-23: se cobraron
+        // 2 h «consumidas» con 8 h de 8 sin usar).
+        enrollmentIds.length
+            ? supabase.from('hour_bank_periods').select('enrollment_id, included_minutes, consumed_minutes, reserved_minutes')
+                .in('enrollment_id', enrollmentIds).lte('period_start', hoyBanco).gte('period_end', hoyBanco)
+                .then(({ data, error: e }) => (e ? [] : (data ?? []) as Record<string, any>[]))
+            : Promise.resolve([]),
     ]);
     const planPor = new Map(planes.map((p) => [p.id, p]));
+    const saldoPor = new Map(periodosBanco.map((p) => [p.enrollment_id,
+        Number(p.included_minutes) - Number(p.consumed_minutes) - Number(p.reserved_minutes)]));
     const equipoPor = new Map(equipos.map((t) => [t.id, t]));
     const primariaSet = new Set(primarias.map((p) => p.enrollment_id));
 
@@ -725,6 +739,7 @@ export async function sugerenciasDeCobro(schoolId: string, atleta: AtletaInput) 
                 // Para vender horas adicionales: la misma tarifa que usa el cobro de excedentes.
                 included_minutes: Number(plan.included_minutes_per_period) > 0 ? Number(plan.included_minutes_per_period) : null,
                 hourly_rate: tarifaPorHora(Number(plan.price), Number(plan.included_minutes_per_period)),
+                available_minutes: saldoPor.get(e.id) ?? null,
             } : null,
             team: team ? { id: team.id, name: team.name } : null,
             suggested_monthly_amount: sugerido,

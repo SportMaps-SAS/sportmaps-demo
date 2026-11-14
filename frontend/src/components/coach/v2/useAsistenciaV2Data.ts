@@ -329,6 +329,23 @@ export function usePlanillasPorRevisar(schoolId: string | null, habilitado: bool
   });
 }
 
+/**
+ * Cierra la lista (PATCH …/finalize). Al cerrar sale la encuesta a las familias
+ * de los que vinieron (trigger post_training_notify_on_finalize), se descuentan
+ * clases y se marcan las ausencias; y solo con la lista cerrada se puede evaluar.
+ * Si ya estaba cerrada (409, p. ej. la cerró la escuela) cuenta como cerrada:
+ * lo que sigue es evaluar igual.
+ */
+export async function cerrarListaSesion(sessionId: string): Promise<{ yaEstabaCerrada: boolean }> {
+  try {
+    await bffClient.patch(`/api/v1/attendance/session/${sessionId}/finalize`, {});
+    return { yaEstabaCerrada: false };
+  } catch (e) {
+    if ((e as { status?: number } | null)?.status === 409) return { yaEstabaCerrada: true };
+    throw e;
+  }
+}
+
 export function usePtDeHoy(userId: string | undefined, hoy: string) {
   return useQuery<{ sessions: any[] } | null>({
     queryKey: ['coach-pt-sessions', userId, hoy],

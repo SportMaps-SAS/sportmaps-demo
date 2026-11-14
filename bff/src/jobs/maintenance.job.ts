@@ -28,6 +28,9 @@ import { runPostTrainingReminders } from './post-training-reminders.job';
 import { runWhatsAppQueue } from './whatsapp-queue.job';
 import { runWhatsAppPaymentOutcome } from './whatsapp-payment-outcome.job';
 import { runReceiptReviewAlerts } from './receipt-review-alerts.job';
+import { runPagosPorValidar, pagosPorValidarActivo, type Tramo as TramoPagosPorValidar } from './pagos-por-validar.job';
+import { runAcuerdosRecordatorios, correrMantenimientoAcuerdos } from './acuerdos-de-pago-recordatorios.job';
+import { runBienvenidaEscuelas } from './bienvenida-escuelas.job';
 import { runWhatsAppMantenimiento } from './whatsapp-mantenimiento.job';
 import { vencerComprobantesColgados } from './whatsapp-cola-vencimiento.job';
 import { runWhatsAppPlantillasSync } from './whatsapp-plantillas-sync.job';
@@ -56,9 +59,14 @@ export function initMaintenanceJobs() {
     // (correos dobles, bloqueos dobles, glosas, conciliación...). Los
     // DISABLE_* por tarea no alcanzan: ~15 tareas no tienen interruptor.
     //
-    // CRONS_ENABLED=false en sportmaps-bff-dev y sportmaps-bff-stg; en prod
-    // sin definir (= habilitado), así prod no necesita cambio de entorno.
-    // Los DISABLE_* de cada tarea siguen funcionando dentro de prod.
+    // La INTENCIÓN era CRONS_ENABLED=false en sportmaps-bff-dev y
+    // sportmaps-bff-stg y sin definir en prod (= habilitado). OJO: al
+    // 2026-10-27 sportmaps-bff-dev NO tiene CRONS_ENABLED=false, así que sus
+    // crons SÍ corren contra la base compartida (y además
+    // notification_settings.bff_dispatch_url apunta a bffdev). stg no está
+    // verificado. Antes de asumir que un cron no corre en dev/stg, mirar las
+    // variables de cada servicio en Render. Los DISABLE_* de cada tarea siguen
+    // funcionando en cualquier proceso.
     // ────────────────────────────────────────────────────────────────────────
     if (process.env.CRONS_ENABLED === 'false') {
         console.log('[CRON] CRONS_ENABLED=false: no se registra ningún cron en este proceso.');
@@ -103,6 +111,12 @@ export function initMaintenanceJobs() {
                 .from('subscriptions_due_for_billing')
                 .select('*');
 
+            // La vista se crea solo si existe la tabla legacy `subscriptions`, y en
+            // la base viva no existe (2026-10-29): no hay nada que cobrar, no es error.
+            if (error && (error.code === 'PGRST205' || error.code === '42P01')) {
+                console.log('[CRON] Auto-cobro legacy: la vista subscriptions_due_for_billing no existe; nada que cobrar.');
+                return;
+            }
             if (error) {
                 console.error('[CRON] Error consultando subscriptions_due_for_billing:', error.message);
                 return;
@@ -536,6 +550,71 @@ export function initMaintenanceJobs() {
 
     console.log('[CRON] Cola de comprobantes de WhatsApp registrada (cada minuto).');
 
+    // Turnos del bot que se perdieron en un reinicio (A-01): los relanza. Mismo
+    // interruptor que la cola: solo el BFF que recibe el webhook (prod).
+    cron.schedule('* * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { barrerTurnosPendientes } = await import('../services/whatsapp-turnos-pendientes.service');
+            const r = await barrerTurnosPendientes();
+            if (r.relanzados || r.descartados) {
+                console.log(`[CRON] WhatsApp: ${r.relanzados} turno(s) relanzado(s), ${r.descartados} descartado(s) por viejos.`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error relanzando turnos de WhatsApp:', err?.message || err);
+        }
+    });
+
+    // Seguimiento de ~20 h al interesado que dejó de escribir (ventana abierta,
+    // sin plantilla). Mismo interruptor: solo prod. De 8 a 20 h lo filtra el job.
+    cron.schedule('7,22,37,52 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runSeguimientoProspectos20h } = await import('../services/whatsapp-prospecto-seguimiento.service');
+            const r = await runSeguimientoProspectos20h();
+            if (r.enviados || r.fallidos) {
+                console.log(`[CRON] WhatsApp: seguimiento 20 h — ${r.enviados} enviado(s), ${r.fallidos} con error.`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el seguimiento de 20 h de prospectos:', err?.message || err);
+        }
+    });
+
+    // Barrido de respaldo de conversaciones sin respuesta (el del webhook solo corre con tráfico). Apagado por
+    // defecto: WA_BARRIDO_SIN_RESPUESTA=true. Mismo interruptor de prod.
+    cron.schedule('*/30 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        if (process.env.WA_BARRIDO_SIN_RESPUESTA !== 'true') return;
+        try {
+            const { revisarPendientesSinRespuesta } = await import('../services/whatsapp-modo-discreto');
+            const { hablaDeLaEscuela } = await import('../services/whatsapp-bot.service');
+            const { intencionDeProspecto } = await import('../services/whatsapp-atencion.service');
+            const r = await revisarPendientesSinRespuesta(Date.now(), true, (t) => intencionDeProspecto(t) || hablaDeLaEscuela(t));
+            if (r.avisadas) console.log(`[CRON] WhatsApp: barrido sin respuesta — ${r.avisadas} aviso(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el barrido de pendientes de WhatsApp:', err?.message || err);
+        }
+    });
+
+    // Rescate por plantilla del interesado sin respuesta (ventana cerrada o por cerrar): solo con consentimiento
+    // vigente y la plantilla `seguimiento_interesado` APROBADA en la WABA. Mismo interruptor: solo prod.
+    cron.schedule('12,42 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runRescateProspectosPorPlantilla } = await import('../services/whatsapp-prospecto-rescate.service');
+            const r = await runRescateProspectosPorPlantilla();
+            if (r.enviados || r.fallidos) {
+                console.log(`[CRON] WhatsApp: rescate por plantilla — ${r.enviados} enviado(s), ${r.fallidos} con error.`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el rescate por plantilla de prospectos:', err?.message || err);
+        }
+    });
+
     // ────────────────────────────────────────────────────────────────────────
     // El desenlace del comprobante vuelve al chat donde entró.
     //
@@ -578,6 +657,90 @@ export function initMaintenanceJobs() {
     });
 
     console.log('[CRON] Avisos de comprobantes por validar registrados (cada 5 min).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Resumen diario de «Pagos por validar» → dueño y admins — 07:30 y 17:00 COT.
+    //
+    // El aviso de arriba es in-app + push y se pierde (Monster, 2026-11-08: 33
+    // comprobantes, ~20 en verde, el dueño entró y no aprobó ninguno). Este
+    // manda UN resumen por escuela: correo branded + in-app (+ WhatsApp de
+    // plataforma, apagado). 07:30 si hay pendientes; 17:00 solo si alguno lleva
+    // más de 48 h. Idempotente por escuela + día + tramo con la reserva en
+    // email_sends (los 3 BFF y los reinicios no duplican).
+    //
+    // Solo producción (`pagosPorValidarActivo`: NODE_ENV=production, porque dev
+    // no tiene CRONS_ENABLED=false). Kill-switch: DISABLE_PAGOS_POR_VALIDAR=true.
+    // ────────────────────────────────────────────────────────────────────────
+    const correrPagosPorValidar = async (tramo: TramoPagosPorValidar) => {
+        if (!pagosPorValidarActivo()) return;
+        try {
+            const r = await runPagosPorValidar({ tramo });
+            if (r.avisadas || r.fallosCorreo) {
+                console.log(`[CRON] Pagos por validar (${tramo}): ${r.avisadas} escuela(s) avisada(s), `
+                    + `${r.fallosCorreo} correo(s) fallido(s), ${r.sinCorreo} sin correo, ${r.duplicadas} ya avisada(s).`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error(`[CRON] Error en el resumen de pagos por validar (${tramo}):`, err?.message || err);
+        }
+    };
+    cron.schedule('30 7 * * *', () => correrPagosPorValidar('manana'), { timezone: 'America/Bogota' });
+    cron.schedule('0 17 * * *', () => correrPagosPorValidar('tarde'), { timezone: 'America/Bogota' });
+
+    console.log(pagosPorValidarActivo()
+        ? '[CRON] Resumen de pagos por validar registrado (07:30 y 17:00 COT).'
+        : '[CRON] Resumen de pagos por validar APAGADO en este servidor (solo NODE_ENV=production; o DISABLE_PAGOS_POR_VALIDAR=true).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Acuerdos de pago por plazos (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md §5).
+    // · Recordatorio de la cuota del día: cada hora; el job solo avisa entre las 07:00 y las 20:59 de
+    //   Colombia y reclama cada cuota una sola vez (`reminded_at`), así que los 3 BFF no repiten.
+    // · Mantenimiento diario: sincroniza los abonos y vence las cuotas sin pago. 06:30 UTC, ANTES de
+    //   'apply-late-fees-daily' (07:00 UTC, pg_cron), que además sincroniza por su cuenta.
+    // Ambos no hacen nada en escuelas sin `payment_agreements_enabled`. Kill-switch: DISABLE_ACUERDOS_CRON.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('5 * * * *', async () => {
+        if (process.env.DISABLE_ACUERDOS_CRON === 'true') return;
+        try {
+            const r = await runAcuerdosRecordatorios();
+            if (r.avisos > 0) console.log(`[CRON] Recordatorios de cuotas de acuerdos: ${r.avisos} aviso(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en recordatorios de acuerdos de pago:', err?.message || err);
+        }
+    });
+    cron.schedule('30 6 * * *', async () => {
+        if (process.env.DISABLE_ACUERDOS_CRON === 'true') return;
+        try {
+            await correrMantenimientoAcuerdos();
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en mantenimiento de acuerdos de pago:', err?.message || err);
+        }
+    });
+    console.log('[CRON] Acuerdos de pago: recordatorios cada hora y mantenimiento diario 06:30 UTC.');
+
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Bienvenida a escuelas y entrenadores nuevos — cada 10 min.
+    //
+    // Antes la mandaba el navegador y solo en el registro con correo y rol
+    // 'school': con Google o como entrenador personal no salía (2026-10-26).
+    // Correo al dueño + aviso interno a contacto@. Idempotente entre los 3 BFF
+    // por la reserva en email_sends. Kill-switch: DISABLE_BIENVENIDA_ESCUELAS.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/10 * * * *', async () => {
+        if (process.env.DISABLE_BIENVENIDA_ESCUELAS === 'true') return;
+        try {
+            const r = await runBienvenidaEscuelas();
+            if (r.enviadas || r.fallos) console.log(`[CRON] Bienvenidas: ${r.enviadas} enviada(s), ${r.fallos} fallida(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error enviando bienvenidas:', err?.message || err);
+        }
+    });
+
+    console.log('[CRON] Bienvenida a escuelas nuevas registrada (cada 10 min).');
 
     // ────────────────────────────────────────────────────────────────────────
     // Plazo de la promesa del acuse (P1, análisis 2026-10-06) — cada 2 min.
@@ -835,11 +998,12 @@ export function initMaintenanceJobs() {
     // Ciclo diario de facturación SaaS SportMaps → escuelas (Fase 1). Llama a
     // run_saas_billing_cycle() (flip a overdue + avanza período + genera la
     // próxima factura + calcula recordatorios de 3 etapas) y por cada fila
-    // manda el email/PDF vía sendSaasInvoice. 06:20 COT, después del cron SQL
-    // de mensualidades a familias (06:30 UTC) para no competir por conexiones
-    // en el mismo minuto. Kill-switch: DISABLE_SAAS_BILLING_CRON=true.
+    // manda el email/PDF vía sendSaasInvoice. 09:20 COT: a las 06:20 el push de
+    // «Factura SportMaps vencida» despertaba a la dueña todos los días
+    // (2026-10-29); sigue lejos del cron SQL de mensualidades (06:30 UTC).
+    // Kill-switch: DISABLE_SAAS_BILLING_CRON=true.
     // ────────────────────────────────────────────────────────────────────────
-    cron.schedule('20 6 * * *', async () => {
+    cron.schedule('20 9 * * *', async () => {
         if (process.env.DISABLE_SAAS_BILLING_CRON === 'true') return;
         try {
             await runSaasBillingCycle();
@@ -849,7 +1013,7 @@ export function initMaintenanceJobs() {
         }
     }, { timezone: 'America/Bogota' });
 
-    console.log('[CRON] Ciclo de facturación SaaS registrado para las 06:20 COT.');
+    console.log('[CRON] Ciclo de facturación SaaS registrado para las 09:20 COT.');
 
     // ────────────────────────────────────────────────────────────────────────
     // Chequeo de latido de bridges locales (ej. scripts/gymrm-door-bridge/).
@@ -1041,6 +1205,73 @@ export function initMaintenanceJobs() {
     }, { timezone: 'America/Bogota' });
 
     console.log('[CRON] Ciclo de la clase de cortesía registrado (seguimiento 20:00-21:45 COT; cruce de inscripciones 21:30 COT).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Clase de prueba del embudo (B2/B3, Monster 2026-10-30) — cada 15 min:
+    //  · cupos separados: a las ~22 h «tu cupo vence en 2 h» (ventana abierta o
+    //    plantilla) y a las `separar_horas` se libera con aviso a la escuela; si
+    //    ya hay pago, confirma en vez de soltar. Una sola RPC por lote.
+    //  · clases reprogramadas: red de seguridad del aviso de «Mi semana» (sesión
+    //    cancelada o movida en las últimas 48 h → «clase reprogramada»).
+    // Las dos escriben por WhatsApp: solo el BFF de la cola (prod). Idempotentes
+    // entre los 3 BFF por marcas en source_detail del lead. Sin escuelas con
+    // embudo o sin la migración M1, no hacen nada. Kill-switch propio de los
+    // cupos: DISABLE_CUPOS_SEPARADOS=true.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/15 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runCuposSeparados, runClasesReprogramadas } = await import('../services/clase-prueba-agenda.service');
+            const c = await runCuposSeparados();
+            if (c.avisados || c.liberados || c.confirmados || c.errores) {
+                console.log(`[CRON] Clase de prueba: ${c.avisados} aviso(s) de cupo por vencer, ${c.liberados} liberado(s), ${c.confirmados} confirmado(s), ${c.errores} error(es).`);
+            }
+            const r = await runClasesReprogramadas();
+            if (r.avisos) console.log(`[CRON] Clase de prueba: ${r.avisos} aviso(s) de clase reprogramada en ${r.escuelas} escuela(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en los cupos de la clase de prueba:', err?.message || err);
+        }
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Campañas de WhatsApp (plan B5) — cada 10 min. Sin campañas aprobadas o
+    // enviando, una sola lectura a una tabla chica (cero IO para las demás
+    // escuelas). Horario, tope diario, piloto, cupo de Meta y freno por calidad
+    // los decide el motor. Mismo interruptor que la cola: solo prod.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/10 * * * *', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runCampanas } = await import('../services/whatsapp-campanas.service');
+            const r = await runCampanas();
+            if (r.enviados || r.fallidos || r.pausadas || r.terminadas) {
+                console.log(`[CRON] Campañas de WhatsApp: ${r.enviados} enviado(s), ${r.fallidos} fallido(s), ${r.pausadas} pausada(s), ${r.terminadas} terminada(s).`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en las campañas de WhatsApp:', err?.message || err);
+        }
+    });
+
+    // ────────────────────────────────────────────────────────────────────────
+    // «Sigue en fila» (B6) — cada 15 min, lun–sáb en horario hábil. A quien el
+    // bot pasó a una persona y la escuela no le ha contestado en 2 h hábiles
+    // (lun–sáb 8:00–18:00 Bogotá) se le confirma UNA vez que su mensaje sigue en
+    // fila. Solo escuelas con `wa_temas_a_persona` configurado (Dynasty no
+    // cambia). Escribe por WhatsApp: solo prod.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('5,20,35,50 8-18 * * 1-6', async () => {
+        if (process.env.DISABLE_WHATSAPP_QUEUE_CRON === 'true') return;
+        try {
+            const { runSigueEnFila } = await import('../services/whatsapp-sigue-en-fila.service');
+            const r = await runSigueEnFila();
+            if (r.avisados || r.errores) console.log(`[CRON] WhatsApp «sigue en fila»: ${r.avisados} aviso(s), ${r.errores} error(es).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el aviso «sigue en fila»:', err?.message || err);
+        }
+    }, { timezone: 'America/Bogota' });
 
     // ────────────────────────────────────────────────────────────────────────
     // Detector de cambio de plan: la familia paga el valor de otro plan sin avisar.

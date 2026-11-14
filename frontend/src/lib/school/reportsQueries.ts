@@ -44,6 +44,40 @@ export interface TrainingLoadSummary {
   total_ua: number;
 }
 
+export interface SessionMetricOption {
+  value: number;
+  label: string;
+  n: number;
+  pct: number;
+}
+
+/** Agregado del mes para una métrica que se registra varias veces (por
+ *  sesión) — cansancio, comprensión, esfuerzo, satisfacción, aspectos a
+ *  mejorar, rating del coach. A diferencia de `SnapshotMetric` (última vs.
+ *  anterior), acá se promedia o distribuye TODO el periodo. */
+export interface SessionMetricSummary {
+  metric_key: string;
+  label: string;
+  category: string | null;
+  aggregation: 'avg' | 'distribution' | 'count';
+  n: number;
+  avg?: number;
+  distribution?: SessionMetricOption[];
+  count?: number;
+}
+
+/** Un día del mes para el mapa de calor: si hubo entreno, qué tan duro fue
+ *  (promedio de cansancio autopercibido) y si fue día de partido. */
+export interface CalendarDay {
+  date: string;
+  day: number;
+  has_session: boolean;
+  attended: boolean | null;
+  effort: number | null;
+  is_match: boolean;
+  minutes_played: number | null;
+}
+
 export interface ReportSnapshot {
   version: 1;
   generated_at: string;
@@ -58,6 +92,10 @@ export interface ReportSnapshot {
   highlights: SnapshotMetric[];
   to_work_on: SnapshotMetric[];
   metrics: SnapshotMetric[];
+  metrics_session: SessionMetricSummary[];
+  /** Panorama completo: última banda de cada métrica con historia, no solo este mes. */
+  radar: SnapshotMetric[];
+  calendar: CalendarDay[];
   football: FootballSummary | null;
   training_load: TrainingLoadSummary | null;
 }

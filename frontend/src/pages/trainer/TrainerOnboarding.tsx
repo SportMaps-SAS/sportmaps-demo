@@ -516,7 +516,8 @@ export default function TrainerOnboarding() {
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
                             if (!file) return;
-                            const url = await uploadFile(file, 'avatars', 'trainer-profiles');
+                            if (!session?.user?.id) return;
+                            const url = await uploadFile(file, 'avatars', `trainer-profiles/${session.user.id}`);
                             if (url) setAvatarUrl(url);
                           }}
                         />

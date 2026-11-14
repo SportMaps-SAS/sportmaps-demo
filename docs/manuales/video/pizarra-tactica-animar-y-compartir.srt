@@ -1,0 +1,55 @@
+1
+00:00:00,006 --> 00:00:05,574
+Partimos de una jugada armada. Para animarla, se usa la línea de tiempo de abajo.
+
+2
+00:00:06,122 --> 00:00:15,314
+Más Cuadro copia el cuadro actual. Ahí mueves a los jugadores para marcar el siguiente momento: el lateral pasa al ataque, el medio y el extremo se adelantan.
+
+3
+00:00:17,498 --> 00:00:24,266
+Agrega los cuadros que necesites, hasta treinta. Tocando la miniatura de un cuadro vuelves a él para editarlo.
+
+4
+00:00:28,557 --> 00:00:34,772
+Cada cuadro tiene su tiempo. Al reproducir, todo se mueve con suavidad de un cuadro al siguiente.
+
+5
+00:00:40,084 --> 00:00:45,004
+En Notas escribes la consigna, y le pones etiquetas para encontrarla después.
+
+6
+00:00:59,107 --> 00:01:06,308
+En Videos pegas un enlace de YouTube, Vimeo, o de cámaras como Veo y Hudl. También puedes subir el video del celular.
+
+7
+00:01:19,008 --> 00:01:26,375
+Ver en 3D muestra la misma jugada con jugadores en volumen. Se edita en 2D; el 3D es para mirarla y mostrarla.
+
+8
+00:01:41,816 --> 00:01:49,520
+Cambias de cámara: transmisión de TV, cenital, spider-cam, dron, o la automática, que elige sola la mejor toma.
+
+9
+00:02:06,731 --> 00:02:10,547
+Volver a 2D te devuelve al tablero, con la jugada intacta.
+
+10
+00:02:19,852 --> 00:02:31,588
+Analizar jugada le pide a la IA una lectura: riesgos, contraataques del rival y variantes. Son sugerencias, y no se envían nombres ni fotos. Cada entrenador tiene un cupo al mes.
+
+11
+00:02:35,990 --> 00:02:44,678
+Exportar la saca como imagen, ficha en PDF, video, o directo a WhatsApp. De entrada no muestra nombres: son menores de edad.
+
+12
+00:02:50,203 --> 00:02:58,483
+En Más, Guardar en biblioteca la convierte en un ejercicio de la escuela: se guarda con los puestos, sin nombres, para usarla con cualquier equipo.
+
+13
+00:03:12,721 --> 00:03:15,793
+Y Guardar jugada la deja en el bloque de la sesión.
+
+14
+00:03:20,177 --> 00:03:27,545
+Al editar una sesión, Desde la biblioteca te muestra tus ejercicios, las plantillas de SportMaps y los paquetes por deporte.

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -99,12 +99,7 @@ export function usePushSubscription() {
         // Si la suscripción del navegador fue creada con OTRA clave VAPID
         // (rotación de llaves), el envío falla con 403. Detectarlo comparando
         // la applicationServerKey y re-suscribir con la clave actual.
-        const existingKey = existing.options?.applicationServerKey;
-        const existingBytes = existingKey ? new Uint8Array(existingKey) : null;
-        const sameKey = !!existingBytes
-          && existingBytes.length === appServerKey.length
-          && existingBytes.every((b, i) => b === appServerKey[i]);
-        if (sameKey) {
+        if (mismaLlave(existing, appServerKey)) {
           await saveSubscription(existing);
           setStatus('granted');
           toast.success('Notificaciones push ya activadas');
@@ -130,24 +125,8 @@ export function usePushSubscription() {
     }
   }, [user]);
 
-  const saveSubscription = async (subscription: PushSubscription) => {
-    const json = subscription.toJSON();
-    const key = json.keys?.p256dh;
-    const auth = json.keys?.auth;
-    if (!key || !auth) throw new Error('Invalid subscription keys');
-
-    const { error } = await supabase.from('push_subscriptions').upsert(
-      {
-        user_id: user!.id,
-        endpoint: json.endpoint,
-        p256dh: key,
-        auth,
-        user_agent: navigator.userAgent,
-      },
-      { onConflict: 'endpoint' }
-    );
-    if (error) throw error;
-  };
+  const saveSubscription = (subscription: PushSubscription) =>
+    guardarSuscripcion(user!.id, subscription);
 
   const checkStatus = useCallback(async () => {
     if (!('Notification' in window)) {
@@ -167,6 +146,152 @@ export function usePushSubscription() {
   }, []);
 
   return { subscribe, status, checkStatus };
+}
+
+async function guardarSuscripcion(userId: string, subscription: PushSubscription) {
+  const json = subscription.toJSON();
+  const key = json.keys?.p256dh;
+  const auth = json.keys?.auth;
+  if (!key || !auth) throw new Error('Invalid subscription keys');
+
+  const { error } = await supabase.from('push_subscriptions').upsert(
+    {
+      user_id: userId,
+      endpoint: json.endpoint,
+      p256dh: key,
+      auth,
+      user_agent: navigator.userAgent,
+    },
+    // ignoreDuplicates → ON CONFLICT DO NOTHING: push_subscriptions no tiene
+    // policy de UPDATE, así que un upsert sobre un endpoint ya guardado
+    // fallaría por RLS. Si la fila ya existe, no hay nada que refrescar.
+    { onConflict: 'endpoint', ignoreDuplicates: true }
+  );
+  if (error) throw error;
+}
+
+/** ¿La suscripción del navegador se creó con esta misma llave VAPID? */
+function mismaLlave(sub: PushSubscription, appServerKey: Uint8Array): boolean {
+  const existingKey = sub.options?.applicationServerKey;
+  const existingBytes = existingKey ? new Uint8Array(existingKey) : null;
+  return !!existingBytes
+    && existingBytes.length === appServerKey.length
+    && existingBytes.every((b, i) => b === appServerKey[i]);
+}
+
+// ── Sincronización SILENCIOSA al iniciar sesión ──────────────────────────────
+//
+// Por qué existe (2026-10-27): se rotó la llave VAPID. El BFF firma con la
+// nueva, y las suscripciones creadas con la vieja le devuelven 401; solo les
+// llegaba push por la Edge Function legacy. `subscribe()` de arriba ya sabía
+// rotar, pero solo corre cuando el usuario toca el banner, y el banner NUNCA
+// aparece si el permiso ya está 'granted'. Así las suscripciones viejas no
+// rotaban nunca y no se podía apagar el push legacy.
+//
+// Corre una vez por sesión (por usuario), sin pedir permiso, sin toasts y con
+// errores solo a console.warn. NUNCA llama a Notification.requestPermission.
+
+const SYNC_KEY_PREFIX = 'sm_push_sync_';
+const yaSincronizados = new Set<string>();
+
+/** Devuelve true si es la primera vez en esta sesión para ese usuario. */
+function marcarSincronizado(userId: string): boolean {
+  if (yaSincronizados.has(userId)) return false;
+  try {
+    if (sessionStorage.getItem(SYNC_KEY_PREFIX + userId) === '1') {
+      yaSincronizados.add(userId);
+      return false;
+    }
+  } catch { /* sessionStorage bloqueado: basta el guard en memoria */ }
+  yaSincronizados.add(userId);
+  try { sessionStorage.setItem(SYNC_KEY_PREFIX + userId, '1'); } catch { /* idem */ }
+  return true;
+}
+
+/** Solo para tests: olvida qué usuarios ya se sincronizaron. */
+export function __resetSincronizacionPush() {
+  yaSincronizados.clear();
+}
+
+export type ResultadoSincronizacion =
+  | 'omitido'      // no aplica: nativo, sin sesión, sin permiso, prefs off, ya corrió…
+  | 'refrescada'   // misma llave: solo upsert
+  | 'rotada'       // llave distinta: unsubscribe + subscribe + upsert (+ borrar la vieja)
+  | 'creada'       // no había suscripción y el permiso estaba concedido
+  | 'error';
+
+export async function sincronizarSuscripcionSilenciosa(opts: {
+  userId: string | null | undefined;
+  preferences?: Record<string, unknown> | null;
+  vapidKey?: string | null;
+}): Promise<ResultadoSincronizacion> {
+  const { userId, preferences } = opts;
+  const vapidKey = 'vapidKey' in opts ? opts.vapidKey : VAPID_PUBLIC_KEY;
+
+  if (!userId) return 'omitido';
+  if (isNativePlatform()) return 'omitido'; // nativo va por FCM / user_devices
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'omitido';
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return 'omitido';
+  if (!vapidKey) return 'omitido';
+  if (Notification.permission !== 'granted') return 'omitido';
+  // Mismo criterio que resolvePushAllowed del BFF: solo `false` explícito apaga.
+  if (preferences?.push_notifications === false) return 'omitido';
+  if (!marcarSincronizado(userId)) return 'omitido';
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    if (!registration?.pushManager) return 'omitido';
+    const appServerKey = urlBase64ToUint8Array(vapidKey);
+    const existing = await registration.pushManager.getSubscription();
+
+    if (existing && mismaLlave(existing, appServerKey)) {
+      await guardarSuscripcion(userId, existing);
+      return 'refrescada';
+    }
+
+    const endpointViejo = existing?.endpoint ?? null;
+    if (existing) await existing.unsubscribe();
+
+    const nueva = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appServerKey,
+    });
+    await guardarSuscripcion(userId, nueva);
+
+    if (endpointViejo && endpointViejo !== nueva.endpoint) {
+      // La policy push_subscriptions_delete_own deja borrar la fila propia.
+      // Si falla no es grave: el endpoint ya está muerto tras el unsubscribe
+      // y el BFF borra la fila cuando el push service responde 404/410.
+      const { error } = await supabase
+        .from('push_subscriptions')
+        .delete()
+        .eq('user_id', userId)
+        .eq('endpoint', endpointViejo);
+      if (error) console.warn('[push] no se pudo borrar la suscripción vieja:', error.message);
+    }
+    return existing ? 'rotada' : 'creada';
+  } catch (err) {
+    console.warn('[push] sincronización silenciosa falló:', err);
+    return 'error';
+  }
+}
+
+/**
+ * Monta la sincronización silenciosa. Va en AuthLayout (solo rutas con sesión).
+ * Espera al perfil para poder respetar `preferences.push_notifications`.
+ */
+export function useSincronizarPushSilencioso() {
+  const { user, profile } = useAuth();
+  const userId = user?.id ?? null;
+  const perfilListo = !!profile && profile.id === userId;
+  const preferences = (profile?.preferences ?? null) as Record<string, unknown> | null;
+
+  useEffect(() => {
+    if (!userId || !perfilListo) return;
+    void sincronizarSuscripcionSilenciosa({ userId, preferences });
+    // Solo al cambiar de usuario o cargar el perfil; el guard evita repetir.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, perfilListo]);
 }
 
 // El retorno se declara sobre ArrayBuffer y no sobre el ArrayBufferLike que

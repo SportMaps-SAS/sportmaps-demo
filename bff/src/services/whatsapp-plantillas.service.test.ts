@@ -255,6 +255,9 @@ describe('enviarCobroPorPlantilla — variables de _v3 / _v4', () => {
             pago_recibido_otro_concepto: 'pago_recibido_otro_concepto.json',
             comprobante_en_revision: 'comprobante_en_revision.json',
             recordatorio_clase_cortesia: 'recordatorio_clase_cortesia.json',
+            recordatorio_clase_prueba: 'recordatorio_clase_prueba.json',
+            clase_prueba_cupo_por_vencer: 'clase_prueba_cupo_por_vencer.json',
+            clase_prueba_reprogramada: 'clase_prueba_reprogramada.json',
         };
         const datos = {
             ...DATOS, diasVencido: 7, montoAbono: '$75.000', saldoPendiente: '$75.000', motivo: 'no coincide el valor',

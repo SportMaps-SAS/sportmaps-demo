@@ -254,3 +254,22 @@ describe('«Ya las usó» con plan con banco: horas × tarifa', () => {
         expect(screen.queryByLabelText('Horas usadas')).toBeNull();
     });
 });
+
+describe('«Ya las usó» con saldo en el banco (Airi, Dreamers, 2026-10-23)', () => {
+    it('avisa cuántas horas le quedan cuando el banco del mes no está agotado', () => {
+        const conSaldo = sugerencias({ enrollments: [{ ...PGR6X2, available_minutes: 480 }] });
+        render(<HorasAdicionalesLine line={usadas()} suggestions={conSaldo} onPatch={vi.fn()} />);
+        const aviso = screen.getByTestId('cyp-horas-usadas-saldo');
+        expect(aviso.textContent).toMatch(/8 h/);
+        expect(aviso.textContent).toMatch(/por encima/);
+    });
+
+    it('no avisa con el banco agotado ni cuando no se conoce el saldo', () => {
+        const agotado = sugerencias({ enrollments: [{ ...PGR6X2, available_minutes: -60 }] });
+        const { unmount } = render(<HorasAdicionalesLine line={usadas()} suggestions={agotado} onPatch={vi.fn()} />);
+        expect(screen.queryByTestId('cyp-horas-usadas-saldo')).toBeNull();
+        unmount();
+        render(<HorasAdicionalesLine line={usadas()} suggestions={sugerencias()} onPatch={vi.fn()} />);
+        expect(screen.queryByTestId('cyp-horas-usadas-saldo')).toBeNull();
+    });
+});

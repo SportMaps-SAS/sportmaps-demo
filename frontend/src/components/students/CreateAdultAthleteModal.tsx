@@ -38,17 +38,20 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { ZkPinField, zkPinToPayload } from './ZkPinField';
+import { phoneForForm, type AthletePrefill } from './athletePrefill';
 import { supabase } from '@/integrations/supabase/client';
 import { bffClient } from '@/lib/api/bffClient';
 import {
   FirstPaymentModeSection, FirstPaymentChoice, DEFAULT_FIRST_PAYMENT_CHOICE,
 } from '@/components/students/FirstPaymentModeSection';
 import { formatCOP } from '@/lib/prorationUtils';
+import { PlanCombobox } from '@/components/students/PlanCombobox';
 import {
   AltaFirstChargeCard, FeeWaivers, feeWaiversPayload, defaultFeeWaivers,
 } from '@/components/students/AltaFirstChargeCard';
 import { useInsuranceActiveSince } from '@/hooks/useInsuranceActiveSince';
 import { PhoneInput } from '@/components/ui/phone-input';
+import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -87,10 +90,12 @@ interface FoundProfile {
 interface CreateAdultAthleteModalProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Recibe la respuesta de create-one (`user_id` o `unregistered_athlete_id`). */
+  onSuccess: (result?: any) => void;
   schoolId: string;
   /** «No cobrar inscripción / seguro». El coach no exonera (default true; el BFF también lo frena). */
   canWaiveFees?: boolean;
+  prefill?: AthletePrefill | null;
 }
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────
@@ -109,10 +114,12 @@ function Section({ icon, title, children }: { icon: React.ReactNode; title: stri
 
 // ─── Main Modal ───────────────────────────────────────────────────────────────
 
-export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true }: CreateAdultAthleteModalProps) {
+export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true, prefill }: CreateAdultAthleteModalProps) {
   const { toast } = useToast();
   const { registrationZkPinEnabled } = useEntitlements();
   const [submitting, setSubmitting] = useState(false);
+  // «¿Quién lo refirió?»: solo con la campaña activa; se registra tras crear la inscripción.
+  const referido = useReferidoAlta(schoolId);
 
   // Lookup data
   const [teams, setTeams]       = useState<Team[]>([]);
@@ -198,7 +205,7 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
 
     Promise.all([
       supabase.from('teams').select('id, name, sport, price_monthly').eq('school_id', schoolId).eq('status', 'active').order('name'),
-      supabase.from('offering_plans').select('id, name, price, duration_days, registration_fee, insurance_fee, offering_id, offerings(id, name)').eq('school_id', schoolId).eq('is_active', true).order('sort_order'),
+      supabase.from('offering_plans').select('id, name, price, duration_days, registration_fee, insurance_fee, offering_id, offerings(id, name)').eq('school_id', schoolId).eq('is_active', true).order('sort_order').order('created_at'),
       supabase.from('school_branches').select('id, name').eq('school_id', schoolId).order('name'),
       supabase.from('school_settings').select('payment_cutoff_day, billing_cycle_type, late_fee_skip_signup_month').eq('school_id', schoolId).maybeSingle(),
     ]).then(([teamsRes, plansRes, branchesRes, settingsRes]) => {
@@ -276,7 +283,14 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
     setSendInviteEmail(true); setSendInviteWhatsapp(true);
   };
 
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => { referido.reiniciar(); reset(); onClose(); };
+
+  // Abre precargado (prospecto de clase de prueba): solo lo que se sabe.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    if (prefill.fullName) setUFullName(prefill.fullName);
+    if (prefill.phone) setUPhone(phoneForForm(prefill.phone));
+  }, [open, prefill]);
 
   // ── Búsqueda silenciosa en profiles ──────────────────────────────────────────
   const checkEmailExists = useCallback(async (emailVal: string) => {
@@ -385,8 +399,12 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
         }, { 'x-school-id': schoolId });
 
         handlePostSuccess(result, uFullName.trim() || 'Atleta', uPhone);
+        if (Number((result as any)?.enrollments_created) > 0) {
+          await referido.registrarTras({ tipo: 'profile', id: foundProfile.id, nombre: uFullName.trim() || 'el atleta' });
+        }
+        referido.reiniciar();
         reset();
-        onSuccess();
+        onSuccess({ ...(result as any), user_id: (result as any)?.user_id ?? foundProfile.id });
       } else {
         // Registrar atleta nuevo
         const result = await bffClient.post('/api/v1/students/create-one', {
@@ -414,8 +432,12 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
         }, { 'x-school-id': schoolId });
 
         handlePostSuccess(result, uFullName, uPhone);
+        if ((result as any)?.unregistered_athlete_id && Number((result as any)?.enrollments_created) > 0) {
+          await referido.registrarTras({ tipo: 'unregistered', id: (result as any).unregistered_athlete_id, nombre: uFullName.trim() });
+        }
+        referido.reiniciar();
         reset();
-        onSuccess();
+        onSuccess(result);
       }
     } catch (e: any) {
       toast({ title: 'Error al inscribir', description: e.message || 'Error inesperado', variant: 'destructive' });
@@ -673,17 +695,13 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
               <div>
                 <Label>Plan</Label>
                 <p className="text-[11px] text-muted-foreground mb-1">Independiente del equipo</p>
-                <Select value={selectedPlanId} onValueChange={handlePlanSelect}>
-                  <SelectTrigger><SelectValue placeholder="Sin plan" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Sin plan</SelectItem>
-                    {plans.map(p => (
-                      <SelectItem key={p.plan_id} value={p.plan_id}>
-                        {p.offering_name} — {p.plan_name} ({formatCOP(p.price)})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <PlanCombobox
+                  plans={plans.map(p => ({ id: p.plan_id, name: p.plan_name, offering_name: p.offering_name, price: p.price }))}
+                  value={selectedPlanId}
+                  onChange={handlePlanSelect}
+                  noneValue="none"
+                  showPrice
+                />
               </div>
             </div>
 
@@ -779,6 +797,8 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
           </Section>
         </div>
 
+        {referido.campo}
+
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={submitting}>
             Cancelar
@@ -794,6 +814,7 @@ export function CreateAdultAthleteModal({ open, onClose, onSuccess, schoolId, ca
           </Button>
         </DialogFooter>
       </DialogContent>
+      {referido.dialogo}
     </Dialog>
   );
 }

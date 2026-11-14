@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ParentHomeV2 } from './ParentHomeV2';
@@ -34,6 +34,12 @@ vi.mock('./useParentHomeData', () => ({
 // La agenda del Calendario: sin datos, Inicio cae al horario del equipo.
 vi.mock('./useParentCalendarData', () => ({ useParentAgenda: () => ({ data: undefined }) }));
 vi.mock('@/lib/api/parents', () => ({ parentsAPI: { updateChild: vi.fn() } }));
+// Convocatorias (B1): my_callups / respond_callup simulados.
+const callups = vi.hoisted(() => ({ rows: [] as unknown[], responder: vi.fn() }));
+vi.mock('@/lib/api/v2Contratos', () => ({
+  misConvocatorias: async () => ({ data: callups.rows, error: null, noDisponible: false }),
+  responderConvocatoria: callups.responder,
+}));
 vi.mock('sonner', () => ({ toast: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 // Jueves 8 de octubre de 2026, 10:00 a. m.
@@ -82,6 +88,13 @@ describe('ParentHomeV2', () => {
     expect(screen.getAllByTestId('tarjeta-hijo')).toHaveLength(2);
   });
 
+  it('una sola campana: el Inicio no dibuja la suya (queda la de la cabecera de la app)', () => {
+    pintar();
+    expect(screen.queryByRole('link', { name: /Avisos/ })).toBeNull();
+    expect(document.querySelector('a[href="/notifications"]')).toBeNull();
+    expect(screen.getByRole('banner')).toBeInTheDocument();
+  });
+
   it('familia al día: sin botón de pagar y chips «Al día»', () => {
     pintar();
     expect(screen.getByRole('heading', { name: 'Todo al día, Carolina.' })).toBeInTheDocument();
@@ -89,6 +102,29 @@ describe('ParentHomeV2', () => {
     expect(screen.getAllByText('Al día')).toHaveLength(2);
     expect(screen.getByText(/entrena/)).toHaveTextContent('Sofía entrena hoy a las 4:00 p. m. en la cancha 2.');
     expect(screen.getByText('Falta un dato de Tomás')).toBeInTheDocument();
+  });
+
+  it('B1: el hijo convocado trae «¿Va …?» y el acudiente responde Va', async () => {
+    callups.rows = [{
+      lineup_id: 'l-1', match_id: 'm-1', team_id: 't-1', subject_type: 'child', subject_id: 'c-tomas',
+      athlete_name: 'Tomás Ramírez', role: 'starter', opponent: 'Halcones FC', match_date: '2026-10-31',
+      kickoff_at: null, location: null, notes: null, response: null,
+    }];
+    callups.responder.mockResolvedValue({ data: { response: 'va' }, error: null, noDisponible: false });
+    pintar();
+    expect(await screen.findByText('¿Va Tomás al partido contra Halcones FC?')).toBeInTheDocument();
+    // Solo en la tarjeta de Tomás, no en la de Sofía.
+    expect(screen.getAllByTestId('convocatoria-hijo')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Va' }));
+    await waitFor(() => expect(callups.responder).toHaveBeenCalledWith('l-1', { childId: 'c-tomas' }, 'va'));
+    expect(await screen.findByText('Tomás va al partido')).toBeInTheDocument();
+    callups.rows = [];
+  });
+
+  it('B10: «p. m.» no termina en doble punto cuando no hay lugar', () => {
+    conDatos([{ ...SOFIA, lugar: null }], []);
+    pintar();
+    expect(screen.getByText(/entrena/).textContent).toBe('Sofía entrena hoy a las 4:00 p. m.');
   });
 
   it('un error de red NO se ve como «todo al día» (UX-2)', () => {

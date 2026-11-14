@@ -1,0 +1,180 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Dreamers Gymnastics: por qué no se han descontado horas</title><style>@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+* { box-sizing: border-box; }
+body { margin: 0; font-family: 'Inter', sans-serif; color: #1c2b20; background: #f4f6f4; }
+.page { width: 816px; height: 1056px; background: #fff; position: relative; page-break-after: always; overflow: hidden; padding: 0 60px 76px; }
+.page:last-child { page-break-after: auto; }
+h1,h2,h3,.logo,.pill,.chapter-badge,.num { font-family: 'Baloo 2', sans-serif; }
+
+.hero { margin: 0 -60px 28px; padding: 40px 60px 34px; color: #f2f7f2;
+  background: radial-gradient(120% 90% at 15% 95%, #2a7a3f, transparent 55%), linear-gradient(155deg, #123416, #0f2614 45%, #0c1f10); }
+.logo { display:flex; align-items:center; gap:10px; font-weight:800; font-size:20px; margin-bottom: 22px; }
+.logo .pin { width:26px; height:26px; border-radius:999px; background:#4fd17a; display:inline-block; }
+.hero h1 { font-size: 38px; font-weight: 800; line-height: 1.08; margin: 0 0 10px; }
+.hero p { font-size: 15px; line-height: 1.5; color: #cfe8d6; margin: 0 0 18px; max-width: 600px; }
+.pills { display:flex; gap:8px; flex-wrap:wrap; }
+.pill { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.22); padding: 5px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+.top-pad { height: 52px; }
+
+.chapter-head { display:flex; align-items:center; gap:14px; margin: 0 0 8px; }
+.chapter-badge { width:40px; height:40px; border-radius:12px; background:#1c5c34; color:#fff; font-size:21px; font-weight:800; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.chapter-head h2 { font-size: 22px; font-weight: 800; margin: 0; color: #123416; line-height: 1.15; }
+.rule { height:3px; background:#1c5c34; border:none; margin: 0 0 14px; border-radius:2px; }
+p { margin: 0 0 12px; font-size: 13.5px; line-height: 1.55; color: #33413a; }
+.section { margin-bottom: 26px; }
+
+table { width:100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; margin: 4px 0 6px; border: 1px solid #dfe8e1; border-radius: 12px; overflow: hidden; }
+th { background:#eaf3ec; color:#123416; text-align:left; font-weight:700; padding: 9px 10px; font-size: 12px; }
+td { padding: 9px 10px; border-top: 1px solid #e8efe9; vertical-align: top; line-height: 1.45; color:#33413a; }
+td.n { white-space: nowrap; font-weight: 600; color:#1c2b20; }
+td .ok { color:#1f7a3d; font-weight:700; }
+td .warn { color:#c2600f; font-weight:700; }
+
+.callout { border-radius: 12px; padding: 12px 16px; margin: 12px 0; font-size: 13px; line-height: 1.5; }
+.callout .tag { font-family:'Baloo 2',sans-serif; font-size: 12px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 3px; }
+.callout.warn { background:#fff3e8; border: 1px solid #ffb877; border-left: 5px solid #ff8833; }
+.callout.warn .tag { color:#c2600f; }
+.callout.tip { background:#eaf7ee; border: 1px solid #79c98f; border-left: 5px solid #2f9e57; }
+.callout.tip .tag { color:#1f7a3d; }
+
+.formula { background:#123420; color:#eaf7ee; border-radius: 12px; padding: 14px 18px; margin: 10px 0 12px; display:flex; gap: 22px; align-items:center; }
+.formula .big { font-family:'Baloo 2',sans-serif; font-size: 30px; font-weight: 800; color:#4fd17a; line-height: 1; }
+.formula .lbl { font-size: 12px; color:#b9dcc4; }
+
+.steps { list-style:none; padding:0; margin: 6px 0 0; }
+.steps li { display:flex; gap: 12px; align-items:flex-start; margin-bottom: 12px; }
+.steps .num { width:28px; height:28px; border-radius:999px; background:#ff8833; color:#fff; font-weight:800; font-size:15px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.steps li > span { font-size: 13.5px; line-height: 1.5; color:#33413a; padding-top: 4px; }
+
+.q { border: 1px solid #dfe8e1; border-radius: 12px; padding: 12px 16px; margin-bottom: 10px; font-size: 13.5px; line-height: 1.5; }
+.q b.t { font-family:'Baloo 2',sans-serif; color:#123416; font-size: 15px; display:block; margin-bottom: 2px; }
+.check { display:inline-block; margin-right: 18px; color:#33413a; font-size: 13px; }
+.check::before { content:''; display:inline-block; width:12px; height:12px; border:1.6px solid #1c5c34; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+
+.footer { position:absolute; left:60px; right:60px; bottom:30px; border-top:1px solid #dfe8e1; padding-top:10px; display:flex; justify-content:space-between; font-size: 11.5px; color:#6b7d70; }
+</style></head><body>
+
+<!-- ───────────── Página 1 ───────────── -->
+<div class="page">
+  <div class="hero">
+    <div class="logo"><span class="pin"></span>SportMaps</div>
+    <h1>¿Por qué no se han descontado horas del plan?</h1>
+    <p>Revisamos uno por uno a los atletas de Dreamers Gymnastics que están inscritos en SportMaps: sus marcaciones en el torniquete, sus asistencias y su saldo de horas de octubre.</p>
+    <div class="pills"><span class="pill">Dreamers Gymnastics</span><span class="pill">Banco de horas · octubre 2026</span><span class="pill">Revisado el 26-oct-2026</span></div>
+  </div>
+
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">1</div><h2>Las horas las descuenta el torniquete, no la asistencia</h2></div>
+    <hr class="rule">
+    <p>El sistema mide el tiempo entre la <b>entrada</b> y la <b>salida</b> que el atleta marca en el torniquete, y eso es lo que descuenta del plan. <b>Tomar asistencia no descuenta horas.</b></p>
+    <p>Por eso cada atleta tiene que marcar <b>al entrar y al salir</b>. Si falta una de las dos marcaciones, el sistema no puede calcular cuánto tiempo estuvo y no descuenta.</p>
+  </div>
+
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">2</div><h2>Lo que se marcó antes de asociar el PIN no cuenta</h2></div>
+    <hr class="rule">
+    <p>SportMaps reconoce al atleta <b>desde el momento en que se asocia su PIN</b>, no hacia atrás. Todo lo que marcó antes quedó registrado como "persona desconocida" y no se puede descontar.</p>
+    <div class="callout warn"><div class="tag">El caso de Silvana</div>Su PIN se asoció el 21 de octubre a las 4:38 p. m., cuando ella ya estaba adentro (entró a las 3:51 p. m.). El sistema solo vio su salida y no pudo armar la visita. Lo mismo pasó el 20 de octubre. Son <b>unas 8 horas que no se le descontaron</b>.</div>
+  </div>
+
+  <div class="footer"><span>SportMaps · Informe para Dreamers Gymnastics</span><span>Página 1 de 4</span></div>
+</div>
+
+<!-- ───────────── Página 2 ───────────── -->
+<div class="page">
+  <div class="top-pad"></div>
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">3</div><h2>Atleta por atleta</h2></div>
+    <hr class="rule">
+    <table>
+      <tr><th style="width:23%">Atleta</th><th style="width:12%">Inscrita(o)</th><th style="width:17%">PIN asociado</th><th>Qué pasó</th></tr>
+      <tr><td class="n">Emma Victoria Gómez</td><td>19-oct</td><td>19-oct</td><td><span class="ok">✓ Bien.</span> Se le han descontado 8 h (20 y 22 de octubre).</td></tr>
+      <tr><td class="n">Silvana Moreno</td><td>19-oct</td><td><b>21-oct, 4:38 p. m.</b></td><td><span class="warn">⚠ Pendiente.</span> Entrenó el 20 y el 21 (unas 4 h cada día), pero su PIN se asoció cuando ya estaba adentro. <b>No se le descontaron unas 8 h.</b> Solo se le ha descontado el 22 (4 h).</td></tr>
+      <tr><td class="n">Carolina Fonseca</td><td>20-oct</td><td>20-oct</td><td><span class="ok">✓ Bien.</span> 4 h descontadas (la visita del 19 la cargamos a mano).</td></tr>
+      <tr><td class="n">Airi Gacharna</td><td>20-oct</td><td>20-oct, 3:27 p. m.</td><td><span class="warn">⚠</span> El 20 marcó antes de asociar el PIN. El 21 sí la reconoció, pero ese día su plan no tenía horas configuradas. El cobro de 2 h del 23 no descuenta del banco (ver punto 5).</td></tr>
+      <tr><td class="n">Zoe Barrera</td><td>19-oct</td><td>19-oct</td><td><span class="warn">⚠</span> Desde que se asoció su PIN solo ha marcado un día: el 24, 31 minutos, que quedan en 0 por la gracia (ver puntos 4 y 5).</td></tr>
+      <tr><td class="n">Santiago Bohorques</td><td>24-oct</td><td>24-oct, 1:27 p. m.</td><td><span class="warn">⚠</span> Ese día entró a las 9:47 a. m., antes de asociar el PIN, y no marcó salida. No se descontó nada.</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">4</div><h2>Cada visita tiene 30 minutos de gracia</h2></div>
+    <hr class="rule">
+    <p>Hoy están configurados <b>10 minutos de gracia al entrar y 20 al salir</b>, que no se cobran. El resto se redondea hacia arriba a la hora completa.</p>
+    <div class="formula">
+      <div><div class="big">30 min</div><div class="lbl">o menos adentro = 0 h descontadas</div></div>
+      <div><div class="big">1 h</div><div class="lbl">de clase con 4 min de más = 1 h descontada</div></div>
+    </div>
+    <p>En los planes de una hora por clase (los PGP) esto pesa bastante: una visita corta queda en cero. Si prefieren menos gracia, la ajustamos.</p>
+  </div>
+
+  <div class="footer"><span>SportMaps · Informe para Dreamers Gymnastics</span><span>Página 2 de 4</span></div>
+</div>
+
+<!-- ───────────── Página 3 ───────────── -->
+<div class="page">
+  <div class="top-pad"></div>
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">5</div><h2>Zoe y Airi en detalle</h2></div>
+    <hr class="rule">
+    <p><b>Zoe Barrera</b> · plan PGP8x1 (8 h al mes) · PIN 602, asociado el 19 de octubre.</p>
+    <table>
+      <tr><th style="width:24%">Fecha</th><th style="width:26%">Marcaciones</th><th>Resultado</th></tr>
+      <tr><td class="n">7, 10, 14 y 17 oct</td><td>Entradas y salidas de ~1 h</td><td>Fueron <b>antes de inscribirla</b> en SportMaps (19-oct): el sistema no sabía quién era.</td></tr>
+      <tr><td class="n">24 oct (sáb)</td><td>8:32 a. m. → 9:03 a. m.</td><td>31 minutos adentro. Con los 30 de gracia queda en <b>0 h</b>.</td></tr>
+      <tr><td class="n">Resto del mes</td><td>Ninguna</td><td>Si vino otros días, <b>no marcó en el torniquete</b>.</td></tr>
+    </table>
+    <div class="callout tip"><div class="tag">Saldo de Zoe hoy</div>8 h disponibles de 8. Por eso se ve "sin horas usadas".</div>
+
+    <p style="margin-top:18px"><b>Airi Gacharna</b> · PIN 615, asociado el 20 de octubre a las 3:27 p. m.</p>
+    <table>
+      <tr><th style="width:24%">Fecha</th><th style="width:26%">Qué pasó</th><th>Resultado</th></tr>
+      <tr><td class="n">20 oct</td><td>Entrada 3:04 p. m., sin salida</td><td>Marcó <b>antes de asociar el PIN</b> y no marcó salida: no se pudo medir.</td></tr>
+      <tr><td class="n">21 oct</td><td>Entrada 3:47 p. m. → salida 4:08 p. m.</td><td>El sistema la reconoció, pero ese día estaba en el plan <b>PGP4x1</b>, que <b>no tenía horas configuradas</b>. No se abrió su banco de horas.</td></tr>
+      <tr><td class="n">22 oct, 7:29 p. m.</td><td>Cambio a PGP8x1</td><td>Desde aquí sí tiene banco: 8 h. No ha vuelto a marcar.</td></tr>
+      <tr><td class="n">23 oct</td><td>Cobro "Hora adicional consumida · 2 h" ($61.250, pagado)</td><td>Se registró como <b>"Ya las usó"</b>: esa opción <b>solo cobra, no descuenta</b> del banco. Por eso su saldo sigue en 8 h de 8.</td></tr>
+    </table>
+    <div class="callout warn"><div class="tag">Ojo con ese cobro</div>"Ya las usó" es para cobrar horas <b>por encima</b> del plan. Airi tiene 8 h en su plan sin usar, así que esas 2 h podrían estar cobradas de más. Si eran horas dentro de su plan, avísennos para cargarlas al banco y revisar el cobro.</div>
+  </div>
+
+  <div class="footer"><span>SportMaps · Informe para Dreamers Gymnastics</span><span>Página 3 de 4</span></div>
+</div>
+
+<!-- ───────────── Página 4 ───────────── -->
+<div class="page">
+  <div class="top-pad"></div>
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">6</div><h2>La mayoría de quienes entran no están en SportMaps</h2></div>
+    <hr class="rule">
+    <div class="formula">
+      <div><div class="big">+100</div><div class="lbl">PIN que marcaron en octubre<br>sin estar asociados a nadie</div></div>
+      <div><div class="big">6</div><div class="lbl">atletas con PIN asociado<br>a los que sí se les descuenta</div></div>
+    </div>
+    <p>Las entradas de las personas que no están inscritas en SportMaps con su PIN asociado no se pueden descontar. Para que el banco de horas cubra a todos, cada atleta tiene que estar inscrito y tener su PIN asociado.</p>
+  </div>
+
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">7</div><h2>Para que funcione de aquí en adelante</h2></div>
+    <hr class="rule">
+    <ul class="steps">
+      <li><div class="num">1</div><span>Inscribir al atleta y <b>asociar su PIN el mismo día, antes de su siguiente clase</b>.</span></li>
+      <li><div class="num">2</div><span>Pedir a los atletas que marquen <b>siempre entrada y salida</b> en el torniquete.</span></li>
+      <li><div class="num">3</div><span>Ir inscribiendo y asociando a los demás atletas que hoy entran sin estar en SportMaps.</span></li>
+    </ul>
+    <div class="callout tip"><div class="tag">Atajo</div>Si un atleta marcó antes de que se asociara su PIN, avísennos: podemos cargar esa visita a mano, como hicimos con Carolina el 19 de octubre.</div>
+  </div>
+
+  <div class="section">
+    <div class="chapter-head"><div class="chapter-badge">8</div><h2>Necesitamos que nos confirmen</h2></div>
+    <hr class="rule">
+    <div class="q"><b class="t">¿Le cargamos a Silvana las ~8 h del 20 y 21 de octubre?</b>
+      <span class="check">Sí, cárguenlas</span><span class="check">No</span></div>
+    <div class="q"><b class="t">¿Dejamos los 30 minutos de gracia o los bajamos?</b>
+      <span class="check">Dejarlos</span><span class="check">Bajarlos a ____ minutos</span></div>
+    <div class="q"><b class="t">Las 2 h que se le cobraron a Airi el 23, ¿eran por encima de su plan?</b>
+      <span class="check">Sí, eran de más</span><span class="check">No, eran de su plan</span></div>
+  </div>
+
+  <div class="footer"><span>SportMaps · Informe para Dreamers Gymnastics</span><span>Página 4 de 4</span></div>
+</div>
+
+</body></html>

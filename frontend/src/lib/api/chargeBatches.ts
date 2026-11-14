@@ -350,6 +350,8 @@ export interface EnrollmentOption {
     /** Precio del plan ÷ horas incluidas: la misma tarifa del cobro de excedentes. */
     hourly_rate?: number | null;
     included_minutes?: number | null;
+    /** Saldo del banco en el periodo vigente (incluidos − consumidos − reservados); null si no hay periodo. */
+    available_minutes?: number | null;
 }
 
 export interface ChargeSuggestions {
@@ -662,6 +664,7 @@ export function normalizeSuggestions(r: any): ChargeSuggestions {
         hours_plan: !!(e.hours_plan ?? e.plan?.hours_plan),
         hourly_rate: numOrNull(e.hourly_rate ?? e.plan?.hourly_rate),
         included_minutes: numOrNull(e.included_minutes ?? e.plan?.included_minutes),
+        available_minutes: numOrNull(e.available_minutes ?? e.plan?.available_minutes),
     }));
     const primary = raw.find((e) => e.is_primary) ?? raw.find((e) => e.status === 'active') ?? raw[0];
     const amount = numOrNull(r?.suggested_monthly?.amount ?? primary?.suggested_monthly_amount ?? primary?.monthly_amount);

@@ -27,6 +27,11 @@ vi.mock('../config/supabase', () => {
             eq: (col: string, v: any) => { filas = filas.filter((f) => f[col] === v); return b; },
             is: (col: string, v: any) => { filas = filas.filter((f) => (f[col] ?? null) === v); return b; },
             in: (col: string, vs: any[]) => { filas = filas.filter((f) => vs.includes(f[col])); return b; },
+            insert: (fila: Fila | Fila[]) => {
+                const nuevas = Array.isArray(fila) ? fila : [fila];
+                estado.tablas[tabla] = [...(estado.tablas[tabla] ?? []), ...nuevas];
+                return { then: (ok: any, ko: any) => Promise.resolve({ data: nuevas, error: null }).then(ok, ko) };
+            },
             then: (ok: any, ko: any) => {
                 if (cambios) for (const f of filas) Object.assign(f, cambios);
                 return Promise.resolve({ data: filas, error: null }).then(ok, ko);
@@ -36,7 +41,7 @@ vi.mock('../config/supabase', () => {
     }
     return { supabase: { from: (t: string) => builder(t) } };
 });
-vi.mock('../utils/emailClient', () => ({ emailClient: { send: vi.fn(async (m: any) => { estado.correos.push(m); }) } }));
+vi.mock('../utils/emailClient', () => ({ emailClient: { send: vi.fn(async (m: any) => { estado.correos.push(m); return { success: true, data: { id: 'msg-test' } }; }) } }));
 vi.mock('../utils/emailTemplates', () => ({
     BrandedEmailTemplates: {
         paymentOverdue: vi.fn(async (p: any) => { estado.plantillasVencido.push(p); return { subject: 'Pago vencido', html: '<p/>' }; }),
@@ -77,6 +82,7 @@ beforeEach(() => {
         unregistered_athletes: [],
         children: [{ id: 'c1', full_name: 'Atleta Prueba', parent_name_temp: 'Acudiente Prueba', parent_email_temp: 'acudiente@ejemplo.com', parent_phone_temp: '3000000000' }],
         payments: [],
+        email_sends: [],
     };
 });
 

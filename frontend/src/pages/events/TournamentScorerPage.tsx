@@ -50,7 +50,7 @@ export default function TournamentScorerPage() {
   if (open && home) {
     return (
       <LiveScorer
-        match={open} endpoints={endpoints} queueKey={`torneo-cola:token:${token}`}
+        match={open} endpoints={endpoints} queueKey={`torneo-cola:token:${token}`} tournamentTitle={home.event.title}
         onClose={() => { setOpen(null); void load(); }}
       />
     );

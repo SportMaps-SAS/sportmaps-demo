@@ -1,0 +1,168 @@
+{
+ "payload_version": 2,
+ "event": {
+  "id": "932169eb-7d31-43a4-82ec-7dc6f108d92b",
+  "title": "Copa Demo Ajedrez E2E",
+  "sport": "Ajedrez",
+  "city": "Por definir",
+  "event_date": "2026-11-11",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "liga",
+  "status": "finished",
+  "start_date": "2026-11-11",
+  "end_date": "2026-11-11",
+  "cover_url": null,
+  "logo_url": null,
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": null,
+  "venue": {
+   "name": null,
+   "address": "Por definir, Por definir",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Por%20definir%2C%20Por%20definir"
+  },
+  "sponsors": [],
+  "attachments": []
+ },
+ "tournament": {
+  "id": "932169eb-7d31-43a4-82ec-7dc6f108d92b",
+  "title": "Copa Demo Ajedrez E2E",
+  "sport": "Ajedrez",
+  "city": "Por definir",
+  "event_date": "2026-11-11",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "liga",
+  "status": "finished",
+  "start_date": "2026-11-11",
+  "end_date": "2026-11-11",
+  "cover_url": null,
+  "logo_url": null,
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": null,
+  "venue": {
+   "name": null,
+   "address": "Por definir, Por definir",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Por%20definir%2C%20Por%20definir"
+  },
+  "sponsors": [],
+  "attachments": []
+ },
+ "categories": [
+  {
+   "id": "972dbe34-1e3c-4502-a3ac-7030f4e802b1",
+   "name": "General · 1 · General · Mixto"
+  }
+ ],
+ "teams": [
+  {
+   "id": "7bcac044-6aff-4338-9313-40642958307c",
+   "name": "Martín López",
+   "category_id": "972dbe34-1e3c-4502-a3ac-7030f4e802b1",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "fe1ac530-3df9-4b42-81f6-0be91354207a",
+   "name": "Sofía Ruiz",
+   "category_id": "972dbe34-1e3c-4502-a3ac-7030f4e802b1",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  }
+ ],
+ "matches": [
+  {
+   "id": "357c2e10-c1eb-4c81-b15d-d04f8a79885e",
+   "category_id": "972dbe34-1e3c-4502-a3ac-7030f4e802b1",
+   "stage": "league",
+   "group_label": null,
+   "cup_label": null,
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "fe1ac530-3df9-4b42-81f6-0be91354207a",
+   "away_team_id": "7bcac044-6aff-4338-9313-40642958307c",
+   "home_name": "Sofía Ruiz",
+   "away_name": "Martín López",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 1,
+   "away_score": 1,
+   "status": "played",
+   "scheduled_at": null,
+   "court": null,
+   "started_at": "2026-10-28T12:11:01.447-05:00",
+   "finished_at": "2026-10-28T12:11:04.728-05:00",
+   "sets": [],
+   "model": "goals",
+   "home_logo_url": null,
+   "away_logo_url": null,
+   "home_short_name": null,
+   "away_short_name": null
+  }
+ ],
+ "standings": {
+  "972dbe34-1e3c-4502-a3ac-7030f4e802b1": {
+   "model": "goals",
+   "standings": [
+    {
+     "team_id": "7bcac044-6aff-4338-9313-40642958307c",
+     "team_name": "Martín López",
+     "P": 1,
+     "W": 0,
+     "D": 1,
+     "L": 0,
+     "GF": 1,
+     "GA": 1,
+     "GD": 0,
+     "Pts": 0.5,
+     "SW": 0,
+     "SL": 0,
+     "PF": 0,
+     "PA": 0,
+     "set_diff": 0,
+     "point_diff": 0,
+     "set_ratio": 0,
+     "point_ratio": 0,
+     "buchholz": 0.5,
+     "sonneborn_berger": 0.25,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    },
+    {
+     "team_id": "fe1ac530-3df9-4b42-81f6-0be91354207a",
+     "team_name": "Sofía Ruiz",
+     "P": 1,
+     "W": 0,
+     "D": 1,
+     "L": 0,
+     "GF": 1,
+     "GA": 1,
+     "GD": 0,
+     "Pts": 0.5,
+     "SW": 0,
+     "SL": 0,
+     "PF": 0,
+     "PA": 0,
+     "set_diff": 0,
+     "point_diff": 0,
+     "set_ratio": 0,
+     "point_ratio": 0,
+     "buchholz": 0.5,
+     "sonneborn_berger": 0.25,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    }
+   ]
+  }
+ },
+ "player_stats": []
+}

@@ -9,7 +9,7 @@ import { boardSportConfig } from '@/lib/school/tacticalBoardSport';
 import { formationByKey } from '@/lib/school/tacticalFormations';
 import { SPORTS } from '@/lib/school/tacticalSports';
 import {
-  countRivals, filterFormations, formationGroups, mirrorPoint, playerCounts, removeRivalShapes,
+  countRivals, filterFormations, formationGroups, galleryFormations, mirrorPoint, playerCounts, removeRivalShapes,
   replaceRivalShapes, rivalShapesFor,
 } from '@/lib/school/tacticalFormationGallery';
 import { FormationGallery } from '@/components/school/FormationGallery';
@@ -77,7 +77,7 @@ describe('filtros de la galería', () => {
   });
 });
 
-function renderGallery(sport: 'futbol' | 'voleibol' | 'baloncesto' = 'futbol', rivalCount = 0) {
+function renderGallery(sport: 'futbol' | 'voleibol' | 'baloncesto' = 'futbol', rivalCount = 0, initialPlayers: number | null = null) {
   const props = {
     onApplyOwn: vi.fn(),
     onApplyRival: vi.fn(),
@@ -85,11 +85,12 @@ function renderGallery(sport: 'futbol' | 'voleibol' | 'baloncesto' = 'futbol', r
   };
   const formations = boardSportConfig(sport).formations;
   render(
-    <FormationGallery sport={sport} formations={formations} currentKey={null} rivalCount={rivalCount} {...props} />,
+    <FormationGallery sport={sport} formations={formations} currentKey={null} rivalCount={rivalCount} initialPlayers={initialPlayers} {...props} />,
   );
   fireEvent.click(screen.getByRole('button', { name: /Formación/ }));
   const dialog = screen.getByRole('dialog');
-  return { ...props, dialog, formations };
+  // Fútbol 11 suma en la galería las de F7 y F5 (llevadas a la cancha grande).
+  return { ...props, dialog, formations: galleryFormations(sport, formations) };
 }
 
 describe('FormationGallery', () => {
@@ -111,12 +112,23 @@ describe('FormationGallery', () => {
     expect(keys).toEqual(['4-2-3-1', '4-2-3-1-estrecho']);
     fireEvent.change(within(dialog).getByLabelText('Buscar formación'), { target: { value: '' } });
     fireEvent.click(within(dialog).getByRole('button', { name: '7 jugadores' }));
-    expect(dialog.querySelectorAll('[data-formation-key]')).toHaveLength(1);
+    const sevens = galleryFormations('futbol', boardSportConfig('futbol').formations).filter((f) => f.players === 7);
+    expect(dialog.querySelectorAll('[data-formation-key]')).toHaveLength(sevens.length);
+    expect(sevens.length).toBeGreaterThan(1);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Todos' }));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Históricas' }));
     const hist = [...dialog.querySelectorAll('[data-formation-key]')].map((e) => e.getAttribute('data-formation-key'));
     expect(hist).toContain('3-2-2-3');
     expect(hist).not.toContain('4-3-3');
+  });
+
+  it('cancha en F7: abre filtrada a 7 y el subtítulo lo dice («Todos» quita el filtro)', () => {
+    const { dialog, formations } = renderGallery('futbol', 0, 7);
+    const sevens = formations.filter((f) => f.players === 7);
+    expect(dialog.querySelectorAll('[data-formation-key]')).toHaveLength(sevens.length);
+    expect(within(dialog).getByText(new RegExp(`^${sevens.length} formaciones de Fútbol 7`))).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Todos' }));
+    expect(dialog.querySelectorAll('[data-formation-key]')).toHaveLength(formations.length);
   });
 
   it('elegir para mi equipo llama onApplyOwn con la formación y cierra', () => {

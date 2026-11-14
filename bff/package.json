@@ -7,6 +7,8 @@
     "dev": "nodemon src/index.ts",
     "test": "vitest run",
     "qa:bot": "tsx scripts/qa-bot-100.ts",
+    "qa:embudo": "tsx scripts/qa-embudo.ts",
+    "qa:replay-ventas": "tsx scripts/qa-replay-ventas.ts",
     "test:watch": "vitest",
     "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/data', {recursive:true}); fs.copyFileSync('src/data/exercises.json', 'dist/data/exercises.json'); fs.mkdirSync('dist/assets', {recursive:true}); fs.copyFileSync('src/assets/sportmaps-logo.png', 'dist/assets/sportmaps-logo.png');\""
   },
@@ -18,8 +20,8 @@
     "node": ">=22.23.4"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
-    "@sentry/node": "^10.72.0",
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@sentry/node": "^11.9.0",
     "@supabase/supabase-js": "^2.97.0",
     "@types/pdfkit": "^0.17.6",
     "@types/qrcode": "^1.5.6",
@@ -34,7 +36,7 @@
     "mailauth": "^7.3.1",
     "mailparser": "^3.12.4",
     "node-cron": "^4.2.1",
-    "pdfkit": "^0.18.0",
+    "pdfkit": "^0.20.2",
     "pg": "^8.19.0",
     "pino": "^8.21.0",
     "pino-http": "^8.6.1",
@@ -57,5 +59,11 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "vitest": "^2.1.9"
+  },
+  "overrides": {
+    "mailauth": {
+      "undici": "^8.12.3",
+      "nodemailer": "^10.2.1"
+    }
   }
 }

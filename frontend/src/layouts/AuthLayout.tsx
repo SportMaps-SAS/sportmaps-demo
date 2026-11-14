@@ -6,23 +6,31 @@ import { useSchoolContext } from "@/hooks/useSchoolContext";
 import { useEntitlements } from "@/hooks/useEntitlements";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { GlobalNotificationBell } from "@/components/GlobalNotificationBell";
-import { Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
+import { Repeat } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BrandingScope } from "@/components/BrandingScope";
 import { useDeviceContext } from "@/hooks/useDeviceContext";
 import { usePwaTenantSync } from "@/hooks/usePwaTenantSync";
 import { PushPermissionBanner } from "@/components/PushPermissionBanner";
+import { useSincronizarPushSilencioso } from "@/hooks/usePushSubscription";
 import { TrialStatusBanner } from "@/components/entitlements/TrialStatusBanner";
 import { SupportChatButton } from "@/components/support/SupportChatButton";
 import { VolverAcudiente } from "@/components/parent/v2/VolverAcudiente";
 import { pestanasDeRol } from "@/lib/acudienteTabs";
 import { useRolActivo } from "@/hooks/useRolActivo";
 import { CoachListasSync } from "@/components/coach/v2/CoachListasSync";
+import { useFabSoporteOculto } from "@/lib/supportFab";
+import { inicialesPersona } from "@/lib/iniciales";
+import { clasesCascaronV2 } from "@/layouts/cascaronV2";
 
 export default function AuthLayout() {
-  const { user, profile } = useAuth();
+  const { user, profile, roleContexts } = useAuth();
   const { schoolId, schoolName, currentUserRole, schoolBranding } = useSchoolContext();
   const pestanasV2 = pestanasDeRol(useRolActivo());
+  const { pathname } = useLocation();
+  const fabOculto = useFabSoporteOculto();
+  const cascaron = clasesCascaronV2({ v2: !!pestanasV2, pathname, fabVisible: !fabOculto });
   const entitlements = useEntitlements();
   // Registrar device del usuario al loguearse (Fase 6.1).
   // Hoy solo web/PWA; cuando se instale Capacitor (Fase 7) detecta nativo.
@@ -30,6 +38,9 @@ export default function AuthLayout() {
   // Deja el slug de la escuela en localStorage para que la PROXIMA carga pida
   // el manifest con la marca correcta y la app se instale con su logo.
   usePwaTenantSync();
+  // Web: si el permiso ya está concedido, refresca la suscripción push y la
+  // rota si se creó con otra llave VAPID. Silencioso, una vez por sesión.
+  useSincronizarPushSilencioso();
 
   // Logo escuela en header: usar el del context (ya lo hace fetch
   // useSchoolContext.fetchSchoolBranding). Sirve para feature gate por tier.
@@ -38,7 +49,8 @@ export default function AuthLayout() {
   // desincronicen entre pantallas.
   const schoolLogo = entitlements.marcaPropia ? (schoolBranding?.logo_url ?? null) : null;
 
-  const showSchoolBranding = ['owner', 'admin', 'school_admin', 'school', 'coach'].includes(currentUserRole || '');
+  // V2: el Inicio ya trae su cabecera con la escuela; aquí no se repite (27/32).
+  const showSchoolBranding = ['owner', 'admin', 'school_admin', 'school', 'coach'].includes(currentUserRole || '') && cascaron.mostrarEscuelaEnBarra;
   const isCoach = currentUserRole === 'coach';
   const hasSchool = !!schoolId;
 
@@ -62,8 +74,9 @@ export default function AuthLayout() {
 
             {/* Left: hamburger + school branding */}
             <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-              {/* SidebarTrigger abre el drawer en mobile, colapsa en desktop */}
-              <SidebarTrigger className="flex-shrink-0 hover:bg-accent transition-colors h-9 w-9" />
+              {/* SidebarTrigger abre el drawer en mobile, colapsa en desktop.
+                  V2 en celular: no hay menú lateral, la barra inferior («Más») hace ese papel (34). */}
+              <SidebarTrigger className={`flex-shrink-0 hover:bg-accent transition-colors h-9 w-9 ${cascaron.trigger}`} />
 
               <div className="h-6 w-[1px] bg-border hidden md:block flex-shrink-0" />
 
@@ -96,6 +109,17 @@ export default function AuthLayout() {
             {/* Right: notifications + theme + avatar */}
             <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
               <div className="flex items-center gap-1 sm:gap-2 pr-2 border-r">
+                {/* Sin menú lateral en el celular (V2), el cambio de rol de una persona multirol queda aquí. */}
+                {pestanasV2 && roleContexts.length > 0 && (
+                  <Link
+                    to="/elegir-rol"
+                    aria-label="Cambiar de rol"
+                    title="Cambiar de rol"
+                    className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-md hover:bg-accent transition-colors"
+                  >
+                    <Repeat className="h-4 w-4" />
+                  </Link>
+                )}
                 <GlobalNotificationBell />
                 <ThemeToggle />
               </div>
@@ -116,7 +140,7 @@ export default function AuthLayout() {
                 <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border-2 border-primary/20 hover:border-primary/50 transition-all cursor-pointer">
                   <AvatarImage src={profile?.avatar_url} />
                   <AvatarFallback className="bg-primary/5 text-primary text-xs font-bold">
-                    {(profile?.full_name || 'U').substring(0, 2).toUpperCase()}
+                    {inicialesPersona(profile?.full_name, user?.email)}
                   </AvatarFallback>
                 </Avatar>
               </div>
@@ -125,9 +149,9 @@ export default function AuthLayout() {
 
           {/* ── Main content ───────────────────────────────────────────── */}
           {/* Reserva el alto del bottom nav (h-16) + el home indicator de iOS — antes era un pb-20 fijo que en iPhone se quedaba 18px corto */}
-          {/* V2: sm:pb-24 deja que la última acción («Guardar lista», «Cerrar sesión»)
-              pase por encima del botón flotante de Mapi en tablet y escritorio. */}
-          <main className={`flex-1 p-3 sm:p-4 lg:p-6 overflow-auto pb-[calc(5rem+env(safe-area-inset-bottom))] w-full max-w-full ${pestanasV2 ? 'sm:pb-24 lg:pb-24' : 'sm:pb-6'}`}>
+          {/* 39: con la burbuja de Mapi a la vista, el final de cualquier lista sube por encima de ella
+              (en celular: barra inferior + burbuja). Ver layouts/cascaronV2.ts. */}
+          <main className={`flex-1 p-3 sm:p-4 lg:p-6 overflow-auto w-full max-w-full ${cascaron.main}`}>
             {/* overflow-x-clip (no -hidden): recorta igual, pero -hidden crea un
                 contenedor de scroll que no se mueve y ningún `sticky` de adentro se
                 pegaba («Guardar lista», pestañas del equipo). El clip va en style:

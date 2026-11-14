@@ -26,6 +26,10 @@ import { ClasesCortesia } from '@/components/whatsapp/ClasesCortesia';
 import { AvisosSportMaps } from '@/components/whatsapp/AvisosSportMaps';
 import { ImportarChatExportado } from '@/components/whatsapp/ImportarChatExportado';
 import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/BandejaComprobantes';
+import { Campanas } from '@/components/whatsapp/Campanas';
+import { Anuncios } from '@/components/whatsapp/Anuncios';
+import { CoherenciaFicha } from '@/components/whatsapp/CoherenciaFicha';
+import { SeguimientoConversaciones } from '@/components/whatsapp/SeguimientoConversaciones';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -37,6 +41,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import {
     MessageSquare, RefreshCw, AlertTriangle, Clock, FileText, Inbox, Settings, Plus, Loader2, Power, BarChart3, CalendarCheck,
+    Megaphone,
+    Target,
+    ListChecks,
 } from 'lucide-react';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
@@ -184,7 +191,12 @@ export default function WhatsAppPage() {
         setConectando(true);
         try {
             const res = await bffClient.post<{ display_phone_number: string | null; coexistence: boolean }>(
-                `/api/v1/whatsapp/${schoolId}/conectar`, { code: r.code, sesion: r.sesion?.data ?? null });
+                `/api/v1/whatsapp/${schoolId}/conectar`, {
+                    code: r.code,
+                    // `event` dice si fue Coexistence (y con eso el BFF pide el
+                    // historial); antes solo iba `data` y el BFF nunca lo veía.
+                    sesion: r.sesion?.data ? { event: r.sesion.event, ...r.sesion.data } : null,
+                });
             toast({
                 title: 'WhatsApp conectado',
                 description: res.coexistence
@@ -259,10 +271,12 @@ export default function WhatsAppPage() {
                             <MessageSquare className="h-5 w-5" /> No se pudo cargar el canal
                         </CardTitle>
                         <CardDescription>
-                            {errorDeCarga ?? 'No llegó respuesta del servidor.'}
+                            {!errorDeCarga || /failed to fetch|networkerror|load failed/i.test(errorDeCarga)
+                                ? 'No pudimos conectar con el servidor. Revisa tu internet e inténtalo de nuevo.'
+                                : errorDeCarga}
                         </CardDescription>
                     </CardHeader>
-                    <CardContent>
+                    <CardContent className="flex flex-col sm:flex-row gap-2">
                         <Button variant="outline" onClick={() => void cargar()}>
                             <RefreshCw className="h-4 w-4 mr-2" /> Reintentar
                         </Button>
@@ -411,11 +425,20 @@ export default function WhatsAppPage() {
                         <Inbox className="h-4 w-4 mr-1" /> Bandeja
                         {pendientesBandeja > 0 && <Badge variant="secondary" className="ml-2">{pendientesBandeja}</Badge>}
                     </TabsTrigger>
+                    <TabsTrigger value="seguimiento" className="h-full">
+                        <ListChecks className="h-4 w-4 mr-1" /> Seguimiento
+                    </TabsTrigger>
                     <TabsTrigger value="cortesias" className="h-full">
                         <CalendarCheck className="h-4 w-4 mr-1" /> Clases de cortesía
                     </TabsTrigger>
                     <TabsTrigger value="plantillas" className="h-full">
                         <FileText className="h-4 w-4 mr-1" /> Plantillas
+                    </TabsTrigger>
+                    <TabsTrigger value="campanas" className="h-full">
+                        <Megaphone className="h-4 w-4 mr-1" /> Campañas
+                    </TabsTrigger>
+                    <TabsTrigger value="anuncios" className="h-full">
+                        <Target className="h-4 w-4 mr-1" /> Anuncios
                     </TabsTrigger>
                     <TabsTrigger value="metricas" className="h-full">
                         <BarChart3 className="h-4 w-4 mr-1" /> Métricas
@@ -517,6 +540,21 @@ export default function WhatsAppPage() {
                     />
                 </TabsContent>
 
+                {/* ── Campañas: un mensaje a quienes preguntaron por clases (plan B5) ── */}
+                <TabsContent value="campanas">
+                    {schoolId && <Campanas schoolId={schoolId} />}
+                </TabsContent>
+
+                {/* ── Anuncios: qué pasa después del clic en un anuncio con botón de WhatsApp ── */}
+                <TabsContent value="anuncios">
+                    {schoolId && <Anuncios schoolId={schoolId} />}
+                </TabsContent>
+
+                {/* ── Seguimiento: quién escribió, si respondió la escuela o el bot, quién espera ── */}
+                <TabsContent value="seguimiento">
+                    {schoolId && <SeguimientoConversaciones schoolId={schoolId} onAbrirConversacion={verChat} />}
+                </TabsContent>
+
                 {/* ── Bandeja ── */}
                 <TabsContent value="bandeja" className="space-y-3">
                     {/* Comprobantes viejos que solo están en el celular de la escuela. */}
@@ -543,6 +581,8 @@ export default function WhatsAppPage() {
                     {schoolId && <HorariosDeEntrenamiento schoolId={schoolId} />}
                 </TabsContent>
                 <TabsContent value="config" className="space-y-4">
+                    {/* Arriba: el texto del asistente que contradice el catálogo (blindaje de ventas, frente B). */}
+                    {schoolId && <CoherenciaFicha schoolId={schoolId} />}
                     <PanelConfig
                         ajustes={estado?.ajustes ?? null}
                         guardando={guardando}
@@ -567,6 +607,11 @@ function PanelPlantillas({ schoolId, plantillas, cargando, onCreada }: {
     const [nombre, setNombre] = useState('');
     const [texto, setTexto] = useState('');
     const [ejemplos, setEjemplos] = useState('');
+    // Promoción (campañas, plan B5): va como MARKETING con pie y los tres
+    // botones que la campaña sabe atender (la baja siempre de tercera).
+    const [promocion, setPromocion] = useState(false);
+    const [pie, setPie] = useState('Puedes dejar de recibir promociones cuando quieras');
+    const [botones, setBotones] = useState(['Sí, cuéntame', 'Más adelante', 'No recibir más']);
 
     // Las variables se detectan en vivo: así el usuario sabe cuántos ejemplos
     // debe dar antes de que Meta lo rechace.
@@ -610,13 +655,18 @@ function PanelPlantillas({ schoolId, plantillas, cargando, onCreada }: {
         try {
             const r = await bffClient.post<{ name: string; status: string; category: string }>(
                 `/api/v1/whatsapp/${schoolId}/plantillas`,
-                { name: nombre, body: texto, ejemplos: listaEjemplos, category: 'UTILITY', language: 'es_CO' },
+                promocion
+                    ? {
+                        name: nombre, body: texto, ejemplos: listaEjemplos, category: 'MARKETING', language: 'es_CO',
+                        pie: pie.trim(), botones_rapidos: botones.map((b) => b.trim()),
+                    }
+                    : { name: nombre, body: texto, ejemplos: listaEjemplos, category: 'UTILITY', language: 'es_CO' },
             );
             toast({
                 title: 'Plantilla enviada a Meta',
                 description: `${r.name} — ${r.status} · ${r.category}`,
             });
-            setAbriendo(false); setNombre(''); setTexto(''); setEjemplos('');
+            setAbriendo(false); setNombre(''); setTexto(''); setEjemplos(''); setPromocion(false);
             onCreada();
         } catch (err: any) {
             toast({ title: 'Meta no la aceptó', description: err?.message ?? 'Error', variant: 'destructive' });
@@ -669,8 +719,36 @@ function PanelPlantillas({ schoolId, plantillas, cargando, onCreada }: {
                                 </p>
                             </div>
                         )}
+                        <div className="flex items-start gap-2">
+                            <Switch id="plantilla-promocion" checked={promocion} onCheckedChange={setPromocion} />
+                            <div>
+                                <Label htmlFor="plantilla-promocion">Es una promoción (para Campañas)</Label>
+                                <p className="text-xs text-muted-foreground">
+                                    Meta la cobra como marketing. Lleva un pie y tres botones: el tercero siempre es para no
+                                    recibir más.
+                                </p>
+                            </div>
+                        </div>
+                        {promocion && (
+                            <div className="space-y-2">
+                                <div>
+                                    <Label>Pie del mensaje</Label>
+                                    <Input value={pie} maxLength={60} onChange={(e) => setPie(e.target.value)} />
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-3">
+                                    {botones.map((b, i) => (
+                                        <div key={i}>
+                                            <Label>Botón {i + 1}</Label>
+                                            <Input value={b} maxLength={25} disabled={i === 2}
+                                                onChange={(e) => setBotones(botones.map((x, j) => (j === i ? e.target.value : x)))} />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         <Button onClick={() => void crear()}
-                            disabled={enviando || !nombre || texto.length < 10 || listaEjemplos.length !== variables}>
+                            disabled={enviando || !nombre || texto.length < 10 || listaEjemplos.length !== variables
+                                || (promocion && (!pie.trim() || botones.some((b) => !b.trim())))}>
                             {enviando && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
                             Enviar a Meta para aprobación
                         </Button>

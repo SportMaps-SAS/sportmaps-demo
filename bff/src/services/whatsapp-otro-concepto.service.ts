@@ -19,6 +19,7 @@
 import { supabase } from '../config/supabase';
 import { normalizarFrase } from './whatsapp-reglas-turno';
 import { resolverPago, type PagoPendiente } from './whatsapp-receipt-matching.service';
+import { MOTIVO, type Motivo } from './motivos-de-cobro';
 
 export type OtroConcepto =
     | 'clase_extra'
@@ -28,7 +29,8 @@ export type OtroConcepto =
     | 'rifa'
     | 'inscripcion'
     | 'seguro'
-    | 'vacacional';
+    | 'vacacional'
+    | 'clase_prueba';
 
 /** Cómo se nombra cada concepto en el mensaje a la familia y en el motivo. */
 export const NOMBRE_OTRO_CONCEPTO: Record<OtroConcepto, string> = {
@@ -40,27 +42,45 @@ export const NOMBRE_OTRO_CONCEPTO: Record<OtroConcepto, string> = {
     inscripcion: 'inscripción',
     seguro: 'seguro de accidentes',
     vacacional: 'vacacionales',
+    clase_prueba: 'clase de prueba',
 };
+
+/** El motivo de cobro (`payment_category`) de cada concepto. La rifa no tiene categoría propia. */
+export const MOTIVO_DE_OTRO_CONCEPTO: Record<OtroConcepto, Motivo | null> = {
+    clase_extra: 'clase_extra',
+    uniforme: 'articulos',
+    torneo: 'torneo',
+    viaje: 'viaje',
+    rifa: null,
+    inscripcion: 'inscripcion',
+    seguro: 'seguro',
+    vacacional: 'vacacional',
+    clase_prueba: 'clase_prueba',
+};
+
+const palabras = (m: Motivo): RegExp => MOTIVO[m].palabrasClave as RegExp;
 
 /**
  * Sobre texto ya normalizado (`normalizarFrase`: sin tildes, minúsculas, solo
- * letras y números). El orden importa: el primero que coincide gana.
+ * letras y números). El orden importa: el primero que coincide gana. Las
+ * palabras viven en el catálogo único (motivos-de-cobro.ts); desde 2026-10-30
+ * se reconocen «clase de prueba / de cortesía» y «clínica» (clase_extra) en
+ * todas las escuelas (decisión del plan B4).
  */
 const PATRONES: [OtroConcepto, RegExp][] = [
-    ['vacacional', /\b(vacacional(es)?|curso de vacaciones|plan vacaciones)\b/],
-    ['clase_extra', /\b(perfeccionamiento|refuerzo|clases? (extra|adicional(es)?|suelta|sueltas|particular(es)?|personalizada(s)?|privada(s)?)|clases? de (hoy|manana|ayer))\b/],
-    ['uniforme', /\b(uniformes?|camiseta(s)?|sudadera(s)?|pantaloneta(s)?|licra(s)?|chaqueta(s)?|dotacion|kit)\b/],
-    ['torneo', /\b(torneos?|campeonatos?|copa|festival|inscripcion (al|del|de la) (torneo|copa|campeonato))\b/],
-    ['viaje', /\b(viajes?|tiquetes?|pasajes?|transporte|hotel|hospedaje|excursion)\b/],
+    ['clase_prueba', palabras('clase_prueba')],
+    ['vacacional', palabras('vacacional')],
+    ['clase_extra', palabras('clase_extra')],
+    ['uniforme', palabras('articulos')],
+    ['torneo', palabras('torneo')],
+    ['viaje', palabras('viaje')],
     ['rifa', /\b(rifas?|boletas?|bono(s)? (de la )?rifa)\b/],
-    // «Seguro» suelto es también «seguro que ya pagué»: cuenta solo como el pie
-    // entero, o con lo que lo hace un cobro (de accidentes, póliza, «el seguro»).
-    ['seguro', /(^seguro$|\bseguro (de |del |contra )?(accidente|accidentes|deportivo|estudiantil|medico)\b|\bpolizas?\b|\b(pago|pague|abono|valor|cuota|el|del) seguro\b)/],
-    ['inscripcion', /\b(inscripcion|matricula)\b/],
+    ['seguro', palabras('seguro')],
+    ['inscripcion', palabras('inscripcion')],
 ];
 
 /** Palabras que dicen «esto ES la mensualidad». */
-const MENSUALIDAD = /\b(mensualidad(es)?|mensual|cuota del mes|pension|plan pro|plan basico)\b/;
+const MENSUALIDAD = palabras('mensualidad');
 
 /** El concepto (distinto de la mensualidad) que nombra un texto, o null. */
 export function conceptoNombrado(texto: string | null | undefined): OtroConcepto | null {
@@ -91,6 +111,7 @@ const CONCEPTO_DE_CATEGORIA: Record<string, OtroConcepto | null> = {
     clase_extra: 'clase_extra',
     viaje: 'viaje',
     vacacional: 'vacacional',
+    clase_prueba: 'clase_prueba',
 };
 
 /**
@@ -193,14 +214,23 @@ export function decidirOtroConcepto(
     return { tipo: 'a_la_escuela', senal };
 }
 
+/**
+ * El nombre de la señal: la clínica es `clase_extra`, pero a la familia que
+ * escribió «clínica» no se le dice «clase de perfeccionamiento». Pura.
+ */
+export function nombreDeSenal(s: Pick<SenalOtroConcepto, 'concepto' | 'evidencia'>): string {
+    if (s.concepto === 'clase_extra' && /\bclinicas?\b/.test(normalizarFrase(s.evidencia))) return 'clínica';
+    return NOMBRE_OTRO_CONCEPTO[s.concepto];
+}
+
 /** Motivo que queda en `error_message` (la pantalla «Comprobantes sin resolver» lo muestra). */
 export function motivoOtroConcepto(s: SenalOtroConcepto): string {
-    return `otro_concepto: ${NOMBRE_OTRO_CONCEPTO[s.concepto]} (${s.fuente}: «${s.evidencia}»)`.slice(0, 500);
+    return `otro_concepto: ${nombreDeSenal(s)} (${s.fuente}: «${s.evidencia}»)`.slice(0, 500);
 }
 
 /** Lo que se le dice a la familia: honesto, sin prometer aplicarlo a nada. */
 export function mensajeOtroConcepto(s: SenalOtroConcepto): string {
-    return `Recibí tu comprobante de *${NOMBRE_OTRO_CONCEPTO[s.concepto]}* 📄 ` +
+    return `Recibí tu comprobante de *${nombreDeSenal(s)}* 📄 ` +
         'Se lo paso a la escuela para que lo registre; no lo apliqué a la mensualidad.';
 }
 

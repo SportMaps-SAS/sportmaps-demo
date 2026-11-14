@@ -69,3 +69,48 @@ describe('app-map con la pregunta del usuario', () => {
         expect(appMapParaRol(['coach'], 'quiero editar el nombre de mi equipo')).toContain('Guardar Cambios');
     });
 });
+
+describe('app-map V2 (entrenador, acudiente, deportista)', () => {
+    // 2026-10-27: Mapi respondía «Asistencias > Supervisión», «Equipos Regulares»
+    // y «menú lateral, sección Seguimiento» con la V2 prendida.
+    const sinVistaAnterior = (rol: string, consulta?: string) =>
+        appMapParaRol([rol], consulta).split('VISTA ANTERIOR')[0];
+
+    it('la asistencia del coach va por la pestaña Asistencia, no por Supervisión', () => {
+        const txt = sinVistaAnterior('coach', 'cómo tomo asistencia');
+        expect(txt).toContain('Tomar lista');
+        expect(txt).toContain('Guardar lista');
+        expect(txt).not.toMatch(/Supervisión|Equipos Regulares|Gestión >/);
+    });
+
+    it('el pago del acudiente va por la pestaña Pagos, sin secciones del menú viejo', () => {
+        const txt = sinVistaAnterior('parent', 'cómo pago la mensualidad');
+        expect(txt).toContain('Pestaña Pagos');
+        expect(txt).not.toMatch(/Seguimiento|Mi Actividad|Calendario Familiar|"Pendientes"/);
+    });
+
+    it('describe las pestañas V2 de cada rol', () => {
+        expect(appMapParaRol(['coach'])).toContain('Hoy · Equipos · Sesiones · Asistencia · Más');
+        expect(appMapParaRol(['parent'])).toContain('Inicio · Calendario · Hijos · Pagos · Más');
+        expect(appMapParaRol(['athlete'])).toContain('Hoy · Entrenos · Progreso · Carnet · Más');
+    });
+
+    it('Más del coach ya trae Pizarra en Entrenamiento y el grupo Comunicación', () => {
+        const txt = appMapParaRol(['coach']);
+        expect(txt).toContain('Entrenamiento (Pizarra,');
+        expect(txt).toContain('Comunicación (Mensajes, Anuncios, Encuestas)');
+        expect(txt).not.toContain('Se usan poco');
+    });
+
+    it('la vista anterior viaja aparte y marcada como plan B', () => {
+        for (const rol of ['coach', 'parent', 'athlete']) {
+            expect(appMapParaRol([rol])).toContain('VISTA ANTERIOR (úsala SOLO si el usuario dice que no ve esas pestañas)');
+        }
+        expect(appMapParaRol(['school'])).not.toContain('VISTA ANTERIOR');
+    });
+
+    it('la configuración personal apunta a la entrada de Más de cada rol', () => {
+        expect(appMapParaRol(['parent'], 'cambiar contraseña')).toContain('Más > "Mi cuenta" > pestaña "Seguridad"');
+        expect(appMapParaRol(['coach'], 'cambiar contraseña')).toContain('Más > "Mis datos y configuración" > pestaña "Seguridad"');
+    });
+});

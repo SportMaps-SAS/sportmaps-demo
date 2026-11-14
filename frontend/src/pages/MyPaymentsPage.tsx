@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Loader2, Zap, User, FileText } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PaymentCheckoutModal } from '@/components/payment/PaymentCheckoutModal';
+import { conceptoInicialDeUrl, type ConceptoInicial } from '@/components/payment/checkoutConcepto';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
 import { GlosaRespondModal } from '@/components/payment/GlosaRespondModal';
 import { listMine as listMyGlosas, OPEN_GLOSA_STATUSES, type Glosa } from '@/lib/api/glosas';
@@ -24,12 +25,15 @@ import { formatCurrency } from '@/lib/utils';
 import { normalizeReceiptUrl } from '@/lib/normalizeReceiptUrl';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
-import { calcEarlyPaymentDiscount } from '@/lib/earlyPaymentDiscount';
+import { calcEarlyPaymentDiscount, modoProntoPago } from '@/lib/earlyPaymentDiscount';
 import { MiFacturaElectronicaCard } from '@/components/billing/MiFacturaElectronicaCard';
 import { DebitoAutomaticoCard, DebitoSugerenciaBanner } from '@/components/autopay/DebitoAutomaticoCard';
 import { useMiDebito } from '@/components/autopay/useMiDebito';
 import { AcuPagosV2 } from '@/components/parent/v2/AcuPagosV2';
-import { PAYABLE_STATES, rowTitle, type Transaction } from '@/components/parent/v2/pagosModel';
+import { fetchAjustesDeCobros } from '@/lib/cobrosAbiertos';
+import { PagarPorPlazos } from '@/components/familia/plazos/PagarPorPlazos';
+import { cobrosParaPlazos } from '@/components/familia/plazos/plazosModelo';
+import { PAYABLE_STATES, rotuloCobroSinHijo, rowTitle, type Transaction } from '@/components/parent/v2/pagosModel';
 
 interface Enrollment {
   id: string;
@@ -95,6 +99,8 @@ export default function MyPaymentsPage() {
   // vacía y la pantalla parecía al día.
   const [loadError, setLoadError] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  // «Ya transferí» abre el checkout con transferencia marcada (B7).
+  const [checkoutMethod, setCheckoutMethod] = useState<'transfer' | undefined>(undefined);
   // Cobros marcados que faltan por pagar. El checkout es de UN cobro por vez
   // (no hay pago múltiple en el BFF): al terminar uno con éxito se abre el
   // siguiente con el mismo modal.
@@ -113,7 +119,11 @@ export default function MyPaymentsPage() {
     paymentCategory?: string | null;
     /** Recargo por mora ya sumado en el cobro (apply_late_fees). Solo se muestra. */
     late_fee_amount?: number | null;
+    /** «Pagar otro concepto» con un motivo ya elegido (`?motivo=`). */
+    conceptoInicial?: ConceptoInicial;
   } | null>(null);
+  // Motivo de `?motivo=` esperando que la familia elija para quién es (varios hijos).
+  const [motivoPedido, setMotivoPedido] = useState<ConceptoInicial | null>(null);
 
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
 
@@ -195,8 +205,17 @@ export default function MyPaymentsPage() {
         paymentsQuery = paymentsQuery.eq('parent_id', user?.id || '');
       }
 
-      const { data: payments, error: paymentsError } = await paymentsQuery;
+      const [{ data: payments, error: paymentsError }, { count: inscripcionesPropias }] = await Promise.all([
+        paymentsQuery,
+        // ¿El acudiente entrena él mismo? Solo así un cobro sin hijo es «Tú (como atleta)» (B8).
+        supabase
+          .from('enrollments')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user?.id || '')
+          .is('child_id', null),
+      ]);
       if (paymentsError) throw paymentsError;
+      const tieneInscripcionPropia = (inscripcionesPropias ?? 0) > 0;
 
       // ── PASO 2.5: Hidratar period_year/period_month desde la tabla base ──
       // La vista `payments_with_installments` no proyecta estas columnas
@@ -206,6 +225,9 @@ export default function MyPaymentsPage() {
       // pero no rompe nada (devuelve los mismos valores).
       const paymentIds = (payments || []).map((p: any) => p.id).filter(Boolean);
       let periodMap: Record<string, { period_year: number | null; period_month: number | null; late_fee_amount?: number | null; created_at: string; early_payment_discount_applied?: number | null; sibling_discount_applied?: number | null; child_id?: string | null; parent_id?: string | null; school_id: string; last_failure_reason?: string | null; last_failure_at?: string | null; requires_review?: boolean | null; payment_category?: string | null; payment_method?: string | null; payment_provider?: string | null }> = {};
+      // Ajustes de la escuela (mes anulado por «no asistió», valor por cambio de
+      // plan): se piden en paralelo y, si fallan, el cobro se ve igual sin la nota.
+      const ajustesPromise = fetchAjustesDeCobros(paymentIds);
       if (paymentIds.length > 0) {
         const { data: periodRows } = await supabase
           .from('payments')
@@ -235,7 +257,7 @@ export default function MyPaymentsPage() {
       // ── PASO 3: Enriquecer con school_type ───────────────────────────────
       const transactionSchoolIds = [...new Set((payments || []).map((p: any) => p.school_id).filter(Boolean))];
       let schoolTypeMap: Record<string, string> = {};
-      let discountConfigMap: Record<string, { enabled: boolean; days: number; percentage: number }> = {};
+      let discountConfigMap: Record<string, { enabled: boolean; days: number; percentage: number; mode?: 'days_from_creation' | 'day_of_month' }> = {};
 
       if (transactionSchoolIds.length > 0) {
         const { data: schoolsData } = await supabase
@@ -246,12 +268,13 @@ export default function MyPaymentsPage() {
 
         const { data: settingsRows } = await supabase
           .from('school_settings')
-          .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+          .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
           .in('school_id', transactionSchoolIds);
         discountConfigMap = Object.fromEntries((settingsRows || []).map((s: any) => [s.school_id, {
           enabled: !!s.early_payment_discount_enabled,
           days: s.early_payment_discount_days || 5,
           percentage: s.early_payment_discount_percentage || 0,
+          mode: modoProntoPago(s.early_payment_discount_mode),
         }]));
       }
 
@@ -270,7 +293,9 @@ export default function MyPaymentsPage() {
         return (unpaidGroups.get(key) || []).some(d => d < createdAt);
       };
 
+      const ajustes = await ajustesPromise;
       const txns: Transaction[] = (payments || []).map((p: any) => {
+        const ajuste = ajustes.get(p.id);
         const created_at = periodMap[p.id]?.created_at ?? p.created_at;
         const paymentCategory = periodMap[p.id]?.payment_category ?? null;
         // Pronto pago = solo mensualidad: a un cobro único (inscripción, seguro…)
@@ -300,7 +325,7 @@ export default function MyPaymentsPage() {
           // hijos, rotulados como suyos (spec cambio-de-rol-atleta-acudiente.md).
           child_name: p.child_id
             ? (childNameMap[p.child_id] || 'Deportista')
-            : (p.parent_id === user?.id ? 'Tú (como atleta)' : 'Deportista'),
+            : rotuloCobroSinHijo(p, user?.id, childrenData || [], tieneInscripcionPropia),
           // Medio real (payments.payment_method + pasarela). Antes se leía
           // payment_type, que es one_time/monthly, no el medio.
           pay_method: periodMap[p.id]?.payment_method ?? null,
@@ -312,6 +337,7 @@ export default function MyPaymentsPage() {
           receipt_url: p.receipt_url,
           period_year:  periodMap[p.id]?.period_year ?? p.period_year ?? null,
           period_month: periodMap[p.id]?.period_month ?? p.period_month ?? null,
+          // El mes es el periodo, no el vencimiento (ver estadoCuentaModel.mesDe).
           period_label: formatPeriodLabel(
             periodMap[p.id]?.period_year ?? p.period_year,
             periodMap[p.id]?.period_month ?? p.period_month,
@@ -325,6 +351,10 @@ export default function MyPaymentsPage() {
           last_failure_at: periodMap[p.id]?.last_failure_at ?? null,
           requires_review: periodMap[p.id]?.requires_review ?? null,
           payment_category: paymentCategory,
+          ajuste_kind: ajuste?.kind ?? null,
+          ajuste_antes: ajuste ? Number(ajuste.amount_before) : null,
+          ajuste_motivo: ajuste?.motivo ?? null,
+          ajuste_at: ajuste?.created_at ?? null,
         };
       });
       setTransactions(txns);
@@ -485,8 +515,9 @@ export default function MyPaymentsPage() {
   };
 
   // Abre el ÚNICO checkout (PaymentCheckoutModal) para un cobro existente.
-  const openCheckoutFor = (p: Transaction) => {
+  const openCheckoutFor = (p: Transaction, metodo?: 'transfer') => {
     setSelectedPayment(toSelectedPayment(p));
+    setCheckoutMethod(metodo);
     setShowCheckout(true);
   };
 
@@ -505,6 +536,45 @@ export default function MyPaymentsPage() {
     openCheckoutFor(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- corre una sola vez, al terminar la carga
   }, [loading, transactions, searchParams]);
+
+  // «Pagar otro concepto» (modo create del mismo checkout) para un hijo, con el
+  // motivo ya elegido si vino de `?motivo=`.
+  const openOtroConcepto = (enroll: Enrollment, conceptoInicial?: ConceptoInicial) => {
+    setPayQueue([]);
+    setSelectedPayment({
+      childId: enroll.child_id,
+      childName: enroll.children?.full_name || 'Deportista',
+      teamId: enroll.team_id || undefined,
+      teamName: enroll.teams?.name || 'Mensualidad Deportista',
+      amount: enroll.teams?.price_monthly || 0,
+      schoolId: enroll.school_id,
+      ...(conceptoInicial ? { conceptoInicial } : {}),
+    });
+    setCheckoutMethod(undefined);
+    setShowCheckout(true);
+  };
+
+  // Atajo `?motivo=<clave>` (catálogo lib/motivosDeCobro: enlaces de WhatsApp,
+  // correos): abre «Pagar otro concepto» con ese motivo preseleccionado. Con un
+  // solo hijo, directo; con varios, primero «¿Para quién es el pago?». Una clave
+  // que no está en el catálogo se ignora. `?pay=` manda si vienen los dos. El
+  // parámetro se limpia para que un refresh no reabra el modal.
+  const motivoAbiertoRef = useRef(false);
+  useEffect(() => {
+    if (loading || motivoAbiertoRef.current || !searchParams.get('motivo')) return;
+    motivoAbiertoRef.current = true;
+    if (searchParams.get('pay')) return;
+    const motivo = conceptoInicialDeUrl(searchParams.get('motivo'));
+    setSearchParams(prev => { prev.delete('motivo'); return prev; }, { replace: true });
+    if (!motivo || enrollments.length === 0) return;
+    if (enrollments.length === 1) {
+      openOtroConcepto(enrollments[0], motivo);
+      return;
+    }
+    setMotivoPedido(motivo);
+    setShowChildPicker(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- corre una sola vez, al terminar la carga
+  }, [loading, enrollments, searchParams]);
 
   // «Pagar $ X» / «Ya transferí» con los cobros marcados. El BFF firma la
   // sesión de UN cobro (no existe pago múltiple), así que se pagan en fila con
@@ -538,7 +608,7 @@ export default function MyPaymentsPage() {
         description: `Sube aquí el comprobante de ${rowTitle(payable[0])}. Si hiciste una sola transferencia por varios cobros, súbela aquí y avísale a la escuela para que la reparta.`,
       });
     }
-    openCheckoutFor(payable[0]);
+    openCheckoutFor(payable[0], 'transfer');
   };
 
   // Si la familia cierra el modal (o el pago no pasa) con cobros en fila, la
@@ -635,6 +705,8 @@ export default function MyPaymentsPage() {
                 onActivarSchoolIdChange={setActivarDebitoSchoolId}
               />
             </div>
+            {/* Pagar por plazos: solo aparece si la escuela lo tiene prendido. */}
+            <PagarPorPlazos cobros={cobrosParaPlazos(transactions)} />
             {/* Adelantar una mensualidad sin cobro creado (modo create del mismo modal). */}
             <div className="text-center">
               <Button variant="link" className="min-h-touch text-sm" onClick={() => setShowChildPicker(true)}>
@@ -664,7 +736,7 @@ export default function MyPaymentsPage() {
       />
 
       {/* Child Picker Dialog */}
-      <Dialog open={showChildPicker} onOpenChange={setShowChildPicker}>
+      <Dialog open={showChildPicker} onOpenChange={(o) => { setShowChildPicker(o); if (!o) setMotivoPedido(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>¿Para quién es el pago?</DialogTitle>
@@ -684,17 +756,9 @@ export default function MyPaymentsPage() {
                         ? 'bg-zinc-900 border-zinc-800 hover:border-indigo-500/50 hover:bg-zinc-950 dark:bg-zinc-950 dark:hover:bg-black' 
                         : 'bg-background hover:bg-muted/50 hover:border-primary'}`}
                     onClick={() => {
-                      setPayQueue([]);
-                      setSelectedPayment({
-                        childId: enroll.child_id,
-                        childName: enroll.children?.full_name || 'Deportista',
-                        teamId: enroll.team_id || undefined,
-                        teamName: enroll.teams?.name || 'Mensualidad Deportista',
-                        amount: enroll.teams?.price_monthly || 0,
-                        schoolId: enroll.school_id,
-                      });
+                      openOtroConcepto(enroll, motivoPedido ?? undefined);
+                      setMotivoPedido(null);
                       setShowChildPicker(false);
-                      setShowCheckout(true);
                     }}
                   >
                     <div className="flex items-center gap-3">
@@ -741,7 +805,7 @@ export default function MyPaymentsPage() {
         <PaymentCheckoutModal
           // Remonta al cambiar de cobro (pago en fila): el modal guarda estado
           // interno del intento anterior (resultado, cobro creado).
-          key={selectedPayment.paymentId ?? `nuevo-${selectedPayment.childId}-${selectedPayment.teamName}`}
+          key={`${selectedPayment.paymentId ?? `nuevo-${selectedPayment.childId}-${selectedPayment.teamName}`}-${checkoutMethod ?? 'auto'}`}
           open={showCheckout}
           onOpenChange={handleCheckoutOpenChange}
           studentId={selectedPayment.childId}
@@ -755,6 +819,8 @@ export default function MyPaymentsPage() {
           amount={selectedPayment.amount}
           concept={selectedPayment.teamName}
           paymentCategory={selectedPayment.paymentCategory ?? null}
+          initialMethod={checkoutMethod}
+          initialConceptType={selectedPayment.paymentId ? undefined : selectedPayment.conceptoInicial}
           mode={selectedPayment.paymentId ? 'update' : 'create'}
           onSuccess={handleCheckoutSuccess}
         />

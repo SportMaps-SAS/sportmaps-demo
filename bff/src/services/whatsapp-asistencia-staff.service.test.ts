@@ -18,9 +18,9 @@ vi.mock('../config/supabase', () => {
     const builder = (name: string) => {
         const rows = () => (db.t[name] ??= []);
         const f: ((r: any) => boolean)[] = [];
-        let op = 'select'; let payload: any; let single = false; let lim = Infinity; let ord: any = null;
+        let op = 'select'; let payload: any; let single = false; let lim = Infinity; let ord: any = null; let sel_cols = '';
         const api: any = {
-            select: () => api,
+            select: (cols?: string) => { if (typeof cols === 'string') sel_cols = cols; return api; },
             eq: (c: string, v: any) => { f.push((r) => r[c] === v); return api; },
             in: (c: string, v: any[]) => { f.push((r) => v.includes(r[c])); return api; },
             is: (c: string, v: any) => { f.push((r) => (r[c] ?? null) === v); return api; },
@@ -33,7 +33,10 @@ vi.mock('../config/supabase', () => {
             single: () => { single = true; return api; },
             then: (ok: any, ko: any) => {
                 let r: any;
-                if (db.sinTabla && name === 'attendance_sheet_intake') {
+                // Como PostgREST: pedir una columna que no existe es 42703 (teams NO tiene is_active).
+                if (name === 'teams' && /is_active/.test(sel_cols)) {
+                    r = { data: null, error: { code: '42703', message: 'column teams.is_active does not exist' } };
+                } else if (db.sinTabla && name === 'attendance_sheet_intake') {
                     r = { data: null, error: { code: '42P01', message: 'relation "attendance_sheet_intake" does not exist' } };
                 } else if (op === 'insert') {
                     const row = { id: `${name}-${++db.seq}`, created_at: new Date().toISOString(), ...payload };
@@ -75,7 +78,7 @@ vi.mock('./whatsapp.service', () => ({ downloadMedia: vi.fn() }));
 
 import {
     parsearRespuestaLista, esDisparadorDeLista, identificarStaffPorTelefono, procesarMensajeStaff,
-    recibirPlanillaDeStaff, confirmarPlanilla, aplicarCorrecciones, textoResumenEquipos, construirCruce, esTablaAusente,
+    recibirPlanillaDeStaff, confirmarPlanilla, puedeSubirPlanilla, cargarEquipos, equipoVigente, aplicarCorrecciones, textoResumenEquipos, construirCruce, esTablaAusente,
     type StaffIdentificado,
 } from './whatsapp-asistencia-staff.service';
 
@@ -89,8 +92,8 @@ const AHORA = new Date('2026-10-20T17:30:00-05:00');
 function sembrar() {
     db.t = {
         teams: [
-            { id: 'T-NE', name: 'NUEVA ERA', is_active: true, school_id: ESC, schedule: [{ day: 2, time: '17:00', end: '19:00', place: 'Coliseo' }] },
-            { id: 'T-IN', name: 'INTERMEDIO', is_active: true, school_id: ESC, schedule: [{ day: 4, time: '16:00', end: '18:00', place: 'Coliseo', group: 'Origen' }] },
+            { id: 'T-NE', name: 'NUEVA ERA', active: true, status: 'active', school_id: ESC, schedule: [{ day: 2, time: '17:00', end: '19:00', place: 'Coliseo' }] },
+            { id: 'T-IN', name: 'INTERMEDIO', active: true, status: 'active', school_id: ESC, schedule: [{ day: 4, time: '16:00', end: '18:00', place: 'Coliseo', group: 'Origen' }] },
         ],
         enrollments: [
             ...['Ana Lopez Ruiz', 'Bea Mora Diaz', 'Cata Rey Paz', 'Dani Sol Vega', 'Eva Cruz Pena'].map((_n, i) => ({ school_id: ESC, status: 'active', team_id: 'T-NE', child_id: `ne-${i}` })),
@@ -104,6 +107,7 @@ function sembrar() {
         school_staff: [{ id: 'st-1', coach_auth_id: 'coach-1', school_id: ESC }],
         team_coaches: [{ team_id: 'T-NE', coach_id: 'st-1' }, { team_id: 'T-IN', coach_id: 'st-1' }],
         attendance_sheet_intake: [],
+        school_settings: [{ school_id: ESC, coach_can_upload_attendance_sheets: true }],
     };
     db.sinTabla = false; db.uploads = []; db.removed = []; db.seq = 0;
     db.rpc = (n: string) => n === 'wa_identify_staff_by_phone'
@@ -311,6 +315,46 @@ describe('recibirPlanillaDeStaff', () => {
         expect(r.estado).not.toBe('resumen');
     });
 
+    it('B2: equipos por teams.active/status (no is_active); un equipo inactivo no cuenta', async () => {
+        db.t.teams[1].active = false;
+        ocrMock.extractAttendanceSheet.mockResolvedValue(planilla());
+        const r = await recibirPlanillaDeStaff(foto);
+        expect(r.estado).toBe('resumen');
+        db.t.teams[0].status = 'inactive';
+        const r2 = await recibirPlanillaDeStaff(foto);
+        expect(r2).toMatchObject({ estado: 'error', texto: 'No tienes equipos asignados para pasar lista.' });
+    });
+
+    it('B2: sin equipos asignados NO sube la foto ni paga el OCR', async () => {
+        db.t.team_coaches = [];
+        const r = await recibirPlanillaDeStaff(foto);
+        expect(r).toMatchObject({ estado: 'error', texto: 'No tienes equipos asignados para pasar lista.' });
+        expect(ocrMock.extractAttendanceSheet).not.toHaveBeenCalled();
+        expect(db.uploads).toHaveLength(0);
+    });
+
+    it('B2: asignación por teams.coach_id (= school_staff.id) y con dos filas de school_staff del mismo coach', async () => {
+        db.t.team_coaches = [];
+        db.t.school_staff.push({ id: 'st-2', coach_auth_id: 'coach-1', school_id: ESC });
+        db.t.teams[0].coach_id = 'st-2';
+        ocrMock.extractAttendanceSheet.mockResolvedValue(planilla());
+        const r = await recibirPlanillaDeStaff(foto);
+        expect(r.estado).toBe('resumen');
+        expect(db.t.attendance_sheet_intake[0].team_id).toBe('T-NE');
+    });
+
+    it('B5: coach por WhatsApp sin el permiso de la escuela → mensaje claro, sin OCR ni foto', async () => {
+        db.t.school_settings = [{ school_id: ESC, coach_can_upload_attendance_sheets: false }];
+        const r = await recibirPlanillaDeStaff(foto);
+        expect(r.estado).toBe('error');
+        expect(r.texto).toMatch(/no tiene habilitado/);
+        expect(ocrMock.extractAttendanceSheet).not.toHaveBeenCalled();
+        expect(db.uploads).toHaveLength(0);
+        // El admin no depende del permiso.
+        ocrMock.extractAttendanceSheet.mockResolvedValue(planilla());
+        expect((await recibirPlanillaDeStaff({ ...foto, staff: ADMIN })).estado).toBe('resumen');
+    });
+
     it('sin la tabla: no_disponible y no deja la foto huérfana', async () => {
         db.sinTabla = true;
         ocrMock.extractAttendanceSheet.mockResolvedValue(planilla());
@@ -391,6 +435,26 @@ describe('confirmarPlanilla — revisión obligatoria', () => {
         const r = await confirmarPlanilla(id, 'guardar', { staff: COACH, ahora: AHORA });
         expect(r.estado).toBe('error');
         expect(reg.guardar).not.toHaveBeenCalled();
+    });
+});
+
+describe('puedeSubirPlanilla (B5)', () => {
+    it('admin siempre; coach solo con el flag en true; otros nunca', () => {
+        for (const rol of ['owner', 'admin', 'super_admin', 'school_admin', 'school']) expect(puedeSubirPlanilla(rol, false)).toBe(true);
+        expect(puedeSubirPlanilla('coach', true)).toBe(true);
+        expect(puedeSubirPlanilla('coach', false)).toBe(false);
+        expect(puedeSubirPlanilla('coach', null)).toBe(false);
+        expect(puedeSubirPlanilla('parent', true)).toBe(false);
+        expect(puedeSubirPlanilla(undefined, true)).toBe(false);
+    });
+});
+
+describe('cargarEquipos', () => {
+    it('lee active/status; si la consulta falla lo registra y cargarEquiposOFallar lanza', async () => {
+        expect((await cargarEquipos(ESC)).map((e) => e.id)).toEqual(['T-NE', 'T-IN']);
+        expect(equipoVigente({ active: true, status: 'inactive', name: 'X' })).toBe(false);
+        expect(equipoVigente({ active: null, status: null, name: 'X' })).toBe(true);
+        expect(equipoVigente({ active: true, status: 'active', name: 'Sub 12 (duplicado)' })).toBe(false);
     });
 });
 

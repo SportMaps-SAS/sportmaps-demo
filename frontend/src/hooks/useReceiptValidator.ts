@@ -28,6 +28,7 @@
 import { useState } from 'react';
 import { bffClient } from '@/lib/api/bffClient';
 import { sha256File } from '@/lib/sha256File';
+import { minimoDeAbono } from '@/lib/minimoDeAbono';
 import type { PaymentChargeCategory } from '@/lib/payment-accounts';
 
 export type ReceiptVerdict = 'verde' | 'amarillo' | 'rojo';
@@ -95,6 +96,10 @@ export interface ValidationOptions {
     /** Monto mínimo por abono (school_settings.min_installment_amount).
      *  Solo aplica cuando allowPartial=true. 0 = sin mínimo. */
     minPartialAmount?: number;
+    /** `abono_minimo_pct` del ítem de servicio al que está ligado el cobro. Sin él
+     *  (cobros de mensualidad, escuelas sin ítems) rige `minPartialAmount` como siempre.
+     *  Ver lib/minimoDeAbono: una sola regla para la app y el bot. */
+    abonoMinimoPctItem?: number | null;
     /** Escuela del cobro. Si se pasa, el BFF computa el veredicto (modo sombra). */
     schoolId?: string;
     /** Pago en edición (update flow), para excluirlo del dedup en el BFF. */
@@ -386,8 +391,10 @@ export function useReceiptValidator() {
                 const diffPct = Math.abs(amount - expected) / expected * 100;
                 amountMatches = diffPct <= AMOUNT_TOLERANCE_PCT;
             }
-            // En 'fixed', un comprobante por MÁS del esperado siempre se bloquea
-            // (posible comprobante equivocado o reusado de otro pago mayor).
+            // Un comprobante por MÁS del esperado ya NO se bloquea (Monster 2026-11-12): quien abonó
+            // y paga el valor completo, o paga de más, sube igual. Queda como aviso y la escuela lo
+            // revisa (el excedente lo decide ella). Los otros bloqueos duros (moneda, fecha, cuenta) siguen.
+            let avisoMayor: string | null = null;
             if (
                 conceptKind === 'fixed' &&
                 typeof amount === 'number' &&
@@ -395,9 +402,7 @@ export function useReceiptValidator() {
                 amountMatches === false &&
                 amount > expected
             ) {
-                errors.push(
-                    `El comprobante es por ${formatCop(amount)}, mayor al valor esperado ${formatCop(expected)}. Verifica que sea el comprobante correcto.`,
-                );
+                avisoMayor = `El comprobante es por ${formatCop(amount)}, mayor al saldo de ${formatCop(expected)}; la escuela lo revisará y te confirmará el excedente.`;
             }
 
             // Un monto MENOR al esperado sólo es un ABONO válido si la escuela
@@ -415,10 +420,17 @@ export function useReceiptValidator() {
                     errors.push(
                         `El comprobante es por ${formatCop(amount)}, inferior al valor requerido ${formatCop(expected)}. Esta escuela no permite pagos parciales (abonos); paga el valor completo o comunícate con la escuela para gestionar esta situación.`,
                     );
-                } else if (opts.minPartialAmount && amount < opts.minPartialAmount) {
-                    errors.push(
-                        `El abono mínimo permitido es ${formatCop(opts.minPartialAmount)}. El comprobante es por ${formatCop(amount)}.`,
-                    );
+                } else {
+                    const minAbono = minimoDeAbono({
+                        pctItem: opts.abonoMinimoPctItem,
+                        minEscuela: opts.minPartialAmount,
+                        precio: expected,
+                    });
+                    if (minAbono && amount < minAbono) {
+                        errors.push(
+                            `El abono mínimo permitido es ${formatCop(minAbono)}. El comprobante es por ${formatCop(amount)}.`,
+                        );
+                    }
                 }
             }
 
@@ -473,7 +485,7 @@ export function useReceiptValidator() {
                 // OCR ilegible: sube igual (advisory), la escuela lo revisará. No es un bloqueo.
                 rejectionReason: ocrUnreadable
                     ? 'No pudimos leer todos los datos automáticamente; la escuela revisará tu comprobante.'
-                    : null,
+                    : avisoMayor,
             };
         } catch (err) {
             console.error('Error en OCR:', err);

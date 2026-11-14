@@ -40,7 +40,10 @@ export function cameraKindLabel(kind: CameraKind, sport: TacticalSport): string 
     case 'cenital': return 'Cenital';
     case 'iso': return 'Isométrica';
     case 'detras': return end === 'palos' ? 'Detrás de los palos' : end ? `Detrás del ${end}` : 'Fondo propio';
-    case 'rival': return end === 'palos' ? 'Palos rivales' : end ? `${end === 'arco' ? 'Arco' : 'Aro'} rival` : 'Fondo rival';
+    // «Detrás del arco» (alta, desde nuestro fondo) y la del rival se veían casi
+    // iguales (eran espejo una de la otra). Ahora la del rival es la toma BAJA
+    // del arquero rival: a ras del arco, viendo venir el ataque de frente.
+    case 'rival': return end === 'arco' ? 'Ojos del arquero rival' : end === 'aro' ? 'Bajo el aro rival' : end === 'palos' ? 'Bajo los palos rivales' : 'Fondo rival, a ras';
     case 'balon': return 'Seguir balón';
     case 'jugador': return 'Seguir jugador';
     case 'spider': return 'Spider-cam';
@@ -167,9 +170,28 @@ function isoPose(ctx: CameraContext): CameraPose {
   return { position: v(d.x * dist, d.y * dist, d.z * dist), target: v(0, 0, 0) };
 }
 
+/**
+ * Toma baja desde el fondo rival (−z): a la altura de los ojos de un arquero,
+ * un poco detrás de la línea, mirando hacia la zona de definición y el medio
+ * campo. Se diferencia a propósito de «Detrás del arco» (alta y desde el fondo
+ * propio): antes era su espejo y las dos se veían casi iguales. En vertical se
+ * aleja lo justo para que el ancho de la cancha quepa.
+ */
+export function rivalLowPose(court: Court3D, aspect = 16 / 9, fovDeg = 45): CameraPose {
+  const { halfH } = halfAngles(aspect, fovDeg);
+  const s = figureScale(court);
+  const ahead = court.lengthM * 0.3;
+  let back = Math.max(1.5 * s, court.lengthM * 0.025);
+  if (aspect < 1) back = Math.max(back, (court.widthM / 2) * 1.05 / halfH - ahead);
+  const eye = Math.max(2.2 * s, court.lengthM * 0.03, back * 0.18);
+  return {
+    position: v(0, eye, -court.lengthM / 2 - back),
+    target: v(0, 0.9 * s, -court.lengthM / 2 + ahead),
+  };
+}
+
 function rivalPose(ctx: CameraContext): CameraPose {
-  const p = fixedCameraPose(ctx.court, 'detras', ctx.aspect, ctx.fovDeg);
-  return { position: { ...p.position, z: -p.position.z }, target: { ...p.target, z: -p.target.z } };
+  return rivalLowPose(ctx.court, ctx.aspect, ctx.fovDeg);
 }
 
 /** Distancias de la cámara que sigue al balón. */
@@ -184,9 +206,11 @@ function ballPose(ctx: CameraContext): CameraPose {
   const h = ctx.ballHeading ?? Math.PI;
   const dx = Math.sin(h);
   const dz = Math.cos(h);
+  // Mira bien adelante del balón: con la mira pegada al balón, la mitad de
+  // abajo del cuadro era césped vacío entre la cámara y el balón.
   return {
     position: v(b.x - dx * back, up + b.y * 0.6, b.z - dz * back),
-    target: v(b.x + dx * back * 0.35, b.y * 0.85, b.z + dz * back * 0.35),
+    target: v(b.x + dx * back * 0.8, b.y * 0.85, b.z + dz * back * 0.8),
   };
 }
 
@@ -195,9 +219,10 @@ function thirdPersonPose(ctx: CameraContext): CameraPose {
   const p = ctx.player!;
   const dx = Math.sin(p.heading);
   const dz = Math.cos(p.heading);
+  // Mira más lejos (10 m y no 6): menos césped vacío delante del jugador.
   return {
     position: v(p.x - dx * 4.2 * s, 2.7 * s, p.z - dz * 4.2 * s),
-    target: v(p.x + dx * 6 * s, 1 * s, p.z + dz * 6 * s),
+    target: v(p.x + dx * 10 * s, 1.2 * s, p.z + dz * 10 * s),
   };
 }
 

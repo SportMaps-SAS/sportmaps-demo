@@ -8,6 +8,7 @@ import {
   useLatestReportSnapshot,
 } from './useHijosData';
 import {
+  comentariosDelProfe,
   firstName,
   formatLongDate,
   recentSessions,
@@ -53,7 +54,10 @@ export function ProgresoTab({ hijo }: { hijo: Hijo }) {
   const coachNote = snap?.coach_note?.trim() || null;
   const toWorkOn = (snap?.to_work_on ?? []).map((m) => m.label).filter(Boolean).slice(0, 2);
 
-  const nothing = sessions.rows.length === 0 && skills.length === 0 && !coachNote && toWorkOn.length === 0;
+  const comentarios = comentariosDelProfe(entries.data);
+
+  const nothing = sessions.rows.length === 0 && skills.length === 0 && !coachNote && toWorkOn.length === 0
+    && comentarios.length === 0;
   const parcial = entries.isError || evolution.isError;
 
   // Si una de las dos lecturas falló, «no hay evaluaciones» sería mentira (UX-2).
@@ -162,6 +166,19 @@ export function ProgresoTab({ hijo }: { hijo: Hijo }) {
                 </>
               )}
             </p>
+          </div>
+        )}
+        {comentarios.length > 0 && (
+          <div className="mx-4 mb-4 space-y-2" data-testid="comentarios-profe">
+            <p className="text-sm font-semibold">Lo que dijo el profe</p>
+            {comentarios.map((c) => (
+              <blockquote key={`${c.fecha}-${c.texto}`} className="rounded-xl bg-muted/60 p-3 text-sm leading-relaxed">
+                «{c.texto}»
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  {c.contexto === 'competition' ? 'Partido' : c.contexto === 'session' ? 'Entreno' : 'Evaluación'} · {formatLongDate(c.fecha)}
+                </span>
+              </blockquote>
+            ))}
           </div>
         )}
         <p className="border-t px-4 py-3 text-xs text-muted-foreground">

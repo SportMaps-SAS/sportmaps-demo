@@ -55,8 +55,45 @@ export function capitalize(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * Logo + nombre de la escuela + subtítulo, apilados. Antes cuando había logo
+ * el nombre NUNCA se dibujaba (rama `else` descartada) y el logo salía a
+ * 34pt de alto -- se veía "escondido, pequeño" (feedback real del usuario
+ * viendo el PDF). Ahora el logo crece y el nombre SIEMPRE se dibuja debajo,
+ * en grande. Devuelve el `y` donde debe empezar la línea de acento.
+ */
+export function drawBrandHeader(
+    doc: PDFKit.PDFDocument,
+    logo: Buffer | null,
+    schoolName: string,
+    subtitle: string,
+): number {
+    let y = 48;
+    if (logo) {
+        try {
+            doc.image(logo, 60, y, { height: 46 });
+            y += 46 + 10;
+        } catch {
+            // sigue con el nombre en texto, como si no hubiera logo
+        }
+    }
+    doc.fillColor(INK).fontSize(17).font('Helvetica-Bold')
+        .text(schoolName, 60, y, { width: doc.page.width - 220 });
+    y += 22;
+    doc.fillColor(MUTED).fontSize(9).font('Helvetica')
+        .text(subtitle, 60, y, { width: doc.page.width - 220 });
+    doc.fillColor(INK);
+    return y + 24;
+}
+
 export function sectionTitle(doc: PDFKit.PDFDocument, text: string, color: string) {
-    doc.fillColor(color).font('Helvetica-Bold').fontSize(11).text(text);
+    // x/width explícitos SIEMPRE: `.text(text)` sin opciones hereda el
+    // width/align de la ÚLTIMA llamada con opciones que haya corrido antes
+    // (p.ej. las cajas de KPI, angostas y centradas) -- sin esto el título
+    // se parte en 2-3 líneas angostas en el margen derecho. Bug real, visto
+    // renderizando el PDF.
+    doc.fillColor(color).font('Helvetica-Bold').fontSize(11)
+        .text(text, 60, doc.y, { width: doc.page.width - 120, align: 'left' });
     doc.moveDown(0.3);
     doc.fillColor(INK);
 }

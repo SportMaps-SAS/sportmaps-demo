@@ -80,7 +80,7 @@ const METHOD_LABEL: Record<string, string> = {
 export const INCOME_CATEGORY_LABEL: Record<string, string> = {
     mensualidad: 'Mensualidad', inscripcion: 'Inscripción', articulos: 'Artículos', torneo: 'Torneo', otro: 'Otro',
     seguro: 'Seguro', excedente: 'Horas adicionales', clase_extra: 'Clase extra', vacacional: 'Vacacional',
-    viaje: 'Viaje',
+    viaje: 'Viaje', clase_prueba: 'Clase de prueba',
 };
 
 /**

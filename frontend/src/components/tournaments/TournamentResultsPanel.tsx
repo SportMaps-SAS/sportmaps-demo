@@ -3,13 +3,15 @@ import { bffClient } from '@/lib/api/bffClient';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { CalendarPlus, Share2, Tv, Radio } from 'lucide-react';
-import type { LiveConfigDto, MatchDto, StandingsDto, FixturesResponse } from '@/lib/tournamentTypes';
+import { CalendarPlus, Share2, Tv, Radio, Clock } from 'lucide-react';
+import type { LiveConfigDto, MatchDto, StandingsDto, FixturesResponse, TeamDto } from '@/lib/tournamentTypes';
 import { byScheduleOrder } from '@/lib/tournamentDisplay';
 import { MatchCard, StandingsView, BracketView } from './TournamentViews';
 import { FixtureGeneratorDialog, LIVE_BASE, type TeamRef } from './FixtureGeneratorDialog';
 import { LiveSettingsPanel } from './LiveSettingsPanel';
 import { LiveScorer, type ScorerEndpoints } from './LiveScorer';
+import { MatchScheduleDialog } from './MatchScheduleDialog';
+import { PlanillaPartidoButton, loadMatchRoster } from './planilla/PlanillaPartidoButton';
 
 const selectCls = 'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -27,6 +29,17 @@ export function teamsFrom(matches: MatchDto[], standings: StandingsDto | null): 
   return Array.from(map, ([id, name]) => ({ id, name }));
 }
 
+/** Partidos de fase final agrupados por copa (null = copa única), en el orden en que aparecen. */
+export function knockoutByCup(matches: MatchDto[]): Array<{ cup: string | null; matches: MatchDto[] }> {
+  const out: Array<{ cup: string | null; matches: MatchDto[] }> = [];
+  for (const m of matches) {
+    const cup = m.cup_label ?? null;
+    const g = out.find((x) => x.cup === cup);
+    if (g) g.matches.push(m); else out.push({ cup, matches: [m] });
+  }
+  return out;
+}
+
 export function TournamentResultsPanel({ eventId, categories }: { eventId: string; categories: PanelCategory[] }) {
   const { toast } = useToast();
   const base = `${LIVE_BASE}/school/${eventId}`;
@@ -36,6 +49,8 @@ export function TournamentResultsPanel({ eventId, categories }: { eventId: strin
   const [standings, setStandings] = useState<StandingsDto | null>(null);
   const [genOpen, setGenOpen] = useState(false);
   const [scoring, setScoring] = useState<MatchDto | null>(null);
+  const [editing, setEditing] = useState<MatchDto | null>(null);
+  const [catTeams, setCatTeams] = useState<TeamDto[]>([]);
 
   const loadConfig = useCallback(async () => {
     try { setConfig(await bffClient.get<LiveConfigDto>(`${base}/config`)); }
@@ -45,23 +60,31 @@ export function TournamentResultsPanel({ eventId, categories }: { eventId: strin
   const loadResults = useCallback(async (c: string) => {
     if (!c) return;
     try {
-      const [m, s] = await Promise.all([
+      const [m, s, t] = await Promise.all([
         bffClient.get<MatchDto[]>(`${base}/matches?category_id=${c}`),
         bffClient.get<StandingsDto>(`${base}/standings?category_id=${c}`),
+        // Internos y rivales externos: el sorteo manual los necesita aunque aún no haya partidos.
+        bffClient.get<TeamDto[]>(`${base}/teams`).catch(() => [] as TeamDto[]),
       ]);
-      setMatches(m); setStandings(s);
+      setMatches(m); setStandings(s); setCatTeams(t.filter((x) => x.category_id === c));
     } catch (e) { toast({ title: 'Error', description: (e as Error).message, variant: 'destructive' }); }
   }, [base, toast]);
 
   useEffect(() => { void loadConfig(); }, [loadConfig]);
   useEffect(() => { void loadResults(catId); }, [catId, loadResults]);
 
-  const teams = useMemo(() => teamsFrom(matches, standings), [matches, standings]);
+  const teams = useMemo(() => {
+    const known = catTeams.map((t) => ({ id: t.id, name: t.name }));
+    return known.length > 0 ? known : teamsFrom(matches, standings);
+  }, [catTeams, matches, standings]);
+  const courts = useMemo(() => Array.from(new Set(matches.map((m) => m.court).filter(Boolean) as string[])).sort(), [matches]);
   const model = standings?.model ?? matches[0]?.model ?? 'goals';
   const sorted = useMemo(() => matches.slice().sort(byScheduleOrder), [matches]);
   const knockoutMatches = sorted.filter((m) => m.stage === 'knockout' || m.stage === 'third_place');
   const groupMatches = sorted.filter((m) => m.stage === 'group');
   const leagueMatches = sorted.filter((m) => m.stage === 'league');
+  const cat = categories.find((c) => c.id === catId);
+  const categoryName = cat ? `${cat.division} · ${cat.category} (${cat.rama})` : null;
   const groupLabels = Array.from(new Set(groupMatches.map((m) => m.group_label ?? ''))).sort();
 
   const endpoints: ScorerEndpoints = useMemo(() => ({
@@ -78,14 +101,19 @@ export function TournamentResultsPanel({ eventId, categories }: { eventId: strin
   };
 
   const anotar = (m: MatchDto) => (
-    <Button size="sm" variant="outline" disabled={!m.home_team_id || !m.away_team_id} title={!m.home_team_id || !m.away_team_id ? 'Los equipos aún no están definidos' : undefined} onClick={() => setScoring(m)} aria-label="Anotar este partido">Anotar</Button>
+    <div className="flex gap-1">
+      <PlanillaPartidoButton size="sm" variant="ghost" match={m} tournamentTitle={config?.event.title} sport={config?.event.sport}
+        categoryName={categoryName} loadRoster={() => loadMatchRoster(eventId, m.id)} />
+      <Button size="sm" variant="ghost" onClick={() => setEditing(m)} aria-label="Editar hora y cancha" title="Hora y cancha"><Clock className="h-4 w-4" /></Button>
+      <Button size="sm" variant="outline" disabled={!m.home_team_id || !m.away_team_id} title={!m.home_team_id || !m.away_team_id ? 'Los equipos aún no están definidos' : undefined} onClick={() => setScoring(m)} aria-label="Anotar este partido">Anotar</Button>
+    </div>
   );
 
   if (scoring) {
     return (
       <div className="fixed inset-0 z-50 overflow-y-auto bg-background">
         <LiveScorer
-          match={scoring} endpoints={endpoints} queueKey={`torneo-cola:school:${eventId}`}
+          match={scoring} endpoints={endpoints} queueKey={`torneo-cola:school:${eventId}`} tournamentTitle={config?.event.title}
           onClose={() => { setScoring(null); void loadResults(catId); }}
           onMatchChange={(m) => setMatches((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...m } : x)))}
         />
@@ -117,7 +145,13 @@ export function TournamentResultsPanel({ eventId, categories }: { eventId: strin
         )}
       </div>
 
-      {config && <LiveSettingsPanel eventId={eventId} config={config} onChanged={loadConfig} />}
+      {config && (
+        <LiveSettingsPanel eventId={eventId} config={config} onChanged={loadConfig}
+          categories={categories.map((c) => ({ id: c.id, name: `${c.division} · ${c.category} (${c.rama})` }))} />
+      )}
+
+      <MatchScheduleDialog eventId={eventId} match={editing} courts={courts} onClose={() => setEditing(null)}
+        onSaved={(m) => setMatches((prev) => prev.map((x) => (x.id === m.id ? { ...x, ...m } : x)))} />
 
       <FixtureGeneratorDialog
         open={genOpen} onOpenChange={setGenOpen} eventId={eventId} categoryId={catId} teams={teams}
@@ -158,12 +192,12 @@ export function TournamentResultsPanel({ eventId, categories }: { eventId: strin
               </CardContent>
             </Card>
           ))}
-          {knockoutMatches.length > 0 && (
-            <Card>
-              <CardHeader><CardTitle className="text-base">Fase final</CardTitle></CardHeader>
-              <CardContent><BracketView matches={knockoutMatches} renderAction={(m) => anotar(m as MatchDto)} /></CardContent>
+          {knockoutByCup(knockoutMatches).map(({ cup, matches: cm }) => (
+            <Card key={cup ?? '_'}>
+              <CardHeader><CardTitle className="text-base">{cup ? `Fase final · ${cup}` : 'Fase final'}</CardTitle></CardHeader>
+              <CardContent><BracketView matches={cm} renderAction={(m) => anotar(m as MatchDto)} /></CardContent>
             </Card>
-          )}
+          ))}
         </>
       )}
     </div>

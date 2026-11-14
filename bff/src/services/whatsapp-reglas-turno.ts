@@ -20,6 +20,22 @@
 
 import { desgloseMora, textoDesgloseMora } from '../utils/desglose-mora';
 
+/**
+ * Clínicas, campamentos y vacacionales, sobre texto ya normalizado
+ * (`normalizarFrase`). UNA regla para la campaña (whatsapp-audiencias: quién
+ * pidió una clínica) y para el destino por anuncio (whatsapp-anuncio-destino).
+ */
+export const EVENTO_DE_SERVICIO = /\b(clinicas?|campamentos?|vacacional(es)?|vacaciones recreativas)\b/;
+
+/**
+ * La misma regla partida por servicio, para que una campaña de la clínica no le llegue a
+ * quien solo habló del vacacional (y viceversa). «Campamento» es ambiguo: las familias
+ * llaman así a los dos. La unión de las tres es EVENTO_DE_SERVICIO.
+ */
+export const EVENTO_CLINICA = /\bclinicas?\b/;
+export const EVENTO_VACACIONAL = /\b(vacacional(es)?|vacaciones recreativas)\b/;
+export const EVENTO_CAMPAMENTO = /\bcampamentos?\b/;
+
 export function normalizarFrase(t: string | null | undefined): string {
     return (t || '')
         .toLowerCase()
@@ -258,6 +274,13 @@ export type PedidoDePersona =
     | { tipo: 'escalar' }
     | { tipo: 'vocativo'; nombre: string };
 
+/** nombre de pila (normalizado) → apodos con los que se le habla. Solo los muy comunes. */
+const APODOS_COMUNES: Record<string, string[]> = {
+    felipe: ['pipe', 'felo'], sebastian: ['sebas', 'seba'], alejandro: ['alejo', 'ale'], santiago: ['santi'],
+    daniel: ['dani'], fernando: ['fercho', 'nando'], francisco: ['pacho', 'paco'], camilo: ['milo'],
+    juan: ['juancho'], david: ['davo'], nicolas: ['nico'],
+};
+
 /**
  * Nombres del equipo con los que escriben las familias: nombre de pila, el
  * diminutivo de cuatro letras («Milena» → «mile») y el -ita («milenita»).
@@ -265,6 +288,13 @@ export type PedidoDePersona =
 export function vocativosDelEquipo(nombresCompletos: (string | null | undefined)[]): Map<string, string> {
     const m = new Map<string, string>();
     for (const completo of nombresCompletos) {
+        // Apodos de uso común en Colombia («Felipe» → «Pipe»): se miran TODOS los nombres de
+        // pila, no solo el primero («Iván Felipe …»), pero solo los de la tabla (un apellido
+        // no es un vocativo). Monster 2026-11-05: «Hola Pipe» recibió el aviso de registro.
+        const visiblePrimero = (completo || '').trim().split(/\s+/)[0];
+        for (const token of normalizarFrase(completo).split(' ').slice(0, 3)) {
+            for (const apodo of APODOS_COMUNES[token] ?? []) if (!m.has(apodo)) m.set(apodo, visiblePrimero);
+        }
         const pila = normalizarFrase(completo).split(' ')[0];
         if (!pila || pila.length < 3) continue;
         const visible = (completo || '').trim().split(/\s+/)[0];

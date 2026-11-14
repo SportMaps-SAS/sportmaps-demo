@@ -12,17 +12,21 @@ const h = vi.hoisted(() => {
         inserts: [] as { table: string; row: any }[],
         updates: [] as { table: string; row: any }[],
         orden: null as null | { ascending: boolean },
+        statusTicket: null as null | string,
+        filtros: [] as string[],
     };
     function builder(table: string) {
         const ops: string[] = [];
         const b: any = {};
-        for (const m of ['select', 'eq', 'is', 'limit', 'in']) b[m] = () => { ops.push(m); return b; };
+        for (const m of ['select', 'is', 'limit', 'in']) b[m] = () => { ops.push(m); return b; };
+        b.eq = (c: string, v: unknown) => { ops.push('eq'); state.filtros.push(`${table}.${c}=${v}`); return b; };
         b.order = (_c: string, o: any) => { ops.push('order'); state.orden = o; return b; };
         b.update = (row: any) => { state.updates.push({ table, row }); return b; };
         b.insert = (row: any) => { state.inserts.push({ table, row }); return b; };
         const resolver = () => {
             if (table === 'support_messages' && ops.includes('order')) return { data: state.historial, error: null };
             if (table === 'support_messages') return { count: 0, error: null };
+            if (table === 'support_tickets' && state.statusTicket) return { data: { status: state.statusTicket }, error: null };
             return { data: null, error: null };
         };
         b.maybeSingle = async () => resolver();
@@ -56,6 +60,8 @@ beforeEach(() => {
     h.state.inserts = [];
     h.state.updates = [];
     h.state.historial = [{ author_type: 'user', body: 'quiero editar el nombre de mi equipo' }];
+    h.state.statusTicket = null;
+    h.state.filtros = [];
 });
 
 describe('Mapi: redacta en vez de mandar manuales', () => {
@@ -153,5 +159,21 @@ describe('quitarLinksInventados', () => {
         expect(out).not.toContain('editar-equipo-coach');
         expect(out).toContain('/ayuda/registrar-nuevo-atleta');
         expect(out).toContain('Abre **Equipos**');
+    });
+});
+
+describe('Mapi y los casos que esperan a una persona (2026-10-27)', () => {
+    it('si el caso ya está en waiting_human (escaló o «No me sirvió»), responder no lo devuelve a bot_handled', async () => {
+        h.state.statusTicket = 'waiting_human';
+        h.chat.mockResolvedValueOnce({ text: 'Abre **Asistencia** > **Tomar lista**.', provider: 'test' });
+        await turno();
+        expect(respuestasDelBot()).toHaveLength(1);
+        expect(estados()).toEqual([]);
+    });
+
+    it('el historial que va al modelo deja fuera las notas internas', async () => {
+        h.chat.mockResolvedValueOnce({ text: 'Listo.', provider: 'test' });
+        await turno();
+        expect(h.state.filtros).toContain('support_messages.internal_note=false');
     });
 });

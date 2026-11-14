@@ -1,15 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// validateImageUrl compara contra el host de SUPABASE_URL; el CI lo fija en mock.supabase.co.
+// Estas pruebas usan x.supabase.co, así que lo fijamos aquí (cada archivo corre aislado).
+process.env.SUPABASE_URL = 'https://x.supabase.co';
 
 vi.mock('../../config/supabase', async () => {
   const kit = await import('./fakeDb.testkit');
   return { supabase: kit.fakeSupabase };
 });
 
-import { db, resetDb, seedEvent, seedTeams, seedCategory } from './fakeDb.testkit';
+import { db, resetDb, seedEvent, seedTeams, seedCategory, seedExternalTeam } from './fakeDb.testkit';
 import {
   LiveError, loadEvent, loadMatches, performMatchAction, generateCategoryFixtures, buildCategoryStandings, patchConfig, getConfig,
   createScorekeeper, authScorekeeper, revokeScorekeeper, scorerMatches, publicLive, _clearPublicCache, takeMatch, validateStreamUrl,
   Actor, LiveEvent,
+  addExternalTeams, updateTeam, deleteExternalTeam, listTeams, createSponsor, updateSponsor, deleteSponsor, listSponsors,
+  rescheduleMatch, publicStatus, validateImageUrl, isMissingColumn,
 } from './tournament-live.service';
 import { SCORING_PRESETS } from './scoring.shared';
 
@@ -448,5 +453,233 @@ describe('carga: 500 lecturas públicas con caché', () => {
     await Promise.all(Array.from({ length: 500 }, () => publicLive(ev.slug!)));
     expect(spy.mock.calls.length).toBe(base);
     spy.mockRestore();
+  });
+});
+
+describe('rivales externos (solo nombre, sin cuenta ni delegación)', () => {
+  it('se agregan pegando una lista; repetidos se saltan; nombre corto en mayúsculas', async () => {
+    const { ev, cat } = await setup({ teams: 0 });
+    const r = await addExternalTeams(ev, { category_id: cat, teams: [
+      { team_name: '  Club  Águilas ', club_name: 'Águilas VC', short_name: 'agu' }, { team_name: 'Titanes' }, { team_name: 'club águilas' }, { team_name: '   ' },
+    ] });
+    expect(r.created.map((t) => t.name)).toEqual(['Club Águilas', 'Titanes']);
+    expect(r.skipped).toEqual(['club águilas']);
+    expect(r.created[0]).toMatchObject({ is_external: true, short_name: 'AGU', club_name: 'Águilas VC' });
+    const row = db.tables.event_teams.find((t) => t.team_name === 'Titanes')!;
+    expect(row).toMatchObject({ delegation_id: null, is_external: true, status: 'confirmed', category_id: cat });
+    // segunda vez: todo repetido, no crea nada
+    expect((await addExternalTeams(ev, { category_id: cat, teams: [{ team_name: 'TITANES' }] })).created).toHaveLength(0);
+  });
+
+  it('valida categoría del torneo, lista vacía, nombre corto y logo fuera de SportMaps', async () => {
+    const { ev, cat } = await setup({ teams: 0 });
+    await expect(addExternalTeams(ev, { category_id: 'otra', teams: [{ team_name: 'X' }] })).rejects.toMatchObject({ status: 404 });
+    await expect(addExternalTeams(ev, { category_id: cat, teams: [] })).rejects.toMatchObject({ status: 400 });
+    await expect(addExternalTeams(ev, { category_id: cat, teams: [{ team_name: 'X', short_name: 'LARGO' }] })).rejects.toMatchObject({ code: 'texto_largo' });
+    const prev = process.env.SUPABASE_URL;
+    process.env.SUPABASE_URL = 'https://abc.supabase.co';
+    try {
+      await expect(addExternalTeams(ev, { category_id: cat, teams: [{ team_name: 'X', logo_url: 'https://otro.com/a.png' }] })).rejects.toMatchObject({ code: 'imagen_invalida' });
+      expect(validateImageUrl('https://abc.supabase.co/storage/v1/object/public/school-assets/logos/s/a.png')).toContain('school-assets');
+      expect(() => validateImageUrl('http://abc.supabase.co/a.png')).toThrow(/https/);
+    } finally {
+      if (prev === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = prev;
+    }
+  });
+
+  it('entran al sorteo, al calendario y a la tabla igual que los internos', async () => {
+    const { ev, cat } = await setup({ teams: 2 });
+    await addExternalTeams(ev, { category_id: cat, teams: [{ team_name: 'Rival A' }, { team_name: 'Rival B' }] });
+    const gen = await generateCategoryFixtures(ev, cat, 'liga', { seed: 5 });
+    expect(gen.matches).toBe(6);
+    const ms = await loadMatches(ev.id, cat);
+    const ext = db.tables.event_teams.filter((t) => t.is_external).map((t) => t.id);
+    expect(ms.filter((m) => ext.includes(m.home_team_id!) || ext.includes(m.away_team_id!)).length).toBe(5);
+    const extVsExt = ms.find((m) => ext.includes(m.home_team_id!) && ext.includes(m.away_team_id!))!;
+    await playVolley(ev, extVsExt.id, 'home');
+    const st = await buildCategoryStandings(ev, cat);
+    expect(st.standings).toHaveLength(4);
+    expect(st.standings[0]).toMatchObject({ team_id: extVsExt.home_team_id, Pts: 3, set_diff: 2 });
+    const teams = await listTeams(ev);
+    expect(teams.filter((t) => t.is_external)).toHaveLength(2);
+  });
+
+  it('editar y quitar: un interno solo cambia logo y sigla; con partidos jugados no se quita', async () => {
+    const { ev, cat } = await setup({ teams: 1 });
+    const internal = db.tables.event_teams[0];
+    const ext = seedExternalTeam(ev.id, cat, 'Rival');
+    expect(await updateTeam(ev, internal.id, { short_name: 'mon' })).toMatchObject({ short_name: 'MON', is_external: false });
+    await expect(updateTeam(ev, internal.id, { team_name: 'Otro' })).rejects.toMatchObject({ code: 'equipo_interno' });
+    expect(await updateTeam(ev, ext.id, { team_name: 'Rival FC', club_name: 'Club Rival' })).toMatchObject({ name: 'Rival FC', club_name: 'Club Rival' });
+    await expect(deleteExternalTeam(ev, internal.id)).rejects.toMatchObject({ code: 'equipo_interno' });
+
+    await generateCategoryFixtures(ev, cat, 'liga', { seed: 1 });
+    const [m] = await loadMatches(ev.id, cat);
+    await expect(updateTeam(ev, ext.id, { category_id: seedCategory(ev.id) })).rejects.toMatchObject({ code: 'equipo_en_calendario' });
+    await playVolley(ev, m.id, 'home');
+    await expect(deleteExternalTeam(ev, ext.id)).rejects.toMatchObject({ code: 'equipo_con_resultados' });
+  });
+
+  it('quitar un externo que solo estaba programado avisa que hay que regenerar', async () => {
+    const { ev, cat } = await setup({ teams: 1 });
+    const ext = seedExternalTeam(ev.id, cat, 'Rival');
+    await generateCategoryFixtures(ev, cat, 'liga', { seed: 1 });
+    expect(await deleteExternalTeam(ev, ext.id)).toEqual({ success: true, regenerate: true });
+    expect(db.tables.event_teams.find((t) => t.id === ext.id)).toBeUndefined();
+  });
+});
+
+describe('copas oro / plata desde grupos', () => {
+  it('cada copa se arma con sus posiciones y el ganador avanza solo dentro de su copa', async () => {
+    const { ev, cat } = await setup({ teams: 8 });
+    const gen = await generateCategoryFixtures(ev, cat, 'grupos', {
+      seed: 11, groups: { count: 2, advance: 4 },
+      cups: [{ label: 'Copa oro', positions: [1, 2], third_place: true }, { label: 'Copa plata', positions: [3, 4] }],
+    });
+    // 12 de grupo + oro (2 semis + final + 3.º) + plata (2 semis + final)
+    expect(gen.matches).toBe(19);
+    let ms = await loadMatches(ev.id, cat);
+    for (const g of ms.filter((m) => m.stage === 'group')) await playVolley(ev, g.id, 'home');
+    const st = await buildCategoryStandings(ev, cat);
+    ms = await loadMatches(ev.id, cat);
+    const semis = (cup: string) => ms.filter((m) => m.cup_label === cup && m.stage === 'knockout' && m.round === 1);
+    const top = new Set([st.groups!.A[0], st.groups!.A[1], st.groups!.B[0], st.groups!.B[1]].map((r) => r.team_id));
+    expect(semis('Copa oro').flatMap((m) => [m.home_team_id, m.away_team_id]).every((t) => top.has(t!))).toBe(true);
+    expect(semis('Copa plata').flatMap((m) => [m.home_team_id, m.away_team_id]).every((t) => t && !top.has(t))).toBe(true);
+
+    // los ganadores de las semis de plata llegan a la final de PLATA, no a la de oro
+    for (const sm of semis('Copa plata')) await playVolley(ev, sm.id, 'home');
+    ms = await loadMatches(ev.id, cat);
+    const finalPlata = ms.find((m) => m.cup_label === 'Copa plata' && m.round === 2 && m.stage === 'knockout')!;
+    const finalOro = ms.find((m) => m.cup_label === 'Copa oro' && m.round === 2 && m.stage === 'knockout')!;
+    expect(finalPlata.home_team_id && finalPlata.away_team_id).toBeTruthy();
+    expect(finalOro.home_team_id ?? null).toBeNull();
+    expect(finalOro.away_team_id ?? null).toBeNull();
+    // el 3.º puesto de oro sigue vacío: los perdedores de plata no entran
+    expect(ms.find((m) => m.cup_label === 'Copa oro' && m.stage === 'third_place')!.home_team_id ?? null).toBeNull();
+
+    for (const sm of semis('Copa oro')) await playVolley(ev, sm.id, 'away');
+    ms = await loadMatches(ev.id, cat);
+    const third = ms.find((m) => m.cup_label === 'Copa oro' && m.stage === 'third_place')!;
+    expect(third.home_team_id && third.away_team_id).toBeTruthy();
+    _clearPublicCache();
+    const pub = (await publicLive(ev.slug!))!.payload;
+    expect(new Set(pub.matches.map((m: any) => m.cup_label))).toEqual(new Set([null, 'Copa oro', 'Copa plata']));
+  });
+});
+
+describe('hora y cancha a mano', () => {
+  it('cambia solo lo que viene, deja log «reschedule» y limpia la caché pública', async () => {
+    const { ev, cat } = await setup({ teams: 2 });
+    await generateCategoryFixtures(ev, cat, 'liga', { seed: 1, schedule: { start: '2026-11-07T08:00:00-05:00', courts: 1, slot_minutes: 60 } });
+    const [m] = await loadMatches(ev.id, cat);
+    await publicLive(ev.slug!);
+    const out = await rescheduleMatch(ev, m.id, admin, { court: ' Coliseo 2 ' });
+    expect(out).toMatchObject({ court: 'Coliseo 2', scheduled_at: m.scheduled_at });
+    const out2 = await rescheduleMatch(ev, m.id, admin, { scheduled_at: '2026-11-07T10:30:00-05:00' });
+    expect(out2.scheduled_at).toBe('2026-11-07T15:30:00.000Z');
+    expect(out2.court).toBe('Coliseo 2');
+    const logs = db.tables.tournament_match_log.filter((l) => l.action === 'reschedule');
+    expect(logs).toHaveLength(2);
+    expect(logs[0]).toMatchObject({ actor_type: 'user', actor_id: 'u1', before_state: { court: 'Cancha 1' }, after_state: { court: 'Coliseo 2' } });
+    const pub = (await publicLive(ev.slug!))!.payload;
+    expect(pub.matches.find((x: any) => x.id === m.id).court).toBe('Coliseo 2');
+  });
+  it('valida hora, cancha larga y cuerpo vacío', async () => {
+    const { ev, cat } = await setup({ teams: 2 });
+    await generateCategoryFixtures(ev, cat, 'liga', { seed: 1 });
+    const [m] = await loadMatches(ev.id, cat);
+    await expect(rescheduleMatch(ev, m.id, admin, {})).rejects.toMatchObject({ status: 400 });
+    await expect(rescheduleMatch(ev, m.id, admin, { scheduled_at: 'mañana' })).rejects.toMatchObject({ code: 'hora_invalida' });
+    await expect(rescheduleMatch(ev, m.id, admin, { court: 'x'.repeat(41) })).rejects.toMatchObject({ code: 'texto_largo' });
+    await expect(rescheduleMatch(ev, 'no-existe', admin, { court: 'A' })).rejects.toMatchObject({ status: 404 });
+    expect(await rescheduleMatch(ev, m.id, admin, { scheduled_at: null, court: '' })).toMatchObject({ scheduled_at: null, court: null });
+  });
+});
+
+describe('patrocinadores', () => {
+  it('CRUD con orden por tier y validación de enlaces', async () => {
+    const { ev } = await setup();
+    const a = await createSponsor(ev, { name: 'Aliado 1' });
+    const p = await createSponsor(ev, { name: 'Bebidas S.A.', tier: 'principal', url: 'https://bebidas.co' });
+    expect(a).toMatchObject({ tier: 'aliado', sort_order: 0 });
+    expect((await listSponsors(ev.id)).map((x) => x.name)).toEqual(['Bebidas S.A.', 'Aliado 1']);
+    await expect(createSponsor(ev, { name: '' })).rejects.toMatchObject({ code: 'nombre_requerido' });
+    await expect(createSponsor(ev, { name: 'X', tier: 'oro' })).rejects.toMatchObject({ code: 'tier_invalido' });
+    await expect(createSponsor(ev, { name: 'X', url: 'http://inseguro.co' })).rejects.toMatchObject({ code: 'enlace_invalido' });
+    expect(await updateSponsor(ev, a.id, { tier: 'oficial' })).toMatchObject({ tier: 'oficial' });
+    await expect(updateSponsor(ev, 'otro', { name: 'Y' })).rejects.toMatchObject({ status: 404 });
+    await deleteSponsor(ev, p.id);
+    expect(await listSponsors(ev.id)).toHaveLength(1);
+  });
+});
+
+describe('payload público v2', () => {
+  it('trae estado, fechas, portada, logo, organizador, sede, patrocinadores, logos de equipos y cup_label', async () => {
+    const { ev, cat } = await setup({ teams: 2 });
+    Object.assign(db.tables.events.find((e) => e.id === ev.id)!, {
+      status: 'active', end_date: '2026-11-08', banner_url: 'https://x.supabase.co/portada.jpg', logo_url: 'https://x.supabase.co/logo.png',
+      organizer_name: null, rules_url: 'https://drive.google.com/reglamento', venue_name: 'Coliseo Iván de Bedout', address: 'Cra 70 #1', lat: 6.25, lng: -75.59,
+    });
+    db.tables.event_teams[0].logo_url = 'https://x.supabase.co/eq1.png';
+    db.tables.event_teams[0].short_name = 'MON';
+    seedExternalTeam(ev.id, cat, 'Rival Externo', { club_name: 'Club Rival' });
+    await createSponsor(ev, { name: 'Patrocinador', tier: 'principal', logo_url: 'https://x.supabase.co/sp.png', url: 'https://sp.co' });
+    await generateCategoryFixtures(ev, cat, 'liga', { seed: 1 });
+    _clearPublicCache();
+    const out = (await publicLive(ev.slug!))!.payload;
+    expect(out.payload_version).toBe(2);
+    expect(out.tournament).toBe(out.event);
+    expect(out.tournament).toMatchObject({
+      status: 'published', start_date: '2026-11-07', end_date: '2026-11-08', cover_url: 'https://x.supabase.co/portada.jpg',
+      logo_url: 'https://x.supabase.co/logo.png', organizer_name: 'Monster Volley', rules_url: 'https://drive.google.com/reglamento',
+      venue: { name: 'Coliseo Iván de Bedout', address: 'Cra 70 #1, Medellín', maps_url: 'https://www.google.com/maps/search/?api=1&query=6.25,-75.59' },
+      sponsors: [{ name: 'Patrocinador', tier: 'principal', logo_url: 'https://x.supabase.co/sp.png', url: 'https://sp.co/' }],
+    });
+    expect(out.teams).toHaveLength(3);
+    expect(out.teams.find((t: any) => t.name === 'Rival Externo')).toMatchObject({ is_external: true, club_name: 'Club Rival', logo_url: null });
+    const id0 = db.tables.event_teams[0].id;
+    const withLogo = out.matches.find((m: any) => m.home_team_id === id0 || m.away_team_id === id0);
+    expect([withLogo.home_logo_url, withLogo.away_logo_url]).toContain('https://x.supabase.co/eq1.png');
+    expect(out.matches.every((m: any) => 'cup_label' in m)).toBe(true);
+    const row = out.standings[cat].standings.find((r: any) => r.team_id === id0);
+    expect(row).toMatchObject({ short_name: 'MON', logo_url: 'https://x.supabase.co/eq1.png', is_external: false, set_diff: 0, point_ratio: 0 });
+    expect(JSON.stringify(out)).not.toContain('"delegation"');
+  });
+
+  it('estado derivado: borrador, publicado, en curso, finalizado, cancelado', () => {
+    const m = (status: string) => ({ status, stage: 'league', home_team_id: 'a', away_team_id: 'b', home_ref: null, away_ref: null }) as any;
+    expect(publicStatus('draft', [])).toBe('draft');
+    expect(publicStatus('cancelled', [m('played')])).toBe('cancelled');
+    expect(publicStatus('active', [])).toBe('published');
+    expect(publicStatus('active', [m('scheduled'), m('live')])).toBe('in_progress');
+    expect(publicStatus('active', [m('played'), m('scheduled')])).toBe('in_progress');
+    expect(publicStatus('closed', [m('played'), m('walkover'), m('cancelled')])).toBe('finished');
+    expect(publicStatus('completed', [])).toBe('finished');
+  });
+
+  it('reconoce el error de columna inexistente (migración sin aplicar)', () => {
+    expect(isMissingColumn({ code: '42703', message: 'column events.logo_url does not exist' })).toBe(true);
+    expect(isMissingColumn({ code: 'PGRST204' })).toBe(true);
+    expect(isMissingColumn({ code: '23505' })).toBe(false);
+    expect(isMissingColumn(null)).toBe(false);
+  });
+});
+
+describe('reglas de marcador por categoría', () => {
+  it('cada categoría puede tener su plantilla; no se cambia goles ↔ sets si esa categoría ya tiene marcador', async () => {
+    const { ev, cat } = await setup({ teams: 2, scoring: null });
+    const mini = seedCategory(ev.id);
+    seedTeams(ev.id, mini, 2);
+    const vol = { ...SCORING_PRESETS.voleibol_3.config };
+    await patchConfig(ev, { scoring_config: { ...vol, by_category: { [mini]: { best_of: 1, set_points: 15, deciding_set_points: 15 } } } });
+    const ev2 = (await loadEvent(ev.id))!;
+    await generateCategoryFixtures(ev2, mini, 'liga', { seed: 1 });
+    const [m] = await loadMatches(ev.id, mini);
+    expect((await performMatchAction(ev2, m.id, admin, { action: { type: 'correct', sets: [[15, 10]] } })).match).toMatchObject({ status: 'played', home_score: 1 });
+    await expect(patchConfig(ev2, { scoring_config: { ...vol, by_category: { [mini]: { model: 'goals' } } } })).rejects.toMatchObject({ code: 'modelo_en_uso' });
+    // otra categoría sin partidos sí puede cambiar
+    await patchConfig(ev2, { scoring_config: { ...vol, by_category: { [mini]: { best_of: 1, set_points: 15, deciding_set_points: 15 }, [cat]: { best_of: 5 } } } });
+    expect(db.tables.events.find((e) => e.id === ev.id)!.scoring_config.by_category[cat]).toEqual({ best_of: 5 });
   });
 });

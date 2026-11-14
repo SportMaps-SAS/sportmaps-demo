@@ -17,6 +17,14 @@ export interface ScheduleConfig {
   break_minutes?: number;
 }
 
+/** Una copa de la fase final: qué posiciones de cada grupo la juegan (ej. oro = 1.º y 2.º). */
+export interface CupConfig {
+  label: string;
+  positions: number[];
+  /** Partido por el tercer puesto de ESTA copa (si no viene, usa `third_place` del formato). */
+  third_place?: boolean;
+}
+
 export interface FormatConfig {
   draw?: 'random' | 'manual';
   seed?: number | string;
@@ -30,6 +38,8 @@ export interface FormatConfig {
   groups?: { count: number; advance: number };
   /** Copa/grupos: partido por el tercer puesto. */
   third_place?: boolean;
+  /** Grupos: varias copas (oro/plata…). Si viene, reemplaza a `groups.advance`. */
+  cups?: CupConfig[] | null;
   schedule?: ScheduleConfig | null;
 }
 
@@ -45,6 +55,8 @@ export interface FixtureRow {
   away_ref: string | null;
   court: string | null;
   scheduled_at: string | null;
+  /** Copa de la fase final (null = grupos/liga o copa única). */
+  cup_label: string | null;
 }
 
 export interface GenerateResult { rows: FixtureRow[]; seed: number; groups?: Record<string, string[]> }
@@ -86,18 +98,48 @@ export function validateFormat(format: Format, n: number, cfg: FormatConfig): st
   }
   if (format === 'grupos') {
     const g = cfg.groups;
-    if (!g || !Number.isInteger(g.count) || !Number.isInteger(g.advance)) return 'Indica cuántos grupos y cuántos equipos clasifican por grupo.';
+    const hasCups = Array.isArray(cfg.cups) && cfg.cups.length > 0;
+    if (!g || !Number.isInteger(g.count) || (!hasCups && !Number.isInteger(g.advance))) return 'Indica cuántos grupos y cuántos equipos clasifican por grupo.';
     if (g.count < 1 || g.count > 26) return 'Los grupos deben ser entre 1 y 26.';
     if (n < g.count * 2) return `Con ${g.count} grupos se necesitan al menos ${g.count * 2} equipos (2 por grupo).`;
     const minSize = Math.floor(n / g.count);
-    if (g.advance < 1 || g.advance > minSize) return `Por grupo pueden clasificar entre 1 y ${minSize} equipos.`;
-    if (g.count * g.advance < 2) return 'La fase final necesita al menos 2 clasificados.';
+    if (hasCups) {
+      const err = validateCups(cfg.cups!, g.count, minSize);
+      if (err) return err;
+    } else {
+      if (g.advance < 1 || g.advance > minSize) return `Por grupo pueden clasificar entre 1 y ${minSize} equipos.`;
+      if (g.count * g.advance < 2) return 'La fase final necesita al menos 2 clasificados.';
+    }
+  } else if (Array.isArray(cfg.cups) && cfg.cups.length > 0) {
+    return 'Las copas (oro, plata…) solo aplican al formato de grupos + fase final.';
   }
   if (cfg.schedule) {
     const s = cfg.schedule;
     if (!Number.isFinite(Date.parse(s.start))) return 'La fecha de inicio del calendario no es válida.';
     if (!Number.isInteger(s.courts) || s.courts < 1 || s.courts > 50) return 'Las canchas deben estar entre 1 y 50.';
     if (!Number.isInteger(s.slot_minutes) || s.slot_minutes < 5 || s.slot_minutes > 600) return 'La duración por partido debe estar entre 5 y 600 minutos.';
+  }
+  return null;
+}
+
+/** Copas: nombre único, posiciones 1..minSize sin repetir entre copas, al menos 2 equipos por copa. */
+export function validateCups(cups: CupConfig[], groupCount: number, minSize: number): string | null {
+  if (cups.length > 8) return 'Máximo 8 copas.';
+  const labels = new Set<string>();
+  const used = new Set<number>();
+  for (const c of cups) {
+    const label = String(c?.label ?? '').trim();
+    if (!label) return 'Ponle nombre a cada copa (por ejemplo «Copa oro»).';
+    if (label.length > 40) return 'El nombre de la copa puede tener máximo 40 caracteres.';
+    if (labels.has(label.toLowerCase())) return `La copa «${label}» está repetida.`;
+    labels.add(label.toLowerCase());
+    if (!Array.isArray(c.positions) || c.positions.length === 0) return `Indica qué posiciones juegan la ${label}.`;
+    for (const p of c.positions) {
+      if (!Number.isInteger(p) || p < 1 || p > minSize) return `En la ${label} las posiciones deben estar entre 1 y ${minSize} (el grupo más pequeño).`;
+      if (used.has(p)) return `El ${p}.º de cada grupo está en dos copas.`;
+      used.add(p);
+    }
+    if (c.positions.length * groupCount < 2) return `La ${label} necesita al menos 2 equipos.`;
   }
   return null;
 }
@@ -143,7 +185,7 @@ export function bracketOrder(size: number): number[] {
 export interface Entrant { team_id: string | null; ref: string | null; group?: string | null }
 
 /** Arma la ronda 1 con byes y las rondas siguientes vacías. `entrants` viene en orden de siembra. */
-export function buildKnockout(entrants: Entrant[], opts: { thirdPlace?: boolean; stageRoundOffset?: number } = {}): FixtureRow[] {
+export function buildKnockout(entrants: Entrant[], opts: { thirdPlace?: boolean; stageRoundOffset?: number; cupLabel?: string | null } = {}): FixtureRow[] {
   let size = 1; while (size < entrants.length) size *= 2;
   const seeds: (Entrant | null)[] = [...entrants];
   while (seeds.length < size) seeds.push(null);
@@ -152,7 +194,7 @@ export function buildKnockout(entrants: Entrant[], opts: { thirdPlace?: boolean;
   const rows: FixtureRow[] = [];
   const mk = (p: Partial<FixtureRow>): FixtureRow => ({
     stage: 'knockout', group_label: null, round: 1, slot: 1, home_team_id: null, away_team_id: null,
-    home_ref: null, away_ref: null, court: null, scheduled_at: null, ...p,
+    home_ref: null, away_ref: null, court: null, scheduled_at: null, cup_label: opts.cupLabel ?? null, ...p,
   });
   for (let i = 0; i < size / 2; i++) {
     const h = seeds[order[2 * i] - 1], a = seeds[order[2 * i + 1] - 1];
@@ -189,6 +231,11 @@ export function dealIntoGroups(ids: string[], count: number): Record<string, str
 
 /** Clasificados en orden de siembra: primeros de cada grupo, luego segundos, etc. (rotando para evitar cruces del mismo grupo). */
 export function groupQualifiers(count: number, advance: number): Array<{ pos: number; group: string }> {
+  return groupQualifiersFor(count, Array.from({ length: advance }, (_, i) => i + 1));
+}
+
+/** Igual que `groupQualifiers` pero con posiciones arbitrarias (ej. copa plata = 3.º y 4.º). */
+export function groupQualifiersFor(count: number, positions: number[]): Array<{ pos: number; group: string }> {
   const sameGroupInRound1 = (list: Array<{ pos: number; group: string }>): boolean => {
     let size = 1; while (size < list.length) size *= 2;
     const order = bracketOrder(size);
@@ -200,10 +247,10 @@ export function groupQualifiers(count: number, advance: number): Array<{ pos: nu
   };
   const build = (rot: number) => {
     const list: Array<{ pos: number; group: string }> = [];
-    for (let p = 1; p <= advance; p++) {
-      const shift = p === 1 ? 0 : (rot * (p - 1)) % count;
+    positions.forEach((p, i) => {
+      const shift = i === 0 ? 0 : (rot * i) % count;
       for (let g = 0; g < count; g++) list.push({ pos: p, group: LABELS[(g + shift) % count] });
-    }
+    });
     return list;
   };
   for (let rot = 1; rot <= Math.max(count, 1); rot++) {
@@ -270,7 +317,7 @@ export function generateFixtures(format: Format, teamIds: string[], cfg: FormatC
 
   const base = (p: Partial<FixtureRow>): FixtureRow => ({
     stage: 'league', group_label: null, round: 1, slot: 1, home_team_id: null, away_team_id: null,
-    home_ref: null, away_ref: null, court: null, scheduled_at: null, ...p,
+    home_ref: null, away_ref: null, court: null, scheduled_at: null, cup_label: null, ...p,
   });
 
   let rows: FixtureRow[] = [];
@@ -290,11 +337,16 @@ export function generateFixtures(format: Format, teamIds: string[], cfg: FormatC
         stage: 'group', group_label: label, round: ri + 1, slot: si + 1, home_team_id: pair[0], away_team_id: pair[1],
       }))));
     }
-    const qualifiers = groupQualifiers(count, advance);
-    rows.push(...buildKnockout(
-      qualifiers.map((q) => ({ team_id: null, ref: `G${q.pos}:${q.group}`, group: q.group })),
-      { thirdPlace: cfg.third_place },
-    ));
+    const cups = Array.isArray(cfg.cups) && cfg.cups.length > 0
+      ? cfg.cups.map((c) => ({ label: String(c.label).trim() as string | null, positions: c.positions, third: c.third_place ?? cfg.third_place }))
+      : [{ label: null as string | null, positions: Array.from({ length: advance }, (_, i) => i + 1), third: cfg.third_place }];
+    for (const cup of cups) {
+      const qualifiers = groupQualifiersFor(count, cup.positions);
+      rows.push(...buildKnockout(
+        qualifiers.map((q) => ({ team_id: null, ref: `G${q.pos}:${q.group}`, group: q.group })),
+        { thirdPlace: cup.third, cupLabel: cup.label },
+      ));
+    }
   }
 
   if (cfg.schedule) rows = assignSchedule(rows, cfg.schedule);

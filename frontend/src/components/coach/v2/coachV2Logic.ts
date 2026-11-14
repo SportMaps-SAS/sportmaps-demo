@@ -27,8 +27,13 @@ export interface RutasCoachV2 {
   informeMensual: string;
   informeEntreno: string;
   resultados: string;
+  /** Pantalla del partido (Programar → Convocar → Resultado → Evaluar → Reporte). */
+  partido: (matchId: string) => string;
+  /** Pantalla del partido para uno nuevo de ese equipo. */
+  partidoNuevo: (teamId: string) => string;
   misDeportistas: string;
-  avisos: string;
+  /** Pizarra libre: dibujar una jugada sin formulario (pantalla independiente). */
+  pizarra: string;
 }
 
 export type TabEquipo = 'deportistas' | 'partidos' | 'evaluar';
@@ -43,8 +48,10 @@ export const RUTAS_COACH_V2: RutasCoachV2 = {
   informeMensual: '/informe-mensual',
   informeEntreno: '/coach-reports/entreno-equipo',
   resultados: '/results',
+  partido: (matchId) => `/partidos/${encodeURIComponent(matchId)}`,
+  partidoNuevo: (teamId) => `/partidos/nuevo?equipo=${encodeURIComponent(teamId)}`,
   misDeportistas: '/students',
-  avisos: '/notifications',
+  pizarra: '/pizarra',
 };
 
 export const conRutas = (r?: Partial<RutasCoachV2>): RutasCoachV2 => ({ ...RUTAS_COACH_V2, ...(r ?? {}) });
@@ -118,6 +125,24 @@ export function comoDesdeEffort(v: number | null | undefined): ComoLeFue | null 
   return 'costo';
 }
 
+/**
+ * Qué decirle al profe cuando `submit_post_training_coach_rating` falla (B3).
+ * Antes todo error salía como «Revisa tu conexión», incluso cuando la base
+ * rechazaba la evaluación por una regla: el profe reintentaba sin fin. Los
+ * mensajes de la RPC ya vienen en español, así que se muestran tal cual.
+ */
+export function mensajeErrorEvaluar(error: { code?: string | null; message?: string | null } | null | undefined): string {
+  const code = error?.code ?? '';
+  const msg = (error?.message ?? '').trim();
+  if (!code && (!msg || /failed to fetch|networkerror|network request failed|load failed/i.test(msg))) {
+    return 'Sin conexión: la evaluación no se guardó. Revisa la señal e inténtalo de nuevo.';
+  }
+  if (code === '42501') return 'No se guardó: no figuras como entrenador de este equipo. Pídele a la administración que te asigne.';
+  if (code === 'P0002') return 'No se guardó: este entreno ya no existe.';
+  if (msg && (code === '55000' || code === '22023' || code === 'P0001')) return `No se guardó: ${conPunto(msg)}`;
+  return 'No se guardó la evaluación por un error del servidor. Inténtalo de nuevo en un momento.';
+}
+
 // ── Deportistas ─────────────────────────────────────────────────────────────
 
 export type TipoDeportista = 'child' | 'adult' | 'unregistered';
@@ -170,18 +195,21 @@ export function refuerzosDe(roster: Array<Pick<Deportista, 'id' | 'tipo' | 'user
 
 /**
  * `p_players` para `save_match_roster` (borra y reinserta TODO): los del roster
- * marcados + los refuerzos que siguen marcados, conservando rol, posición,
- * dorsal y minutos de la convocatoria anterior.
+ * marcados + los refuerzos (de la convocatoria anterior o recién buscados en
+ * esta sesión) que siguen marcados, conservando rol, posición, dorsal y
+ * minutos de la convocatoria anterior cuando ya existían.
  */
 export function armarConvocatoria(
   roster: Array<Pick<Deportista, 'id' | 'tipo' | 'userId'>>,
   seleccion: Set<string>,
   previos: ConvocadoPrevio[],
+  nuevosRefuerzos: Array<{ subject_type: 'child' | 'profile' | 'unregistered'; subject_id: string }> = [],
 ) {
   const previoDe = new Map(previos.map((p) => [claveConvocado(p), p]));
   const sujetos = [
     ...roster.map(sujetoDe),
     ...refuerzosDe(roster, previos).map((p) => ({ subject_type: p.subject_type, subject_id: p.subject_id })),
+    ...nuevosRefuerzos,
   ];
   const vistos = new Set<string>();
   return sujetos
@@ -345,6 +373,30 @@ export function momentoDelDia(equipos: EquipoHorario[], ahora: Date, sesionesHoy
     }
   }
   return { tipo: 'libre', proximo: mejor ? { equipo: mejor.equipo, franja: mejor.franja, enDias: mejor.enDias } : null };
+}
+
+/**
+ * Resumen de la semana (lunes a hoy) para Hoy: entrenos con lista, cuántos
+ * con la lista tomada y cuántos cerrados sin evaluar. Con «Hoy no entrenas» es
+ * lo que llena la pantalla (ítem 30).
+ */
+export function resumenSemana(sesiones: Array<Pick<SesionReciente, 'fecha' | 'cerrada' | 'evaluada'>>, ahora: Date): {
+  entrenos: number; conLista: number; sinEvaluar: number;
+} {
+  const lunes = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate() - ((ahora.getDay() + 6) % 7));
+  const desde = isoDia(lunes);
+  const hasta = isoDia(ahora);
+  const deLaSemana = sesiones.filter((s) => s.fecha >= desde && s.fecha <= hasta);
+  return {
+    entrenos: deLaSemana.length,
+    conLista: deLaSemana.filter((s) => s.cerrada).length,
+    sinEvaluar: deLaSemana.filter((s) => s.cerrada && !s.evaluada).length,
+  };
+}
+
+/** Equipos sin horario fijo (ítem 31: «Agregar horario» o pedírselo a la administración). */
+export function equiposSinHorario<T extends Pick<EquipoHorario, 'franjas'>>(equipos: T[]): T[] {
+  return equipos.filter((e) => e.franjas.length === 0);
 }
 
 /** Cierra con punto sin duplicarlo («p. m.» ya lo trae). */
@@ -610,4 +662,14 @@ export function rutasDePreview(base: string): Partial<RutasCoachV2> {
     equipo: (teamId, tab) => `${b}/equipos?equipo=${encodeURIComponent(teamId)}${tab ? `&tab=${tab}` : ''}`,
     evaluar: (sessionId) => `${b}/evaluar/${encodeURIComponent(sessionId)}`,
   };
+}
+
+/**
+ * Altas del profe en Equipos (Carmel/Besser 2026-11-07). Inscribir: crea
+ * deportistas (Carmel) o pasa de categoría (Besser). Ficha nueva: solo Carmel.
+ */
+/** ¿Qué altas deja la escuela al profe? (mismos flags que el BFF). */
+export function altasPermitidas(e: { coachCanCreateAthletes?: boolean; coachCanEditCategories?: boolean }): { inscribir: boolean; nuevo: boolean } {
+  const nuevo = e.coachCanCreateAthletes === true;
+  return { inscribir: nuevo || e.coachCanEditCategories === true, nuevo };
 }

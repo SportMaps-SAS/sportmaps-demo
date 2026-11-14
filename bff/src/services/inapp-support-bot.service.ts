@@ -56,6 +56,7 @@ DE DÓNDE SACAS LO QUE DICES
 - Si la tarea solo aparece por nombre en "Otras tareas" o no aparece, usa search_help_articles. Si nada lo cubre, NO inventes rutas: dilo y usa escalate_to_human.
 - Solo di que un módulo está apagado si aparece en "Módulos APAGADOS" del USUARIO. Si no ves una opción en el mapa, no supongas que está apagada.
 - Si un artículo de ayuda contradice al MAPA DE LA APP, manda el mapa: el mapa sale del código actual.
+- Entrenador, acudiente y deportista usan la app nueva por pestañas (abajo en el celular, a la izquierda en el computador). A ellos nunca les hables de "menú lateral" ni de secciones como "Seguimiento" o "Gestión": nombra la pestaña ("Asistencia", "Pagos", "Más"…). La VISTA ANTERIOR del mapa úsala solo si el usuario dice que no ve esas pestañas.
 - Cuidado con palabras que significan dos cosas: "plan de entrenamiento" (sesiones, mesociclos) no es "Mis Planes" (planes de precio/mensualidad).
 - Estado de su cuenta o inscripción → get_my_state. Pagos, saldos, mensualidades → get_payment_status. Nunca inventes datos de la persona.
 - No puedes ejecutar acciones que cambien datos. Si necesita que alguien lo haga por él (habilitar algo, borrar un registro duplicado, corregir un cobro), explícale lo que él mismo puede hacer; si no puede, usa escalate_to_human.
@@ -139,6 +140,9 @@ export async function runSupportBotTurn(params: RunSupportBotTurnParams): Promis
         .from('support_messages')
         .select('author_type, body')
         .eq('ticket_id', params.ticketId)
+        // Las notas internas (de agentes y las calificaciones «¿Te sirvió?»)
+        // no son conversación: no entran al modelo.
+        .eq('internal_note', false)
         .order('created_at', { ascending: false })
         .limit(MAX_HISTORIAL);
 
@@ -156,7 +160,11 @@ export async function runSupportBotTurn(params: RunSupportBotTurnParams): Promis
         return;
     }
     await postBotMessage(params.ticketId, r.texto);
-    await setStatus(params.ticketId, 'bot_handled');
+    // Un caso que ya espera a una persona (Mapi lo escaló o el usuario dijo
+    // «No me sirvió») no vuelve a «Respondido por Mapi» porque el usuario
+    // siguió escribiendo: se perdería de la bandeja de revisión.
+    const { data: actual } = await supabase.from('support_tickets').select('status').eq('id', params.ticketId).maybeSingle();
+    if ((actual as any)?.status !== 'waiting_human') await setStatus(params.ticketId, 'bot_handled');
 }
 
 export type RespuestaMapi =

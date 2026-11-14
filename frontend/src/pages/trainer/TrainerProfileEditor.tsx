@@ -209,7 +209,8 @@ export default function TrainerProfileEditor() {
                         onChange={async (e) => {
                           const file = e.target.files?.[0];
                           if (!file) return;
-                          const url = await uploadFile(file, 'avatars', 'trainer-profiles');
+                          if (!user?.id) return;
+                          const url = await uploadFile(file, 'avatars', `trainer-profiles/${user.id}`);
                           if (url) set('avatar_url', url);
                         }}
                       />

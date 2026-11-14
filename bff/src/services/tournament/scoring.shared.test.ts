@@ -234,3 +234,21 @@ describe('simulación: 200 partidos aleatorios nunca quedan inconsistentes', () 
     }
   });
 });
+
+describe('validateConfig: desempates y reglas por categoría', () => {
+  it('acepta los desempates nuevos de vóley y rechaza desconocidos o repetidos', async () => {
+    const { validateConfig } = await import('./scoring.shared');
+    expect(validateConfig({ tiebreakers: ['pts', 'set_diff', 'point_diff', 'set_ratio', 'point_ratio', 'head_to_head'] })).toBeNull();
+    expect(validateConfig({ tiebreakers: ['pts', 'goles_raros'] })).toMatch(/desconocido/);
+    expect(validateConfig({ tiebreakers: ['pts', 'pts'] })).toMatch(/repetido/);
+  });
+  it('valida cada categoría (Mini a 1 set de 15) y no deja anidar by_category', async () => {
+    const { validateConfig, resolveConfig } = await import('./scoring.shared');
+    const raw = { ...SCORING_PRESETS.voleibol_3.config, by_category: { mini: { best_of: 1, set_points: 15, deciding_set_points: 15 } } };
+    expect(validateConfig(raw)).toBeNull();
+    expect(resolveConfig(raw as any, 'mini')).toMatchObject({ model: 'sets', best_of: 1, set_points: 15 });
+    expect(resolveConfig(raw as any, 'otra')).toMatchObject({ best_of: 3, set_points: 25 });
+    expect(validateConfig({ by_category: { x: { best_of: 20 } } })).toMatch(/Categoría/);
+    expect(validateConfig({ by_category: { x: { by_category: {} } } })).toMatch(/no puede/);
+  });
+});

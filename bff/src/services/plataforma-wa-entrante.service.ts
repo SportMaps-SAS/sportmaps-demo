@@ -18,7 +18,7 @@
 import { supabase } from '../config/supabase';
 import type { ParsedInboundMessage } from './whatsapp.service';
 import {
-    leerCanal, plataformaHabilitada, testersDePlataforma, soloDigitos, registrarMensaje, enviarTextoPlataforma,
+    leerCanal, canalHabilitado, testersDePlataforma, soloDigitos, registrarMensaje, enviarTextoPlataforma,
     adminsDeEscuela, nombreDeEscuela, escuelaHabilitada, urlDeLaApp, COLUMNAS_SUSCRIPCION,
     type CanalPlataforma, type ClaseDeContacto, type Suscripcion,
 } from './plataforma-wa.service';
@@ -115,8 +115,9 @@ export async function atenderEntrantePlataforma(
     const texto = msg.textBody ?? '';
 
     const esTester = testersDePlataforma().has(numero);
-    const suscripciones = plataformaHabilitada() ? await suscripcionesDelNumero(numero) : [];
-    const comando = plataformaHabilitada() && msg.type === 'text' ? comandoDeSuscripcion(texto) : null;
+    const habilitado = await canalHabilitado();
+    const suscripciones = habilitado ? await suscripcionesDelNumero(numero) : [];
+    const comando = habilitado && msg.type === 'text' ? comandoDeSuscripcion(texto) : null;
 
     // Modo pruebas: todo lo del tester, salvo los comandos de suscripción
     // (ACTIVAR/PAUSAR/AYUDA) escritos FUERA de una sesión de prueba: así el
@@ -138,7 +139,7 @@ export async function atenderEntrantePlataforma(
         return 'prueba';
     }
 
-    if (!plataformaHabilitada()) return 'apagado';
+    if (!habilitado) return 'apagado';
 
     if (comando?.tipo === 'activar') return activar(canal, numero, comando.codigo, msg.waMessageId, ahora);
     if (comando?.tipo === 'desactivar') return desactivar(canal, numero, suscripciones);

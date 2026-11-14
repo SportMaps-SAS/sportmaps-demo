@@ -84,7 +84,7 @@ test('horizontal: tocar cada acción del toolbar abre su menú o panel dentro de
     const dib = d.getByRole('button', { name: /^Dibujar( \(\d+\))?$/ });
     await dib.tap();
     await expect(dib).toHaveAttribute('aria-pressed', 'true');
-    await expectInsideViewport(page.getByRole('button', { name: /Activar dibujo|Dibujando/ }), 'Hoja Dibujar');
+    await expectInsideViewport(page.getByRole('button', { name: /Mover fichas|Dibujando/ }), 'Hoja Dibujar');
     // Las pestañas se pueden recorrer (Material, Objeto, Medir…).
     await page.getByRole('tab', { name: 'Material' }).tap();
     await expect(page.getByRole('tab', { name: 'Material' })).toHaveAttribute('aria-selected', 'true');

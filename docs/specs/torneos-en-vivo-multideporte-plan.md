@@ -417,3 +417,179 @@ No toca la base ni cambia lo que ven los usuarios. Después viene F1, con la mig
 - **Privacidad:** Ley 1581, responsabilidad del club sobre el video e interruptor global.
 - **Avisos:** solo inicio y final; WhatsApp con opt-in por costo.
 - **Decisiones:** cada una con valor por defecto, ordenadas por lo que bloquean.
+
+---
+
+## Experiencia en vivo (agente «vivo», 2026-10-27)
+
+Lo que nos diferencia de Star Vivo / Copa Fácil: SportMaps conoce a las deportistas y a sus familias.
+Migración **`20261027180907_torneos_vivo_seguir_social_tiempo_real`** (SIN aplicar; aplicarla ANTES de desplegar el BFF — sin ella todo esto queda mudo pero no rompe nada).
+
+### Tiempo real (F4)
+- Tras cada acción NO duplicada, `performMatchAction` llama `onMatchActionApplied` (`tournament-follow.service.ts`), que publica UN mensaje Broadcast al canal **privado** `tlive:<slug>` por la API REST de Realtime (`live-push.ts`).
+- Payload mínimo: `{ match_id, version, status, home_score, away_score, sets[], started_at, finished_at, sent_at }`. Sin nombres.
+- Sin tormentas: por partido como mucho 1 mensaje cada 300 ms (el último estado gana); por canal ≤ 10/s. Nunca una versión menor que la ya enviada.
+- Canal privado: policy `tlive_broadcast_lectura` (SELECT a anon/authenticated solo para `tlive:%`). Sin policy de INSERT → nadie puede emitir desde el navegador. Realtime evalúa la policy al UNIRSE (una consulta por conexión), no por mensaje.
+- Cliente (`usePublicLive`): aplica el mensaje si `sent_at` es posterior al `server_time` del último polling. Polling de respaldo 3× más lento con push (30 s / 180 s). Al terminar un partido pide el payload completo a los 6–10 s (después de la caché de 5 s, con espera aleatoria). Pestaña oculta = suelta el canal.
+- Interruptor: `TOURNAMENT_LIVE_PUSH_DISABLED=true` (queda el polling).
+- Cuota de Realtime (Pro): cada mensaje cuenta por espectador conectado. Un partido de ~100 puntos con 300 espectadores ≈ 30 000 mensajes.
+
+### Seguir y avisos
+- `tournament_follows` (torneo completo o equipo). Con cuenta → avisos por el camino EXISTENTE: insert en `notifications` (category `tournament`) → trigger → despachador unificado → Web Push / FCM. **Dependencia:** el despachador de prod está atascado (arreglo en curso, `20261027150500_desatascar_cola_notificaciones`); mientras tanto los avisos quedan en la campana. No se tocó `notifications-dispatch.job` ni el trigger.
+- Web Push exige cuenta (`push_subscriptions.user_id`). Sin cuenta: **Agregar al calendario** — `GET /public/:slug/calendar.ics[?team=]` (sale de la caché de `publicLive`, alarma 15 min antes).
+- Avisos: «⏰ … empieza en 15 min en la cancha 3» (cron cada 5 min, ventana +10/+20 min, solo Render, `DISABLE_TOURNAMENT_REMINDERS_CRON`), «🏐 Empezó Monsters vs Orange», «Final: Monsters 2-0 Orange (25-22, 25-20)».
+- Destinatarios: seguidores del torneo o de uno de los equipos + familias y deportistas de la planilla (en «final» solo seguidores: a la planilla ya le llega `notifyMatchFinished`). `tournament_match_notices` (PK partido+tipo, `ON CONFLICT DO NOTHING`) garantiza un aviso por partido y tipo aunque haya reintentos o dos BFF. Una corrección posterior NO vuelve a avisar.
+
+### Inicio V2 de familias y deportistas
+- `GET /me/today` → partidos de HOY (día de Bogotá) de los equipos donde está la persona (`event_team_members.profile_id`) o sus hijos (`children.parent_id`). Tarjeta `HoyJuegaCard` en ParentHomeV2 y AthleteHomeV2. Limitación: hijos vinculados por otros caminos (no `parent_id`) no salen.
+
+### Tarjeta para compartir
+- PNG 1080×1350 en el cliente (`live/shareCard.ts`): torneo, fase (+ `cup_label`), escudos (`*_logo_url` del payload v2 si existen; si no, iniciales), marcador y sets, MVP, «Powered by SportMaps». Botón `ShareResultButton` (Web Share con archivo; si no, descarga). En el anotador aparece al terminar el partido.
+
+### Social (comentarios, medios, noticias)
+- `GET /public/:slug/matches/:id/social` → `{ comments[], media[], mvp, player_stats }` (caché 10 s). `GET /public/:slug/social` (torneo).
+- Comentarios: con cuenta (nombre de pila + inicial, marca de verificado) o con nombre + reto «¿Cuánto es 3 + 5?» firmado (HMAC, ≥ 3 s, ≤ 30 min, `TOURNAMENT_SOCIAL_SECRET`), campo trampa, sin enlaces, filtro de groserías, 1 cada 20 s por dispositivo y 6/min por IP. Moderación: `PATCH /school/:id/comments/:id { hide | show | delete }`.
+- Medios: el organizador o el anotador sube fotos con URL firmada al bucket `tournament-media` (lectura pública; SIN policies de escritura para clientes) o pega un enlace de video; noticias solo el organizador. Pestañas «Todo / Noticias».
+
+### MVP y estadísticas por jugadora
+- Solo para equipos **con planilla** (`event_team_members`). Sin planilla, `mvp.available = false` (no hay MVP por jugadora).
+- Nombre público: solo nombre de pila; inicial del apellido solo si consta que es mayor de edad. La planilla no tiene número de camiseta (si se agrega, va como `#7`).
+- Voto: uno por dispositivo y partido (hash de dispositivo+partido), 30/min por IP, abierto en juego y hasta 3 h después. El organizador puede elegir (`PUT /school/:id/matches/:id/mvp`) y su elección manda.
+- Estadísticas (ace / ataque / bloqueo; puntos = suma) atadas a `point_index`: cuentan solo si el punto sigue en la secuencia y lo ganó el lado de la jugadora. Deshacer/corregir borra las etiquetas de los puntos que ya no existen. Ranking: `GET /public/:slug/player-stats`, y también en `player_stats` del payload de `/public/:slug/live` (hecho por «datos»).
+
+## Multideporte: plantillas, anotador y planilla (agente «deportes», 2026-10-27)
+
+Motor: `bff/src/services/tournament/scoring.shared.ts` (copia idéntica en `frontend/src/lib/tournamentScoring.ts`, prueba de paridad en `frontend/src/test/tournamentScoringParity.test.ts`). Catálogo de deportes de torneo: `frontend/src/lib/tournamentSports.ts`. Cada plantilla nueva guarda su clave en `scoring_config.preset`, así el anotador y la planilla saben el deporte sin leer `events.sport`. Los torneos existentes (sin `preset`) siguen igual: fútbol 3-1-0 y las plantillas viejas no cambiaron (pádel sigue contando games como unidad, con tope 7).
+
+### Tabla deporte → plantilla → anotador → tabla de posiciones
+
+| Deporte | Plantilla(s) (`preset`) | Anotador | Tabla de posiciones (puntos · desempates) |
+|---|---|---|---|
+| Fútbol, Futsal | `futbol` | Goles +1; en eliminatoria un empate pide **penales** | 3-1-0 · pts, DG, GF, enfrentamiento directo |
+| Balonmano | `balonmano` (2-1-0), `balonmano_3` (3-1-0) | Goles; empate en grupos; en eliminatoria «lanzamientos de 7 m» | 2-1-0 / 3-1-0 · pts, DG, GF, directo |
+| Hockey | `hockey` | Goles; en eliminatoria shoot-out / penales | 3-1-0 · pts, DG, GF, directo |
+| Baloncesto | `baloncesto` | Puntos; sin empate (se juega tiempo extra, no penales) | 2-1 · pts, DG, GF, directo |
+| Voleibol | `voleibol_3`, `voleibol_5` | Puntos por set; el set se cierra solo | 3/2/1/0 (3-0 y 3-1 = 3; 3-2 = 2 y 1) · pts, victorias, ratio sets, ratio puntos, directo |
+| Vóley playa | `voley_playa` (21, decisivo 15) | Igual que vóley | Igual que vóley |
+| Futvóley | `futvoley` (18, decisivo 15) | Igual que vóley | Igual que vóley |
+| Tenis de mesa | `tenis_mesa` (3 de 5 a 11) | Puntos por set | 2-0 · pts, ratio sets, ratio puntos, directo |
+| Bádminton | `badminton` (21, tope 30) | Puntos por set | 2-0 · igual |
+| Pádel | `padel` (games, tope 7) | Games como unidad (sin cambios) | 2-0 · igual |
+| Tenis | `tenis` (2 de 3, tie-break a 7 en 6-6), `tenis_super` (3.º set = super tie-break a 10) | **Puntos 15-30-40-AD**, games y tie-break se cuentan solos; sets se muestran «6-4 · 7-6(4) · [10-8]» | 2-0 · pts, ratio sets, ratio **games** (PF/PA = games), directo |
+| Beach tennis | `beach_tennis` (1 set), `beach_tennis_3` (2 de 3), punto de oro | Como tenis, con punto de oro a 40-40 | 2-0 · igual que tenis |
+| Ajedrez | `ajedrez` | Tres botones: **1-0 · ½-½ · 0-1** (blancas = local). Marcador en medios puntos (2-0, 1-1, 0-2); en eliminatoria tablas → armagedón | 1 · ½ · 0 · pts, directo, victorias, luego **Buchholz y Sonneborn-Berger** (`extra_tiebreakers`) |
+| Bochas | `bochas` (a 12), `bochas_13` (a 13) | Un solo «set» a 12/13 con diferencia de 1 (+1 por bocha) | 2-0 · pts, ratio puntos, directo |
+| Críquet | `criquet` (20 overs) | Manual por innings: runs / wickets / overs por equipo; gana quien más runs; empate posible; en eliminatoria «super over» | 2-1-0 · pts, victorias, diferencia de runs, directo |
+| Videojuegos | `videojuegos_mapas` (mejor de 3), `videojuegos_mapas_5`, `videojuegos_goles` (FIFA) | Mapas: cada toque = un mapa ganado. FIFA: goles con empate | Mapas 3-0 · pts, victorias, ratio mapas, directo. FIFA 3-1-0 |
+| Deporte genérico | `generico` (con empate 3-1-0), `generico_sin_empate` (2-0) | Marcador numérico libre | Según plantilla · pts, DG, GF, directo |
+| Atletismo | — (modo **ranking por marca**, no «A vs B») | `MarksScorer`: marca por participante (tiempo, distancia, altura, puntos), hasta 3 intentos, DNS/DNF/DQ | Posición por marca; puntos por posición (10-8-6-5-4-3-2-1); tabla por delegación sumando pruebas |
+
+Lo que no cabe en la secuencia de puntos va en `live_state.detail` (`penalties: [local, visitante]`, `innings: [{ side, runs, wickets, overs }]`); solo lo cambia «corregir». El servicio en vivo ya lo guarda y lo lee (`stateOf` y `p_live_state`).
+
+### Pendiente para «datos» (no editado por este agente)
+1. `standings.shared.ts`: después de `order(...)`, si `cfg.extra_tiebreakers?.length`, llamar `orderWithExtraTiebreakers(rows, matches, cfg)` (exportado por el motor) y devolver `buchholz` / `sonneborn_berger` en cada fila para mostrarlos en la tabla de ajedrez.
+2. Mostrar puntos de ajedrez con `formatHalfPoints(GF)` (GF está en medios puntos; `Pts` ya viene en 1 · ½ · 0). En tablas y tarjetas públicas («publico»): si `config.half_points`, el marcador 2-0 se muestra «1-0» y 1-1 «½-½».
+3. Sets de tenis: `SetDto` trae `tb` y `super`; en `tournamentDisplay.formatSetsLine` mostrar «7-6(4)» y «[10-8]» (helper `setScoreText` exportado por `LiveScorer.tsx`).
+4. Críquet: mostrar `live_state.detail.innings` como «156/7 (20)».
+5. `PatchTournamentSchema` (events.route.ts) no acepta `competition_format`: el asistente pasa el formato elegido en la URL (`?formato=liga|grupos|copa&nuevo=1`) para que el detalle lo preseleccione en `FixtureGeneratorDialog`.
+6. `POST /api/v1/events/school-tournament` exige fecha, hora, dirección y ciudad: el asistente manda valores de borrador (fecha +14 días, 08:00, «Por definir»). Si se vuelven opcionales, quitar esos valores en `tournamentWizard.logic.ts`.
+7. El motor en vivo (`/tournament-live/school/:id/...`) solo atiende torneos de escuela; el organizador crea con `POST /api/v1/events` y su plantilla queda en la URL (`&reglas=`) hasta que exista un endpoint de config para organizador.
+8. Gate: el frontend lo concentra en `frontend/src/lib/tournaments/tournamentAccess.ts` (`useTournamentAccess` / `tournamentAccessFor`). `CreateTournamentPage` aún usa `hasAddon('tournaments')` directo: cambiarlo al helper al integrar. En el BFF el gate sigue en `POST /school-tournament` (`v_school_entitlements.has_tournaments`).
+
+### Asistente rápido de creación
+`frontend/src/components/tournaments/create/TournamentWizard.tsx` (lógica pura en `tournamentWizard.logic.ts`). Rutas: `/school/tournaments/nuevo-rapido` (admin de la escuela) y `/organizer/torneo-rapido` (organizador). Para enchufarlo: botón «Crear torneo» de la sección Torneos → `/school/tournaments/nuevo-rapido`. Cuatro pasos de una pantalla: nombre → tipo («Un solo torneo» = categoría General; «Con categorías» con sugerencias por edad y rama) → deporte (19, con emoji; si hay varias plantillas, se elige) → formato («Todos contra todos» = `liga`, «Grupos + eliminatoria» = `grupos`, «Eliminatoria» = `copa`; «Puedes cambiarlo después»). Crea en borrador, guarda la plantilla con `PATCH /tournament-live/school/:id/config {preset}` y lleva al detalle. No asume deportistas de la escuela: los equipos (internos o invitados) se agregan después.
+
+### Planilla de juego (PDF)
+`components/tournaments/planilla/`: `planillaModel.ts` (qué tablas lleva cada deporte, puro), `planillaPdf.ts` (jsPDF, A4) y `<PlanillaPartidoButton match tournamentTitle sport loadRoster />`. Precargada con equipos, fase, cancha, hora y nómina (`GET /events/school-tournaments/:id/matches/:matchId/rosters`, solo organizador) o en blanco sin `match`. Voleibol: nóminas, sets con tiempos y cambios, rotaciones I-VI por set. Fútbol / balonmano / hockey: nóminas con goles y tarjetas, resultado por tiempo y penales, goles, tarjetas, cambios. Baloncesto: faltas F1-F5, puntos por cuarto, faltas de equipo y tiempos muertos. Raqueta: sets con tie-break y quién saca. Ajedrez: planilla de 80 jugadas y resultado. Críquet: bateo, resumen por innings y lanzadores. Atletismo: prueba con intentos y posición. Ya está en el anotador; falta ponerlo en cada partido del panel (`SchoolTournamentDetailPage` / `TournamentResultsPanel`, de «datos»).
+
+### Atletismo: ranking por marca
+Motor puro `bff/src/services/tournament/marks.shared.ts` (copia `frontend/src/lib/tournamentMarks.ts`, con paridad): `rankByMark(entries, { unit, points_by_position })`, `teamPoints`, `parseMark` («10,52», «1:02.35», «6.45 m»), `formatMark`. Reglas: tiempo menor es mejor y el empate comparte posición; distancia desempata con la segunda mejor marca, luego la tercera; altura con menos fallos en la altura ganada y luego totales; DNS/DNF/DQ/NM sin posición. Los empatados se reparten los puntos de los puestos que ocupan. Anotador `MarksScorer.tsx` (controlado, sin guardar todavía).
+
+**Persistencia (siguiente fase, sin migración escrita):** tabla `tournament_mark_events` (event_id, category_id, name, unit text CHECK in ('time','distance','height','points'), attempts int, points_by_position int[], status text CHECK) y `tournament_marks` (mark_event_id, team_id → tournament teams, participant_name, marks jsonb, status text CHECK, failures_at_best, failures_total, version). RLS: lectura pública solo si el evento es público (vía vista con columnas publicables, como `v_school_staff_publico`); escritura solo por RPC `SECURITY DEFINER` con `user_staff_school_ids()` sobre la escuela del evento o por token de anotador, con `SET search_path = pg_catalog, public, pg_temp` y `GRANT EXECUTE` explícito. Endpoints: `GET/PUT /tournament-live/school/:id/mark-events/:meId/marks` y la versión con token del anotador.
+
+
+## Datos y administración (agente «datos», 2026-10-27)
+
+Migraciones **escritas, sin aplicar** (las aplica la sesión principal, en este orden, después de `20261027180907` de «vivo»):
+
+| Migración | Qué hace |
+|---|---|
+| `20261027180825_torneos_equipos_externos_logos_copas` | `event_teams.delegation_id` NULL-able + `is_external`, `club_name`, `short_name` (≤4), `logo_url`; CHECK externo ⇔ sin delegación; único por nombre en la categoría para externos. `events`: `logo_url`, `end_date`, `rules_url`, `venue_name`, `venue_maps_url`, `organizer_name` (portada = `banner_url`). `tournament_sponsors`. `tournament_matches.cup_label`. RPC `reschedule_tournament_match` (cambio + log). Helper `is_event_school_admin()` (usa `user_admin_school_ids()`). Cierra el `FOR ALL` sin `WITH CHECK` de `teams_school_manage`. |
+| `20261027191314_torneos_jugadores_carnes_adjuntos` | `event_team_members` para externos (delegation_id NULL-able + `is_external`) y ficha (apodo, posición, número, nacimiento, teléfono, foto, `extra` jsonb, suspensión, `card_version`). `events.player_form`, `card_config`, `attachments`. `tournament_team_invites` (link del delegado, hash del token, avance, consentimiento, prospecto `lead_origin='torneo'`). Cierra el `FOR ALL` sin `WITH CHECK` de `members_school_manage`. |
+
+**Por qué columna y no tabla aparte para los externos:** `tournament_matches.home/away_team_id` ya apuntan a `event_teams`; con una columna el sorteo, la tabla y el avance de llaves tratan igual a internos y externos, sin FK polimórfica. Las fotos y logos van al bucket existente `school-assets` (carpeta `logos/<school_id>/…`, escritura solo del admin; el delegado sin cuenta sube con URL firmada del BFF). No se reutiliza `school_signup_leads` para los prospectos: esa tabla es de prospectos *de una escuela* (alumnos con clase de prueba), no de clubes para SportMaps.
+
+**Permisos del organizador:** un solo lugar, `bff/src/services/tournament/tournament-access.ts` (`assertTournamentOrganizer` / `schoolOrganizesTournament`). Hoy = admin de la escuela dueña; el rol organizador entra cambiando solo ese archivo. Lo público, el anotador y el link del delegado no pasan por `school_members`. (`tournament-follow.route.ts` de «vivo» todavía tiene su propio `ownedEvent`: conviene que lo importe de ahí al integrar.)
+
+**BFF compatible antes de aplicar:** las lecturas caen a las columnas viejas si PostgREST responde columna inexistente (`42703` / `PGRST204`); crear y editar torneos omiten la identidad nueva. Lo nuevo (externos, jugadores, patrocinadores, links) sí exige las migraciones.
+
+### Endpoints nuevos (`/api/v1/tournament-live`)
+- Organizador: `GET/POST/PATCH/DELETE /school/:id/teams…` (externos: `POST /teams/external` uno o lista), `…/sponsors`, `PATCH /school/:id/matches/:matchId/schedule` (hora y cancha, log `reschedule`), `GET/PUT /school/:id/player-form`, `GET/POST /school/:id/teams/:teamId/players`, `POST …/players/from-school`, `GET /school/:id/school-athletes`, `PATCH/DELETE /school/:id/players/:pid`, `POST …/reissue-card`, `GET/PUT /school/:id/card-config`, `GET /school/:id/cards`, `POST /school/:id/roster-photo` (OCR, no guarda), `GET /school/:id/invites`, `POST /school/:id/teams/:teamId/invite`, `POST …/invites/:iid/revoke`, `PATCH …/invites/:iid/payment`, `GET …/invites/:iid/proof`.
+- Delegado sin cuenta (token): `GET /invite/:token`, `PATCH /invite/:token/team`, `POST/DELETE /invite/:token/players…`, `POST /invite/:token/upload-url` (logo, foto o comprobante), `POST /invite/:token/roster-photo`, `POST /invite/:token/submit` (reglamento + consentimiento obligatorios).
+- Público: `GET /public/:slug/validate/:token` (validación en cancha: nombre de pila, foto si se permite, equipo, categoría, `habilitado|no_habilitado` con razones; nunca documento, teléfono ni nacimiento; `no-store`).
+- `PATCH /api/v1/events/school-tournaments/:id` acepta además `logo_url`, `banner_url`, `end_date`, `rules_url`, `venue_name`, `venue_maps_url`, `organizer_name`, `attachments[{name,url}]` y `slug` (único, 409 `slug_en_uso`). `PUT …/categories` **conserva los ids** (antes borraba y reinsertaba y dejaba equipos/partidos/inscripciones con `category_id` NULL); quitar una categoría en uso da 409.
+
+### Motor
+- **Varias copas:** `format_config.cups = [{ label, positions, third_place? }]` en «grupos»; cada copa es un cuadro con su `cup_label`; el ganador y el 3.º puesto avanzan solo dentro de su copa.
+- **Desempates de vóley:** `set_diff`, `point_diff`, `set_ratio`, `point_ratio` en cada fila y como claves de `tiebreakers` (validadas). Cociente `null` = nada en contra («MAX»).
+- **Reglas por categoría:** `scoring_config.by_category[catId]` validado; no se cambia goles↔sets en una categoría con marcador; elegir otra plantilla del torneo conserva `by_category`.
+
+### Payload público v2 — `GET /api/v1/tournament-live/public/:slug/live`
+Agrega sin quitar nada (caché 5 s + ETag igual que antes). `tournament` es el mismo objeto que `event`.
+
+```json
+{
+  "payload_version": 2,
+  "event": { "…": "igual que tournament" },
+  "tournament": {
+    "id": "8f0c…", "title": "Copa Monster 2026", "sport": "Voleibol", "city": "Medellín", "event_date": "2026-11-07",
+    "school_name": "Monster Volley", "live_enabled": true, "stream_url": "https://youtu.be/abc", "format": "grupos",
+    "status": "in_progress",
+    "start_date": "2026-11-07", "end_date": "2026-11-08",
+    "cover_url": "https://<proyecto>.supabase.co/storage/v1/object/public/school-assets/covers/<school>/torneos/<id>/portada.jpg",
+    "logo_url": "https://<proyecto>.supabase.co/storage/v1/object/public/school-assets/logos/<school>/torneos/<id>/logo.png",
+    "organizer_name": "Monster Volley",
+    "rules_url": "https://drive.google.com/reglamento",
+    "venue": { "name": "Coliseo Iván de Bedout", "address": "Cra 70 #1, Medellín", "maps_url": "https://www.google.com/maps/search/?api=1&query=6.25,-75.59" },
+    "sponsors": [ { "id": "s1", "name": "Bebidas El Nevado", "logo_url": "https://…/sp.png", "url": "https://elnevado.co/", "tier": "principal" } ],
+    "attachments": [ { "name": "Programación", "url": "https://drive.google.com/programacion.pdf" } ]
+  },
+  "categories": [ { "id": "c-sub14", "name": "Infantil · A · Sub 14 · Femenina" } ],
+  "teams": [
+    { "id": "t1", "name": "Monster A", "category_id": "c-sub14", "short_name": "MON", "logo_url": "https://…/mon.png", "is_external": false, "club_name": "Monster Volley" },
+    { "id": "t2", "name": "Halcones", "category_id": "c-sub14", "short_name": "HAL", "logo_url": null, "is_external": true, "club_name": "Club Halcones" }
+  ],
+  "matches": [
+    {
+      "id": "m9", "category_id": "c-sub14", "stage": "knockout", "group_label": null, "cup_label": "Copa oro", "round": 1, "slot": 1,
+      "home_team_id": "t1", "away_team_id": "t2", "home_name": "Monster A", "away_name": "Halcones",
+      "home_label": null, "away_label": null, "is_bye": false,
+      "home_score": 2, "away_score": 1, "status": "played", "scheduled_at": "2026-11-08T14:00:00.000Z", "court": "Cancha 1",
+      "started_at": "…", "finished_at": "…", "sets": [ { "home": 25, "away": 20, "closed": true, "deciding": false } ], "model": "sets",
+      "home_logo_url": "https://…/mon.png", "away_logo_url": null, "home_short_name": "MON", "away_short_name": "HAL"
+    }
+  ],
+  "standings": {
+    "c-sub14": {
+      "model": "sets", "standings": [],
+      "groups": { "A": [ {
+        "team_id": "t1", "team_name": "Monster A", "P": 3, "W": 3, "D": 0, "L": 0, "GF": 6, "GA": 1, "GD": 5, "Pts": 8,
+        "SW": 6, "SL": 1, "PF": 160, "PA": 120, "set_diff": 5, "point_diff": 40, "set_ratio": 6, "point_ratio": 1.333,
+        "logo_url": "https://…/mon.png", "short_name": "MON", "is_external": false
+      } ] }
+    }
+  },
+  "player_stats": [ { "member_id": "p1", "name": "Ana", "team_id": "t1", "ace": 3, "attack": 7, "block": 1, "points": 11 } ],
+  "server_time": "2026-11-08T15:02:11.000Z"
+}
+```
+
+`status` se deriva (no hay columna): `draft` → borrador; `cancelled` → cancelado; `completed` o todos los partidos reales terminados → `finished`; algún partido en juego o jugado → `in_progress`; si no, `published`. Los equipos y filas nunca traen datos de personas; los jugadores solo salen con nombre público en `player_stats`.
+
+### Pendiente
+- Pasarela de pago en el link del delegado: hoy es «Pago por transferencia» con comprobante que el organizador confirma.
+- Código de verificación por WhatsApp/correo para el delegado: hoy basta el token.
+- Marcas de atletismo (`MarksScorer` de «deportes»): sin tablas ni endpoints todavía.
+- Motor en vivo para torneos del ORGANIZADOR (rol `organizer`, sin escuela): `requireAuth` exige membresía en `school_members`, así que las rutas `/school/:id/*` no lo dejan pasar. Hace falta un middleware de organizador y abrir `assertTournamentOrganizer` (tournament-access.ts) para `events.creator_id`; mientras, el asistente deja la plantilla en `&reglas=`.
+- `tournament-follow.route.ts` aún tiene su propio `ownedEvent`: cambiarlo por `assertTournamentOrganizer`.
+- Al llegar con `?formato=` al detalle, abrir el generador con ese formato preseleccionado (el alta ya guarda `competition_format`).

@@ -54,6 +54,16 @@ export interface AgendaItem {
   tag: string | null;
   /** Nota corta del evento («Llevar el uniforme azul»). */
   note: string | null;
+  // ── Para el detalle al tocar la fila (opcionales) ──
+  /** Equipo del evento: con él se encuentra la convocatoria del partido. */
+  teamId?: string | null;
+  /** Hijos a los que aplica. */
+  childIds?: string[];
+  end?: Date | null;
+  /** Lugar completo (sin mezclar con el equipo ni el profe). */
+  location?: string | null;
+  /** Descripción completa del evento (la nota es solo la primera línea). */
+  description?: string | null;
 }
 
 export interface AgendaDay {
@@ -231,6 +241,7 @@ export function buildAgenda(params: {
       if (!ev.team_id && !ev.school_id && ev.user_id && ev.user_id === userId) tag = 'Tuyo';
     }
 
+    const fin = ev.end_time ? new Date(ev.end_time) : null;
     items.push({
       key: `ev-${ev.id}`,
       start: d,
@@ -240,6 +251,11 @@ export function buildAgenda(params: {
       subtitle,
       tag,
       note: shortNote(ev.description),
+      teamId: ev.team_id ?? null,
+      childIds: kids.map((k) => k.id),
+      end: fin && !Number.isNaN(fin.getTime()) ? fin : null,
+      location: ev.location || team?.location || null,
+      description: (ev.description ?? '').trim() || null,
     });
   }
 
@@ -268,6 +284,11 @@ export function buildAgenda(params: {
           subtitle: sub([team.name, team.location, team.coachName ? `Profe ${firstName(team.coachName)}` : null]),
           tag: null,
           note: null,
+          teamId: team.id,
+          childIds: kids.map((k) => k.id),
+          end: null,
+          location: team.location,
+          description: null,
         });
       }
     }

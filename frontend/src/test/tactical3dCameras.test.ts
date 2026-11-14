@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { BOARD_H, BOARD_W, TACTICAL_SPORTS, type TacticalSport } from '@/lib/school/tacticalSports';
 import { computeLive, court3D, EYE_HEIGHT_M, figureScale, fixedCameraPose, toMeters, type Court3D, type Vec3 } from '@/lib/school/tactical3d';
 import {
-  blendPose, CAMERA_KINDS, cameraKindLabel, cameraPose, createDirector, directorShot, DRONE_PERIOD_S,
+  ballCamOffsets, blendPose, CAMERA_KINDS, cameraKindLabel, cameraPose, createDirector, directorShot, DRONE_PERIOD_S,
   finishZoneM, longPassM, resolveCameraKind, smoothAngle, smoothToward, spiderHeightM, transitionMs, tvPanLimitM,
   type CameraContext, type CameraKind,
 } from '@/lib/school/tactical3dCameras';
@@ -51,12 +51,13 @@ describe('cámaras: catálogo y nombres por deporte', () => {
 
   it('arco / aro / fondo según el deporte', () => {
     expect(cameraKindLabel('detras', 'futbol')).toBe('Detrás del arco');
-    expect(cameraKindLabel('rival', 'futbol')).toBe('Arco rival');
-    expect(cameraKindLabel('rival', 'balonmano')).toBe('Arco rival');
+    // «Detrás del arco» y la del rival ya no son espejo: la del rival es la toma baja del arquero.
+    expect(cameraKindLabel('rival', 'futbol')).toBe('Ojos del arquero rival');
+    expect(cameraKindLabel('rival', 'balonmano')).toBe('Ojos del arquero rival');
     expect(cameraKindLabel('detras', 'baloncesto')).toBe('Detrás del aro');
-    expect(cameraKindLabel('rival', 'baloncesto')).toBe('Aro rival');
+    expect(cameraKindLabel('rival', 'baloncesto')).toBe('Bajo el aro rival');
     expect(cameraKindLabel('detras', 'voleibol')).toBe('Fondo propio');
-    expect(cameraKindLabel('rival', 'voleibol')).toBe('Fondo rival');
+    expect(cameraKindLabel('rival', 'voleibol')).toBe('Fondo rival, a ras');
     expect(cameraKindLabel('tv', 'voleibol')).toBe('Transmisión TV');
     expect(cameraKindLabel('spider', 'futbol')).toBe('Spider-cam');
   });
@@ -134,7 +135,23 @@ describe.each(['futbol', 'voleibol', 'baloncesto'] as TacticalSport[])('poses en
     expect(riv.position.z).toBeLessThan(-(L / 2 - 1));
     expect(own.target.z).toBeLessThan(own.position.z);
     expect(riv.target.z).toBeGreaterThan(riv.position.z);
-    close(riv.position.y, own.position.y);
+    // Ya no son espejo: la del rival es BAJA (ojos del arquero) y mira a la zona de definición.
+    expect(riv.position.y).toBeLessThan(own.position.y);
+    expect(riv.position.y).toBeLessThan(Math.max(4, L * 0.05));
+    expect(riv.target.z).toBeLessThan(0);
+  });
+
+  it('Detrás del arco mira más allá del medio campo (menos césped vacío delante)', () => {
+    const own = cameraPose('detras', ctxOf(c))!;
+    if (sport === 'baloncesto') return; // el aro tiene su propia toma
+    expect(own.target.z).toBeLessThan(0);
+  });
+
+  it('Seguir balón mira bien adelante del balón', () => {
+    const ball = { x: 0, y: 0.2, z: 0 };
+    const p = cameraPose('balon', ctxOf(c, { ball }))!;
+    const { back } = ballCamOffsets(c);
+    close(p.target.z, -back * 0.8, 1e-9);
   });
 
   it('Seguir balón: detrás del balón (+z) y mirando hacia el ataque (−z)', () => {

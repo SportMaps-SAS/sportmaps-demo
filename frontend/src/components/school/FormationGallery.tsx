@@ -24,6 +24,8 @@ import {
   DEFAULT_GROUP,
   filterFormations,
   formationGroups,
+  galleryCaption,
+  galleryFormations,
   mirrorPoint,
   playerCounts,
 } from '@/lib/school/tacticalFormationGallery';
@@ -43,6 +45,9 @@ export interface FormationGalleryProps {
   /** Clases del botón (las de la barra de la pizarra). */
   triggerClassName?: string;
   disabled?: boolean;
+  /** Modalidad de la cancha (jugadores por lado): la galería abre filtrada a
+   *  ella (F7 → formaciones de 7). null/sin dato = todas. */
+  initialPlayers?: number | null;
 }
 
 // ─── Miniatura ──────────────────────────────────────────────────────────────
@@ -162,8 +167,11 @@ const chipClass = (on: boolean) =>
   `${CHIP} ${on ? 'border-emerald-500 bg-emerald-600 text-white' : 'border-border bg-background hover:bg-muted'}`;
 
 export function FormationGallery({
-  sport, formations, currentKey, rivalCount, onApplyOwn, onApplyRival, onClearRival, triggerClassName, disabled,
+  sport, formations: catalog, currentKey, rivalCount, onApplyOwn, onApplyRival, onClearRival, triggerClassName, disabled,
+  initialPlayers = null,
 }: FormationGalleryProps) {
+  // Fútbol 11 suma las de F7 y F5 (llevadas a la cancha grande).
+  const formations = useMemo(() => galleryFormations(sport, catalog) as BoardFormation[], [sport, catalog]);
   const [open, setOpen] = useState(false);
   const [team, setTeam] = useState<FormationTeam>('own');
   const [query, setQuery] = useState('');
@@ -201,6 +209,8 @@ export function FormationGallery({
           // Cada apertura arranca sin búsqueda (si no, «4231» de la vez anterior
           // escondería todo lo demás al cambiar a la pestaña Rival).
           setQuery('');
+          // Abre en la modalidad de la cancha (F7 → las de 7); «Todos» quita el filtro.
+          setPlayers(initialPlayers && counts.includes(initialPlayers) ? initialPlayers : null);
           setOpen(true);
         }}
         disabled={disabled}
@@ -216,7 +226,7 @@ export function FormationGallery({
           <DialogHeader className="pr-8 text-left">
             <DialogTitle>Formaciones</DialogTitle>
             <DialogDescription className="text-xs">
-              {formations.length} formaciones de {sportDef(sport).label}. Elige para quién y toca una tarjeta.
+              {galleryCaption(sport, visible.length, players)}. Elige para quién y toca una tarjeta.
             </DialogDescription>
           </DialogHeader>
 

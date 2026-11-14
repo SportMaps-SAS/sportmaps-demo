@@ -540,7 +540,7 @@ describe('runWhatsAppQueue — adjunto con consulta', () => {
 
 describe('decidirAdjunto — negocio, otro club y plataforma valen lo mismo que personal', () => {
     it('silencio, incluso sobre staff', () => {
-        for (const tipo of ['negocio', 'otro_club', 'plataforma'] as const) {
+        for (const tipo of ['negocio', 'otro_club', 'plataforma', 'equipo'] as const) {
             expect(decidirAdjunto({ botEncendido: true, tipo, esStaffAdmin: false })).toBe('silencio');
             expect(decidirAdjunto({ botEncendido: true, tipo, esStaffAdmin: true })).toBe('silencio');
         }

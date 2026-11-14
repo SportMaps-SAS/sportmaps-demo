@@ -204,3 +204,71 @@ describe('infoDeEscuela', () => {
         expect(txt).not.toContain('NO USAR');
     });
 });
+
+// ─── «¿Hay clase hoy?» con la semana del profe (migración M1, 2026-10-30) ───
+
+import { horariosDelDia, textoHorarioDeHoy, franjasDelDia } from './whatsapp-info-escuela.service';
+import type { ExcepcionSemana } from './semana-equipo.service';
+
+describe('horariosDelDia con los ajustes de «Mi semana»', () => {
+    const SAB = '2026-10-31';
+    const EQUIPOS = [
+        { id: 'u9', name: 'U9 Y U11 MIXTO', active: true, schedule: [{ day: 6, time: '11:00', end: '13:00', place: 'Parque Pinar de Suba 2' }] },
+        { id: 'may', name: 'MIXTO MAYORES', active: true, schedule: [{ day: 6, time: '13:00', end: '15:00', place: 'Liceo Fesan' }] },
+        { id: 'nor', name: 'NORTE', active: true, schedule: [{ day: 6, time: '8:00', end: '10:00' }, { day: 0, time: '8:00', end: '10:00' }] },
+    ];
+    const conAjustes = (filas: ExcepcionSemana[]) => ({ excepciones: async () => filas });
+
+    beforeEach(() => {
+        estado.filtros = {};
+        estado.tablas = { teams: { data: EQUIPOS, error: null } };
+    });
+
+    it('sin ajustes: exactamente lo de siempre (franjasDelDia)', async () => {
+        const h = await horariosDelDia('s1', SAB, conAjustes([]));
+        expect(h).toEqual({
+            dia: 'sábado', conHorario: 3,
+            grupos: EQUIPOS.map((t) => ({ nombre: t.name, franjas: franjasDelDia(t.schedule, 6)! })),
+        });
+        expect(textoHorarioDeHoy(h!, false)).toBe('Según el horario de la escuela, hoy *sábado* entrenan:\n\n'
+            + '• *U9 Y U11 MIXTO*: 11:00 a 13:00 (Parque Pinar de Suba 2)\n• *MIXTO MAYORES*: 13:00 a 15:00 (Liceo Fesan)\n'
+            + '• *NORTE*: 8:00 a 10:00\n\nSi hay un cambio de última hora, la escuela lo avisa por aquí.');
+    });
+
+    it('un día cancelado no aparece en «hoy entrenan» y se dice que se canceló', async () => {
+        const h = await horariosDelDia('s1', SAB, conAjustes([
+            { team_id: 'u9', fecha: SAB, tipo: 'cancelada', hora_original: null },
+        ]));
+        expect(h!.grupos.map((g) => g.nombre)).toEqual(['MIXTO MAYORES', 'NORTE']);
+        expect(h!.cancelados).toEqual(['U9 Y U11 MIXTO']);
+        const t = textoHorarioDeHoy(h!, false)!;
+        expect(t).not.toContain('• *U9 Y U11 MIXTO*');
+        expect(t).toContain('Hoy se canceló el entreno de *U9 Y U11 MIXTO*.');
+    });
+
+    it('todos cancelados: «no hay entrenamientos» y por qué', async () => {
+        const h = await horariosDelDia('s1', SAB, conAjustes(EQUIPOS.map((e) => ({ team_id: e.id, fecha: SAB, tipo: 'cancelada' as const }))));
+        expect(textoHorarioDeHoy(h!, true)).toBe('Según el horario de la escuela, hoy *sábado* no hay entrenamientos: '
+            + 'se canceló el de *U9 Y U11 MIXTO*, *MIXTO MAYORES* y *NORTE*.\n\n'
+            + 'Si hay un cambio de última hora, la escuela lo avisa por aquí. Ya le pasé tu mensaje para que te lo confirme.');
+    });
+
+    it('movida y extra salen con su hora nueva y marcados', async () => {
+        const h = await horariosDelDia('s1', SAB, conAjustes([
+            { team_id: 'may', fecha: SAB, tipo: 'movida', hora_original: '13:00:00', hora_inicio: '15:00:00', lugar: 'Colegio Lestonnac' },
+            { team_id: 'nor', fecha: SAB, tipo: 'extra', hora_inicio: '16:00:00', hora_fin: '18:00:00' },
+            { team_id: 'u9', fecha: '2026-11-01', tipo: 'cancelada' },   // otro día: no cuenta
+        ]));
+        expect(h!.grupos).toEqual([
+            { nombre: 'U9 Y U11 MIXTO', franjas: '11:00 a 13:00 (Parque Pinar de Suba 2)' },
+            { nombre: 'MIXTO MAYORES', franjas: '15:00 a 17:00 (Colegio Lestonnac) (cambio de horario)' },
+            { nombre: 'NORTE', franjas: '08:00 a 10:00 · 16:00 a 18:00 (entreno extra)' },
+        ]);
+        expect(h!.cancelados).toBeUndefined();
+    });
+
+    it('si la lectura de ajustes falla, lo de siempre', async () => {
+        const h = await horariosDelDia('s1', SAB, { excepciones: async () => { throw new Error('caída'); } });
+        expect(h!.grupos).toHaveLength(3);
+    });
+});

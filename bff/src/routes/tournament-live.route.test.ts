@@ -164,3 +164,90 @@ describe('organizador', () => {
     expect(r.json.code).toBe('no_en_juego');
   });
 });
+
+describe('equipos, patrocinadores y hora/cancha (organizador)', () => {
+  it('agrega rivales externos pegando una lista, los edita y los quita', async () => {
+    const { ev, cat } = await world({ teams: 2 });
+    const add = await call('POST', `/school/${ev.id}/teams/external`, { category_id: cat, teams: [{ team_name: 'Águilas' }, { team_name: 'Titanes', short_name: 'tit' }] });
+    expect(add.status).toBe(201);
+    expect(add.json.created).toHaveLength(2);
+    const list = await call('GET', `/school/${ev.id}/teams`);
+    expect(list.json.filter((t: any) => t.is_external)).toHaveLength(2);
+    const tit = list.json.find((t: any) => t.name === 'Titanes');
+    expect(tit.short_name).toBe('TIT');
+    const upd = await call('PATCH', `/school/${ev.id}/teams/${tit.id}`, { club_name: 'Club Titanes' });
+    expect(upd.status).toBe(200);
+    expect(upd.json.club_name).toBe('Club Titanes');
+    const del = await call('DELETE', `/school/${ev.id}/teams/${tit.id}`);
+    expect(del.status).toBe(200);
+    const bad = await call('POST', `/school/${ev.id}/teams/external`, { category_id: cat, teams: [] });
+    expect(bad.status).toBe(400);
+    expect(bad.json.code).toBe('sin_equipos');
+  });
+  it('CRUD de patrocinadores y la página pública los muestra', async () => {
+    const { ev } = await world();
+    const c = await call('POST', `/school/${ev.id}/sponsors`, { name: 'Bebidas', tier: 'principal', url: 'https://bebidas.co' });
+    expect(c.status).toBe(201);
+    expect((await call('PATCH', `/school/${ev.id}/sponsors/${c.json.id}`, { tier: 'oficial' })).json.tier).toBe('oficial');
+    const pub = await call('GET', `/public/${ev.slug}/live`);
+    expect(pub.json.tournament.sponsors).toEqual([{ id: c.json.id, name: 'Bebidas', logo_url: null, url: 'https://bebidas.co/', tier: 'oficial' }]);
+    expect((await call('DELETE', `/school/${ev.id}/sponsors/${c.json.id}`)).status).toBe(200);
+    expect((await call('GET', `/school/${ev.id}/sponsors`)).json).toEqual([]);
+  });
+  it('edita hora y cancha de un partido y queda en el log', async () => {
+    const { ev, matches } = await world({ teams: 2 });
+    const r = await call('PATCH', `/school/${ev.id}/matches/${matches[0].id}/schedule`, { scheduled_at: '2026-11-07T09:00:00-05:00', court: 'Cancha 3' });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ court: 'Cancha 3', scheduled_at: '2026-11-07T14:00:00.000Z' });
+    const log = await call('GET', `/school/${ev.id}/log?match_id=${matches[0].id}`);
+    expect(log.json[0].action).toBe('reschedule');
+    expect((await call('PATCH', `/school/${ev.id}/matches/${matches[0].id}/schedule`, { scheduled_at: 'x' })).status).toBe(400);
+  });
+  it('otra escuela no toca equipos, patrocinadores ni horarios', async () => {
+    const { ev, cat, matches } = await world({ teams: 2 });
+    auth.schoolId = 'otra-escuela';
+    expect((await call('GET', `/school/${ev.id}/teams`)).status).toBe(404);
+    expect((await call('POST', `/school/${ev.id}/teams/external`, { category_id: cat, teams: [{ team_name: 'X' }] })).status).toBe(404);
+    expect((await call('POST', `/school/${ev.id}/sponsors`, { name: 'X' })).status).toBe(404);
+    expect((await call('PATCH', `/school/${ev.id}/matches/${matches[0].id}/schedule`, { court: 'X' })).status).toBe(404);
+    expect(db.tables.event_teams.filter((t) => t.is_external)).toHaveLength(0);
+    expect(db.tables.tournament_sponsors).toHaveLength(0);
+  });
+});
+
+describe('jugadores, carné e inscripción por link (HTTP)', () => {
+  it('organizador agrega jugadores a un rival, imprime carnés y el QR valida sin datos privados', async () => {
+    const { ev, cat } = await world({ teams: 2 });
+    const add = await call('POST', `/school/${ev.id}/teams/external`, { category_id: cat, teams: [{ team_name: 'Rival' }] });
+    const teamId = add.json.created[0].id;
+    const p = await call('POST', `/school/${ev.id}/teams/${teamId}/players`, { players: [{ full_name: 'Ana Ruiz', document_number: '777888' }] });
+    expect(p.status).toBe(201);
+    const cards = await call('GET', `/school/${ev.id}/cards?team_id=${teamId}`);
+    expect(cards.json.cards).toHaveLength(1);
+    const v = await call('GET', `/public/${ev.slug}/validate/${cards.json.cards[0].token}`);
+    expect(v.status).toBe(200);
+    expect(v.headers.get('cache-control')).toBe('no-store');
+    expect(v.json.player.first_name).toBe('Ana');
+    expect(JSON.stringify(v.json)).not.toContain('777888');
+    expect((await call('GET', `/public/${ev.slug}/validate/inventado`)).status).toBe(404);
+    auth.schoolId = 'otra-escuela';
+    expect((await call('GET', `/school/${ev.id}/cards`)).status).toBe(404);
+    expect((await call('POST', `/school/${ev.id}/teams/${teamId}/players`, { players: [{ full_name: 'X' }] })).status).toBe(404);
+  });
+  it('el delegado usa el link sin cuenta; un token inventado → 401', async () => {
+    const { ev, cat } = await world({ teams: 2 });
+    const add = await call('POST', `/school/${ev.id}/teams/external`, { category_id: cat, teams: [{ team_name: 'Halcones' }] });
+    const inv = await call('POST', `/school/${ev.id}/teams/${add.json.created[0].id}/invite`, { delegate_phone: '3001234567' });
+    expect(inv.status).toBe(201);
+    const token = inv.json.token as string;
+    const home = await call('GET', `/invite/${token}`);
+    expect(home.status).toBe(200);
+    expect(home.json.team.name).toBe('Halcones');
+    expect((await call('POST', `/invite/${token}/players`, { players: [{ full_name: 'Uno' }] })).status).toBe(201);
+    const sub = await call('POST', `/invite/${token}/submit`, { rules_accepted: true, consent: true, consent_version: home.json.consent.version });
+    expect(sub.status).toBe(200);
+    expect(sub.json.signup_prefill.club_name).toBe('Halcones');
+    expect((await call('GET', `/school/${ev.id}/invites`)).json[0].stage).toBe('listo');
+    expect((await call('GET', `/invite/${'z'.repeat(43)}`)).status).toBe(401);
+  });
+});

@@ -1,0 +1,51 @@
+1
+00:00:00,004 --> 00:00:07,085
+Así tomas asistencia en SportMaps. En tu panel principal tienes un acceso rápido: Tomar asistencia.
+
+2
+00:00:07,553 --> 00:00:14,658
+Tócalo, y la app abre directo la lista del equipo que tienes hoy. También llegas desde el menú, en Asistencias.
+
+3
+00:00:15,132 --> 00:00:19,404
+Si no es el equipo correcto, toca: No es esta, cambiar.
+
+4
+00:00:19,862 --> 00:00:25,838
+La lista arranca con todo el equipo marcado en Presente. Así solo cambias a quienes no vinieron.
+
+5
+00:00:26,293 --> 00:00:33,661
+Cada deportista tiene cuatro estados: presente, ausente, tarde y excusado. Toca el que corresponda.
+
+6
+00:00:37,045 --> 00:00:44,413
+Marcar presente descuenta una clase del plan del deportista. Si después lo cambias a ausente, la clase se le devuelve.
+
+7
+00:00:44,873 --> 00:00:48,184
+Cuando termines, toca Guardar asistencia.
+
+8
+00:00:50,982 --> 00:00:56,358
+Al terminar el entrenamiento, toca Finalizar sesión, para cerrar la lista del día.
+
+9
+00:00:57,226 --> 00:01:03,129
+Confírmalo. Quien haya quedado sin marcar pasa a ausente, y su familia recibe un aviso.
+
+10
+00:01:03,588 --> 00:01:10,908
+Al finalizar, la app te pide calificar el entreno de cada deportista. Puedes hacerlo ahora, o cerrar la ventana.
+
+11
+00:01:11,374 --> 00:01:17,374
+La lista queda cerrada con candado. Si te equivocaste, puedes reabrirla para corregir.
+
+12
+00:01:17,838 --> 00:01:23,070
+Y si se te pasó un día, en Día de la lista eliges una fecha anterior, y la completas.
+
+13
+00:01:23,529 --> 00:01:29,673
+También puedes marcar las llegadas escaneando el carnet digital de cada deportista. Así de fácil.

@@ -177,3 +177,56 @@ describe('roundRobinRounds', () => {
     expect(met.size).toBe(15);
   });
 });
+
+describe('varias copas desde grupos (oro / plata)', () => {
+  const cups = [
+    { label: 'Copa oro', positions: [1, 2], third_place: true },
+    { label: 'Copa plata', positions: [3, 4] },
+  ];
+  it('cada copa tiene su cuadro con sus posiciones y su tercer puesto opcional', () => {
+    const { rows } = generateFixtures('grupos', ids(16), { seed: 4, groups: { count: 4, advance: 4 }, cups });
+    const oro = rows.filter((r) => r.cup_label === 'Copa oro');
+    const plata = rows.filter((r) => r.cup_label === 'Copa plata');
+    // 8 clasificados por copa: 4 + 2 + 1 = 7 partidos; oro con tercer puesto
+    expect(oro.filter((r) => r.stage === 'knockout')).toHaveLength(7);
+    expect(oro.filter((r) => r.stage === 'third_place')).toHaveLength(1);
+    expect(plata.filter((r) => r.stage === 'knockout')).toHaveLength(7);
+    expect(plata.filter((r) => r.stage === 'third_place')).toHaveLength(0);
+    const refsOf = (rs: typeof rows) => rs.filter((r) => r.round === 1 && r.stage === 'knockout').flatMap((r) => [r.home_ref, r.away_ref]);
+    expect(refsOf(oro).every((x) => /^G[12]:/.test(String(x)))).toBe(true);
+    expect(refsOf(plata).every((x) => /^G[34]:/.test(String(x)))).toBe(true);
+    expect(new Set(refsOf(oro)).size).toBe(8);
+    // los partidos de grupo no tienen copa
+    expect(rows.filter((r) => r.stage === 'group').every((r) => r.cup_label === null)).toBe(true);
+  });
+  it('en la ronda 1 de cada copa no se cruzan equipos del mismo grupo', () => {
+    const { rows } = generateFixtures('grupos', ids(16), { seed: 9, groups: { count: 4, advance: 4 }, cups });
+    for (const r of rows.filter((x) => x.stage === 'knockout' && x.round === 1)) {
+      expect(String(r.home_ref).split(':')[1]).not.toBe(String(r.away_ref).split(':')[1]);
+    }
+  });
+  it('sin copas el resultado es el mismo de antes (cup_label null)', () => {
+    const a = generateFixtures('grupos', ids(8), { seed: 7, groups: { count: 2, advance: 2 } });
+    expect(a.rows.every((r) => r.cup_label === null)).toBe(true);
+    expect(a.rows.filter((r) => r.stage === 'knockout')).toHaveLength(3);
+  });
+  it('valida nombres, posiciones repetidas y fuera de rango', () => {
+    const g = { count: 2, advance: 2 };
+    expect(validateFormat('grupos', 8, { groups: g, cups: [{ label: '', positions: [1] }] })).toMatch(/nombre/);
+    expect(validateFormat('grupos', 8, { groups: g, cups: [{ label: 'Oro', positions: [1, 2] }, { label: 'Plata', positions: [2, 3] }] })).toMatch(/dos copas/);
+    expect(validateFormat('grupos', 8, { groups: g, cups: [{ label: 'Oro', positions: [1, 5] }] })).toMatch(/entre 1 y 4/);
+    expect(validateFormat('grupos', 8, { groups: g, cups: [{ label: 'Oro', positions: [1] }, { label: 'oro', positions: [2] }] })).toMatch(/repetida/);
+    expect(validateFormat('copa', 8, { cups: [{ label: 'Oro', positions: [1] }] })).toMatch(/solo aplican/);
+    expect(validateFormat('grupos', 8, { groups: { count: 2 } as any, cups: [{ label: 'Oro', positions: [1, 2] }, { label: 'Plata', positions: [3, 4] }] })).toBeNull();
+  });
+  it('el calendario pone las dos copas de la misma ronda en el mismo bloque (canchas en paralelo)', () => {
+    const { rows } = generateFixtures('grupos', ids(8), {
+      seed: 2, groups: { count: 2, advance: 4 }, cups: [{ label: 'Oro', positions: [1, 2] }, { label: 'Plata', positions: [3, 4] }],
+      schedule: { start: '2026-11-07T08:00:00-05:00', courts: 4, slot_minutes: 60 },
+    });
+    const r1 = rows.filter((r) => r.stage === 'knockout' && r.round === 1);
+    expect(r1).toHaveLength(4);
+    expect(new Set(r1.map((r) => r.scheduled_at)).size).toBe(1);
+    expect(new Set(r1.map((r) => r.court)).size).toBe(4);
+  });
+});

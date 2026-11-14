@@ -2,7 +2,7 @@
  * Tabla de posiciones genérica — PURA. Reemplaza las dos copias (solo fútbol) de events.route.ts.
  * Puntos y desempates salen de la configuración del torneo; sin configuración = fútbol 3-1-0 como hoy.
  */
-import { matchOutcome, ScoringConfig, TiebreakerKey, StandingsPoints } from './scoring.shared';
+import { matchOutcome, orderWithExtraTiebreakers, ScoringConfig, TiebreakerKey, StandingsPoints } from './scoring.shared';
 
 export interface StandingsTeam { id: string; team_name: string }
 export interface StandingsMatch {
@@ -22,11 +22,21 @@ export interface StandingRow {
   Pts: number;
   /** Solo modelo sets */
   SW: number; SL: number; PF: number; PA: number;
+  /** Solo sets: diferencias y cocientes (sets ganados/perdidos, puntos a favor/en contra).
+   *  Cociente `null` = sin nada en contra (infinito, «MAX»); 0/0 = 0. Redondeado a 3 decimales. */
+  set_diff: number; point_diff: number; set_ratio: number | null; point_ratio: number | null;
 }
 
 const blank = (t: StandingsTeam): StandingRow => ({
   team_id: t.id, team_name: t.team_name, P: 0, W: 0, D: 0, L: 0, GF: 0, GA: 0, GD: 0, Pts: 0, SW: 0, SL: 0, PF: 0, PA: 0,
+  set_diff: 0, point_diff: 0, set_ratio: 0, point_ratio: 0,
 });
+
+/** Cociente público: null cuando no hay nada en contra pero sí a favor (se muestra «MAX»). */
+export function publicRatio(num: number, den: number): number | null {
+  if (den === 0) return num === 0 ? 0 : null;
+  return Math.round((num / den) * 1000) / 1000;
+}
 
 function pointsFor(pts: StandingsPoints, result: 'win' | 'draw' | 'loss', deciding: boolean): number {
   if (result === 'win') return deciding && pts.win_deciding_set != null ? pts.win_deciding_set : pts.win;
@@ -60,7 +70,13 @@ function accumulate(rows: Record<string, StandingRow>, matches: StandingsMatch[]
       h.Pts += cfg.standings_points.draw; a.Pts += cfg.standings_points.draw;
     }
   }
-  for (const r of Object.values(rows)) r.GD = r.GF - r.GA;
+  for (const r of Object.values(rows)) {
+    r.GD = r.GF - r.GA;
+    r.set_diff = r.SW - r.SL;
+    r.point_diff = r.PF - r.PA;
+    r.set_ratio = publicRatio(r.SW, r.SL);
+    r.point_ratio = publicRatio(r.PF, r.PA);
+  }
 }
 
 const BIG = 1e9;
@@ -75,6 +91,8 @@ function metric(k: Exclude<TiebreakerKey, 'head_to_head'>, r: StandingRow): numb
     case 'gf': return r.GF;
     case 'set_ratio': return round9(ratio(r.SW, r.SL));
     case 'point_ratio': return round9(ratio(r.PF, r.PA));
+    case 'set_diff': return r.SW - r.SL;
+    case 'point_diff': return r.PF - r.PA;
   }
 }
 
@@ -116,5 +134,7 @@ export function computeStandings(teams: StandingsTeam[], matches: StandingsMatch
   accumulate(rows, matches, cfg);
   const keys = cfg.tiebreakers && cfg.tiebreakers.length ? cfg.tiebreakers : (['pts', 'gd', 'gf'] as TiebreakerKey[]);
   const played = matches.filter((m) => m.status === 'played' || m.status === 'walkover');
-  return order(Object.values(rows), keys, played, cfg);
+  const ordered = order(Object.values(rows), keys, played, cfg);
+  // Ajedrez (Buchholz / Sonneborn-Berger): solo entre los que siguen empatados en puntos.
+  return cfg.extra_tiebreakers?.length ? orderWithExtraTiebreakers(ordered, played, cfg) : ordered;
 }

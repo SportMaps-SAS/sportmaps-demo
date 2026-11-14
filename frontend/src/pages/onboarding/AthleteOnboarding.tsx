@@ -13,10 +13,12 @@ import { Badge } from '@/components/ui/badge';
 import { PhoneInput } from '@/components/ui/phone-input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { UserCircle, Activity, Loader2, ChevronLeft, ChevronRight, Check } from 'lucide-react';
+import { UserCircle, Activity, Loader2, ChevronLeft, ChevronRight, Check, KeyRound } from 'lucide-react';
 import { SPORTS_LIST } from '@/lib/constants/sportsCatalog';
 import { getUserFriendlyError } from '@/lib/error-translator';
 import { toast } from 'sonner';
+import { OnboardingSchoolCodeField } from '@/components/school-join/OnboardingSchoolCodeField';
+import { formatJoinCode, isJoinCodeShape, readPendingJoinCode } from '@/lib/schoolJoinCode';
 
 const EXPERIENCE_LEVELS = [
   { value: 'principiante', label: 'Principiante' },
@@ -38,6 +40,8 @@ export default function AthleteOnboarding() {
   const [sports, setSports] = useState<string[]>([]);
   const [level, setLevel] = useState('');
   const [bio, setBio] = useState(profile?.bio ?? '');
+  // Código de escuela opcional (precargado si llegó por /unirse?codigo=… antes de registrarse).
+  const [schoolCode, setSchoolCode] = useState(() => formatJoinCode(readPendingJoinCode() ?? ''));
 
   // Backstop de invitaciones: quien se registra SIN el link llega acá antes que
   // al dashboard (el gate de onboarding lo saca de /dashboard), así que el
@@ -91,7 +95,10 @@ export default function AthleteOnboarding() {
 
       await updateProfile({}, { silent: true });
       toast.success('¡Perfil completo! Bienvenido a SportMaps.');
-      navigate('/dashboard', { replace: true });
+      navigate(
+        isJoinCodeShape(schoolCode) ? `/unirse?codigo=${encodeURIComponent(formatJoinCode(schoolCode))}` : '/dashboard',
+        { replace: true },
+      );
     } catch (err) {
       console.error('Athlete onboarding failed:', err);
       toast.error(getUserFriendlyError(err));
@@ -101,7 +108,8 @@ export default function AthleteOnboarding() {
 
   const steps: ShellStep[] = [
     { id: 'datos', title: 'Tus datos', description: 'Información personal de contacto', icon: UserCircle, done: step > 1 || step1Done },
-    { id: 'deporte', title: 'Tu deporte', description: 'Deportes que practicas y tu nivel', icon: Activity, done: false },
+    { id: 'deporte', title: 'Tu deporte', description: 'Deportes que practicas y tu nivel', icon: Activity, done: step > 2 },
+    { id: 'escuela', title: 'Tu escuela', description: 'Opcional: únete con el código de tu escuela', icon: KeyRound, done: false },
   ];
 
   const canAdvance = step === 1 ? step1Done : step2Done;
@@ -111,14 +119,14 @@ export default function AthleteOnboarding() {
       <Button variant="ghost" size="sm" onClick={() => setStep((p) => Math.max(1, p - 1))} disabled={step === 1 || saving}>
         <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
       </Button>
-      {step < 2 ? (
-        <Button onClick={() => setStep(2)} disabled={!canAdvance}>
+      {step < 3 ? (
+        <Button onClick={() => setStep(step + 1)} disabled={!canAdvance}>
           Siguiente <ChevronRight className="h-4 w-4 ml-1" />
         </Button>
       ) : (
         <Button onClick={handleFinish} disabled={saving || !canAdvance}>
           {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Check className="h-4 w-4 mr-2" />}
-          Finalizar
+          {isJoinCodeShape(schoolCode) ? 'Finalizar y unirme' : 'Finalizar'}
         </Button>
       )}
     </>
@@ -193,6 +201,10 @@ export default function AthleteOnboarding() {
             <Textarea value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Cuéntanos sobre tus metas deportivas..." maxLength={500} rows={3} />
           </div>
         </div>
+      )}
+
+      {step === 3 && (
+        <OnboardingSchoolCodeField value={schoolCode} onChange={setSchoolCode} />
       )}
     </OnboardingShell>
   );

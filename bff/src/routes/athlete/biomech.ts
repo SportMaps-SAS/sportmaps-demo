@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../../config/supabase';
+import { validarCapturaBiomecanica, validarGrantBiomecanico } from './biomechAlcance';
 
 const router = Router();
 
@@ -70,6 +71,11 @@ router.post('/biomech/captures', async (req: Request, res: Response) => {
         const { school_id, session_plan_id, enrollment_id, analyzer_code, block_index, source } = req.body;
 
         if (!school_id || !analyzer_code) return res.status(400).json({ error: 'school_id y analyzer_code son requeridos.' });
+
+        // Service role salta RLS: misma regla que bc_athlete_insert (escuela del
+        // atleta y, si trae sesión, una sesión suya de esa escuela).
+        const fueraDeAlcance = await validarCapturaBiomecanica(supabase, athleteId, school_id, session_plan_id ?? null);
+        if (fueraDeAlcance) return res.status(fueraDeAlcance.status).json({ error: fueraDeAlcance.error });
 
         const { data: analyzer } = await supabase.from('exercise_analyzers').select('code').eq('code', analyzer_code).maybeSingle();
         if (!analyzer) return res.status(400).json({ error: `Analyzer '${analyzer_code}' no existe.` });
@@ -248,6 +254,11 @@ router.post('/biomech/grants', async (req: Request, res: Response) => {
         const { coach_id, school_id, expires_at } = req.body;
 
         if (!coach_id || !school_id) return res.status(400).json({ error: 'coach_id y school_id son requeridos.' });
+
+        // Service role salta RLS: misma regla que bag_athlete_insert (escuela del
+        // atleta y coach que TRABAJA en ella). Antes se aceptaba cualquier perfil.
+        const fueraDeAlcance = await validarGrantBiomecanico(supabase, athleteId, coach_id, school_id);
+        if (fueraDeAlcance) return res.status(fueraDeAlcance.status).json({ error: fueraDeAlcance.error });
 
         const { data, error } = await supabase
             .from('biomech_access_grants')

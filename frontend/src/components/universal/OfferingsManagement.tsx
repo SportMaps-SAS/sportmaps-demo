@@ -29,6 +29,7 @@ import { getSportVisual } from '@/lib/sportVisuals';
 import { Plus, Package, Search, X, ChevronDown, Edit, Minus, DollarSign, Clock, Zap, UserPlus, Trash2, ArrowRight, Copy, Share2 } from 'lucide-react';
 import { OfferingCoachesPanel } from './OfferingCoachesPanel';
 import { formatFriendlyDuration } from '@/lib/utils';
+import { porOrdenDeCreacion, coincide } from '@/lib/planes/ordenPlanes';
 import { PlanLevelRulesSection, EMPTY_LEVEL_RULES, levelRulesFromPlan, levelRulesPayload, type PlanLevelRules } from './PlanLevelRulesSection';
 import { useLevelProgressionEnabled } from '@/hooks/useLevelProgression';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -466,6 +467,19 @@ export function OfferingsManagement() {
         applyOneTimeFees,
     } = useOfferings();
 
+    // Programas y tarifas en orden de creación (casi todas las escuelas tienen sort_order = 0
+    // y sin desempate salían revueltos). El buscador muestra el programa entero si coincide
+    // su nombre, o solo las tarifas que coinciden.
+    const [busquedaPlanes, setBusquedaPlanes] = useState('');
+    const offeringsVisibles = useMemo(() =>
+        [...offerings].sort(porOrdenDeCreacion).flatMap((o) => {
+            const planes = [...(o.offering_plans ?? [])].sort(porOrdenDeCreacion);
+            if (coincide(o.name, busquedaPlanes)) return [{ ...o, offering_plans: planes }];
+            const coinciden = planes.filter((p) => coincide(p.name, busquedaPlanes));
+            return coinciden.length ? [{ ...o, offering_plans: coinciden }] : [];
+        }),
+    [offerings, busquedaPlanes]);
+
     const isCreatingOffering = createOffering.isPending;
     const isUpdatingOffering = updateOffering.isPending;
     const isCreatingPlan = createPlan.isPending;
@@ -866,7 +880,29 @@ export function OfferingsManagement() {
                 </Card>
             ) : (
                 <div className="space-y-3">
-                    {offerings.map((offering) => (
+                    <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                            value={busquedaPlanes}
+                            onChange={(e) => setBusquedaPlanes(e.target.value)}
+                            placeholder="Buscar plan o tarifa..."
+                            className="pl-9 pr-9"
+                        />
+                        {busquedaPlanes && (
+                            <button
+                                type="button"
+                                onClick={() => setBusquedaPlanes('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                aria-label="Limpiar búsqueda"
+                            >
+                                <X className="h-4 w-4" />
+                            </button>
+                        )}
+                    </div>
+                    {offeringsVisibles.length === 0 && (
+                        <p className="text-sm text-muted-foreground text-center py-6">No hay planes ni tarifas con «{busquedaPlanes}».</p>
+                    )}
+                    {offeringsVisibles.map((offering) => (
                         <OfferingCard
                             key={offering.id}
                             offering={offering}

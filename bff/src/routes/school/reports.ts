@@ -35,7 +35,7 @@ import { resolveSchoolBranding } from '../../utils/schoolBrandingResolver';
 import {
     INK, MUTED,
     loadSportmapsLogo, fetchSchoolLogo, capitalize,
-    sectionTitle, noteBox, addFooterToAllPages, drawDistributionBar,
+    sectionTitle, noteBox, addFooterToAllPages, drawDistributionBar, drawBrandHeader,
 } from '../../utils/reportPdfHelpers';
 
 const router = Router();
@@ -352,6 +352,71 @@ router.post(
         } catch (err: any) {
             req.log?.error({ err }, 'publicación de informe falló');
             res.status(500).json({ error: 'Error publicando el informe.' });
+        }
+    },
+);
+
+// ── POST /api/v1/school/reports/:id/correct ──────────────────────────────────
+// Corrige un informe YA PUBLICADO (nota + snapshot, versionado y auditado por
+// correct_published_athlete_report, migración 20261103202210). Mismo patrón
+// de permisos que /publish: la ruta solo exige STAFF_ROLES y la RPC decide de
+// verdad (admin siempre, coach solo si reports_release_by = 'coach' y es su
+// informe) — pedido real de un entrenador de Besser, donde ya publican ellos.
+const CorrectReportSchema = z.object({
+    note: z.string().optional().default(''),
+    reason: z.string().trim().min(1, 'El motivo es obligatorio.'),
+});
+
+router.post(
+    '/reports/:id/correct',
+    requireAuth,
+    requireRole(...STAFF_ROLES),
+    async (req: AuthenticatedRequest, res: Response) => {
+        const parsed = CorrectReportSchema.safeParse(req.body ?? {});
+        if (!parsed.success) {
+            return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
+        }
+        const { note, reason } = parsed.data;
+
+        try {
+            const { data: informe } = await supabase
+                .from('athlete_reports')
+                .select('id, subject_type, subject_id, team_id, period_year, period_month, status')
+                .eq('id', paramId(req.params.id))
+                .eq('school_id', req.schoolId)
+                .maybeSingle();
+
+            if (!informe) return res.status(404).json({ error: 'Informe no encontrado.' });
+            const r = informe as any;
+            if (r.status !== 'publicado') {
+                return res.status(409).json({ error: 'Solo se corrige un informe ya publicado.' });
+            }
+
+            // La nota NUEVA entra al cálculo del snapshot (no la que está en la
+            // fila): es justo lo que se está corrigiendo.
+            const snapshot = await buildReportSnapshot({
+                schoolId: req.schoolId,
+                subjectType: r.subject_type as SubjectType,
+                subjectId: r.subject_id,
+                year: r.period_year,
+                month: r.period_month,
+                governingTeamId: r.team_id,
+                coachNote: note,
+            });
+
+            const { data, error } = await userClient(req).rpc('correct_published_athlete_report', {
+                p_report_id: req.params.id,
+                p_coach_note: note,
+                p_snapshot: snapshot,
+                p_reason: reason,
+            });
+
+            if (error) return res.status(rpcStatus(error)).json({ error: error.message });
+
+            res.json({ ok: true, snapshot_version: data });
+        } catch (err: any) {
+            req.log?.error({ err }, 'corrección de informe publicado falló');
+            res.status(500).json({ error: 'Error corrigiendo el informe.' });
         }
     },
 );
@@ -996,27 +1061,17 @@ router.get(
 
             // ── Header: logo + branding, igual que el informe por atleta ─────────
             // Con marca blanca nunca cae al logo de SportMaps: si el propio no
-            // descarga, va el nombre de la escuela en texto (rama de abajo).
+            // descarga, va el nombre de la escuela en texto.
             const headerLogo = branding.hasWhitelabel ? schoolLogo : (schoolLogo ?? sportmapsLogo);
-            if (headerLogo) {
-                try {
-                    doc.image(headerLogo, 60, 50, { height: 34 });
-                } catch {
-                    doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-                }
-            } else {
-                doc.fillColor(INK).fontSize(17).font('Helvetica-Bold').text(branding.schoolName, 60, 55);
-            }
-            doc.fillColor(MUTED).fontSize(9).font('Helvetica')
-                .text('Evaluación post-entrenamiento — informe de equipo', 60, 92);
+            const accentY = drawBrandHeader(doc, headerLogo, branding.schoolName, 'Evaluación post-entrenamiento — informe de equipo');
 
             doc.fillColor(MUTED).fontSize(9).font('Helvetica')
                 .text(capitalize(snapshot.period.label), doc.page.width - 220, 55, { width: 160, align: 'right' });
             doc.fillColor(INK).fontSize(11).font('Helvetica-Bold')
                 .text(snapshot.team.name, doc.page.width - 220, 69, { width: 160, align: 'right' });
 
-            const accentY = 112;
             doc.rect(60, accentY, doc.page.width - 120, 2.5).fill(branding.primaryColor);
+            doc.x = 60;
             doc.y = accentY + 20;
 
             // ── Aviso de borrador — el spec pide "BORRADOR — sin publicar" visible ──

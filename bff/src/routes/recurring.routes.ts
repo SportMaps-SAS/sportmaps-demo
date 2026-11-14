@@ -10,7 +10,7 @@
  *     plan (weekly/biweekly/monthly/quarterly/yearly).
  *
  * Endpoints para el suscriptor:
- *  - POST   /api/v1/recurring/subscriptions              Crea sub. Acepta school O vendor.
+ *  - POST   /api/v1/recurring/subscriptions              RETIRADO: 410 (usar /api/v1/autopay/subscriptions).
  *  - GET    /api/v1/recurring/subscriptions              Lista las del usuario
  *  - POST   /api/v1/recurring/subscriptions/:id/pause    Pausa
  *  - POST   /api/v1/recurring/subscriptions/:id/resume   Reactiva
@@ -29,109 +29,34 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { supabase } from '../config/supabase';
 import { requireAuth, AuthenticatedRequest } from '../middlewares/authMiddleware';
-import { runDueRecurringCharges, chargeRecurringSubscriptionById } from '../services/recurring-charges.service';
+import { runDueRecurringCharges } from '../services/recurring-charges.service';
 
 const router = Router();
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schemas
+// POST /subscriptions — RETIRADO (2026-10-27)
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Una sub es a una escuela O a un vendor. XOR validado en Zod + DB.
-const CreateSubSchema = z.object({
-    // School mode
-    schoolId: z.string().uuid().optional(),
-    childId: z.string().uuid().optional(),
-    programId: z.string().uuid().optional(),
-    teamId: z.string().uuid().optional(),
-    // Vendor mode
-    vendorProfileId: z.string().uuid().optional(),
-    subscriptionPlanId: z.string().uuid().optional(),
-    billingPeriod: z.enum(['weekly','biweekly','monthly','quarterly','yearly']).optional(),
-    // Comunes
-    paymentTokenId: z.string().uuid(),
-    amount: z.number().positive(),
-    billingDay: z.number().int().min(1).max(28).optional(),
-    concept: z.string().max(120).optional(),
-}).refine(
-    (d) => Boolean(d.schoolId) !== Boolean(d.vendorProfileId),
-    { message: 'Debes enviar schoolId O vendorProfileId, no ambos ni ninguno.' },
-).refine(
-    (d) => !d.vendorProfileId || !!d.subscriptionPlanId,
-    { message: 'Para vendor mode se requiere subscriptionPlanId.' },
-);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST /subscriptions — padre crea suscripcion con tarjeta guardada
-// ─────────────────────────────────────────────────────────────────────────────
+// Antes llamaba la RPC `create_recurring_subscription`, que NO existe en la base
+// viva (se retiró con el débito automático F0/F1) → 500 siempre si el router se
+// llegaba a montar. Además confiaba `schoolId`/`childId` del body sin verificar
+// que el caller fuera pagador o staff de esa escuela.
+//
+// El alta canónica es POST /api/v1/autopay/subscriptions (autopay.routes.ts), que
+// llama `autopay_create_subscription` (SECURITY DEFINER, solo service_role) con
+// `p_user_id = req.user.id`; la RPC valida acudiente del deportista (not_guardian),
+// inscripción activa en esa escuela, dueño del medio (token_not_owned) y consentimiento.
+// Ningún llamador en frontend/ ni en el BFF usa esta ruta, y en index.ts todo
+// /api/v1/recurring responde 410 (este router no está montado). Se deja un 410
+// explícito aquí, sin tocar la base, por si alguien vuelve a montar el router.
 
 router.post(
     '/subscriptions',
     requireAuth,
-    async (req: AuthenticatedRequest, res: Response) => {
-        const parsed = CreateSubSchema.safeParse(req.body);
-        if (!parsed.success) {
-            return res.status(400).json({ error: 'Datos invalidos', details: parsed.error.issues });
-        }
-
-        const isVendorMode = !!parsed.data.vendorProfileId;
-
-        const { data, error } = await supabase.rpc('create_recurring_subscription', {
-            p_school_id:            parsed.data.schoolId ?? null,
-            p_child_id:             parsed.data.childId ?? null,
-            p_payment_token_id:     parsed.data.paymentTokenId,
-            p_amount:               parsed.data.amount,
-            p_billing_day:          parsed.data.billingDay ?? 1,
-            p_concept:              parsed.data.concept ?? (isVendorMode ? 'Suscripcion' : 'Mensualidad'),
-            p_program_id:           parsed.data.programId ?? null,
-            p_team_id:              parsed.data.teamId ?? null,
-            p_vendor_profile_id:    parsed.data.vendorProfileId ?? null,
-            p_subscription_plan_id: parsed.data.subscriptionPlanId ?? null,
-            p_billing_period:       parsed.data.billingPeriod ?? null,
-        });
-
-        if (error) {
-            req.log?.error({ err: error }, 'create_recurring_subscription RPC failed');
-            return res.status(500).json({ error: 'No se pudo crear la suscripcion.' });
-        }
-        if (!data?.ok) {
-            return res.status(400).json({ error: data?.error ?? 'unknown_error', details: data });
-        }
-
-        // Vendor mode: el primer cobro debe ser inmediato. La RPC dejo
-        // next_charge_at = now() y marco immediate_charge_due=true; aqui
-        // disparamos chargeOne sincronamente para que el cliente sepa al
-        // toque si la tarjeta fue rechazada (UX critica vs descubrirlo en
-        // un email del cron horas despues).
-        if (data.immediate_charge_due) {
-            try {
-                const charge = await chargeRecurringSubscriptionById(data.subscription_id);
-                if (!charge.ok && !charge.skipped) {
-                    // La sub queda creada pero el primer cobro fallo. El cron
-                    // reintentara segun retry_backoff_hours. Avisamos al UI.
-                    return res.status(202).json({
-                        ...data,
-                        first_charge: { ok: false, error: charge.error ?? 'unknown' },
-                        warning: 'Suscripcion creada pero el primer cobro fallo. Se reintentara automaticamente.',
-                    });
-                }
-                return res.status(201).json({
-                    ...data,
-                    first_charge: { ok: true, skipped: !!charge.skipped },
-                });
-            } catch (err: any) {
-                req.log?.error({ err, subscriptionId: data.subscription_id }, 'immediate charge threw');
-                // La sub esta creada y vencida — el cron la tomara. No es 500.
-                return res.status(202).json({
-                    ...data,
-                    first_charge: { ok: false, error: 'pending_cron' },
-                    warning: 'Suscripcion creada. El primer cobro se procesara en el siguiente ciclo.',
-                });
-            }
-        }
-
-        return res.status(201).json(data);
-    },
+    (_req: AuthenticatedRequest, res: Response) => res.status(410).json({
+        error: 'Este servicio fue reemplazado. Activa el débito automático desde Mis Pagos.',
+        code: 'recurring_v1_retired',
+        replacement: '/api/v1/autopay/subscriptions',
+    }),
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

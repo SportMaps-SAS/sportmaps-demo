@@ -5,8 +5,12 @@
  * Reglas:
  *  · El saldo para avisar es el «disponible para ENTRAR»: included − consumed
  *    (las reservas pendientes NO cuentan; ver plan §6-7).
- *  · Un escalón S (% de horas restantes) sale la PRIMERA vez que se observa el saldo en o
- *    por debajo de S, y una sola vez por inscripción y período.
+ *  · Hay dos clases de escalón en la MISMA escalera: por porcentaje (los configurados en
+ *    hour_bank_balance_notice_steps, clave «50») y por clases que quedan (CLASES_A_AVISAR,
+ *    clave «c2»), contadas con el bloque del plan. Los de clases solo existen si la escuela
+ *    tiene avisos encendidos (pedido de Dreamers 2026-10-29: mitad, 2 clases, 1 clase, agotado).
+ *  · Un escalón sale la PRIMERA vez que se observa el saldo en o por debajo de su umbral,
+ *    y una sola vez por inscripción y período.
  *  · Si de un golpe se cruzan varios escalones (p. ej. de 80 % a 15 %) se avisa SOLO el más
  *    severo y los demás se marcan como enviados en silencio (dos mensajes seguidos cansan).
  *  · Si el saldo vuelve a subir por encima del umbral (recarga de horas), la marca de ese
@@ -36,39 +40,68 @@ export function porcentajeRestante(includedMinutes: number, consumedMinutes: num
     return Math.max(0, Math.min(100, (restante / inc) * 100));
 }
 
-export interface DecisionDeAvisos {
-    /** Escalón a avisar ahora (el más severo cruzado y no enviado), o null. */
-    aEnviar: number | null;
-    /** Escalones cruzados que se marcan como enviados sin avisar (el resto de los cruzados). */
-    marcarEnSilencio: number[];
-    /** Marcas a borrar porque el saldo volvió a subir por encima del umbral. */
-    borrarMarcas: number[];
+/** Avisos por clases que quedan; se suman a los de porcentaje cuando la escuela tiene avisos encendidos. */
+export const CLASES_A_AVISAR = [2, 1] as const;
+
+export interface Umbral {
+    /** Clave en hour_bank_periods.balance_notices: «50» (porcentaje) o «c2» (clases). */
+    clave: string;
+    tipo: 'pct' | 'clases';
+    valor: number;
+    /** Se avisa cuando el saldo queda en o por debajo de estos minutos. */
+    minutos: number;
 }
 
 /**
- * Qué hacer con la escalera dado el % restante y las marcas ya enviadas.
- * `pct` null (sin horas) → no hace nada.
+ * La escalera de un período: los porcentajes configurados más «quedan 2 clases» y «queda 1
+ * clase» según el bloque del plan. Un escalón de clases que no cabe en el plan (bloque × N ≥
+ * incluidas) se omite: saldría con la primera visita y no diría nada útil.
  */
-export function decidirAvisos(steps: number[], pct: number | null, marcas: EscalonMarca): DecisionDeAvisos {
-    const vacio: DecisionDeAvisos = { aEnviar: null, marcarEnSilencio: [], borrarMarcas: [] };
-    if (pct === null || steps.length === 0) return vacio;
+export function umbralesDelPeriodo(steps: number[], incluidoMinutos: number, bloqueMinutos: number): Umbral[] {
+    const inc = Number(incluidoMinutos);
+    if (!(inc > 0) || steps.length === 0) return [];
+    const out: Umbral[] = steps.map((s) => ({ clave: String(s), tipo: 'pct', valor: s, minutos: (inc * s) / 100 }));
+    if (bloqueMinutos > 0) {
+        for (const n of CLASES_A_AVISAR) {
+            if (n * bloqueMinutos < inc) out.push({ clave: `c${n}`, tipo: 'clases', valor: n, minutos: n * bloqueMinutos });
+        }
+    }
+    return out;
+}
 
-    const marcado = (s: number) => Object.prototype.hasOwnProperty.call(marcas, String(s));
+export interface DecisionDeAvisos {
+    /** Escalón a avisar ahora (el más severo cruzado y no enviado), o null. */
+    aEnviar: Umbral | null;
+    /** Claves cruzadas que se marcan como enviadas sin avisar (el resto de las cruzadas). */
+    marcarEnSilencio: string[];
+    /** Claves a borrar porque el saldo volvió a subir por encima del umbral. */
+    borrarMarcas: string[];
+}
+
+/** Qué hacer con la escalera dado el saldo (minutos) y las marcas ya enviadas. */
+export function decidirAvisos(umbrales: Umbral[], restanteMinutos: number, marcas: EscalonMarca): DecisionDeAvisos {
+    if (umbrales.length === 0) return { aEnviar: null, marcarEnSilencio: [], borrarMarcas: [] };
+    const restante = Math.max(0, Number(restanteMinutos) || 0);
+
+    const marcado = (u: Umbral) => Object.prototype.hasOwnProperty.call(marcas, u.clave);
     // Recarga: un escalón marcado cuyo umbral el saldo ya superó se puede volver a avisar.
-    const borrarMarcas = steps.filter((s) => marcado(s) && pct > s);
+    const borrarMarcas = umbrales.filter((u) => marcado(u) && restante > u.minutos).map((u) => u.clave);
 
-    const cruzadosSinAvisar = steps.filter((s) => pct <= s && !marcado(s)).sort((a, b) => a - b); // el menor = más severo
+    // El de menos minutos = más severo; a igual umbral gana el de clases (dice más).
+    const cruzadosSinAvisar = umbrales
+        .filter((u) => restante <= u.minutos && !marcado(u))
+        .sort((a, b) => a.minutos - b.minutos || (a.tipo === b.tipo ? 0 : a.tipo === 'clases' ? -1 : 1));
     if (cruzadosSinAvisar.length === 0) return { aEnviar: null, marcarEnSilencio: [], borrarMarcas };
     const [masSevero, ...resto] = cruzadosSinAvisar;
-    return { aEnviar: masSevero, marcarEnSilencio: resto, borrarMarcas };
+    return { aEnviar: masSevero, marcarEnSilencio: resto.map((u) => u.clave), borrarMarcas };
 }
 
 /** Marcas resultantes tras aplicar la decisión (no muta la entrada). */
 export function aplicarDecision(marcas: EscalonMarca, d: DecisionDeAvisos, ahoraIso: string): EscalonMarca {
     const out: EscalonMarca = { ...marcas };
-    for (const s of d.borrarMarcas) delete out[String(s)];
-    for (const s of d.marcarEnSilencio) out[String(s)] = ahoraIso;
-    if (d.aEnviar !== null) out[String(d.aEnviar)] = ahoraIso;
+    for (const k of d.borrarMarcas) delete out[k];
+    for (const k of d.marcarEnSilencio) out[k] = ahoraIso;
+    if (d.aEnviar !== null) out[d.aEnviar.clave] = ahoraIso;
     return out;
 }
 
@@ -90,7 +123,7 @@ export function clasesRestantes(minutosRestantes: number, bloqueMinutos: number)
 }
 
 export interface ContextoMensaje {
-    escalon: number;
+    aviso: Pick<Umbral, 'tipo' | 'valor'>;
     atleta: string;
     restanteMinutos: number;
     incluidoMinutos: number;
@@ -108,13 +141,25 @@ export interface MensajeDeSaldo {
     severidad: 'info' | 'aviso' | 'critico';
 }
 
-/** Texto del aviso. Siempre dice cuánto le queda y cuándo se renueva. */
+/** «13 %». Redondeado a entero; nunca dice «0 %» si todavía queda algo. */
+export function formatoPorcentaje(restanteMinutos: number, incluidoMinutos: number): string {
+    const pct = porcentajeRestante(incluidoMinutos, incluidoMinutos - restanteMinutos) ?? 0;
+    return `${pct > 0 && pct < 1 ? 1 : Math.round(pct)} %`;
+}
+
+/** Texto del aviso. Siempre dice cuánto le queda en horas, clases y porcentaje, y cuándo se renueva. */
 export function armarMensaje(c: ContextoMensaje): MensajeDeSaldo {
     const quedan = formatoHoras(c.restanteMinutos);
     const clases = clasesRestantes(c.restanteMinutos, c.bloqueMinutos);
     const renueva = `Las horas se renuevan el ${c.seRenueva}; las que no se usen no pasan al mes siguiente.`;
+    const saldo = `${quedan} de las ${formatoHoras(c.incluidoMinutos)} de este mes (${formatoPorcentaje(c.restanteMinutos, c.incluidoMinutos)})`;
+    const alcanzan = clases >= 1
+        ? ` Alcanzan para ${clases} ${clases === 1 ? 'clase más' : 'clases más'} de ${formatoHoras(c.bloqueMinutos)}.`
+        : ' Ya no alcanza para una clase completa.';
+    const entrada = c.momento === 'entrada' ? `${c.atleta} acaba de entrar y ` : '';
+    const cuerpo = `${entrada}${entrada ? 'le' : 'Le'} quedan ${saldo}.${alcanzan} ${renueva}`;
 
-    if (c.escalon <= 0 || c.restanteMinutos <= 0) {
+    if ((c.aviso.tipo === 'pct' && c.aviso.valor <= 0) || c.restanteMinutos <= 0) {
         return {
             titulo: `${c.atleta} ya usó todas sus horas`,
             cuerpo: `Con la visita de hoy, ${c.atleta} usó las ${formatoHoras(c.incluidoMinutos)} de su plan de este mes. `
@@ -123,22 +168,17 @@ export function armarMensaje(c: ContextoMensaje): MensajeDeSaldo {
             severidad: 'critico',
         };
     }
-    if (c.escalon >= 50) {
-        return {
-            titulo: `${c.atleta} ya usó la mitad de sus horas`,
-            cuerpo: `Le quedan ${quedan} de las ${formatoHoras(c.incluidoMinutos)} de este mes. ${renueva}`,
-            severidad: 'info',
-        };
+    if (c.aviso.tipo === 'clases') {
+        // El título cuenta las clases que de verdad caben (pudo bajar más de un bloque de golpe).
+        const titulo = clases >= 1
+            ? `A ${c.atleta} ${clases === 1 ? 'le queda 1 clase' : `le quedan ${clases} clases`} este mes`
+            : `A ${c.atleta} le quedan ${quedan} este mes`;
+        return { titulo, cuerpo, severidad: 'aviso' };
     }
-    const entrada = c.momento === 'entrada' ? `${c.atleta} acaba de entrar y ` : '';
-    const alcanzan = clases >= 1
-        ? ` Alcanzan para ${clases} ${clases === 1 ? 'clase más' : 'clases más'} de ${formatoHoras(c.bloqueMinutos)}.`
-        : ' Ya no alcanza para una clase completa.';
-    return {
-        titulo: `A ${c.atleta} le quedan ${quedan} este mes`,
-        cuerpo: `${entrada}${entrada ? 'le' : 'Le'} quedan ${quedan} de las ${formatoHoras(c.incluidoMinutos)} de este mes.${alcanzan} ${renueva}`,
-        severidad: 'aviso',
-    };
+    if (c.aviso.valor >= 50) {
+        return { titulo: `${c.atleta} ya usó la mitad de sus horas`, cuerpo, severidad: 'info' };
+    }
+    return { titulo: `A ${c.atleta} le quedan ${quedan} este mes`, cuerpo, severidad: 'aviso' };
 }
 
 /** Día 1 del mes siguiente a `periodEnd` (YYYY-MM-DD) o al mes de `hoy`, en español: «1 de noviembre». */

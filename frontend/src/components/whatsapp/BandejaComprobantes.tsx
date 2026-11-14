@@ -103,7 +103,7 @@ const MOTIVOS_RAPIDOS: Record<'resuelto' | 'descartado', string[]> = {
 };
 
 const PARECE_DE: Record<MarcaDeContacto, string> = {
-    negocio: 'un negocio', otro_club: 'otro club', plataforma: 'una plataforma', personal: 'un contacto personal',
+    negocio: 'un negocio', otro_club: 'otro club', plataforma: 'una plataforma', personal: 'un contacto personal', equipo: 'alguien del staff',
 };
 
 function enmascarar(tel: string): string {

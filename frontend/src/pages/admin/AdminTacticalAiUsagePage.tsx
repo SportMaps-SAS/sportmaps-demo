@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { AI_METER_UNIT, AI_RECHARGE_STEP, rechargeLabel, rechargeUsdFor } from '@/lib/school/tacticalAi';
 
 export interface AiCoachRow {
   user_id: string; name: string; analyses: number; cache_hits: number; tokens_in: number; tokens_out: number;
@@ -28,6 +29,8 @@ export interface AiCoachRow {
 export interface AiSchoolRow {
   school_id: string; name: string; analyses: number; cache_hits: number; tokens_in: number; tokens_out: number;
   cost_usd: number; ceiling_usd: number; pct: number; hit_limit: boolean; coaches_at_limit: number; coaches: AiCoachRow[];
+  /** Cupo ampliado temporal vigente (×N). */
+  quota_multiplier?: number;
 }
 export interface AiSportRow { sport: string; label: string; analyses: number; cache_hits: number; cost_usd: number; avg_cost_usd: number | null }
 export interface AiUsageReport {
@@ -48,6 +51,12 @@ function currentPeriod(): string {
 }
 
 interface GrantTarget { schoolId: string; schoolName: string; userId: string | null; userName: string | null }
+
+/** Recargas que se ofrecen al coach, en la moneda de su medidor («+50 % de IA»). */
+const RECHARGE_PRESETS = [AI_RECHARGE_STEP[AI_METER_UNIT], AI_RECHARGE_STEP[AI_METER_UNIT] * 2].map((amount) => ({
+  label: rechargeLabel(AI_METER_UNIT, amount),
+  usd: rechargeUsdFor({ unit: AI_METER_UNIT, amount }),
+}));
 
 function Kpi({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -196,6 +205,9 @@ export default function AdminTacticalAiUsagePage() {
                           <TableCell className="font-semibold">
                             {s.name}
                             {s.hit_limit && <Badge variant="destructive" className="ml-2">Topó el techo</Badge>}
+                            {s.quota_multiplier && s.quota_multiplier !== 1 && (
+                              <Badge variant="secondary" className="ml-2 bg-violet-100 text-violet-900">Cupo ×{String(s.quota_multiplier).replace('.', ',')} temporal</Badge>
+                            )}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">{int(s.analyses)}</TableCell>
                           <TableCell className="text-right tabular-nums">{int(s.cache_hits)}</TableCell>
@@ -250,6 +262,19 @@ export default function AdminTacticalAiUsagePage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            {grant?.userId && (
+              <div className="space-y-1">
+                <Label>Recarga que pidió el entrenador</Label>
+                <div className="flex flex-wrap gap-2">
+                  {RECHARGE_PRESETS.map((r) => (
+                    <Button key={r.label} type="button" size="sm" variant="outline"
+                      onClick={() => { setAmount(String(r.usd)); setNote((n) => n || `Recarga ${r.label}`); }}>
+                      {r.label} ({usd(r.usd)})
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="space-y-1">
               <Label htmlFor="ai-grant-amount">Monto (USD)</Label>
               <Input id="ai-grant-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} />

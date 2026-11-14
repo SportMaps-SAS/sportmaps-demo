@@ -22,7 +22,7 @@ import { supabase } from '../config/supabase';
 import { requireAuth, type AuthenticatedRequest } from '../middlewares/authMiddleware';
 import {
     adminsDeEscuela, celularCo, COLUMNAS_PREFERENCIAS, COLUMNAS_SUSCRIPCION, escuelaHabilitada, esFaltaDeEsquema,
-    leerCanal, nombreDeEscuela, numeroDelCanal, plataformaHabilitada, type Suscripcion,
+    leerCanal, nombreDeEscuela, numeroDelCanal, canalHabilitado, type Suscripcion,
 } from '../services/plataforma-wa.service';
 import { enlaceDeActivacion, nuevoCodigo } from '../services/plataforma-wa-entrante.service';
 
@@ -78,7 +78,7 @@ router.get('/:schoolId/avisos-sportmaps', requireAuth, async (req: Authenticated
         const enlace = mia.fila?.estado === 'pendiente' && mia.fila.codigo
             ? enlaceDeActivacion(numeroDelCanal(canal), escuela, mia.fila.codigo) : null;
         return res.json({
-            disponible: plataformaHabilitada() && canal?.status === 'activo' && !mia.sinMigracion,
+            disponible: (await canalHabilitado()) && canal?.status === 'activo' && !mia.sinMigracion,
             escuela_habilitada: habilitada,
             numero_canal: `+${numeroDelCanal(canal)}`,
             suscripcion: publica(mia.fila, enlace),
@@ -95,7 +95,7 @@ router.post('/:schoolId/avisos-sportmaps', requireAuth, async (req: Authenticate
     const numero = celularCo((req.body ?? {}).telefono);
     if (!numero) return res.status(400).json({ error: 'Escribe un celular de Colombia (10 dígitos, empieza por 3).' });
     try {
-        if (!plataformaHabilitada()) return res.status(409).json({ error: 'Los avisos por WhatsApp de SportMaps todavía no están disponibles.' });
+        if (!(await canalHabilitado())) return res.status(409).json({ error: 'Los avisos por WhatsApp de SportMaps todavía no están disponibles.' });
         if (!(await escuelaHabilitada(schoolId))) return res.status(409).json({ error: 'Tu escuela todavía no tiene este servicio. Escríbenos para activarlo.' });
 
         // El número ya lo tiene otra persona de la escuela.

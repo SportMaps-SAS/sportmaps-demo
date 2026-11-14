@@ -1,0 +1,24 @@
+{
+  "name": "monster_clinica_2026",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! 🏐 Te recordamos la *Clínica de Armadores y Atacantes* de Monster´s Volley con ⭐ Jorge Mesa, armador de la Selección Colombia: 21 y 22 de noviembre en el Colegio Bilingüe La Enseñanza. La preventa va hasta el 10 de noviembre. ¿Te enviamos toda la información y cómo reservar tu cupo?",
+      "example": { "body_text": [["Carolina"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir promociones cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, envíame la info" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

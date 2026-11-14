@@ -58,7 +58,7 @@ async function login(page: Page, email: string) {
 function sniff(page: Page, tag: string) {
   page.on('response', async (r) => {
     const u = r.url();
-    if (r.request().method() !== 'GET' && !/google|sentry|posthog|vercel|wompi\.co/.test(u)) { let b=''; try { b=(await r.text()).slice(0,400);} catch{} log(`${tag}:write`, { m: r.request().method(), s: r.status(), u, b }); return; }
+    if (r.request().method() !== 'GET' && !/google|sentry|posthog|vercel|wompi\.co/.test(u)) { let b=''; try { b=(await r.text()).slice(0,400);} catch { /* sin cuerpo: solo diagnóstico */ } log(`${tag}:write`, { m: r.request().method(), s: r.status(), u, b }); return; }
     if (!/(bffdev|supabase\.co)/.test(u)) return;
     if (!/enable_vendor|marketplace|orders|order_items|products|vendor_profiles|wompi|checkout|shipping|notify_user|shipments/i.test(u)) return;
     let body = '';

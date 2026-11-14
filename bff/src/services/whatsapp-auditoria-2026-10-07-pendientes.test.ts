@@ -137,6 +137,10 @@ describe('6. cancelar = PAGAR, y es público (…5281)', () => {
         ['Donde puedo pagar la cuota', true, false],
         ['me pasas el número de cuenta para consignar', true, false],
         ['medios de pago', true, false],
+        // Monster 2026-11-04: después de la ficha de la clínica el bot mandaba esto al buzón.
+        ['Listo, ¿a qué número te consigno?', true, false],
+        ['¿A qué Nequi transfiero?', true, false],
+        ['a cual llave te pago', true, false],
     ])('«%s» → pagar=%s, presencial=%s', (texto, pagar, presencial) => {
         expect(preguntaComoPagar(texto)).toEqual({ pagar, presencial });
     });

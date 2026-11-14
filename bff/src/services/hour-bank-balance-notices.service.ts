@@ -23,7 +23,7 @@ import { emailClient } from '../utils/emailClient';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { todayInZone } from '../utils/businessDate';
 import {
-    normalizarEscalones, porcentajeRestante, decidirAvisos, aplicarDecision, armarMensaje,
+    normalizarEscalones, umbralesDelPeriodo, decidirAvisos, aplicarDecision, armarMensaje,
     fechaDeRenovacion, dentroDeHorarioDeCorreo, type EscalonMarca, type MensajeDeSaldo,
 } from './hour-bank-balance-notices.shared';
 
@@ -84,7 +84,7 @@ export async function runHourBankBalanceNotices(ahora: Date = new Date()): Promi
     for (const [correo, c] of correos) {
         try {
             const tpl = await BrandedEmailTemplates.hourBankBalance({
-                recipientName: c.nombre, items: c.items, link: `${FRONTEND_URL}/my-enrollments`, schoolId: c.schoolId,
+                recipientName: c.nombre, items: c.items, link: `${FRONTEND_URL}/enrollments`, schoolId: c.schoolId,
             });
             const r = await emailClient.send({ to: correo, subject: tpl.subject, html: tpl.html });
             if (r?.success) out.correos += 1;
@@ -111,16 +111,9 @@ async function procesarEscuela(
     const filas = (periodos ?? []) as Record<string, any>[];
     if (filas.length === 0) return 0;
 
-    // Solo los períodos donde hay algo que hacer (casi siempre ninguno).
-    const pendientes = filas.map((p) => {
-        const marcas = (p.balance_notices && typeof p.balance_notices === 'object' ? p.balance_notices : {}) as EscalonMarca;
-        const pct = porcentajeRestante(Number(p.included_minutes), Number(p.consumed_minutes));
-        return { p, marcas, decision: decidirAvisos(esc.steps, pct, marcas) };
-    }).filter((x) => x.decision.aEnviar !== null || x.decision.marcarEnSilencio.length > 0 || x.decision.borrarMarcas.length > 0);
-    if (pendientes.length === 0) return 0;
-
     // Datos de contexto en lote (nada de una consulta por fila: ver CLAUDE.md, jobs de cada minuto).
-    const enrollmentIds = [...new Set(pendientes.map((x) => x.p.enrollment_id as string))];
+    // El bloque del plan hace falta ANTES de decidir: los escalones «quedan 2 clases» dependen de él.
+    const enrollmentIds = [...new Set(filas.map((p) => p.enrollment_id as string))];
     const { data: insc } = await supabase
         .from('enrollments').select('id, child_id, user_id, offering_plan_id').in('id', enrollmentIds);
     const enrollments = new Map(((insc ?? []) as Record<string, any>[]).map((e) => [e.id as string, e]));
@@ -133,6 +126,17 @@ async function procesarEscuela(
             if (Number(pl.session_block_minutes) > 0) bloques.set(pl.id, Number(pl.session_block_minutes));
         });
     }
+    const bloqueDe = (enrollmentId: string) => bloques.get(enrollments.get(enrollmentId)?.offering_plan_id as string) ?? esc.bloqueEscuela;
+
+    // Solo los períodos donde hay algo que hacer (casi siempre ninguno).
+    const pendientes = filas.map((p) => {
+        const marcas = (p.balance_notices && typeof p.balance_notices === 'object' ? p.balance_notices : {}) as EscalonMarca;
+        const incluido = Number(p.included_minutes);
+        const restante = Math.max(0, incluido - Number(p.consumed_minutes));
+        const umbrales = umbralesDelPeriodo(esc.steps, incluido, bloqueDe(p.enrollment_id as string));
+        return { p, marcas, decision: decidirAvisos(umbrales, restante, marcas) };
+    }).filter((x) => x.decision.aEnviar !== null || x.decision.marcarEnSilencio.length > 0 || x.decision.borrarMarcas.length > 0);
+    if (pendientes.length === 0) return 0;
 
     const childIds = [...new Set([...enrollments.values()].map((e) => e.child_id).filter(Boolean))] as string[];
     const { data: hijos } = childIds.length
@@ -158,7 +162,7 @@ async function procesarEscuela(
 
         // Reclamar el escalón: solo la instancia que logra el UPDATE condicional avisa.
         let consulta = supabase.from('hour_bank_periods').update({ balance_notices: nuevas }).eq('id', p.id);
-        if (decision.aEnviar !== null) consulta = consulta.is(`balance_notices->>${decision.aEnviar}`, null);
+        if (decision.aEnviar !== null) consulta = consulta.is(`balance_notices->>${decision.aEnviar.clave}`, null);
         const { data: reclamado, error: errUpd } = await consulta.select('id');
         if (errUpd || !reclamado || reclamado.length === 0) continue;
         if (decision.aEnviar === null) continue; // solo se limpiaron marcas
@@ -172,9 +176,9 @@ async function procesarEscuela(
 
         const restante = Math.max(0, Number(p.included_minutes) - Number(p.consumed_minutes));
         const msg = armarMensaje({
-            escalon: decision.aEnviar, atleta,
+            aviso: decision.aEnviar, atleta,
             restanteMinutos: restante, incluidoMinutos: Number(p.included_minutes),
-            bloqueMinutos: bloques.get(insc1?.offering_plan_id as string) ?? esc.bloqueEscuela,
+            bloqueMinutos: bloqueDe(p.enrollment_id as string),
             seRenueva: fechaDeRenovacion(p.period_end as string, hoy), momento: 'cierre',
         });
 
@@ -185,7 +189,7 @@ async function procesarEscuela(
             await supabase.from('notifications').insert({
                 user_id: paraId, school_id: esc.schoolId, type: 'hour_bank_balance',
                 title: destinatarioId ? msg.titulo : `${msg.titulo} (sin acudiente vinculado)`,
-                message: msg.cuerpo, link: destinatarioId ? '/my-enrollments' : '/school/access-control',
+                message: msg.cuerpo, link: destinatarioId ? '/enrollments' : '/school/access-control',
             });
             enviados += 1;
         }

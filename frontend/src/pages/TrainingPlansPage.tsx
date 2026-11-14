@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -51,8 +51,14 @@ export default function TrainingPlansPage() {
   const DELETE_SESSION_ROLES = ['owner', 'admin', 'staff', 'school_admin', 'super_admin'];
   const canDeleteSessions = DELETE_SESSION_ROLES.includes(currentUserRole || '');
 
+  // «Planear» / «Crear el plan» desde Sesiones V2 llegan con ?equipo=&fecha=
+  // (B6): se abre ya en ese equipo y en la semana de ese día.
+  const [searchParams] = useSearchParams();
+  const equipoPedido = searchParams.get('equipo');
+  const fechaPedida = /^\d{4}-\d{2}-\d{2}$/.test(searchParams.get('fecha') ?? '') ? searchParams.get('fecha') : null;
+
   const [filterType, setFilterType] = useState<'teams' | 'plans'>('teams');
-  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [selectedTeamId, setSelectedTeamId] = useState<string>(equipoPedido ?? '');
   const [selectedPlanId, setSelectedPlanId] = useState<string>('');
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -442,6 +448,7 @@ export default function TrainingPlansPage() {
               teamSport={teamSport}
               teamName={selectedName}
               onEditSession={(session) => { setEditingSession(session); setDialogOpen(true); }}
+              fechaFoco={selectedTeamId === equipoPedido ? fechaPedida : null}
             />
           )}
 

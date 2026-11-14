@@ -287,12 +287,21 @@ export function validateMpWebhookSignature(params: {
 
     if (!ts || !v1) return false;
 
-    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
-    const expected = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+    // Formato estricto ANTES de tocar Buffers: un v1 no hexadecimal (o de largo raro) no debe lanzar (500) sino
+    // rechazarse con 401 desde el caller.
+    if (!/^[0-9a-f]{64}$/i.test(v1)) return false;
+    if (!/^\d{10,13}$/.test(ts)) return false;
+    // Frescura (anti-replay): ts en ms (MP) o segundos; ±5 min respecto del reloj del servidor.
+    const tsMs = ts.length <= 10 ? Number(ts) * 1000 : Number(ts);
+    const tolerancia = Number(process.env.MP_WEBHOOK_TS_TOLERANCE_MS ?? 5 * 60_000);
+    if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > (Number.isFinite(tolerancia) ? tolerancia : 5 * 60_000)) return false;
 
-    // Timing-safe compare
-    if (expected.length !== v1.length) return false;
-    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(v1, 'hex'));
+    const manifest = `id:${dataId};request-id:${xRequestId};ts:${ts};`;
+    const expected = crypto.createHmac('sha256', secret).update(manifest).digest();
+    const received = Buffer.from(v1, 'hex'); // 32 bytes garantizados por la regex
+
+    // Timing-safe compare (mismo largo garantizado)
+    return received.length === expected.length && crypto.timingSafeEqual(expected, received);
 }
 
 // ─── Fetch payment (anti-spoofing + reconciliation) ────────────────────────
@@ -449,6 +458,70 @@ export async function createMpPayment(
         return { ok: true, payment };
     } catch (err: any) {
         return { ok: false, error: err?.message || 'createMpPayment_error' };
+    }
+}
+
+// ─── Checkout Pro: preferencia con monto exacto y vencimiento ──────────────
+
+export interface CreateMpPreferenceParams {
+    accessToken: string;                    // access_token DE LA ESCUELA (nunca el de SportMaps)
+    title: string;
+    amount: number;                         // COP entero
+    externalReference: string;
+    notificationUrl: string;
+    /** Hasta cuándo se puede pagar (ISO). Se manda como expiration_date_to. */
+    expiresAt: string;
+    backUrl?: string | null;
+    payerEmail?: string | null;
+    /** X-Idempotency-Key: el mismo checkout reintentado devuelve la MISMA preferencia. */
+    idempotencyKey: string;
+}
+
+export async function createMpPreference(
+    params: CreateMpPreferenceParams,
+): Promise<{ ok: true; id: string; initPoint: string; sandboxInitPoint: string | null } | { ok: false; error: string; status?: number }> {
+    const body: Record<string, unknown> = {
+        items: [{
+            id: params.externalReference,
+            title: params.title.slice(0, 256),
+            category_id: mpCategoryFromReference(params.externalReference),
+            quantity: 1,
+            currency_id: 'COP',
+            unit_price: Number(params.amount),
+        }],
+        external_reference: params.externalReference,
+        notification_url: params.notificationUrl,
+        statement_descriptor: 'SPORTMAPS',
+        binary_mode: true,
+        expires: true,
+        expiration_date_from: new Date().toISOString(),
+        expiration_date_to: params.expiresAt,
+    };
+    if (params.payerEmail) body.payer = { email: params.payerEmail };
+    if (params.backUrl) {
+        body.back_urls = { success: params.backUrl, pending: params.backUrl, failure: params.backUrl };
+        body.auto_return = 'approved';
+    }
+
+    try {
+        const res = await fetch(`${MP_API_BASE}/checkout/preferences`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${params.accessToken}`,
+                'X-Idempotency-Key': params.idempotencyKey,
+            },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const errBody = await res.text();
+            return { ok: false, error: `mp_create_preference_failed: ${errBody.slice(0, 500)}`, status: res.status };
+        }
+        const json: any = await res.json();
+        if (!json?.id || !json?.init_point) return { ok: false, error: 'mp_create_preference_invalid_response' };
+        return { ok: true, id: String(json.id), initPoint: String(json.init_point), sandboxInitPoint: json.sandbox_init_point ?? null };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || 'createMpPreference_error' };
     }
 }
 

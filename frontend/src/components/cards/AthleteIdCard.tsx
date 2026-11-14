@@ -71,6 +71,10 @@ export type CardData = {
   } | null;
   revoked_at?: string;
   reason?: string;
+  /** Filas libres (carné de torneo: número, apodo, posición…). Se muestran después de las de siempre. */
+  extra_rows?: Array<{ label: string; value: string }>;
+  /** Filas libres del REVERSO (carné de torneo: campos propios de la ficha, como EPS o talla). */
+  back_rows?: Array<{ label: string; value: string }>;
 };
 
 const FEE_BADGE: Record<string, { label: string; bg: string; fg: string; icon: typeof ShieldCheck }> = {
@@ -348,6 +352,7 @@ function dataRows(ctx: LayoutCtx): { icon: typeof ShieldCheck; label: string; va
   if (show.eps && data.athlete?.eps_name) rows.push({ icon: Heart, label: 'EPS', value: data.athlete.eps_name });
   if (show.tshirt_size && data.athlete?.tshirt_size) rows.push({ icon: Shirt, label: 'Talla', value: data.athlete.tshirt_size });
   if (show.emergency_contact && data.athlete?.emergency_contact) rows.push({ icon: Phone, label: 'Emergencia', value: data.athlete.emergency_contact });
+  for (const r of data.extra_rows ?? []) if (r.value) rows.push({ icon: ShieldCheck, label: r.label, value: r.value });
   return rows;
 }
 
@@ -788,7 +793,10 @@ function BackFace({ ctx }: { ctx: LayoutCtx }) {
     ['RH', a?.blood_type, !!show.blood_type],
     ['Talla', a?.tshirt_size, !!show.tshirt_size],
   ];
-  const shown = rows.filter(([, v, on]) => on && !!v);
+  const shown = [
+    ...rows.filter(([, v, on]) => on && !!v),
+    ...(data.back_rows ?? []).filter((r) => !!r.value).map((r): [string, string, boolean] => [r.label, r.value, true]),
+  ];
   const isPublic = data.viewer === 'public';
   return (
     <div className="relative h-full px-5 pt-5 pb-4 flex flex-col" style={{ color: t.inkColor }}>

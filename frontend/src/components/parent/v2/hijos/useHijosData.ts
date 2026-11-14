@@ -20,7 +20,7 @@ import {
 } from '@/lib/school/performanceQueries';
 import { getAthleteReportDetail } from '@/lib/school/reportsQueries';
 import { useAthleteReports } from '@/hooks/useAthleteReports';
-import type { AttendanceRecord } from './hijosUtils';
+import { carpetaDocsFamilia, type AttendanceRecord } from './hijosUtils';
 
 export function useChildPerformanceEntries(childId: string | undefined) {
   return useQuery({
@@ -83,7 +83,8 @@ export interface ArchivoDocumento {
 /** Por tipo de documento, los archivos que la familia ya subió (catálogo en lib/documentosDeportista). */
 export type ChildDocsState = Partial<Record<TipoDocumento, ArchivoDocumento[]>>;
 
-export const childDocsFolder = (userId: string, childId: string) => `children/${userId}/${childId}/docs`;
+// La misma carpeta que lee la escuela (SchoolStudentsManagementPage → carpetasDocumentosDeportista).
+export const childDocsFolder = (userId: string, childId: string) => carpetaDocsFamilia(userId, childId);
 
 export function useChildDocuments(childId: string | undefined, idDocumentUrl: string | null | undefined) {
   const { user } = useAuth();

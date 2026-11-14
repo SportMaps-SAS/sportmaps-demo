@@ -16,6 +16,7 @@ import type { TacticalSport } from '@/lib/school/tacticalSports';
 import type { TacticalPlaybackOptions } from '@/lib/school/tacticalBoardSettings';
 import { pickVideoMime, type TacticalVideoFormat } from './tacticalAnimationFormat';
 import { abortError, createTacticalFrameRenderer } from './tacticalFrameRenderer';
+import type { ExportBranding } from './tacticalWatermark';
 
 export { pickVideoMime, canRecordVideo, type TacticalVideoFormat } from './tacticalAnimationFormat';
 
@@ -31,6 +32,8 @@ export interface ExportVideoOptions {
   playerNames?: Record<string, string>;
   /** Cancha de fondo (T4). */
   sport?: TacticalSport | null;
+  /** «Hecho con SportMaps · sportmaps.co» y logo del club en cada cuadro. */
+  branding?: ExportBranding;
   fps?: number;
   width?: number;
   format?: TacticalVideoFormat;
@@ -91,6 +94,7 @@ export async function exportVideo(opts: ExportVideoOptions): Promise<ExportVideo
     playerNames: opts.playerNames,
       sport: opts.sport,
       playback: opts.playback,
+      branding: opts.branding,
       width: opts.width ?? 720,
       holdStartMs: opts.holdStartMs ?? 600,
       holdEndMs: opts.holdEndMs ?? 1200,

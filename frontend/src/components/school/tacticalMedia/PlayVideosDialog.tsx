@@ -131,6 +131,22 @@ export function PlayVideosDialog({ open, onOpenChange, readOnly, videos, onSave,
 
   const linksBody = (
     <>
+      {!readOnly && (
+        // Cómo se usa, en tres pasos: sin esto no se entendía que «Usar» solo lo
+        // pasa a la jugada y que hay que guardar la jugada para no perderlo.
+        <ol className="grid gap-1.5 rounded-lg border border-white/10 bg-white/5 p-2.5 text-xs text-white/80 sm:grid-cols-3" aria-label="Cómo agregar un video">
+          {[
+            ['1', 'Elige un video guardado (botón «Agregar») o pega un enlace a la derecha.'],
+            ['2', 'Revisa la vista previa y, si quieres, marca desde qué minuto empieza.'],
+            ['3', 'Toca «Listo» y después «Guardar jugada» en la pizarra.'],
+          ].map(([n, t]) => (
+            <li key={n} className="flex gap-2">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">{n}</span>
+              <span>{t}</span>
+            </li>
+          ))}
+        </ol>
+      )}
       <div className="grid gap-4 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         {/* Columna derecha en desktop (primera en celular): la jugada */}
         <section className="space-y-3 md:order-2">
@@ -183,7 +199,11 @@ export function PlayVideosDialog({ open, onOpenChange, readOnly, videos, onSave,
 
           <div>
             <p className="text-sm font-semibold mb-1.5">En esta jugada ({list.length}/{PLAY_VIDEOS_MAX})</p>
-            {list.length === 0 ? <p className="text-xs text-white/50">Ninguno todavía.</p> : (
+            {list.length === 0 ? (
+              <p className="text-xs text-white/50">
+                {readOnly ? 'Ninguno todavía.' : 'Ninguno todavía. Toca «Agregar» en un video guardado o pega un enlace.'}
+              </p>
+            ) : (
               <ul className="space-y-1">
                 {list.map((v) => {
                   const k = videoKey(v);
@@ -212,7 +232,10 @@ export function PlayVideosDialog({ open, onOpenChange, readOnly, videos, onSave,
 
         {/* Videos guardados de la escuela */}
         <section className="space-y-2 md:order-1 md:border-r md:border-white/10 md:pr-4">
-          <p className="text-sm font-semibold">Videos guardados</p>
+          <div>
+            <p className="text-sm font-semibold">Videos guardados</p>
+            <p className="text-[11px] text-white/50">Los de toda la escuela, para reusarlos en cualquier jugada.</p>
+          </div>
           {saved.isLoading ? <Loader2 className="h-5 w-5 animate-spin text-white/50" /> : saved.data?.available === false ? (
             <p className="text-xs text-white/50">Los videos guardados se activan con la próxima actualización de la base.</p>
           ) : savedList.length === 0 ? (
@@ -227,13 +250,14 @@ export function PlayVideosDialog({ open, onOpenChange, readOnly, videos, onSave,
                   </div>
                   {!readOnly && (
                     <>
-                      <Button type="button" size="sm" variant="outline" aria-label={`Usar ${v.title}`} disabled={full}
+                      <Button type="button" size="sm" variant="outline" aria-label={`Agregar ${v.title} a esta jugada`} disabled={full}
+                        title="Agregar a esta jugada"
                         className="h-8 gap-1 px-2 bg-transparent border-white/20 text-white hover:bg-white/10 hover:text-white"
                         onClick={() => {
                           const { id: _i, created_by: _c, created_at: _a, ...video } = v;
                           if (addToPlay(video)) setForm(EMPTY_FORM);
                         }}>
-                        <BookmarkPlus className="h-4 w-4" /> Usar
+                        <BookmarkPlus className="h-4 w-4" /> Agregar
                       </Button>
                       <Button type="button" size="sm" variant="ghost" aria-label={`Borrar ${v.title} de Videos guardados`}
                         className="h-8 w-8 p-0 text-white/50 hover:bg-white/10 hover:text-red-300"
@@ -251,7 +275,10 @@ export function PlayVideosDialog({ open, onOpenChange, readOnly, videos, onSave,
         </section>
       </div>
 
-      <div className="flex justify-end gap-2 border-t border-white/10 pt-3">
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-white/10 pt-3">
+        {!readOnly && list.length > 0 && (
+          <p className="mr-auto text-xs text-white/60">Al terminar, toca «Guardar jugada» en la pizarra para que los videos queden guardados.</p>
+        )}
         {!readOnly && <Button type="button" variant="ghost" className="text-white/70 hover:bg-white/10 hover:text-white" onClick={() => onOpenChange(false)}>Cancelar</Button>}
         <Button type="button" className="bg-emerald-600 hover:bg-emerald-500 text-white" onClick={done}>{readOnly ? 'Cerrar' : 'Listo'}</Button>
       </div>

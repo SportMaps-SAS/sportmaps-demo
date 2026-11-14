@@ -1,0 +1,291 @@
+1
+00:00:00,014 --> 00:00:08,105
+La app para familias está pensada para el celular. Todo está en estas cinco pestañas de abajo: Inicio, Calendario,
+
+2
+00:00:08,105 --> 00:00:09,453
+Hijos, Pagos y Más.
+
+3
+00:00:09,453 --> 00:00:15,544
+Inicio te dice en una frase si estás al día. Aquí hay cobros pendientes, cuál es el más antiguo,
+
+4
+00:00:15,544 --> 00:00:18,399
+y el botón verde te lleva directo a pagarlos.
+
+5
+00:00:18,399 --> 00:00:26,183
+Debajo, el próximo entreno de cualquiera de tus hijos, y la tarjeta de cada uno, con su equipo, su profe y si debe algo.
+
+6
+00:00:26,183 --> 00:00:31,765
+Cuando el profe publica el informe del mes, su frase aparece aquí, entre comillas.
+
+7
+00:00:31,765 --> 00:00:39,309
+Y si convocaron a tu hijo a un partido, Inicio te pregunta si va, con el día, la hora, el lugar y la nota de llegada.
+
+8
+00:00:39,309 --> 00:00:46,210
+Toca Va o No va, y el profe recibe tu respuesta. Si cambian los planes, tocas Cambiar.
+
+9
+00:00:46,210 --> 00:00:52,488
+En Calendario ves los entrenos, partidos y torneos de todos tus hijos juntos, día por día.
+
+10
+00:00:52,488 --> 00:00:55,836
+El calendario lo arma la escuela: tú lo recibes.
+
+11
+00:00:55,836 --> 00:01:03,399
+Los partidos traen la nota de la escuela. Al tocar uno ves el detalle: la hora, el lugar con el botón Ver mapa,
+
+12
+00:01:03,399 --> 00:01:04,625
+y la convocatoria.
+
+13
+00:01:04,625 --> 00:01:08,548
+Para cerrar, toca la equis o desliza hacia abajo.
+
+14
+00:01:08,548 --> 00:01:15,393
+En Torneos ves dónde ya está inscrito tu hijo y los que tienen inscripciones abiertas, con el precio y la fecha límite.
+
+15
+00:01:15,393 --> 00:01:21,681
+Y Mes es la cuadrícula de siempre: los días con eventos tienen una marca, y al tocar uno ves sus eventos abajo.
+
+16
+00:01:23,554 --> 00:01:32,782
+En Hijos ves la ficha de cada uno. Si tienes varios, arriba eliges a cuál ver. La ficha tiene cuatro pestañas: Progreso,
+
+17
+00:01:32,782 --> 00:01:35,012
+Asistencia, Informes y Ficha.
+
+18
+00:01:35,012 --> 00:01:41,381
+Progreso muestra en qué va mejorando: cada habilidad que el profe mide, con la flecha de si subió o bajó.
+
+19
+00:01:41,381 --> 00:01:45,506
+Tu hijo solo se compara con su propio avance, nunca con otros niños.
+
+20
+00:01:45,506 --> 00:01:50,247
+Abajo está qué trabajar en casa, y lo que dijo el profe, con la fecha.
+
+21
+00:01:50,247 --> 00:01:57,632
+En Asistencia está el porcentaje de cada mes y los últimos entrenos: Vino, Llegó tarde, No vino o Con excusa.
+
+22
+00:01:57,632 --> 00:02:00,207
+Llegar tarde cuenta como haber venido.
+
+23
+00:02:00,207 --> 00:02:05,764
+En Informes está lo que publica la escuela: el informe del mes, lo que trabajó el equipo,
+
+24
+00:02:05,764 --> 00:02:07,699
+y los informes de los partidos.
+
+25
+00:02:07,699 --> 00:02:14,298
+El informe del mes trae la asistencia, la frase del equipo, lo mejor del mes, lo que hay que trabajar,
+
+26
+00:02:14,298 --> 00:02:15,657
+y se descarga en PDF.
+
+27
+00:02:15,657 --> 00:02:25,494
+En Ficha están el documento, la EPS, el tipo de sangre, las alergias y el contacto de emergencia. Si algo está mal,
+
+28
+00:02:25,494 --> 00:02:27,376
+toca Corregir un dato.
+
+29
+00:02:27,376 --> 00:02:34,701
+También están los documentos. Hay diez tipos y ninguno es obligatorio: súbelos si la escuela te los pide.
+
+30
+00:02:34,701 --> 00:02:36,305
+Solo los ve la escuela.
+
+31
+00:02:36,305 --> 00:02:42,331
+Y el carnet digital: en Más, Carnets, están los de tus hijos con su vigencia.
+
+32
+00:02:42,331 --> 00:02:49,055
+Al tocar uno se abre en grande, con el código Q R para la entrada de la escuela. Abajo puedes ver el reverso,
+
+33
+00:02:49,055 --> 00:02:50,659
+descargarlo o compartirlo.
+
+34
+00:02:52,509 --> 00:02:59,627
+Cuando el profe arma la convocatoria, te llega un aviso: tu hijo está convocado, con el día, la hora y el lugar.
+
+35
+00:02:59,627 --> 00:03:08,156
+El profe necesita saber con quién cuenta. Respondes en dos lugares. Uno es Inicio, en la tarjeta de tu hijo.
+
+36
+00:03:08,156 --> 00:03:13,713
+Toca Va o No va, y sale el mensaje de que le avisaste al profe. Si cambian los planes,
+
+37
+00:03:13,713 --> 00:03:20,497
+toca Cambiar y el profe ve la respuesta nueva. Si tienes varios hijos convocados, respondes por cada uno.
+
+38
+00:03:20,497 --> 00:03:26,693
+El otro lugar es el Calendario: tocas el partido, y la convocatoria sale al final del detalle.
+
+39
+00:03:26,693 --> 00:03:35,358
+Después del partido, en Hijos, Informes, Informes de partidos, ves cada uno con su resultado: ganó, empató o perdió.
+
+40
+00:03:35,358 --> 00:03:40,474
+El reporte del profe cuenta el resumen, cómo fue el partido y qué van a mejorar.
+
+41
+00:03:40,474 --> 00:03:43,928
+Si la administración dejó un comentario, también sale.
+
+42
+00:03:43,928 --> 00:03:51,652
+Debajo está Tu respuesta: escríbele al profe lo que quieras sobre el partido y toca Enviar. Puedes editarla después.
+
+43
+00:03:51,652 --> 00:03:56,747
+Y si la escuela comparte las evaluaciones, la calificación de tu hijo aparece en Progreso,
+
+44
+00:03:56,747 --> 00:04:01,445
+junto con lo que el profe mide en los entrenos. Cada familia ve solo la de su hijo.
+
+45
+00:04:03,276 --> 00:04:09,418
+En Pagos ves cuánto debes en total. Cada cobro viene ya marcado: si los quieres pagar todos,
+
+46
+00:04:09,418 --> 00:04:11,354
+no tienes que tocar nada más.
+
+47
+00:04:11,354 --> 00:04:18,031
+Cada cobro dice el concepto, de qué hijo es, desde cuándo está vencido, y si incluye recargo por mora.
+
+48
+00:04:18,031 --> 00:04:25,566
+Para dejar uno por fuera, desmárcalo. El botón de abajo se recalcula solo.
+
+49
+00:04:25,566 --> 00:04:31,986
+Toca Pagar. Los cobros se pagan uno por uno. Con Pagar en línea eliges tarjeta, PSE o Nequi,
+
+50
+00:04:31,986 --> 00:04:36,103
+y ves el valor y el total antes de ir a la pasarela segura.
+
+51
+00:04:36,103 --> 00:04:43,158
+Si pagaste por transferencia, Nequi o Daviplata, cierra esto y toca Ya transferí: subir el comprobante.
+
+52
+00:04:43,158 --> 00:04:48,199
+La ventana te muestra los datos de la cuenta de la escuela, con un botón para copiarlos,
+
+53
+00:04:48,199 --> 00:04:50,319
+y el lugar para subir tu comprobante.
+
+54
+00:04:50,319 --> 00:04:57,317
+Elige la foto o el PDF, espera el chulo de comprobante cargado, y confirma.
+
+55
+00:04:57,317 --> 00:05:03,586
+Ese cobro pasa a En revisión hasta que la escuela compare el comprobante con su cuenta. Cuando lo aprueba,
+
+56
+00:05:03,586 --> 00:05:05,656
+pasa a Pagados y te llega un aviso.
+
+57
+00:05:05,656 --> 00:05:13,708
+En Pagados está todo lo que ya pagaste, con el valor, el medio y la fecha. Los que tienen Recibo lo abren con un toque.
+
+58
+00:05:13,708 --> 00:05:19,596
+Y el estado de cuenta de cada hijo muestra, mes a mes, cuánto debe, qué está vencido y qué está en revisión,
+
+59
+00:05:19,596 --> 00:05:22,540
+con Pagar este cobro en cada uno, y el botón Imprimir.
+
+60
+00:05:24,406 --> 00:05:31,451
+Si creaste tu cuenta y todavía no ves a tu hijo, pídele a la escuela su código: tres letras y cuatro caracteres.
+
+61
+00:05:31,451 --> 00:05:34,408
+En Inicio aparece el aviso: ¿Ya tienes escuela?
+
+62
+00:05:34,408 --> 00:05:43,228
+Escribe el código y busca tu escuela. También puedes llegar por el enlace o el Q R que te mande la escuela.
+
+63
+00:05:43,228 --> 00:05:50,111
+Aparece el nombre, el logo y la ciudad. Si es la tuya, toca Sí, es mi escuela.
+
+64
+00:05:50,111 --> 00:05:57,999
+Elige para quién es: para tu hijo, o para ti si tú entrenas. Escribe el nombre completo y la fecha de nacimiento.
+
+65
+00:05:57,999 --> 00:06:01,839
+La categoría es solo una sugerencia: la escuela decide.
+
+66
+00:06:01,839 --> 00:06:09,864
+Toca Enviar solicitud. Listo: la escuela te asignará la categoría. Todavía no se crea ningún cobro.
+
+67
+00:06:09,864 --> 00:06:18,764
+Mientras tanto, Inicio y Hijos muestran tu solicitud en amarillo, con la opción de cancelarla.
+
+68
+00:06:18,764 --> 00:06:26,329
+Del otro lado, en Por asignar, la escuela ve la solicitud y elige el equipo. Te llega el aviso de bienvenida y,
+
+69
+00:06:26,329 --> 00:06:30,759
+si la escuela cobra, el primer cobro, con unos días para pagarlo.
+
+70
+00:06:30,759 --> 00:06:37,854
+Lo demás está en Más: inscripciones, torneos, carnets, constancias, compras, salud, y ayuda.
+
+71
+00:06:37,854 --> 00:06:41,710
+Escribirle al club abre el WhatsApp de la escuela.
+
+72
+00:06:41,710 --> 00:06:47,880
+Y Mapi, el botón redondo de abajo a la derecha, responde cualquier duda con los pasos. Tu perfil,
+
+73
+00:06:47,880 --> 00:06:50,806
+tus avisos y tu contraseña están en Mi cuenta.

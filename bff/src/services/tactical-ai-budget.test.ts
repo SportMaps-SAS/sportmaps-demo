@@ -77,12 +77,13 @@ describe('costo por modelo y tokens', () => {
   });
 });
 
+const snap = (u: Partial<Record<string, number>>, s: Partial<Record<string, number>> = {}) => ({
+  period: '2026-10',
+  user: { budget_micro_usd: 1_000_000, extra_micro_usd: 0, used_micro_usd: 0, reserved_micro_usd: 0, analyses: 0, cache_hits: 0, ...u },
+  school: { ceiling_micro_usd: 10_000_000, extra_micro_usd: 0, used_micro_usd: 0, reserved_micro_usd: 0, ...s },
+});
+
 describe('saldo público', () => {
-  const snap = (u: Partial<Record<string, number>>, s: Partial<Record<string, number>> = {}) => ({
-    period: '2026-10',
-    user: { budget_micro_usd: 1_000_000, extra_micro_usd: 0, used_micro_usd: 0, reserved_micro_usd: 0, analyses: 0, cache_hits: 0, ...u },
-    school: { ceiling_micro_usd: 10_000_000, extra_micro_usd: 0, used_micro_usd: 0, reserved_micro_usd: 0, ...s },
-  });
   it('40 % usado → queda el 60 %, unos 9 análisis de fútbol 11', () => {
     const b = budget.toPublicBalance(snap({ used_micro_usd: 400_000 }));
     expect(b.remaining_pct).toBe(60);
@@ -110,9 +111,11 @@ describe('mensaje de WhatsApp «Quiero más»', () => {
   it('escuela, coach, deporte y consumo; nada de atletas ni ids', () => {
     const msg = budget.buildMoreAiWhatsappMessage({
       schoolName: 'Club Demo', coachName: 'Profe\nAndrés', sport: 'futbol',
-      balance: { period: '2026-10', used_usd: 0.98, budget_usd: 1, analyses: 15, limited_by: 'user' },
+      balance: { period: '2026-10', pct: 98, analyses: 15, limited_by: 'user' },
     });
-    expect(msg).toBe('Hola, soy Profe Andrés de Club Demo. Usé mi IA de la pizarra de octubre 2026 (analizo jugadas de fútbol 11): 15 análisis, US$ 0,98 de US$ 1,00. Quiero más cupo de IA.');
+    expect(msg).toBe('Hola, soy Profe Andrés de Club Demo. Usé el 98 % de mi IA de la pizarra de octubre 2026 (analizo jugadas de fútbol 11), 15 análisis. Quiero una recarga de +50 % de IA.');
+    // Misma moneda que el medidor (%): nada de US$ en lo que ve el coach.
+    expect(msg).not.toContain('US$');
     for (const n of FAKE_ROSTER_NAMES) expect(msg).not.toContain(n);
     expect(msg).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/);
     expect(msg).not.toMatch(/\n/);
@@ -120,10 +123,43 @@ describe('mensaje de WhatsApp «Quiero más»', () => {
   it('techo de escuela: lo dice', () => {
     const msg = budget.buildMoreAiWhatsappMessage({
       schoolName: null, coachName: null, sport: null,
-      balance: { period: '2026-10', used_usd: 0.2, budget_usd: 1, analyses: 3, limited_by: 'school' },
+      balance: { period: '2026-10', pct: 20, analyses: 3, limited_by: 'school' },
     });
     expect(msg).toContain('mi escuela');
     expect(msg).toContain('tope mensual');
+  });
+});
+
+describe('recargas en la moneda del medidor', () => {
+  it('medidor en % → «+50 % de IA»; en análisis → «+10 análisis»', () => {
+    expect(budget.AI_METER_UNIT).toBe('pct');
+    expect(budget.rechargeOffer()).toEqual({ unit: 'pct', amount: 50, label: '+50 % de IA' });
+    expect(budget.rechargeOffer('analyses')).toEqual({ unit: 'analyses', amount: 10, label: '+10 análisis' });
+  });
+  it('el saldo público trae la recarga en la misma moneda', () => {
+    expect(budget.toPublicBalance(snap({})).recharge.label).toBe('+50 % de IA');
+  });
+  it('USD de la recarga: % del presupuesto BASE o análisis al costo medio, redondeado hacia arriba', () => {
+    expect(budget.rechargeUsd({ unit: 'pct', amount: 50 }, 1)).toBe(0.5);
+    expect(budget.rechargeUsd({ unit: 'pct', amount: 100 }, 1)).toBe(1);
+    expect(budget.rechargeUsd({ unit: 'analyses', amount: 10 }, 1, 'futbol')).toBe(0.64);
+    expect(budget.rechargeUsd({ unit: 'analyses', amount: 10 }, 1, 'voleibol')).toBe(0.43);
+    expect(budget.rechargeUsd({ unit: 'pct', amount: 33 }, 0.333333)).toBe(0.11);
+  });
+});
+
+describe('cupo ampliado temporal (boost)', () => {
+  it('sin boost → null; con x3 lo expone (el presupuesto ya viene multiplicado de la RPC)', () => {
+    expect(budget.toPublicBalance(snap({})).boost).toBeNull();
+    const s = { ...snap({ budget_micro_usd: 3_000_000 }), boost: { multiplier: '3.00', expires_at: '2026-11-05T05:00:00+00:00' } };
+    const b = budget.toPublicBalance(s as any);
+    expect(b.boost).toEqual({ multiplier: 3, expires_at: '2026-11-05T05:00:00+00:00' });
+    expect(b.budget_usd).toBe(3);
+    expect(b.remaining_pct).toBe(100);
+  });
+  it('multiplicador 1 o basura → null', () => {
+    expect(budget.toPublicBalance({ ...snap({}), boost: { multiplier: 1, expires_at: null } } as any).boost).toBeNull();
+    expect(budget.toPublicBalance({ ...snap({}), boost: { multiplier: 'x', expires_at: null } } as any).boost).toBeNull();
   });
 });
 
@@ -147,7 +183,8 @@ describe('reserva → cobro / liberación', () => {
     const L = new FakeTacticalAiLedger();
     await run(L);
     const { boardHash, anonymizePlay } = await import('../routes/school/tacticalAiShapes');
-    st.tablas.tactical_ai_analyses = [{ school_id: 'esc-1', board_hash: boardHash(anonymizePlay(input(), new Set()).play), result: st.inserts[0].result }];
+    const { kbVersion } = await import('./tactical-ai-knowledge');
+    st.tablas.tactical_ai_analyses = [{ school_id: 'esc-1', board_hash: boardHash(anonymizePlay(input(), new Set()).play, kbVersion('futbol')), result: st.inserts[0].result }];
     const before = L.user('esc-1', 'coach-1').used;
     const out = await run(L);
     expect(out.status).toBe(200);

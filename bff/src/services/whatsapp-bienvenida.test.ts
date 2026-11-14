@@ -181,7 +181,7 @@ describe('atenderDesconocido: bienvenida al saludo suelto', () => {
         expect(borradores()).toHaveLength(1);
         const [b] = borradores();
         expect(b.tool_context).toMatchObject({ step: PASO_BIENVENIDA_DESCONOCIDO });
-        expect(b.proposed_text).toContain('asistente automático');
+        expect(b.proposed_text).toContain('asistente virtual');
         expect(b.proposed_text).toContain('¿En qué te puedo ayudar?');
         expect(b.proposed_text.length).toBeLessThanOrEqual(500);
     });
@@ -208,7 +208,8 @@ describe('atenderDesconocido: bienvenida al saludo suelto', () => {
 
     it('una persona de la escuela acaba de escribirle → es suya, el bot calla', async () => {
         base({ filas: [{ wa_message_id: 'w1', direction: 'outbound', text_body: 'Hola, te cuento…', ai_generated: false, created_at: hace(30) }] });
-        expect(await atenderDesconocido(INTEGRATION, CONV, TEL, 'Hola')).toBe('silencio');
+        // Oleada 1: con la escuela en diálogo (72 h) el resultado es `escuela_atendiendo` (antes `silencio`): igual no sale nada.
+        expect(await atenderDesconocido(INTEGRATION, CONV, TEL, 'Hola')).toBe('escuela_atendiendo');
         expect(borradores()).toHaveLength(0);
     });
 

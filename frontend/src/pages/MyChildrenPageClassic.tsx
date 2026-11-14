@@ -21,6 +21,7 @@ import { MedicalAlertBadge } from '@/components/common/MedicalAlertBadge';
 import RequestPauseDialog from '@/components/children/RequestPauseDialog';
 import { ChildPauseSection } from '@/components/children/ChildPauseSection';
 import { useParentPauseActions } from '@/hooks/usePauses';
+import { JoinSchoolCodeBanner } from '@/components/school-join/JoinSchoolCodeBanner';
 
 export default function MyChildrenPage() {
   const { user } = useAuth();
@@ -138,6 +139,9 @@ export default function MyChildrenPage() {
           Registrar Hijo
         </Button>
       </div>
+
+      {/* Sin escuela: unirse con el código de la escuela (spec codigo-de-escuela). */}
+      <JoinSchoolCodeBanner />
 
       {invitacionPendiente && (
         <Card className="border-primary/30 bg-primary/5 rounded-2xl">

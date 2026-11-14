@@ -21,6 +21,7 @@ import { userClient } from '../utils/userClient';
 import { supabase } from '../config/supabase';
 import { runSupportBotTurn } from '../services/inapp-support-bot.service';
 import { avisarTicketSoportePorCorreo } from '../services/avisos-correo.service';
+import { calificarRespuesta, feedbackDelTicket } from '../services/mapi-feedback.service';
 
 const router = Router();
 
@@ -85,7 +86,7 @@ router.get('/thread', async (req: AuthenticatedRequest, res: Response) => {
         return res.status(500).json({ error: 'No se pudo cargar tu conversación de soporte.' });
     }
 
-    res.json({ ticket, messages: messages || [] });
+    res.json({ ticket, messages: messages || [], feedback: await feedbackDelTicket(ticket.id).catch(() => ({})) });
 });
 
 // ─── POST /api/v1/support/open ────────────────────────────────────────────
@@ -160,12 +161,16 @@ router.post('/messages', async (req: AuthenticatedRequest, res: Response) => {
             });
         }
 
-        const { data: ticketRow } = await client.from('support_tickets').select('school_id').eq('id', ticketId).maybeSingle();
+        // La escuela de Mapi es la ACTIVA de la sesión (x-school-id validado
+        // contra school_members en requireAuth), nunca la del ticket:
+        // support_open_ticket guarda la del último vínculo (joined_at) y es solo
+        // informativa. Con esa, a quien está en dos escuelas Mapi le respondía
+        // con los datos (pagos, equipos, módulos) de la otra (2026-11-14).
         try {
             await runSupportBotTurn({
                 ticketId,
                 requesterId: req.user.id,
-                schoolId: (ticketRow as any)?.school_id ?? null,
+                schoolId: req.schoolId || null,
             });
         } catch (err: any) {
             // El mensaje del usuario ya quedó guardado (S0 no depende del bot);
@@ -195,7 +200,54 @@ router.post('/messages', async (req: AuthenticatedRequest, res: Response) => {
         return res.status(500).json({ error: 'Mensaje enviado, pero no se pudo recargar la conversación.' });
     }
 
-    res.json({ messages: messages || [], ticket });
+    res.json({ messages: messages || [], ticket, feedback: await feedbackDelTicket(ticketId).catch(() => ({})) });
+});
+
+// ─── POST /api/v1/support/feedback ────────────────────────────────────────
+// { ticketId, messageId, util: boolean } → «¿Te sirvió?» de una respuesta de
+// Mapi. «No» pasa el caso a waiting_human y manda el correo «[Revisar] …»
+// (services/mapi-feedback.service). Responde como /messages para que el chat
+// se redibuje sin otra llamada.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+router.post('/feedback', async (req: AuthenticatedRequest, res: Response) => {
+    const ticketId = req.body?.ticketId;
+    const messageId = req.body?.messageId;
+    const util = req.body?.util;
+    if (typeof ticketId !== 'string' || typeof messageId !== 'string' || !UUID_RE.test(ticketId) || !UUID_RE.test(messageId) || typeof util !== 'boolean') {
+        return res.status(400).json({ error: 'Indica ticketId, messageId y util.' });
+    }
+
+    // El ticket tiene que ser del que califica: se lee con SU cliente (RLS) y
+    // además se compara el requester, por si un agente de soporte llama acá.
+    const client = userClient(req);
+    const { data: propio } = await client
+        .from('support_tickets')
+        .select('id, requester_id')
+        .eq('id', ticketId)
+        .maybeSingle();
+    if (!propio || (propio as any).requester_id !== req.user.id) {
+        return res.status(404).json({ error: 'No encontramos esa conversación.' });
+    }
+
+    try {
+        const r = await calificarRespuesta({ ticketId, messageId, valor: util ? 'si' : 'no' });
+        if (r === 'no_es_respuesta_de_mapi') return res.status(400).json({ error: 'Ese mensaje no es una respuesta de Mapi.' });
+    } catch (err: any) {
+        req.log?.error({ err, ticketId }, 'support/feedback: no se pudo guardar la calificación');
+        return res.status(500).json({ error: 'No pudimos guardar tu respuesta. Intenta de nuevo.' });
+    }
+
+    const [{ data: messages }, { data: ticket }, feedback] = await Promise.all([
+        client
+            .from('support_messages')
+            .select('id, author_type, body, created_at')
+            .eq('ticket_id', ticketId)
+            .order('created_at', { ascending: true }),
+        client.from('support_tickets').select('id, status, subject, category, updated_at').eq('id', ticketId).maybeSingle(),
+        feedbackDelTicket(ticketId).catch(() => ({})),
+    ]);
+    res.json({ messages: messages || [], ticket, feedback });
 });
 
 export default router;

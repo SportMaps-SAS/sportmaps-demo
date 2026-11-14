@@ -98,9 +98,18 @@ describe('planDeAvisos', () => {
     });
 
     it('máximo un recordatorio cada 2 h', () => {
-        const lista = [comp('viejo', 300, { receipt_verdict: 'rojo' })];
+        // Cumplió las 2 h hace 30 min: todavía no se había recordado.
+        const lista = [comp('viejo', 150, { receipt_verdict: 'rojo' })];
         expect(planDeAvisos(estado({ last_reminder_at: hace(119) }), lista, AHORA).aviso).toBeNull();
         expect(planDeAvisos(estado({ last_reminder_at: hace(120) }), lista, AHORA).aviso?.tipo).toBe('recordatorio');
+    });
+
+    it('un recordatorio por comprobante: el que ya se recordó no vuelve a sonar (2026-10-29)', () => {
+        // Cumplió las 2 h hace 180 min. Con un recordatorio hace 120 min ya entró en
+        // ese: no se repite (antes sonaba cada 2 h, 16 veces en 4 días).
+        const lista = [comp('viejo', 300, { receipt_verdict: 'rojo' })];
+        expect(planDeAvisos(estado({ last_reminder_at: hace(120) }), lista, AHORA).aviso).toBeNull();
+        expect(planDeAvisos(estado({ last_reminder_at: hace(600) }), lista, AHORA).aviso?.tipo).toBe('recordatorio');
     });
 
     it('con abonos cuenta el saldo, no el valor del cobro', () => {

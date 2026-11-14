@@ -1,0 +1,24 @@
+{
+  "name": "monster_vacacional_2026",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! 🏐 Llega el Vacacional de Voleibol de Monster´s Volley Club en el Parque Pinar de Suba 2: del 17 de noviembre al 10 de diciembre, martes, miércoles y jueves de 8 a 11 a. m. Puedes venir 1, 2, 3 o 4 semanas, con tarifas para afiliados y externos. ¿Te enviamos precios e inscripción?",
+      "example": { "body_text": [["Carolina"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir promociones cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, cuéntame" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

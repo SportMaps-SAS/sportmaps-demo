@@ -65,13 +65,15 @@ import {
 import { ventanaAbierta } from './whatsapp-plantillas.service';
 import { estaDadoDeBaja, AVISO_DADO_DE_BAJA } from './whatsapp-optin.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
+import { modoDiscreto, escuelaActiva } from './whatsapp-modo-discreto';
+import { modoDiscretoEfectivo } from './whatsapp-ajustes-escuela.service';
 import { botEncendido } from './whatsapp-atencion.service';
 import {
     calcularCandidatosDePago, deportistasEsperados, textoPropuesta, motivoConPropuesta,
 } from './whatsapp-pago-esperado.service';
 import { cargarItemsDeTorneo, cruzarTorneo, motivoTorneo, type ItemDeTorneo } from './whatsapp-torneos-pago.service';
 import { candidatosParaPreguntar, nombreDelMes } from './whatsapp-comprobante-guiado.service';
-import { deportistaPorNombre } from './whatsapp-comprobante-de-ficha.service';
+import { deportistaPorNombreSinVerificar } from './whatsapp-comprobante-de-ficha.service';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -145,6 +147,12 @@ export interface ResultadoRecuperacion {
      * spec 3.5/3.3, 2026-10-24). Ya va dentro de `motivo`; acá aparte para el script.
      */
     propuesta?: string | null;
+    /**
+     * El deportista salió del NOMBRE escrito por un número que no es de ninguna
+     * familia: a ese número no se le dice ningún dato del deportista (ni su nombre,
+     * ni el concepto del cobro). Monster 2026-11-05 (Ethann / Laura Sofía).
+     */
+    porNombreSinVerificar?: boolean;
 }
 
 /** Lo que devuelve la regla (sin la lectura ni quién es la familia). */
@@ -196,7 +204,11 @@ export function pagosQueYaCubren(pagos: PagoRegistrado[], monto: number | null, 
     if (monto === null || !(monto > 0)) return [];
     const ref = aDia(fecha);
     return pagos.filter((p) => {
-        const mismoMonto = Number(p.amount) === monto || (p.amount_paid !== null && Number(p.amount_paid) === monto);
+        // Un cobro PARCIAL no queda cubierto por un comprobante igual a su TOTAL (Monster 2026-11-12, Shara: $145.000
+        // sobre un cobro de $145.000 con $20.000 abonados no es «ya registrado»): solo por lo que ya se abonó.
+        const mismoMonto = p.status === 'partial'
+            ? p.amount_paid !== null && Number(p.amount_paid) === monto
+            : Number(p.amount) === monto || (p.amount_paid !== null && Number(p.amount_paid) === monto);
         if (!mismoMonto) return false;
         // En revisión no tiene payment_date todavía: vale la última edición.
         const cuando = p.payment_date ?? p.updated_at;
@@ -811,9 +823,15 @@ export async function procesarComprobanteRecuperado(e: EntradaComprobante): Prom
     // el deportista por lo que dice el pie, el chat, el concepto y quien paga —igual
     // que el worker con un número sin ficha—. Con UN solo candidato se sigue como
     // familia con ficha; si no, va al buzón con los candidatos. Nunca se aprueba.
+    // Solo el nombre COMPLETO de UN deportista (un número sin verificar nunca se liga por
+    // dos palabras sueltas ni por el apellido: Monster 2026-11-05, Ethann / Laura Sofía).
     let deportistaPorElNombre = false;
     if (!llaves && (familia.tipo === 'desconocido' || familia.tipo === 'sin_cuenta')) {
-        const k = await deportistaPorNombre(e.schoolId, [e.pie, ocr.description, ocr.originName, ...(e.textos ?? [])]).catch(() => null);
+        const exacta = (await deportistaPorNombreSinVerificar(e.schoolId, [e.pie, ocr.description, ocr.originName, ...(e.textos ?? [])])
+            .catch(() => null))?.exacta ?? null;
+        const k = exacta
+            ? (exacta.tipo === 'child' ? { childIds: [exacta.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [exacta.id] })
+            : null;
         if (k && (k.childIds.length || k.unregisteredIds.length)) {
             llaves = { childIds: k.childIds, unregisteredIds: k.unregisteredIds };
             familia = { tipo: 'sin_cuenta', childIds: k.childIds, unregisteredIds: k.unregisteredIds };
@@ -864,7 +882,9 @@ export async function procesarComprobanteRecuperado(e: EntradaComprobante): Prom
         destinoDeLaEscuela, noDuplicado: !yaUsadoEn,
     });
     if (propuesta) d.motivo = motivoConPropuesta(d.motivo, propuesta);
-    const resultado: ResultadoRecuperacion = { ...d, ocr, parentId, sha: e.sha, propuesta };
+    const resultado: ResultadoRecuperacion = {
+        ...d, ocr, parentId, sha: e.sha, propuesta, ...(deportistaPorElNombre ? { porNombreSinVerificar: true } : {}),
+    };
 
     if ((d.decision !== 'en_revision' && d.decision !== 'abono_en_revision') || !e.aplicar) return resultado;
 
@@ -1257,14 +1277,22 @@ export type AvisoRecuperacion =
     | 'fuera_de_ventana'      // nada ahora; el desenlace sale por plantilla cuando la escuela decida
     | 'bot_apagado'
     | 'conversacion_tomada'
+    | 'escuela_en_la_conversacion' // modo discreto: la escuela escribió en el chat en las últimas 12 h
     | 'sin_conversacion'
     | `error: ${string}`;
 
 /** El texto para la familia. Pura. */
 export function mensajeRecuperacion(
-    r: Pick<ResultadoRecuperacion, 'decision' | 'pago' | 'ocr' | 'pagosCubiertos' | 'excedente'>,
+    r: Pick<ResultadoRecuperacion, 'decision' | 'pago' | 'ocr' | 'pagosCubiertos' | 'excedente' | 'porNombreSinVerificar'>,
 ): string | null {
     if (!r.pago) return null;
+    if (r.porNombreSinVerificar && (r.decision === 'en_revision' || r.decision === 'abono_en_revision')) {
+        // Número sin verificar: ningún dato del deportista (ni el concepto del cobro).
+        const valor = r.ocr?.amount
+            ? ` de ${new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(r.ocr.amount)}`
+            : '';
+        return `Recibí tu comprobante${valor} 📄\n\nLa escuela lo está revisando y te confirmo por aquí cuando lo apruebe.`;
+    }
     const monto = r.ocr?.amount
         ? new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(r.ocr.amount)
         : null;
@@ -1303,6 +1331,8 @@ export async function avisarRecuperacion(
     const abierta = ventanaAbierta((conv as any)?.last_inbound_at ?? null);
     if (!(await botEncendido(fila.integration_id))) return 'bot_apagado';
     if (await conversacionTomada(convId)) return 'conversacion_tomada';
+    // Modo discreto (el de ESA escuela, B6): con la escuela en la conversación (12 h) no se le escribe.
+    if (await modoDiscretoEfectivo(fila.school_id, modoDiscreto()) && await escuelaActiva(convId)) return 'escuela_en_la_conversacion';
     if (!abierta) {
         // Fuera de la ventana el texto no llega (131047). La plantilla, si la
         // WABA la tiene aprobada y hay opt-in; si no, como antes: nada ahora.

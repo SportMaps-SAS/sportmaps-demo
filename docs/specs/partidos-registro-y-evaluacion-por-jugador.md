@@ -278,3 +278,21 @@ papá, un coach y un admin con `set_config('request.jwt.claims', …)`.
   Pruebas T1–T10 en verde con sesiones simuladas del papá y del coach de Besser, todas en
   transacciones revertidas. Diferencia con el plan: un criterio `text` guarda `value = 0` porque
   `performance_entries.value` es NOT NULL. Siguiente: F2 (BFF).
+- 2026-10-26 · **Pantalla única del partido** (`/partidos/:id`, `frontend/src/components/partidos/PartidoFlujo.tsx`;
+  lógica pura en `partidoFlujoLogic.ts` con pruebas). Pasos: Programar (`create_match` / `update_match`) →
+  Convocar (`ConvocatoriaPartido`, extraída de Equipos › Partidos; `save_match_roster`) → Resultado (marcador +
+  goles/asistencias/tarjetas por jugadora en la misma vista, vía BFF `/school/football/events` como
+  `MatchEventsModal`; solo en fútbol) → Evaluar (solo convocadas; criterios `school_metric_definitions`
+  activos de partido/ambos y, si la escuela no tiene, la lista rápida del deporte del BFF;
+  `submit_match_evaluation` y `publish_match_evaluation`, sujeto a `share_match_evaluations`) → Reporte
+  (`MatchReportDialog`). Sin migraciones nuevas. Decisiones de esta entrega:
+  · `metric_key` se guarda tal cual la clave del criterio (sin prefijo `school:`), igual que el resto del
+    repo (`metric-catalog.service.ts`).
+  · Menú de escuela «Resultados» → `/results`. `/results-overview` sale del menú pero la ruta queda: hoy
+    solo pinta datos de demostración de cheer. Deportes por sets (voleibol) siguen con
+    `CompetitionResultsList` dentro de `/results`.
+  · Calendario: un evento tipo Partido para un equipo crea el partido con `create_match`
+    (`create_calendar_event: true`) y luego ajusta título/hora de fin del mismo evento. Editar un evento
+    existente no toca el partido.
+  · Fútbol (panel): «Programar Partido» y el lápiz enlazan a la pantalla del partido; «Eventos» queda
+    solo para partidos de torneo.

@@ -30,6 +30,7 @@ import {
   RESERVE_ESTIMATE_MICRO_USD, buildMoreAiWhatsappMessage, costMicroUsd, toPublicBalance,
   type AiBudgetBalance, type BudgetSport, type LedgerSnapshot,
 } from './tactical-ai-budget';
+import { selectKnowledge } from './tactical-ai-knowledge';
 
 export const TACTICAL_AI_TIMEOUT_MS = Number(process.env.TACTICAL_AI_TIMEOUT_MS) || 75_000;
 
@@ -113,7 +114,11 @@ export async function requestMoreMessage(args: {
 // ─── Análisis ───────────────────────────────────────────────────────────────
 
 export type AnalyzeOutcome =
-  | { status: 200; body: { result: AiResult; cached: boolean; balance: AiBudgetBalance | null; keys: Record<string, string>; dropped?: string[] } }
+  | { status: 200; body: {
+      result: AiResult; cached: boolean; balance: AiBudgetBalance | null; keys: Record<string, string>; dropped?: string[];
+      /** Hash anónimo del análisis: identifica la sugerencia en «Útil / No útil» (tactical_ai_suggestion_feedback). */
+      analysis_ref: string;
+    } }
   | { status: 402; body: { error: string; needs_more: true; limited_by: 'user' | 'school' | null; balance: AiBudgetBalance } }
   | { status: 422 | 502 | 503 | 504; body: { error: string; detalle?: string } };
 
@@ -154,7 +159,9 @@ export async function analyzeTacticalPlay(args: {
   const ledger = args.ledger ?? supabaseLedger;
   const names = await rosterNames(schoolId, input.teamId);
   const { play, keyMap } = anonymizePlay(input, rosterNameTokens(names));
-  const hash = boardHash(play);
+  // Base táctica propia (RAG ligero): principios del deporte + formación.
+  const kb = selectKnowledge({ sport: input.sport, formationKey: play.formacion, firstFrame: play.cuadros[0] ?? null });
+  const hash = boardHash(play, kb.version);
   // p1..pN → clave real del tablero: el cliente la usa para que ningún «p5»
   // llegue a la pantalla aunque el modelo lo escriba en un texto.
   const keys = Object.fromEntries(keyMap);
@@ -174,7 +181,10 @@ export async function analyzeTacticalPlay(args: {
     });
     return {
       status: 200,
-      body: { result: deanonymizeResult((cachedRow as any).result as AiResult, keyMap), cached: true, balance: snap ? toPublicBalance(snap) : null, keys },
+      body: {
+        result: deanonymizeResult((cachedRow as any).result as AiResult, keyMap), cached: true,
+        balance: snap ? toPublicBalance(snap) : null, keys, analysis_ref: hash,
+      },
     };
   }
 
@@ -201,8 +211,8 @@ export async function analyzeTacticalPlay(args: {
   };
 
   // 4. Modelo
-  const system = buildSystemPrompt(input.sport);
-  const user = buildUserPrompt(play);
+  const system = kb.system ? `${buildSystemPrompt(input.sport)}\n\n${kb.system}` : buildSystemPrompt(input.sport);
+  const user = kb.user ? `${buildUserPrompt(play)}\n${kb.user}` : buildUserPrompt(play);
   const leaks = promptLeaks(`${system}\n${user}`, [...names, ...keyMap.values()]);
   if (leaks.length) {
     // No debería pasar nunca (las claves se reemplazan y las etiquetas son
@@ -289,6 +299,7 @@ export async function analyzeTacticalPlay(args: {
       cached: false,
       balance: settled ? toPublicBalance(settled) : null,
       keys,
+      analysis_ref: hash,
       ...(validated.dropped.length ? { dropped: validated.dropped } : {}),
     },
   };

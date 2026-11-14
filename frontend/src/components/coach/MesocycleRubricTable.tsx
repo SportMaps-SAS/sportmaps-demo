@@ -6,7 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
-import { Star } from 'lucide-react';
+import { useEntitlements } from '@/hooks/useEntitlements';
+import { Star, X } from 'lucide-react';
+import { summarizeRubric, type RubricCell } from './mesocycleRubricMath';
 
 const INDICATORS = [
   { key: 'tecnica_individual', label: 'Técnica individual' },
@@ -58,8 +60,13 @@ function subjectTypeFor(member: RosterMember): 'profile' | 'child' | 'unregister
   return 'unregistered';
 }
 
-/** Celda de solo lectura: el valor guardado o un guion. */
-function ScoreValue({ value }: { value: number | undefined }) {
+const fmt = (n: number) => n.toFixed(1).replace('.', ',');
+
+/** Celda de solo lectura: el valor guardado, «N/A» (decidido) o un guion (pendiente). */
+function ScoreValue({ value, na = false }: { value: number | undefined; na?: boolean }) {
+  if (na) {
+    return <span className="inline-flex h-8 w-16 items-center justify-center rounded-md text-xs italic text-muted-foreground">N/A</span>;
+  }
   return (
     <span className={`inline-flex h-8 w-16 items-center justify-center rounded-md tabular-nums ${value != null ? 'font-semibold' : 'text-muted-foreground'}`}>
       {value ?? '—'}
@@ -71,6 +78,7 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { rubricAllowNa } = useEntitlements();
   const [selectedAthleteId, setSelectedAthleteId] = useState<string>(roster[0]?.id ?? '');
 
   // Modo 'team': training_mesocycle_evaluations (mesocycle_id, indicator, checkpoint).
@@ -79,10 +87,10 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from('training_mesocycle_evaluations')
-        .select('indicator, checkpoint, score')
+        .select('indicator, checkpoint, score, not_applicable')
         .eq('mesocycle_id', mesocycleId);
       if (error) throw error;
-      return data as { indicator: string; checkpoint: string; score: number }[];
+      return data as { indicator: string; checkpoint: string; score: number | null; not_applicable: boolean }[];
     },
     enabled: evaluationMode === 'team' && !!mesocycleId,
   });
@@ -108,10 +116,16 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
   });
 
   const teamScoreMap = useMemo(() => {
-    const m = new Map<string, number>();
-    (teamScores || []).forEach((r) => m.set(`${r.indicator}__${r.checkpoint}`, r.score));
+    const m = new Map<string, RubricCell>();
+    (teamScores || []).forEach((r) => m.set(`${r.indicator}__${r.checkpoint}`, { score: r.score, na: r.not_applicable === true }));
     return m;
   }, [teamScores]);
+
+  // Promedios solo con el flag: apagado, la tabla es la de siempre.
+  const rubricSummary = useMemo(
+    () => summarizeRubric(teamScoreMap, INDICATORS.map((i) => i.key), CHECKPOINTS.map((c) => c.key)),
+    [teamScoreMap],
+  );
 
   // Cada guardado es una fila NUEVA de performance_entries (nunca un
   // update) -- el historial completo lo sigue mostrando "Evolución"
@@ -133,7 +147,9 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
   }, [individualScores]);
 
   const saveTeamScore = useMutation({
-    mutationFn: async ({ indicator, checkpoint, score }: { indicator: string; checkpoint: string; score: number }) => {
+    mutationFn: async ({ indicator, checkpoint, score }: { indicator: string; checkpoint: string; score: number | null }) => {
+      // Siempre se mandan score y not_applicable juntos: un upsert sobre una fila
+      // N/A nunca deja score con not_applicable = true (violaría el CHECK).
       const { error } = await (supabase as any).from('training_mesocycle_evaluations').upsert(
         {
           school_id: schoolId,
@@ -141,10 +157,30 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
           indicator,
           checkpoint,
           score,
+          not_applicable: score === null,
           created_by: user?.id,
         },
         { onConflict: 'mesocycle_id,indicator,checkpoint' },
       );
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['mesocycle-evaluations', mesocycleId] });
+    },
+    onError: (error: any) => {
+      toast({ title: 'Error al guardar', description: error.message, variant: 'destructive' });
+    },
+  });
+
+  // N/A -> pendiente: se borra la fila de la celda.
+  const clearTeamCell = useMutation({
+    mutationFn: async ({ indicator, checkpoint }: { indicator: string; checkpoint: string }) => {
+      const { error } = await (supabase as any)
+        .from('training_mesocycle_evaluations')
+        .delete()
+        .eq('mesocycle_id', mesocycleId)
+        .eq('indicator', indicator)
+        .eq('checkpoint', checkpoint);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -207,6 +243,15 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
         )}
       </CardHeader>
       <CardContent className="overflow-x-auto">
+        {evaluationMode === 'team' && rubricAllowNa && (
+          <p className="mb-2 text-xs text-muted-foreground">
+            {rubricSummary.overall.average == null
+              ? 'Promedio general: sin notas todavía'
+              : <>Promedio general <span className="font-semibold text-foreground">{fmt(rubricSummary.overall.average)}</span> · {rubricSummary.overall.applicable} de {rubricSummary.overall.total} con nota</>}
+            {rubricSummary.overall.na > 0 && <> · {rubricSummary.overall.na} N/A</>}
+            {rubricSummary.overall.pending > 0 && <> · {rubricSummary.overall.pending} pendientes</>}
+          </p>
+        )}
         {evaluationMode === 'team' ? (
           <table className="w-full text-sm border-collapse">
             <thead>
@@ -217,6 +262,7 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
                     {cp.label}
                   </th>
                 ))}
+                {rubricAllowNa && <th className="p-2 font-medium text-muted-foreground text-center w-24">Prom.</th>}
               </tr>
             </thead>
             <tbody>
@@ -225,24 +271,56 @@ export function MesocycleRubricTable({ mesocycleId, schoolId, evaluationMode, ro
                   <td className="p-2 font-medium">{ind.label}</td>
                   {CHECKPOINTS.map((cp) => {
                     const key = `${ind.key}__${cp.key}`;
+                    const cell = teamScoreMap.get(key);
                     return (
                       <td key={cp.key} className="p-1.5 text-center">
-                        {readOnly ? <ScoreValue value={teamScoreMap.get(key)} /> : <Input
-                          type="number"
-                          min={1}
-                          max={10}
-                          className="h-8 w-16 text-center mx-auto"
-                          defaultValue={teamScoreMap.get(key) ?? ''}
-                          onBlur={(e) => {
-                            const val = Number(e.target.value);
-                            if (val >= 1 && val <= 10) {
-                              saveTeamScore.mutate({ indicator: ind.key, checkpoint: cp.key, score: val });
-                            }
-                          }}
-                        />}
+                        {readOnly ? <ScoreValue value={cell?.score ?? undefined} na={cell?.na} /> : cell?.na ? (
+                          <button
+                            type="button"
+                            className="mx-auto inline-flex h-8 w-16 items-center justify-center gap-1 rounded-md bg-muted text-xs italic text-muted-foreground hover:bg-accent"
+                            aria-label={`Quitar «No aplica» de ${ind.label}, ${cp.label}`}
+                            onClick={() => clearTeamCell.mutate({ indicator: ind.key, checkpoint: cp.key })}
+                          >
+                            N/A <X className="h-3 w-3" />
+                          </button>
+                        ) : (
+                          <div className="flex items-center justify-center gap-1">
+                            <Input
+                              type="number"
+                              min={1}
+                              max={10}
+                              className="h-8 w-16 text-center"
+                              defaultValue={cell?.score ?? ''}
+                              onBlur={(e) => {
+                                const val = Number(e.target.value);
+                                if (val >= 1 && val <= 10) {
+                                  saveTeamScore.mutate({ indicator: ind.key, checkpoint: cp.key, score: val });
+                                }
+                              }}
+                            />
+                            {rubricAllowNa && (
+                              <button
+                                type="button"
+                                className="h-8 rounded-md border px-1.5 text-[10px] text-muted-foreground hover:bg-accent"
+                                aria-label={`Marcar «No aplica» en ${ind.label}, ${cp.label}`}
+                                onClick={() => saveTeamScore.mutate({ indicator: ind.key, checkpoint: cp.key, score: null })}
+                              >
+                                N/A
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
                     );
                   })}
+                  {rubricAllowNa && (() => {
+                    const s = rubricSummary.byIndicator[ind.key];
+                    return (
+                      <td className="p-1.5 text-center text-xs tabular-nums">
+                        {s.average == null ? '—' : <><span className="font-semibold">{fmt(s.average)}</span> <span className="text-muted-foreground">· {s.applicable} de {s.total}</span></>}
+                      </td>
+                    );
+                  })()}
                 </tr>
               ))}
             </tbody>

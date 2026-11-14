@@ -14,6 +14,7 @@
  * tacticalSports.ts. Esto solo lo consulta.
  */
 import type { TacticalArrow } from './footballQueries';
+import { sportDef, type CourtRectPct, type TacticalSport } from './tacticalSports';
 
 export interface GalleryFormation {
   key: string;
@@ -111,4 +112,77 @@ export function filterFormations<T extends GalleryFormation>(formations: T[], fi
     // «433» o «4 3 3» → «4-3-3»: solo si lo escrito son cifras.
     return qDigits.length >= 2 && qDigits === q.replace(/[\s-]/g, '') && f.label.replace(/[^0-9]/g, '').includes(qDigits);
   });
+}
+
+// ─── Modalidad de la cancha (F11 / F7 / F5) ─────────────────────────────────
+
+/** Catálogos de fútbol chico que se ofrecen también en la cancha de fútbol 11
+ *  (equipo «Fútbol» que juega F7 o F5 en una cancha grande). */
+const SMALL_FOOTBALL: { sport: 'futbol7' | 'futbol5'; players: number }[] = [
+  { sport: 'futbol7', players: 7 },
+  { sport: 'futbol5', players: 5 },
+];
+
+/** Pasa un punto del rectángulo de juego `from` al `to` (los dos en % del tablero). */
+function remapPoint(p: { x: number; y: number }, from: CourtRectPct, to: CourtRectPct) {
+  const fx = (p.x - from.x0) / Math.max(0.01, from.x1 - from.x0);
+  const fy = (p.y - from.y0) / Math.max(0.01, from.y1 - from.y0);
+  return { x: round1(to.x0 + fx * (to.x1 - to.x0)), y: round1(to.y0 + fy * (to.y1 - to.y0)) };
+}
+
+/**
+ * Formaciones que ofrece la galería. En fútbol 11 suma las de fútbol 7 y
+ * fútbol 5 (llevadas a la cancha grande), para que un equipo que juega F7
+ * no vea solo las de 11: antes la galería decía «38 formaciones de Fútbol 11»
+ * y traía una sola de 7. Las que ya están (misma etiqueta y jugadores) no se
+ * repiten. Los demás deportes ya traen su catálogo propio: no se tocan.
+ */
+export function galleryFormations<T extends GalleryFormation>(sport: TacticalSport, formations: T[]): (T | GalleryFormation)[] {
+  if (sport !== 'futbol') return formations;
+  const big = sportDef('futbol').court;
+  const norm = (label: string) => label.replace(/^F\d+\s*·?\s*/i, '').replace(/\s*\(F\d+\)\s*$/i, '').trim();
+  const seen = new Set(formations.map((f) => `${f.players}|${norm(f.label)}`));
+  const extra: GalleryFormation[] = [];
+  for (const { sport: small } of SMALL_FOOTBALL) {
+    const def = sportDef(small);
+    for (const f of def.formations) {
+      const id = `${f.players}|${norm(f.label)}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      extra.push({
+        ...f,
+        key: `${small}:${f.key}`,
+        group: f.group ? `${def.label} · ${f.group}` : def.label,
+        slots: f.slots.map((s) => ({ ...remapPoint(s, def.court, big), label: s.label })),
+      });
+    }
+  }
+  return [...formations, ...extra];
+}
+
+/**
+ * Con qué filtro de jugadores abre la galería: la modalidad de la cancha.
+ * Manda la formación puesta; si no hay, cuántos hay en cancha (si coincide con
+ * una modalidad del catálogo); si no, la formación con la que arrancaría la
+ * cancha vacía. Con un solo tamaño en el catálogo no se filtra (null).
+ */
+export function initialPlayersFilter(
+  formations: GalleryFormation[],
+  ctx: { currentKey?: string | null; onPitch?: number; defaultPlayers?: number | null },
+): number | null {
+  const counts = playerCounts(formations);
+  if (counts.length < 2) return null;
+  const current = ctx.currentKey ? formations.find((f) => f.key === ctx.currentKey) : undefined;
+  if (current) return current.players;
+  if (ctx.onPitch && counts.includes(ctx.onPitch)) return ctx.onPitch;
+  if (ctx.defaultPlayers && counts.includes(ctx.defaultPlayers)) return ctx.defaultPlayers;
+  return null;
+}
+
+/** «12 formaciones de Fútbol 7»: el subtítulo dice la modalidad que se ve. */
+export function galleryCaption(sport: TacticalSport, count: number, players: number | null): string {
+  const noun = count === 1 ? 'formación' : 'formaciones';
+  const isFootball = sport === 'futbol' || sport === 'futbol7' || sport === 'futbol5';
+  const what = isFootball && players ? `Fútbol ${players}` : players ? `${sportDef(sport).label} · ${players} jugadores` : sportDef(sport).label;
+  return `${count} ${noun} de ${what}`;
 }

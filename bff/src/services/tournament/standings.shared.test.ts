@@ -97,3 +97,48 @@ describe('desempates', () => {
     expect(rows.find((r) => r.team_id === 'b')!.Pts).toBe(1);
   });
 });
+
+describe('vóley: diferencias, cocientes y desempates configurables', () => {
+  const base = SCORING_PRESETS.voleibol_3.config;
+  const mk = (tiebreakers: any[]) => resolveConfig({ ...base, tiebreakers });
+  const played = (cfg: any, h: string, a: string, sets: Array<[number, number]>) => {
+    const r = applyAction(emptyState(), { type: 'correct', sets }, cfg);
+    if (!r.ok) throw new Error(r.message);
+    return { home_team_id: h, away_team_id: a, home_score: r.derived.homeScore, away_score: r.derived.awayScore, status: 'played', live_state: r.state };
+  };
+  it('calcula set_diff, point_diff, set_ratio y point_ratio (MAX = null)', () => {
+    const cfg = mk(['pts']);
+    const rows = computeStandings(T('a', 'b'), [played(cfg, 'a', 'b', [[25, 20], [25, 15]])], cfg);
+    const by = Object.fromEntries(rows.map((r) => [r.team_id, r]));
+    expect(by.a).toMatchObject({ SW: 2, SL: 0, set_diff: 2, PF: 50, PA: 35, point_diff: 15, set_ratio: null, point_ratio: 1.429 });
+    expect(by.b).toMatchObject({ set_diff: -2, point_diff: -15, set_ratio: 0, point_ratio: 0.7 });
+  });
+  it('sin partidos los cocientes son 0', () => {
+    const rows = computeStandings(T('a'), [], mk(['pts']));
+    expect(rows[0]).toMatchObject({ set_ratio: 0, point_ratio: 0, set_diff: 0, point_diff: 0 });
+  });
+  it('el orden de desempates cambia quién va primero', () => {
+    // a gana 2-1 con mucha diferencia de puntos; b gana 2-0 ajustado.
+    const ms = (cfg: any) => [
+      played(cfg, 'a', 'c', [[25, 5], [23, 25], [15, 5]]),
+      played(cfg, 'b', 'd', [[25, 23], [25, 23]]),
+    ];
+    const order = (tb: any[]) => { const cfg = mk(tb); return computeStandings(T('a', 'b', 'c', 'd'), ms(cfg), cfg).map((r) => r.team_id); };
+    expect(order(['point_diff'])[0]).toBe('a');
+    expect(order(['set_diff'])[0]).toBe('b');
+    expect(order(['set_ratio'])[0]).toBe('b'); // 2-0 (MAX) vs 2-1
+    expect(order(['point_ratio'])[0]).toBe('a');
+  });
+});
+
+describe('ajedrez: Buchholz en la tabla genérica', () => {
+  it('computeStandings aplica extra_tiebreakers entre los empatados en puntos', () => {
+    const cfg = resolveConfig(SCORING_PRESETS.ajedrez.config);
+    // a y b ganan 1 cada uno; a le ganó a c (que luego le gana a d) → a tiene mejor Buchholz.
+    const g = (h: string, a: string, hs: number, as: number) => ({ home_team_id: h, away_team_id: a, home_score: hs, away_score: as, status: 'played' });
+    const rows = computeStandings(T('b', 'a', 'c', 'd'), [g('a', 'c', 2, 0), g('b', 'd', 2, 0), g('c', 'd', 2, 0)], cfg) as Array<{ team_id: string; buchholz?: number }>;
+    const a = rows.find((r) => r.team_id === 'a')!, b = rows.find((r) => r.team_id === 'b')!;
+    expect(a.buchholz).toBeGreaterThan(b.buchholz ?? 0);
+    expect(rows.findIndex((r) => r.team_id === 'a')).toBeLessThan(rows.findIndex((r) => r.team_id === 'b'));
+  });
+});

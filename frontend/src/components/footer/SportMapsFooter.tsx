@@ -29,10 +29,10 @@ export function SportMapsFooter() {
             </div>
 
             <div className="flex items-center gap-2">
-              <SocialBtn icon={Facebook} href="https://facebook.com/sportmaps" label="Facebook" />
-              <SocialBtn icon={Instagram} href="https://instagram.com/sportmaps" label="Instagram" />
-              <SocialBtn icon={Twitter} href="https://twitter.com/sportmaps" label="Twitter" />
-              <SocialBtn icon={Linkedin} href="https://linkedin.com/company/sportmaps" label="LinkedIn" />
+              <SocialBtn icon={Facebook} href="https://www.facebook.com/profile.php?id=61583784419106" label="Facebook" />
+              <SocialBtn icon={Instagram} href="https://www.instagram.com/sportmaps_app/" label="Instagram" />
+              <SocialBtn icon={Twitter} href="https://x.com/spoort_maps" label="X" />
+              <SocialBtn icon={Linkedin} href="https://www.linkedin.com/company/sportmaps/" label="LinkedIn" />
             </div>
           </div>
 

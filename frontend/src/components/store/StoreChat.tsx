@@ -48,8 +48,8 @@ export function StoreChat({
 
   // Resetea no-leídos del lado que mira.
   const markRead = useCallback(async () => {
-    const field = viewerRole === 'buyer' ? 'buyer_unread' : 'vendor_unread';
-    await supabase.from('store_conversations').update({ [field]: 0 }).eq('id', conversationId);
+    const cambio = viewerRole === 'buyer' ? { buyer_unread: 0 } : { vendor_unread: 0 };
+    await supabase.from('store_conversations').update(cambio).eq('id', conversationId);
   }, [conversationId, viewerRole]);
 
   useEffect(() => {

@@ -57,6 +57,7 @@
 
 import { supabase } from '../config/supabase';
 import { atencionPresencialDeEscuela } from './whatsapp-ajustes-escuela.service';
+import { excepcionesDeEscuela, sesionesDelDia, type ExcepcionSemana, type SesionDelDia } from './semana-equipo.service';
 
 export interface InfoDeEscuela {
     nombre: string;
@@ -474,9 +475,12 @@ export function fallbackInfoEscuela(i: InfoDeEscuela): string {
 //
 // «¿Cambiaron el horario de hoy?» de un desconocido recibía
 // «escríbeme tu correo». El horario del día es público: sale de
-// `teams.schedule` (lo que la escuela cargó). No hay registro de cancelaciones
-// todavía, así que el texto lo dice: si hay un cambio de última hora, avisa la
-// escuela.
+// `teams.schedule` (lo que la escuela cargó) con los ajustes de la semana que
+// el profe o la escuela cargaron en `team_schedule_exceptions` (semana-equipo,
+// migración M1, 2026-10-30): un entreno cancelado no sale en «hoy entrenan» y
+// se dice que se canceló; uno movido sale a su hora nueva. Sin ajustes (o sin
+// la migración) el texto es el de siempre. Igual se dice que un cambio de
+// última hora lo avisa la escuela.
 
 /** Franjas de un `teams.schedule` para un día de la semana (0 = domingo). Pura. */
 export function franjasDelDia(raw: unknown, dia: number): string | null {
@@ -498,6 +502,8 @@ export interface HorarioDelDia {
     grupos: { nombre: string; franjas: string }[];
     /** Cuántos equipos activos tienen horario cargado (0 = no se puede contestar). */
     conHorario: number;
+    /** Grupos que hoy entrenaban y se les canceló el entreno (team_schedule_exceptions). */
+    cancelados?: string[];
 }
 
 /** Día de la semana de una fecha 'YYYY-MM-DD' (0 = domingo). */
@@ -505,24 +511,60 @@ function diaDeLaSemana(fecha: string): number {
     return new Date(diaUTC(fecha)).getUTCDay();
 }
 
-/** Grupos que entrenan hoy (hora de Bogotá), según el horario cargado. null si no se pudo leer. */
-export async function horariosDelDia(schoolId: string, fecha = hoyEnBogota()): Promise<HorarioDelDia | null> {
+/** Sesiones ya ajustadas → «Origen: 09:30 a 11:30 (Parque) (cambio de horario)». Pura. */
+export function franjasDeSesiones(sesiones: SesionDelDia[]): string | null {
+    if (!sesiones.length) return null;
+    return sesiones
+        .map((s) => `${s.grupo ? `${s.grupo}: ` : ''}${s.inicio}${s.fin ? ` a ${s.fin}` : ''}${s.lugar ? ` (${s.lugar})` : ''}`
+            + (s.origen === 'movida' ? ' (cambio de horario)' : s.origen === 'extra' ? ' (entreno extra)' : ''))
+        .join(' · ');
+}
+
+/**
+ * Grupos que entrenan hoy (hora de Bogotá), según el horario cargado y los
+ * ajustes de la semana. null si no se pudo leer. `excepciones` se inyecta en
+ * las pruebas; por defecto, semana-equipo (cacheado 10 min, nunca lanza).
+ */
+export async function horariosDelDia(
+    schoolId: string,
+    fecha = hoyEnBogota(),
+    deps: { excepciones?: (schoolId: string, desde: string, hasta: string) => Promise<ExcepcionSemana[]> } = {},
+): Promise<HorarioDelDia | null> {
     try {
-        const { data, error } = await supabase.from('teams')
-            .select('name, schedule, active')
-            .eq('school_id', schoolId).limit(100);
+        const [{ data, error }, excepciones] = await Promise.all([
+            supabase.from('teams')
+                .select('id, name, schedule, active')
+                .eq('school_id', schoolId).limit(100),
+            (deps.excepciones ?? excepcionesDeEscuela)(schoolId, fecha, fecha).catch(() => [] as ExcepcionSemana[]),
+        ]);
         if (error || !Array.isArray(data)) return null;
         const dia = diaDeLaSemana(fecha);
         const activos = (data as any[])
             .filter((t) => t.active !== false && !MARCADO_NO_USAR.test(String(t.name ?? '')) && String(t.name ?? '').trim());
         const conHorario = activos.filter((t) => describirEntrenamiento(t.schedule)).length;
+        const cancelados: string[] = [];
         const grupos = activos
-            .map((t) => ({ nombre: String(t.name).trim(), franjas: franjasDelDia(t.schedule, dia) }))
+            .map((t) => {
+                const nombre = String(t.name).trim();
+                const base = franjasDelDia(t.schedule, dia);
+                const delEquipo = (excepciones ?? []).filter((e) => e.team_id === t.id && e.fecha === fecha);
+                // Sin ajustes, exactamente lo de siempre.
+                if (!delEquipo.length) return { nombre, franjas: base };
+                const sesiones = sesionesDelDia(t.schedule, delEquipo, fecha);
+                if (base && !sesiones.length) cancelados.push(nombre);
+                return { nombre, franjas: franjasDeSesiones(sesiones) };
+            })
             .filter((g): g is { nombre: string; franjas: string } => !!g.franjas);
-        return { dia: DIA[dia], grupos, conHorario };
+        return { dia: DIA[dia], grupos, conHorario, ...(cancelados.length ? { cancelados } : {}) };
     } catch {
         return null;
     }
+}
+
+/** «*Infantil*» · «*Infantil* y *Mayores*» · «*A*, *B* y *C*». */
+function listaDeGrupos(nombres: string[]): string {
+    const n = nombres.map((x) => `*${x}*`);
+    return n.length <= 1 ? (n[0] ?? '') : `${n.slice(0, -1).join(', ')} y ${n[n.length - 1]}`;
 }
 
 /** Texto para «¿hay clase hoy? / ¿cambió el horario de hoy?». Pura. null si no hay horarios cargados. */
@@ -530,9 +572,17 @@ export function textoHorarioDeHoy(h: HorarioDelDia, pasadoALaEscuela: boolean): 
     if (!h.conHorario) return null;
     const cierre = 'Si hay un cambio de última hora, la escuela lo avisa por aquí.'
         + (pasadoALaEscuela ? ' Ya le pasé tu mensaje para que te lo confirme.' : '');
+    const cancelados = (h.cancelados ?? []).slice(0, 15);
+    const deCancelados = cancelados.length
+        ? `Hoy se canceló el entreno de ${listaDeGrupos(cancelados)}.` : '';
     if (!h.grupos.length) {
+        if (cancelados.length) {
+            return `Según el horario de la escuela, hoy *${h.dia}* no hay entrenamientos: se canceló el de `
+                + `${listaDeGrupos(cancelados)}.\n\n${cierre}`;
+        }
         return `Según el horario de la escuela, hoy *${h.dia}* no hay entrenamientos programados.\n\n${cierre}`;
     }
     const lineas = h.grupos.slice(0, 15).map((g) => `• *${g.nombre}*: ${g.franjas}`);
-    return `Según el horario de la escuela, hoy *${h.dia}* entrenan:\n\n${lineas.join('\n')}\n\n${cierre}`;
+    return `Según el horario de la escuela, hoy *${h.dia}* entrenan:\n\n${lineas.join('\n')}\n\n`
+        + (deCancelados ? `${deCancelados}\n\n` : '') + cierre;
 }

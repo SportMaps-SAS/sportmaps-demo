@@ -77,6 +77,8 @@ export interface LedgerSnapshot {
     analyses: number; cache_hits: number;
   } | null;
   school: { ceiling_micro_usd: number; extra_micro_usd: number; used_micro_usd: number; reserved_micro_usd: number };
+  /** Cupo ampliado temporal vigente (20261027110401): budget/ceiling ya vienen multiplicados. */
+  boost?: { multiplier: number | string; expires_at: string | null } | null;
   ok?: boolean;
   denied_scope?: 'user' | 'school';
   reservation_id?: string;
@@ -98,6 +100,42 @@ export interface AiBudgetBalance {
   approx_remaining: Record<BudgetSport, number>;
   analyses: number;
   cache_hits: number;
+  /** Cupo ampliado temporal: «Cupo ×3 hasta el 4 de noviembre». */
+  boost: { multiplier: number; expires_at: string | null } | null;
+  /** Recarga que se ofrece, en la MISMA moneda que el medidor. */
+  recharge: RechargeOffer;
+}
+
+// ─── Moneda del medidor y de las recargas ───────────────────────────────────
+//
+// Regla (2026-10-27): la recarga se ofrece en la misma unidad que el medidor.
+// Si el medidor muestra análisis, «+10 análisis»; si muestra %, «+50 % de IA».
+// Hoy el medidor del coach es «Te queda el 60 % de tu IA este mes» → %.
+
+export type AiMeterUnit = 'pct' | 'analyses';
+export const AI_METER_UNIT: AiMeterUnit = 'pct';
+/** Tamaño de la recarga por unidad. */
+export const AI_RECHARGE_STEP: Record<AiMeterUnit, number> = { pct: 50, analyses: 10 };
+
+export interface RechargeOffer { unit: AiMeterUnit; amount: number; label: string }
+
+/** «+50 % de IA» / «+10 análisis» (mismo formato que el medidor: «60 %»). */
+export function rechargeLabel(unit: AiMeterUnit, amount: number): string {
+  return unit === 'pct' ? `+${amount} % de IA` : `+${amount} análisis`;
+}
+
+export function rechargeOffer(unit: AiMeterUnit = AI_METER_UNIT, amount = AI_RECHARGE_STEP[unit]): RechargeOffer {
+  return { unit, amount, label: rechargeLabel(unit, amount) };
+}
+
+/**
+ * USD que hay que dar (grant) para cumplir una recarga: % del presupuesto BASE
+ * del coach (sin cupo ampliado ni extras), o N análisis al costo medio del deporte.
+ * Redondeado HACIA ARRIBA al centavo: nunca se da menos de lo prometido.
+ */
+export function rechargeUsd(offer: Pick<RechargeOffer, 'unit' | 'amount'>, baseBudgetUsd: number, sport: BudgetSport = 'futbol'): number {
+  const raw = offer.unit === 'pct' ? (baseBudgetUsd * offer.amount) / 100 : offer.amount * AVG_COST_USD_BY_SPORT[sport];
+  return Math.ceil(Math.round(raw * 1e6) / 1e4) / 100;
 }
 
 const usd = (micro: number) => Math.round(micro) / MICRO;
@@ -135,7 +173,15 @@ export function toPublicBalance(s: LedgerSnapshot, estimate = RESERVE_ESTIMATE_M
     approx_remaining: approx,
     analyses: num(u.analyses),
     cache_hits: num(u.cache_hits),
+    boost: toBoost(s.boost),
+    recharge: rechargeOffer(),
   };
+}
+
+function toBoost(b: LedgerSnapshot['boost']): AiBudgetBalance['boost'] {
+  const m = Number(b?.multiplier);
+  if (!b || !Number.isFinite(m) || m <= 0 || m === 1) return null;
+  return { multiplier: m, expires_at: b.expires_at ?? null };
 }
 
 // ─── «Quiero más» por WhatsApp ──────────────────────────────────────────────
@@ -147,7 +193,6 @@ function mesDe(period: string): string {
   return m ? `${MESES[Number(m[2]) - 1]} ${m[1]}` : period;
 }
 
-const fmtUsd = (n: number) => `US$ ${n.toFixed(2).replace('.', ',')}`;
 /** Una línea, sin saltos ni caracteres de control, acotada. */
 const clean = (s: string | null | undefined, max = 80) =>
   Array.from(String(s ?? ''), (c) => (c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127 ? ' ' : c))
@@ -161,17 +206,20 @@ export function buildMoreAiWhatsappMessage(args: {
   schoolName: string | null | undefined;
   coachName: string | null | undefined;
   sport: BudgetSport | null | undefined;
-  balance: Pick<AiBudgetBalance, 'period' | 'used_usd' | 'budget_usd' | 'analyses' | 'limited_by'>;
+  balance: Pick<AiBudgetBalance, 'period' | 'pct' | 'analyses' | 'limited_by'> & { recharge?: RechargeOffer };
 }): string {
   const school = clean(args.schoolName) || 'mi escuela';
   const coach = clean(args.coachName, 60) || 'entrenador';
   const sport = args.sport && AI_SPORT_LABEL[args.sport] ? AI_SPORT_LABEL[args.sport] : null;
   const b = args.balance;
   const techo = b.limited_by === 'school' ? ' La escuela llegó a su tope mensual de IA.' : '';
+  // Misma moneda que el medidor del coach (%): nada de US$ en lo que él ve.
+  const pct = Math.max(0, Math.min(100, Math.round(num(b.pct))));
+  const recharge = b.recharge ?? rechargeOffer();
   return [
     `Hola, soy ${coach} de ${school}.`,
-    `Usé mi IA de la pizarra de ${mesDe(b.period)}${sport ? ` (analizo jugadas de ${sport})` : ''}:`,
-    `${b.analyses} ${b.analyses === 1 ? 'análisis' : 'análisis'}, ${fmtUsd(b.used_usd)} de ${fmtUsd(b.budget_usd)}.${techo}`,
-    'Quiero más cupo de IA.',
+    `Usé el ${pct} % de mi IA de la pizarra de ${mesDe(b.period)}${sport ? ` (analizo jugadas de ${sport})` : ''},`,
+    `${b.analyses} análisis.${techo}`,
+    `Quiero una recarga de ${recharge.label}.`,
   ].join(' ');
 }

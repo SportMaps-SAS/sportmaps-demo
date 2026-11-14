@@ -89,10 +89,11 @@ export default function SchoolSettingsPage() {
             setUploadingLogo(true);
             const fileC = await comprimirParaSubir(file, 'logo');
             const ext = fileC.name.split('.').pop() || 'jpg';
-            const path = `schools/${schoolId}/logo.${ext}`;
+            // Nombre único y sin upsert: sobrescribir exigía SELECT + UPDATE en avatars.
+            const path = `schools/${schoolId}/logo-${Date.now()}.${ext}`;
             const { error: uploadError } = await supabase.storage
                 .from('avatars')
-                .upload(path, fileC, { upsert: true, contentType: fileC.type || undefined });
+                .upload(path, fileC, { upsert: false, contentType: fileC.type || undefined });
             if (uploadError) throw uploadError;
             const { data: { publicUrl } } = supabase.storage
                 .from('avatars')

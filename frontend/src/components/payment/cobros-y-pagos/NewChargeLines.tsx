@@ -28,6 +28,8 @@ interface NewChargeLinesProps {
     minDue: string;
     /** Atleta nuevo: sin plan, sin mensualidad (§16.2). */
     noMonthly?: boolean;
+    /** Líneas que la vista previa omitió (índice → motivo en texto), p. ej. «ya tiene la mensualidad de ese mes». */
+    skippedByLine?: Map<number, string>;
 }
 
 /** Mes con mensualidad: hasta 12 atrás y 3 adelante (Q4). */
@@ -44,7 +46,7 @@ function monthOptions() {
  * apila (tipo / detalle / valor+vence / descuento / nota).
  */
 export function NewChargeLines({
-    mode, lines, onChange, calcByRef, paymentOn, canDiscount, canOverage, suggestions, defaultDue, minDue, noMonthly,
+    mode, lines, onChange, calcByRef, paymentOn, canDiscount, canOverage, suggestions, defaultDue, minDue, noMonthly, skippedByLine,
 }: NewChargeLinesProps) {
     const [openDiscount, setOpenDiscount] = useState<Record<string, boolean>>({});
     const today = currentPeriodBogota();
@@ -209,7 +211,11 @@ export function NewChargeLines({
                                 <Label htmlFor={`fixed-${l.key}`} className="text-xs font-normal">Mismo valor para todos (si no, cada uno con el de su plan)</Label>
                             </div>
                         )}
-                        {pastMonth && <p className="text-[11px] text-amber-700 dark:text-amber-400">Ese mes ya pasó: se crea solo si no existe, y vence desde hoy.</p>}
+                        {skippedByLine?.has(idx) ? (
+                            <p className="text-xs font-medium text-destructive" role="alert" data-testid={`cyp-line-skipped-${idx}`}>
+                                No se creará: {skippedByLine.get(idx)}. Elige otro mes o quita esta línea.
+                            </p>
+                        ) : pastMonth && <p className="text-[11px] text-amber-700 dark:text-amber-400">Ese mes ya pasó: se crea solo si no existe, y vence desde hoy.</p>}
                         {l.category === 'excedente' && mode === 'single' && (
                             <HorasAdicionalesLine line={l} suggestions={suggestions} onPatch={(patch) => update(idx, patch)} />
                         )}

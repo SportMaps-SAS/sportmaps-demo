@@ -1,0 +1,207 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "FICHA",
+      "title": "Inscripción",
+      "data": {
+        "servicio": { "type": "string", "__example__": "Clínica de armadores y atacantes" },
+        "cuando": { "type": "string", "__example__": "Del 21 al 22 de noviembre" },
+        "hay_cuando": { "type": "boolean", "__example__": true },
+        "valor": { "type": "string", "__example__": "Valor hoy: $300.000 (hasta el 10 de noviembre; desde el 11 de noviembre, $350.000)" },
+        "valor_afiliado": { "type": "string", "__example__": "Si ya entrena en el club: $250.000" },
+        "hay_afiliado": { "type": "boolean", "__example__": true },
+        "abono": { "type": "string", "__example__": "Separas el cupo con un abono mínimo de $150.000 (50 %)." },
+        "hay_abono": { "type": "boolean", "__example__": true },
+        "incluye": { "type": "string", "__example__": "Con Jorge Mesa. Incluye camiseta oficial y fotografía con los ponentes." },
+        "hay_incluye": { "type": "boolean", "__example__": true },
+        "fecha_max": { "type": "string", "__example__": "2026-11-04" },
+        "pide_talla": { "type": "boolean", "__example__": true },
+        "tallas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" }
+            }
+          },
+          "__example__": [
+            { "id": "S", "title": "S" },
+            { "id": "M", "title": "M" },
+            { "id": "L", "title": "L" }
+          ]
+        },
+        "label_novedades": { "type": "string", "__example__": "Quiero recibir novedades de Monster´s Volley Club por WhatsApp." },
+        "resumen_valores": { "type": "string", "__example__": "Valor completo: $300.000\nAbono para separar el cupo: $150.000" },
+        "resumen_valores_afiliado": { "type": "string", "__example__": "Valor de afiliado: $250.000\nAbono para separar el cupo: $125.000" }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          { "type": "TextHeading", "text": "${data.servicio}" },
+          { "type": "TextBody", "text": "${data.cuando}", "visible": "${data.hay_cuando}" },
+          { "type": "TextBody", "text": "${data.valor}", "font-weight": "bold" },
+          { "type": "TextBody", "text": "${data.valor_afiliado}", "visible": "${data.hay_afiliado}" },
+          { "type": "TextBody", "text": "${data.abono}", "visible": "${data.hay_abono}" },
+          { "type": "TextBody", "text": "${data.incluye}", "visible": "${data.hay_incluye}" },
+          { "type": "TextCaption", "text": "Te toma un minuto. Al final te mando por el chat los datos para pagar." },
+          {
+            "type": "Footer",
+            "label": "Inscribir deportista",
+            "on-click-action": {
+              "name": "navigate",
+              "next": { "type": "screen", "name": "DEPORTISTA" },
+              "payload": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "DEPORTISTA",
+      "title": "Deportista",
+      "sensitive": ["nombre_deportista", "fecha_nacimiento"],
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          { "type": "TextSubheading", "text": "¿Quién va a participar?" },
+          {
+            "type": "TextInput",
+            "name": "nombre_deportista",
+            "label": "Nombre completo",
+            "input-type": "text",
+            "required": true,
+            "helper-text": "Nombre y apellidos del deportista"
+          },
+          {
+            "type": "DatePicker",
+            "name": "fecha_nacimiento",
+            "label": "Fecha de nacimiento",
+            "required": true,
+            "min-date": "1940-01-01",
+            "max-date": "${screen.FICHA.data.fecha_max}",
+            "helper-text": "La del deportista"
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "afiliado",
+            "label": "¿Ya entrena en el club?",
+            "required": true,
+            "data-source": [
+              { "id": "si", "title": "Sí, ya entrena en el club" },
+              { "id": "no", "title": "No, todavía no" }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "talla",
+            "label": "Talla de camiseta",
+            "data-source": "${screen.FICHA.data.tallas}",
+            "required": "${screen.FICHA.data.pide_talla}",
+            "visible": "${screen.FICHA.data.pide_talla}"
+          },
+          {
+            "type": "Footer",
+            "label": "Continuar",
+            "on-click-action": {
+              "name": "navigate",
+              "next": { "type": "screen", "name": "CONSENTIMIENTO" },
+              "payload": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "CONSENTIMIENTO",
+      "title": "Autorizaciones",
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextBody",
+            "text": "Para inscribir al deportista necesitamos tu autorización para tratar sus datos (nombre y fecha de nacimiento). Toca «Leer más» para ver la política."
+          },
+          {
+            "type": "OptIn",
+            "name": "acepta_datos",
+            "label": "Acepto la política de tratamiento de datos personales de SportMaps y de la escuela.",
+            "required": true,
+            "on-click-action": {
+              "name": "open_url",
+              "url": "https://app.sportmaps.co/politica-de-privacidad"
+            }
+          },
+          {
+            "type": "OptIn",
+            "name": "acepta_novedades",
+            "label": "${screen.FICHA.data.label_novedades}"
+          },
+          {
+            "type": "Footer",
+            "label": "Ver resumen",
+            "on-click-action": {
+              "name": "navigate",
+              "next": { "type": "screen", "name": "RESUMEN" },
+              "payload": {}
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "RESUMEN",
+      "title": "Resumen",
+      "terminal": true,
+      "success": true,
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          { "type": "TextHeading", "text": "${screen.FICHA.data.servicio}" },
+          { "type": "TextCaption", "text": "Deportista" },
+          { "type": "TextBody", "text": "${screen.DEPORTISTA.form.nombre_deportista}" },
+          {
+            "type": "If",
+            "condition": "${screen.DEPORTISTA.form.afiliado} == 'si'",
+            "then": [
+              { "type": "TextBody", "text": "${screen.FICHA.data.resumen_valores_afiliado}" }
+            ],
+            "else": [
+              { "type": "TextBody", "text": "${screen.FICHA.data.resumen_valores}" }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "forma_pago",
+            "label": "¿Cuánto vas a pagar ahora?",
+            "required": "${screen.FICHA.data.hay_abono}",
+            "visible": "${screen.FICHA.data.hay_abono}",
+            "data-source": [
+              { "id": "completo", "title": "El valor completo" },
+              { "id": "abono", "title": "Solo el abono" }
+            ]
+          },
+          { "type": "TextCaption", "text": "Al enviar te mando por este chat los datos para pagar." },
+          {
+            "type": "Footer",
+            "label": "Enviar inscripción",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "formulario": "servicio_inscripcion",
+                "nombre_deportista": "${screen.DEPORTISTA.form.nombre_deportista}",
+                "fecha_nacimiento": "${screen.DEPORTISTA.form.fecha_nacimiento}",
+                "afiliado": "${screen.DEPORTISTA.form.afiliado}",
+                "talla": "${screen.DEPORTISTA.form.talla}",
+                "acepta_datos": "${screen.CONSENTIMIENTO.form.acepta_datos}",
+                "acepta_novedades": "${screen.CONSENTIMIENTO.form.acepta_novedades}",
+                "forma_pago": "${form.forma_pago}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

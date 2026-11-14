@@ -10,16 +10,26 @@ import { bffClient } from '@/lib/api/bffClient';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from '@/hooks/use-toast';
+import { TIPOS_DE_SERVICIO, definicionDeMotivo, type TipoDeServicio } from '@/lib/motivosDeCobro';
+import {
+  FORMULARIO_VACIO,
+  columnasDePrecios,
+  etiquetasDePrecios,
+  formularioDePrecios,
+  type FormularioDePrecios,
+  type OpcionDeServicio,
+  type PrecioPorFecha,
+} from '@/lib/preciosDeServicio';
+import { PreciosDeServicioEditor } from '@/components/settings/PreciosDeServicioEditor';
 
-/** school_tournament_items.kind (mig. 20261007095911, ventas por WhatsApp F0). */
-type ServiceKind = 'torneo' | 'viaje' | 'clase_extra' | 'vacacional' | 'otro';
-const SERVICE_KINDS: { value: ServiceKind; label: string }[] = [
-  { value: 'torneo', label: 'Torneo' },
-  { value: 'clase_extra', label: 'Clase extra / perfeccionamiento' },
-  { value: 'vacacional', label: 'Vacacional' },
-  { value: 'viaje', label: 'Viaje' },
-  { value: 'otro', label: 'Otro' },
-];
+/**
+ * school_tournament_items.kind (mig. 20261007095911, ventas por WhatsApp F0):
+ * los tipos de servicio del catálogo único de motivos (lib/motivosDeCobro.ts),
+ * que es también la categoría con la que se cobra cada ítem.
+ */
+type ServiceKind = TipoDeServicio;
+const SERVICE_KINDS: { value: ServiceKind; label: string }[] =
+  TIPOS_DE_SERVICIO.map((k) => ({ value: k, label: definicionDeMotivo(k).servicio?.tipo ?? definicionDeMotivo(k).etiqueta }));
 const KIND_LABEL: Record<string, string> = Object.fromEntries(SERVICE_KINDS.map((k) => [k.value, k.label]));
 
 interface CatalogItem {
@@ -38,6 +48,11 @@ interface CatalogItem {
   per_athlete?: boolean | null;
   /** Torneo interno (events) al que está vinculado el cobro; null = cobro suelto. */
   event_id?: string | null;
+  // Precios especiales (migración M2 comprobantes_con_motivo; ver lib/preciosDeServicio.ts)
+  precio_afiliado?: number | null;
+  opciones?: OpcionDeServicio[] | null;
+  precios_por_fecha?: PrecioPorFecha[] | null;
+  abono_minimo_pct?: number | null;
 }
 
 /** Torneo interno de la escuela, para vincular un cobro del catálogo. */
@@ -92,6 +107,8 @@ function formatWhen(item: CatalogItem): string | null {
 
 const BASE_COLS = 'id, name, price, active';
 const SERVICE_COLS = 'id, name, price, active, description, kind, image_url, starts_at, ends_at, capacity, per_athlete, event_id';
+/** Columnas de M2 (comprobantes_con_motivo). Si no existen todavía, la tarjeta se ve como antes. */
+const PRECIOS_COLS = 'precio_afiliado, opciones, precios_por_fecha, abono_minimo_pct';
 
 /**
  * CRUD de un catálogo vendible (artículos deportivos, cobros de torneo) que la
@@ -123,8 +140,12 @@ export function SellableCatalogCard({
   const [perAthlete, setPerAthlete] = useState(true);
   /** null = la columna no existe todavía (migración sin aplicar): no se muestra el interruptor. */
   const [waSales, setWaSales] = useState<boolean | null>(null);
+  // Precios especiales (afiliados, opciones, por fecha, abono): solo con M2 aplicada.
+  const [preciosReady, setPreciosReady] = useState(false);
+  const [precios, setPrecios] = useState<FormularioDePrecios>(FORMULARIO_VACIO);
 
   const showService = withServiceFields && serviceReady;
+  const showPrecios = showService && preciosReady;
   // Vincular requiere el módulo de Torneos y la columna event_id (migración 20261020122827).
   const canLink = linkTournaments && hasAddon('tournaments');
 
@@ -140,6 +161,7 @@ export function SellableCatalogCard({
     setEndsAt('');
     setCapacity('');
     setPerAthlete(true);
+    setPrecios(FORMULARIO_VACIO);
   };
 
   const load = async () => {
@@ -147,8 +169,14 @@ export function SellableCatalogCard({
     let data: unknown = null;
     let error: { message: string } | null = null;
     if (withServiceFields) {
-      // Con la migración F0 aplicada trae los campos de servicio; si no, la consulta de siempre.
-      const r = await supabase.from(table as any).select(SERVICE_COLS).eq('school_id', schoolId).order('sort_order', { ascending: true });
+      // Con M2 aplicada trae también los precios especiales; con F0, los campos de
+      // servicio; si no, la consulta de siempre. Una columna que falta da 400 y se
+      // pide la versión anterior: la pantalla nunca se rompe por una migración pendiente.
+      const conPrecios = await supabase.from(table as any).select(`${SERVICE_COLS}, ${PRECIOS_COLS}`).eq('school_id', schoolId).order('sort_order', { ascending: true });
+      const r = conPrecios.error
+        ? await supabase.from(table as any).select(SERVICE_COLS).eq('school_id', schoolId).order('sort_order', { ascending: true })
+        : conPrecios;
+      setPreciosReady(!conPrecios.error);
       if (!r.error) {
         data = r.data;
         setServiceReady(true);
@@ -210,6 +238,7 @@ export function SellableCatalogCard({
     setEndsAt(toLocalInput(item.ends_at));
     setCapacity(item.capacity ? String(item.capacity) : '');
     setPerAthlete(item.per_athlete !== false);
+    setPrecios(formularioDePrecios(item));
   };
 
   const save = async () => {
@@ -239,6 +268,11 @@ export function SellableCatalogCard({
       row.ends_at = ends;
       row.capacity = cap;
       row.per_athlete = perAthlete;
+    }
+    if (showPrecios) {
+      const r = columnasDePrecios(precios);
+      if ('error' in r) { toast({ title: r.error, variant: 'destructive' }); return; }
+      Object.assign(row, r.columnas);
     }
     setSaving(true);
     const { error } = editingId
@@ -317,6 +351,9 @@ export function SellableCatalogCard({
                         {showService && formatWhen(item) && <span className="ml-2 font-normal text-muted-foreground">{formatWhen(item)}</span>}
                         {showService && item.capacity ? <span className="ml-2 font-normal text-muted-foreground">{item.capacity} cupos</span> : null}
                       </div>
+                      {showPrecios && etiquetasDePrecios(item).length > 0 && (
+                        <div className="text-[11px] text-muted-foreground">{etiquetasDePrecios(item).join(' · ')}</div>
+                      )}
                       <div className="flex flex-wrap items-center gap-1 mt-1">
                       {canLink && showService && (item.kind ?? 'torneo') === 'torneo' && (
                         item.event_id ? (
@@ -353,10 +390,10 @@ export function SellableCatalogCard({
                     <Badge variant={item.active ? 'secondary' : 'outline'} className="text-[10px] shrink-0">
                       {item.active ? 'Activo' : 'Inactivo'}
                     </Badge>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" disabled={saving} onClick={() => startEdit(item)}>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" aria-label={`Editar ${item.name}`} disabled={saving} onClick={() => startEdit(item)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" disabled={saving} onClick={() => toggleActive(item)}>
+                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 shrink-0" aria-label={item.active ? `Desactivar ${item.name}` : `Activar ${item.name}`} disabled={saving} onClick={() => toggleActive(item)}>
                       <ShieldOff className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -408,6 +445,15 @@ export function SellableCatalogCard({
                       Se cobra por deportista
                     </label>
                   </>
+                )}
+                {showPrecios && (
+                  <PreciosDeServicioEditor
+                    key={editingId ?? 'nuevo'}
+                    value={precios}
+                    onChange={setPrecios}
+                    precioBase={price}
+                    disabled={saving}
+                  />
                 )}
               </div>
               <Button size="sm" disabled={saving} onClick={save}>

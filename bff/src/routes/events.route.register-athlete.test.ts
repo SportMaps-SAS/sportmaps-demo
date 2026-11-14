@@ -14,11 +14,21 @@ const h = vi.hoisted(() => ({
     rpc: { data: null as any, error: null as any },
     rpcCalls: [] as any[],
     notifs: [] as any[],
+    soportes: { bloquear: false } as any,
+    soportesLlamadas: [] as any[],
 }));
 
 vi.mock('../middlewares/authMiddleware', () => ({
     requireAuth: (req: any, _res: any, next: any) => { req.user = { id: 'admin-1' }; req.schoolId = h.schoolId; next(); },
     requireRole: () => (_req: any, _res: any, next: any) => next(),
+}));
+// Soportes obligatorios (flag apagado por defecto: nunca bloquea). Cero red: el servicio se simula.
+vi.mock('../services/soportes.service', () => ({
+    chequearSoportesSujeto: (_auth: string, schoolId: string, sujeto: any) => {
+        h.soportesLlamadas.push({ schoolId, sujeto });
+        return Promise.resolve(h.soportes);
+    },
+    mensajeFaltantes: (f: string[]) => `Faltan ${f.length} soporte(s).`,
 }));
 vi.mock('../utils/userClient', () => ({
     userClient: () => ({
@@ -66,6 +76,8 @@ beforeEach(() => {
     h.rpc = { data: null, error: null };
     h.rpcCalls = [];
     h.notifs = [];
+    h.soportes = { bloquear: false };
+    h.soportesLlamadas = [];
 });
 
 const post = (body: unknown) => fetch(`${base}/api/v1/events/school-tournaments/${EVENTO}/register-athlete`, {
@@ -159,6 +171,31 @@ describe('POST /school-tournaments/:id/register-athlete', () => {
 
     it('sin escuela resuelta → 403', async () => {
         h.schoolId = null;
+        const res = await post(cuerpo);
+        expect(res.status).toBe(403);
+        expect(h.rpcCalls).toHaveLength(0);
+    });
+
+    it('soportes obligatorios prendidos y faltan → 409 SOPORTES_INCOMPLETOS con la lista, sin llamar la RPC', async () => {
+        h.soportes = { bloquear: true, faltan: ['athlete_photo', 'good_standing_certificate'] };
+        const res = await post(cuerpo);
+        expect(res.status).toBe(409);
+        const j = await res.json();
+        expect(j.codigo).toBe('SOPORTES_INCOMPLETOS');
+        expect(j.faltan).toEqual(['athlete_photo', 'good_standing_certificate']);
+        expect(h.rpcCalls).toHaveLength(0);
+        expect(h.notifs).toHaveLength(0);
+        expect(h.soportesLlamadas[0]).toEqual({ schoolId: 'school-1', sujeto: { tipo: 'child', id: NINO } });
+    });
+
+    it('soportes: el adulto se chequea como profile', async () => {
+        h.rpc = { data: { registration_id: 'r5', already_registered: false, parent_id: null, is_paid: false }, error: null };
+        await post({ category_id: CATEGORIA, athlete_user_id: PADRE });
+        expect(h.soportesLlamadas[0].sujeto).toEqual({ tipo: 'profile', id: PADRE });
+    });
+
+    it('soportes: sin permiso al revisar (403) → 403 sin llamar la RPC', async () => {
+        h.soportes = { error: true, status: 403, mensaje: 'forbidden' };
         const res = await post(cuerpo);
         expect(res.status).toBe(403);
         expect(h.rpcCalls).toHaveLength(0);

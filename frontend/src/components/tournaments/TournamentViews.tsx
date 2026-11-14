@@ -28,11 +28,14 @@ export function MatchCard({ match, large = false, action }: { match: DisplayMatc
         <span>· {formatBogota(match.scheduled_at)}</span>
         <Badge variant={live ? 'default' : 'outline'} className="ml-auto">{STATUS_LABEL[match.status]}</Badge>
       </div>
-      <div className={`mt-1 flex items-center gap-2 ${text}`}>
-        <span className="flex-1 text-right font-medium">{teamName(match, 'home')}</span>
-        <span className="min-w-[3.5rem] text-center font-bold tabular-nums">{scoreText(match)}</span>
-        <span className="flex-1 font-medium">{teamName(match, 'away')}</span>
-        {action}
+      {/* Nombres y marcador en su fila; las acciones van debajo en móvil y a la derecha desde sm (390 px no les deja espacio). */}
+      <div className={`mt-1 flex flex-col gap-1 ${action ? 'sm:flex-row sm:items-center sm:gap-2' : ''}`}>
+        <div className={`flex min-w-0 flex-1 items-center gap-2 ${text}`}>
+          <span className="min-w-0 flex-1 break-words text-right font-medium">{teamName(match, 'home')}</span>
+          <span className="min-w-[3.5rem] text-center font-bold tabular-nums">{scoreText(match)}</span>
+          <span className="min-w-0 flex-1 break-words font-medium">{teamName(match, 'away')}</span>
+        </div>
+        {action && <div className="flex shrink-0 flex-wrap items-center justify-end gap-1" data-testid="match-card-actions">{action}</div>}
       </div>
       {(setsLine || curSet) && (
         <div className={`mt-0.5 text-center text-muted-foreground ${large ? 'text-lg' : 'text-xs'}`}>

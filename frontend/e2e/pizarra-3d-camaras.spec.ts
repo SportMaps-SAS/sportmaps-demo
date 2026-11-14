@@ -33,8 +33,8 @@ const dbg = (page: Page) => page.evaluate(() => (window as unknown as { __TACTIC
 const AIR_T: Record<string, number> = { futbol: 2000, voleibol: 650, baloncesto: 1750 };
 
 const CAMERAS: Record<string, string[]> = {
-    futbol: ['Transmisión TV', 'Táctica alta', 'Cenital', 'Isométrica', 'Detrás del arco', 'Arco rival', 'Seguir balón', 'Seguir jugador', 'Spider-cam', 'Dron', 'Libre'],
-    voleibol: ['Transmisión TV', 'Táctica alta', 'Cenital', 'Isométrica', 'Fondo propio', 'Fondo rival', 'Seguir balón', 'Seguir jugador', 'Spider-cam', 'Dron', 'Libre'],
+    futbol: ['Transmisión TV', 'Táctica alta', 'Cenital', 'Isométrica', 'Detrás del arco', 'Ojos del arquero rival', 'Seguir balón', 'Seguir jugador', 'Spider-cam', 'Dron', 'Libre'],
+    voleibol: ['Transmisión TV', 'Táctica alta', 'Cenital', 'Isométrica', 'Fondo propio', 'Fondo rival, a ras', 'Seguir balón', 'Seguir jugador', 'Spider-cam', 'Dron', 'Libre'],
     baloncesto: ['Transmisión TV', 'Táctica alta', 'Cenital', 'Isométrica', 'Detrás del aro', 'Aro rival', 'Seguir balón', 'Seguir jugador', 'Spider-cam', 'Dron', 'Libre'],
 };
 
@@ -111,7 +111,7 @@ test('futbol: director automático en 3 instantes (TV → balón → arco rival)
     const viewer = await openHarness(page, 'sport=futbol&t=600');
     await viewer.getByRole('button', { name: 'Cámara automática' }).click();
     const onAir = viewer.getByTestId('director-on-air');
-    const steps: [number, string, string][] = [[600, 'tv', 'Transmisión TV'], [2000, 'balon', 'Seguir balón'], [4650, 'rival', 'Arco rival']];
+    const steps: [number, string, string][] = [[600, 'tv', 'Transmisión TV'], [2000, 'balon', 'Seguir balón'], [4650, 'rival', 'Ojos del arquero rival']];
     for (const [t, kind, label] of steps) {
         await seek(page, t);
         await expect(viewer).toHaveAttribute('data-camera', kind, { timeout: 20_000 });

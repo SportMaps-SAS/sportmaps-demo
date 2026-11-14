@@ -35,6 +35,10 @@ interface EmailItem {
     // Nombre visible del remitente (escuela con marca blanca). La dirección
     // sigue siendo noreply@sportmaps.co: es el dominio verificado en Resend.
     from_name?: string;
+    // A dónde llegan las respuestas. Solo se acepta un buzón @sportmaps.co
+    // (contacto@, soporte@…): noreply no recibe, y cualquier otro dominio
+    // convertiría esta función en un remitente de SportMaps para terceros.
+    reply_to?: string;
 }
 
 const DEFAULT_FROM = "SportMaps <noreply@sportmaps.co>";
@@ -46,6 +50,40 @@ function buildFrom(name?: string): string {
     return limpio ? `"${limpio}" <noreply@sportmaps.co>` : DEFAULT_FROM;
 }
 
+function replyToSeguro(v?: string): string | undefined {
+    const limpio = (v || "").trim().toLowerCase();
+    return /^[a-z0-9._%+-]+@sportmaps\.co$/.test(limpio) ? limpio : undefined;
+}
+
+/**
+ * ¿La llamada viene del servidor (BFF / service_role)? El gateway ya verificó la
+ * firma del JWT (verify_jwt = true); acá solo se lee el rol.
+ *
+ * Por qué (2026-10-27): con la llave PÚBLICA de la app —la que va en el bundle
+ * del frontend— se podía mandar un correo con asunto y HTML libres desde
+ * noreply@sportmaps.co a cualquier dirección. Phishing con nuestra marca y
+ * cupo de Resend quemado. La app solo usa plantillas (`type`); el contenido
+ * libre lo arma únicamente el BFF, que llama con la llave de servicio.
+ */
+function esLlamadaDeServidor(req: Request): boolean {
+    const token = (req.headers.get("authorization") || "").replace(/^Bearer\s+/i, "").trim();
+    if (!token) return false;
+    const servicio = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (servicio && token === servicio) return true;
+    // Llave secreta del formato nuevo: nunca sale del servidor.
+    if (token.startsWith("sb_secret_")) return true;
+    try {
+        const parte = token.split(".")[1];
+        if (!parte) return false;
+        const json = JSON.parse(atob(parte.replace(/-/g, "+").replace(/_/g, "/")));
+        return json?.role === "service_role";
+    } catch {
+        return false;
+    }
+}
+
+const CONTENIDO_LIBRE_PROHIBIDO = "El contenido libre (subject/html sin 'type') solo se acepta desde el servidor";
+
 interface EmailPayload extends Partial<EmailItem> {
     // Envío masivo: hasta 100 destinatarios en UNA sola llamada a Resend.
     // 394 invitaciones = 4 requests en vez de 394 (y sin chocar el rate limit).
@@ -54,12 +92,19 @@ interface EmailPayload extends Partial<EmailItem> {
 
 const RESEND_BATCH_LIMIT = 100;
 
+// ─── Imágenes de los correos (bucket público avatars/correo/) ───
+// Antes el encabezado usaba avatars/LOGO.jpg: el ícono cuadrado en JPG, que en
+// el correo salía con las esquinas negras. LOGO.jpg sigue en el bucket por si
+// algo que vive solo en Supabase lo usa todavía.
+const LOGO_URL = "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/avatars/correo/logo-sportmaps.png";
+const MAPI_URL = "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/avatars/correo/mapi.png";
+
 // ─── Shared Layout (matches Supabase Auth templates) ───
 const wrapTemplate = (body: string): string => `
 <div style="font-family: 'Poppins', Arial, sans-serif; background-color: #f9f9f9; padding: 40px; text-align: center;">
   <div style="max-width: 500px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #e0e0e0;">
     <div style="padding: 20px; background-color: #ffffff;">
-      <img src="https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/avatars/LOGO.jpg" alt="SportMaps Logo" style="width: 150px; height: auto;">
+      <img src="${LOGO_URL}" alt="SportMaps" width="150" style="width: 150px; height: auto;">
     </div>
     <div style="padding: 30px; border-top: 3px solid #248223;">
       ${body}
@@ -72,6 +117,21 @@ const wrapTemplate = (body: string): string => `
 
 const orangeButton = (href: string, text: string): string =>
     `<a href="${href}" style="display: inline-block; padding: 14px 30px; background-color: #FB9F1E; color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: bold; margin-top: 20px; box-shadow: 0 4px 10px rgba(251, 159, 30, 0.3);">${text}</a>`;
+
+/** Presenta a Mapi en las invitaciones de familias y deportistas: es a quien
+ *  pueden preguntarle apenas entren. Tabla y no flex: Outlook no soporta flex. */
+const mapiBlock = (schoolName: string, ejemplos: string): string => `
+          <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; margin-top: 26px; background-color: #eef7ee; border-radius: 10px; border-collapse: separate; text-align: left;">
+            <tr>
+              <td style="padding: 16px 0 16px 16px; vertical-align: middle; width: 80px;">
+                <img src="${MAPI_URL}" alt="Mapi" width="80" height="80" style="display: block; width: 80px; height: 80px; border-radius: 50%;">
+              </td>
+              <td style="padding: 16px; vertical-align: middle; color: #4a4a4a; font-size: 14px; line-height: 1.5;">
+                <strong style="color: #248223;">Te presentamos a Mapi</strong><br>
+                Es el asistente virtual de <strong>${schoolName}</strong>. Cuando entres, toca su botón abajo a la derecha de la app y pregúntale ${ejemplos}.
+              </td>
+            </tr>
+          </table>`;
 
 // ─── Helpers de las plantillas del bot ───
 // Estas plantillas muestran texto que escribió una familia por WhatsApp o un
@@ -211,6 +271,7 @@ function getSubjectAndHtml(type: EmailType, d: Record<string, string>): { subjec
             Si el botón no funciona, copia y pega este enlace:<br>
             <span style="color: #248223; word-break: break-all;">${d.registrationUrl || "https://app.sportmaps.co/register"}</span>
           </p>
+          ${mapiBlock(d.schoolName, "cómo pagar la mensualidad, dónde subir el comprobante o cómo ver los horarios de tu hijo(a)")}
         `),
             };
 
@@ -251,6 +312,7 @@ function getSubjectAndHtml(type: EmailType, d: Record<string, string>): { subjec
             Si el botón no funciona, copia y pega este enlace:<br>
             <span style="color: #248223; word-break: break-all;">${d.registrationUrl || "https://app.sportmaps.co/register?role=athlete"}</span>
           </p>
+          ${mapiBlock(d.schoolName, "cómo ver tus horarios, pagar tu mensualidad o subir un comprobante")}
         `),
             };
 
@@ -436,7 +498,8 @@ Deno.serve(async (req: Request) => {
 
     try {
         const payload: EmailPayload = await req.json();
-        const { type, to, data, subject: rawSubject, html: rawHtml, batch } = payload;
+        const { type, to, data, subject: rawSubject, html: rawHtml, batch, reply_to } = payload;
+        const deServidor = esLlamadaDeServidor(req);
 
         // ── Envío masivo (POST /emails/batch) ──────────────────────────────
         if (Array.isArray(batch)) {
@@ -457,23 +520,27 @@ Deno.serve(async (req: Request) => {
             try {
                 emails = batch.map((item) => {
                     if (!item.to) throw new Error("Falta 'to' en un elemento del batch");
+                    if (!item.type && !deServidor) throw new Error(CONTENIDO_LIBRE_PROHIBIDO);
                     const built = item.type
                         ? getSubjectAndHtml(item.type, item.data || {})
                         : { subject: item.subject!, html: item.html! };
                     if (!built.subject || !built.html) {
                         throw new Error(`Elemento sin 'type' ni ('subject' y 'html'): ${item.to}`);
                     }
+                    const replyTo = replyToSeguro(item.reply_to);
                     return {
                         from: buildFrom(item.from_name),
                         to: [item.to],
                         subject: built.subject,
                         html: built.html,
+                        ...(replyTo ? { reply_to: replyTo } : {}),
                     };
                 });
             } catch (buildErr) {
+                const msg = (buildErr as Error).message;
                 return new Response(
-                    JSON.stringify({ error: (buildErr as Error).message }),
-                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                    JSON.stringify({ error: msg }),
+                    { status: msg === CONTENIDO_LIBRE_PROHIBIDO ? 403 : 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
                 );
             }
 
@@ -539,6 +606,12 @@ Deno.serve(async (req: Request) => {
             subject = template.subject;
             html = template.html;
         } else if (rawSubject && rawHtml) {
+            if (!deServidor) {
+                return new Response(
+                    JSON.stringify({ error: CONTENIDO_LIBRE_PROHIBIDO }),
+                    { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                );
+            }
             subject = rawSubject;
             html = rawHtml;
         } else {
@@ -569,6 +642,7 @@ Deno.serve(async (req: Request) => {
                 to: [to],
                 subject,
                 html,
+                ...(replyToSeguro(reply_to) ? { reply_to: replyToSeguro(reply_to) } : {}),
             }),
         });
 

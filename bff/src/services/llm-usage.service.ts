@@ -213,6 +213,9 @@ export interface PrecioModelo {
 export const PRECIOS_POR_MILLON: PrecioModelo[] = [
     { nombre: 'Claude Sonnet 5.5', patron: /claude-sonnet-5-5/i, input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, confirmado: true },
     { nombre: 'Claude Opus 5.5', patron: /claude-opus-5-5/i, input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, confirmado: true },
+    // Respuesta a prospectos (2026-10-28). Hasta 100K tokens de prompt; lectura de
+    // caché 0,1 × y escritura de 5 min 1,25 × la entrada.
+    { nombre: 'Claude Haiku 5.5', patron: /claude-haiku-5-5/i, input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125, confirmado: true },
     { nombre: 'Claude Haiku 4.5', patron: /claude-haiku-4-5/i, input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, confirmado: true },
     { nombre: 'Claude Sonnet 5', patron: /claude-sonnet-5\b(?!-5)/i, input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, confirmado: true },
     { nombre: 'Claude Sonnet 4.6', patron: /claude-sonnet-4-6/i, input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, confirmado: true },

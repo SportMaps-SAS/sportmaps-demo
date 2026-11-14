@@ -18,6 +18,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import { supabase } from '../config/supabase';
+import { normalizeRosterUsers, replaceDeviceRoster } from '../services/accessRoster.service';
 
 const router = Router();
 
@@ -220,6 +221,42 @@ router.post('/door-commands/:id/ack', async (req: Request, res: Response) => {
     return res.json({ success: true });
   } catch (err: any) {
     return res.status(500).json({ error: 'Error al confirmar comando' });
+  }
+});
+
+// ─── POST /bridge/device-users ───────────────────────────────────────────────
+// «IDs del lector» (Control de acceso, F1): el bridge manda la lista de usuarios que tiene
+// cargada UN lector (PIN, nombre, si tiene clave/huella/rostro). Reemplaza la foto de ese
+// lector. Solo guarda banderas, nunca plantillas biométricas. La llave del bridge es global,
+// así que el serial se valida CONTRA la escuela: no se puede escribir la lista de un lector
+// que no es de ella.
+router.post('/device-users', async (req: Request, res: Response) => {
+  if (!apiKeyOk(req)) return res.status(401).json({ error: 'unauthorized' });
+
+  const { school_id: schoolId, device_serial: serial, users } = req.body as {
+    school_id?: string; device_serial?: string; users?: unknown;
+  };
+  if (!schoolId || !serial) return res.status(400).json({ error: 'school_id y device_serial requeridos' });
+
+  try {
+    const { data: device, error: devErr } = await supabase
+      .from('turnstile_devices')
+      .select('id')
+      .eq('school_id', schoolId)
+      .eq('serial_number', serial)
+      .maybeSingle();
+    if (devErr) throw devErr;
+    if (!device) return res.status(403).json({ error: 'Ese lector no pertenece a la escuela.', code: 'DEVICE_NOT_IN_SCHOOL' });
+
+    const { users: limpios, descartados } = normalizeRosterUsers(users);
+    if (limpios.length === 0) {
+      // Una lista vacía NO borra la foto anterior: un fallo de lectura no debe vaciar la pantalla.
+      return res.status(400).json({ error: 'Sin usuarios válidos: no se cambió nada.', code: 'EMPTY_ROSTER', descartados });
+    }
+    const r = await replaceDeviceRoster(schoolId, serial, limpios);
+    return res.json({ success: true, ...r, descartados });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Error al guardar los usuarios del lector' });
   }
 });
 

@@ -16,6 +16,21 @@ const st = vi.hoisted(() => ({
   rpcs: [] as { name: string; args: any }[],
   inserts: [] as { tabla: string; fila: Fila }[],
   ledger: null as any,
+  upserts: [] as { tabla: string; fila: Fila; opts: any }[],
+  upsertError: null as any,
+}));
+
+// Sesión del coach (RLS): se registra lo que se escribiría.
+vi.mock('../../utils/userClient', () => ({
+  userClient: () => ({
+    from: (tabla: string) => ({
+      upsert: async (fila: Fila, opts: any) => {
+        if (st.upsertError) return { error: st.upsertError };
+        st.upserts.push({ tabla, fila, opts });
+        return { error: null };
+      },
+    }),
+  }),
 }));
 
 // supabase.rpc → el libro en memoria (fiel a las RPC de 20261014155445).
@@ -79,6 +94,7 @@ vi.mock('../../services/llm.service', () => ({
 const { default: router } = await import('./tactical-ai');
 const { samplePlay, FAKE_ROSTER_NAMES, fakeKey } = await import('./__fixtures__/tacticalAiPlays');
 const { anonymizePlay, boardHash, parseAnalyzeInput, validateAiResult } = await import('./tacticalAiShapes');
+const { kbVersion } = await import('../../services/tactical-ai-knowledge');
 
 const ledgerMod = await import('../../services/__fixtures__/fakeTacticalAiLedger');
 const recorded = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'tacticalAi.recorded.json'), 'utf8'));
@@ -106,6 +122,8 @@ beforeEach(() => {
   st.tablas.profiles = [{ id: 'coach-x', full_name: 'Profe Andrés' }];
   st.rpcs = [];
   st.inserts = [];
+  st.upserts = [];
+  st.upsertError = null;
   const { FakeTacticalAiLedger } = ledgerMod;
   st.ledger = new FakeTacticalAiLedger();
   llm.calls = [];
@@ -170,9 +188,14 @@ describe('análisis', () => {
     expect(sent).not.toMatch(/athlete:|aaaa-4bbb/);
     for (const n of FAKE_ROSTER_NAMES) expect(sent).not.toContain(n);
     expect(sent).not.toContain('Sofi');
+    // Base táctica propia: principios del deporte en el sistema.
+    expect(llm.calls[0].system).toContain('PRINCIPIOS TÁCTICOS DE REFERENCIA');
+    expect(llm.calls[0].system).toContain('Transición ataque→defensa');
     // Caché: anónima (p1/r1), con tokens.
     const ins = st.inserts.find((i) => i.tabla === 'tactical_ai_analyses')!;
     expect(ins.fila.board_hash).toMatch(/^[0-9a-f]{64}$/);
+    // analysis_ref = hash de la caché: identifica la sugerencia en «Útil / No útil».
+    expect(r.body.analysis_ref).toBe(ins.fila.board_hash);
     expect(JSON.stringify(ins.fila.result)).not.toMatch(/athlete:/);
     expect(ins.fila.input_tokens).toBe(5000);
     expect(ins.fila.output_tokens).toBe(5900);
@@ -186,7 +209,7 @@ describe('análisis', () => {
     const { input } = parseAnalyzeInput(body);
     const { play, keyMap } = anonymizePlay(input!, new Set());
     const { result } = validateAiResult(recorded.futbol.texto, { sport: 'futbol', ownKeys: new Set(keyMap.keys()) });
-    st.tablas.tactical_ai_analyses = [{ school_id: 'esc-1', board_hash: boardHash(play), result }];
+    st.tablas.tactical_ai_analyses = [{ school_id: 'esc-1', board_hash: boardHash(play, kbVersion('futbol')), result }];
     const r = await post(body);
     expect(r.status).toBe(200);
     expect(r.body.cached).toBe(true);
@@ -222,7 +245,9 @@ describe('análisis', () => {
     expect(msg).toContain('Profe Andrés');
     expect(msg).toContain('Club Demo');
     expect(msg).toContain('fútbol 11');
-    expect(msg).toContain('US$ 0,95 de US$ 1,00');
+    expect(msg).toContain('Usé el 95 % de mi IA');
+    expect(msg).toContain('+50 % de IA');
+    expect(msg).not.toContain('US$');
     for (const n of FAKE_ROSTER_NAMES) expect(msg).not.toContain(n);
     expect(msg).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
   });
@@ -303,6 +328,61 @@ describe('GET ai-balance', () => {
   });
   it('padre → 403', async () => {
     expect((await get('', { 'x-role': 'parent' })).status).toBe(403);
+  });
+});
+
+describe('POST ai-feedback («Útil / No útil» y «Guardar como nueva jugada»)', () => {
+  const HASH = 'a'.repeat(64);
+  const result = { lectura: 'x', riesgos: [], contraataques: [{ titulo: 'c', frames: [] }, { titulo: 'c2', frames: [] }], variantes: [{ titulo: 'v', frames: [] }] };
+  async function fb(body: unknown, headers: Record<string, string> = {}) {
+    const res = await fetch(`${base}/api/v1/school/tactical/ai-feedback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user': 'coach-x', ...headers }, body: JSON.stringify(body),
+    });
+    return { status: res.status, body: await res.json() as any };
+  }
+  beforeEach(() => { st.tablas.tactical_ai_analyses = [{ school_id: 'esc-1', board_hash: HASH, result }]; });
+
+  it('«Útil» en el contraataque 2: upsert con la sesión del coach, solo las columnas que cambian', async () => {
+    const r = await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'contraataque', index: 1, verdict: 'util' });
+    expect(r.status).toBe(200);
+    expect(st.upserts).toHaveLength(1);
+    expect(st.upserts[0].tabla).toBe('tactical_ai_suggestion_feedback');
+    expect(st.upserts[0].fila).toEqual({
+      school_id: 'esc-1', user_id: 'coach-x', board_hash: HASH, sport: 'futbol', suggestion_kind: 'contraataque', suggestion_index: 1, verdict: 'util',
+    });
+    expect(st.upserts[0].opts.onConflict).toBe('user_id,school_id,board_hash,suggestion_kind,suggestion_index');
+  });
+  it('«Guardar como nueva jugada» marca saved_as_play_at sin tocar el voto', async () => {
+    const r = await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, saved: true });
+    expect(r.status).toBe(200);
+    expect(st.upserts[0].fila.saved_as_play_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect('verdict' in st.upserts[0].fila).toBe(false);
+  });
+  it('análisis de OTRA escuela → 404 sin escribir', async () => {
+    const r = await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, verdict: 'no_util' }, { 'x-school': 'esc-2' });
+    expect(r.status).toBe(404);
+    expect(st.upserts).toHaveLength(0);
+  });
+  it('sugerencia que no existe → 422', async () => {
+    expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 3, verdict: 'util' })).status).toBe(422);
+    expect(st.upserts).toHaveLength(0);
+  });
+  it('cuerpo inválido → 422', async () => {
+    expect((await fb({ analysis_ref: 'x', sport: 'futbol', kind: 'variante', index: 0, verdict: 'util' })).status).toBe(422);
+    expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0 })).status).toBe(422);
+    expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, verdict: 'meh' })).status).toBe(422);
+  });
+  it('padre / atleta → 403', async () => {
+    for (const role of ['parent', 'athlete']) {
+      expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, verdict: 'util' }, { 'x-role': role })).status).toBe(403);
+    }
+    expect(st.upserts).toHaveLength(0);
+  });
+  it('la RLS rechaza (42501) → 403; tabla sin crear → 503', async () => {
+    st.upsertError = { code: '42501', message: 'new row violates row-level security policy' };
+    expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, verdict: 'util' })).status).toBe(403);
+    st.upsertError = { code: '42P01', message: 'relation does not exist' };
+    expect((await fb({ analysis_ref: HASH, sport: 'futbol', kind: 'variante', index: 0, verdict: 'util' })).status).toBe(503);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   Baby, Users, ClipboardList, Info, Loader2, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { phoneForForm, type AthletePrefill } from './athletePrefill';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { ZkPinField, zkPinToPayload } from './ZkPinField';
 import { supabase } from '@/integrations/supabase/client';
@@ -37,6 +38,7 @@ import {
   FirstPaymentModeSection, FirstPaymentChoice, DEFAULT_FIRST_PAYMENT_CHOICE,
 } from '@/components/students/FirstPaymentModeSection';
 import { formatCOP } from '@/lib/prorationUtils';
+import { PlanCombobox } from '@/components/students/PlanCombobox';
 import {
   AltaFirstChargeCard, FeeWaivers, feeWaiversPayload, defaultFeeWaivers,
 } from '@/components/students/AltaFirstChargeCard';
@@ -48,6 +50,7 @@ import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { PhoneInput } from '@/components/ui/phone-input';
 import { SiblingChildPicker, SiblingDiscountChip, type SiblingPreview } from '@/components/students/siblings';
+import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -75,8 +78,10 @@ interface Branch { id: string; name: string; }
 interface CreateChildModalProps {
   open: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Recibe la respuesta de create-one (`child_id`, …). */
+  onSuccess: (result?: any) => void;
   schoolId: string;
+  prefill?: AthletePrefill | null;
   /** «No cobrar inscripción / seguro». El coach no exonera (default true; el BFF también lo frena). */
   canWaiveFees?: boolean;
   /**
@@ -84,6 +89,8 @@ interface CreateChildModalProps {
    * responde 403. Por defecto sigue a `canWaiveFees` (false para el coach).
    */
   canUseSiblings?: boolean;
+  /** Equipo ya elegido al abrir (el profe lo abre desde SU equipo). Se puede cambiar. */
+  defaultTeamId?: string | null;
 }
 
 interface BillingSettings {
@@ -111,10 +118,12 @@ function Section({
   );
 }
 
-export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true, canUseSiblings }: CreateChildModalProps) {
+export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveFees = true, canUseSiblings, prefill, defaultTeamId }: CreateChildModalProps) {
   const siblingsAllowed = canUseSiblings ?? canWaiveFees;
   const { toast } = useToast();
   const [submitting, setSubmitting] = useState(false);
+  // «¿Quién lo refirió?»: solo con la campaña activa; se registra tras crear la inscripción.
+  const referido = useReferidoAlta(schoolId);
   const [showMedical, setShowMedical] = useState(false);
 
   // Lookup data
@@ -185,7 +194,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
 
     Promise.all([
       supabase.from('teams').select('id, name, sport, price_monthly').eq('school_id', schoolId).eq('status', 'active').order('name'),
-      supabase.from('offering_plans').select('id, name, price, duration_days, registration_fee, insurance_fee, offering_id, offerings(id, name)').eq('school_id', schoolId).eq('is_active', true).order('sort_order'),
+      supabase.from('offering_plans').select('id, name, price, duration_days, registration_fee, insurance_fee, offering_id, offerings(id, name)').eq('school_id', schoolId).eq('is_active', true).order('sort_order').order('created_at'),
       supabase.from('school_branches').select('id, name').eq('school_id', schoolId).order('name'),
       supabase.from('school_settings').select('payment_cutoff_day, billing_cycle_type, late_fee_skip_signup_month').eq('school_id', schoolId).maybeSingle(),
     ]).then(([teamsRes, plansRes, branchesRes, settingsRes]) => {
@@ -260,7 +269,20 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
     setSendInviteWhatsapp(true);
   };
 
-  const handleClose = () => { reset(); onClose(); };
+  const handleClose = () => { referido.reiniciar(); reset(); onClose(); };
+
+  // Abre precargado (prospecto de clase de prueba): solo lo que se sabe.
+  useEffect(() => {
+    if (!open || !prefill) return;
+    if (prefill.fullName) setFullName(prefill.fullName);
+    if (prefill.parentName) setParentName(prefill.parentName);
+    if (prefill.phone) setParentPhone(phoneForForm(prefill.phone));
+  }, [open, prefill]);
+
+  // Abierto desde un equipo: ese equipo ya elegido (también llena la mensualidad del equipo).
+  useEffect(() => {
+    if (open && defaultTeamId) setTeamId(defaultTeamId);
+  }, [open, defaultTeamId]);
 
   // ── Búsqueda silenciosa en acudiente ──────────────────────────────────────────
   const checkParentEmailExists = useCallback(async (emailVal: string) => {
@@ -457,8 +479,12 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           ) as any,
         });
       }
+      if (result?.child_id && Number(result?.enrollments_created) > 0) {
+        await referido.registrarTras({ tipo: 'child', id: result.child_id, nombre: fullName.trim() });
+      }
+      referido.reiniciar();
       reset();
-      onSuccess();
+      onSuccess(result);
     } catch (e: any) {
       // F2: entre el preview y el alta cambió la familia (otro hermano entró o
       // salió). El BFF no crea nada; se muestra su mensaje y se recalcula.
@@ -505,6 +531,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
                 <Select value={docType} onValueChange={setDocType}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="RC">RC — Registro civil</SelectItem>
                     <SelectItem value="TI">TI</SelectItem>
                     <SelectItem value="CC">CC</SelectItem>
                     <SelectItem value="CE">CE</SelectItem>
@@ -756,17 +783,13 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
               <div>
                 <Label>Plan</Label>
                 <p className="text-[11px] text-muted-foreground mb-1">Opcional — independiente del equipo</p>
-                <Select value={selectedPlanId} onValueChange={handlePlanSelect}>
-                  <SelectTrigger><SelectValue placeholder="Sin plan" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">Sin plan</SelectItem>
-                    {plans.map(p => (
-                      <SelectItem key={p.plan_id} value={p.plan_id}>
-                        {p.offering_name} — {p.plan_name} ({formatCOP(p.price)})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <PlanCombobox
+                  plans={plans.map(p => ({ id: p.plan_id, name: p.plan_name, offering_name: p.offering_name, price: p.price }))}
+                  value={selectedPlanId}
+                  onChange={handlePlanSelect}
+                  noneValue="none"
+                  showPrice
+                />
               </div>
               )}
             </div>
@@ -900,6 +923,8 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           </Section>
         </div>
 
+        {referido.campo}
+
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={submitting}>
             Cancelar
@@ -913,6 +938,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           </Button>
         </DialogFooter>
       </DialogContent>
+      {referido.dialogo}
     </Dialog>
   );
 }

@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Home, Calendar, MessageSquare, User, Compass, Users, CreditCard, Baby, Settings, Trophy, Activity, ShoppingBag, MoreHorizontal, ClipboardList, CheckSquare, TrendingUp, IdCard } from 'lucide-react';
+import { Home, Calendar, Building, DollarSign, MessageSquare, User, Compass, Users, CreditCard, Baby, Settings, Trophy, Activity, ShoppingBag, MoreHorizontal, ClipboardList, CheckSquare, TrendingUp, IdCard } from 'lucide-react';
 import { SHOW_EXPLORE, ACUDIENTE_V2, ENTRENADOR_V2, DEPORTISTA_V2 } from '@/lib/feature-flags';
 import { PESTANAS_ACUDIENTE, PESTANAS_ENTRENADOR, PESTANAS_DEPORTISTA, pestanasDeRol } from '@/lib/acudienteTabs';
 import { useAuth } from '@/contexts/AuthContext';
@@ -55,12 +55,20 @@ const getNavigationItemsForRole = (role: string, showStore = false): NavItem[] =
         { href: '/dashboard', label: 'Inicio', icon: Home },
         { href: '/students', label: 'Alumnos', icon: Users },
         { href: '/payments-automation', label: 'Pagos', icon: CreditCard },
-        // «Chat» de la escuela = el buzón de WhatsApp, que es donde le escriben
-        // las familias. Antes abría /messages (mensajería interna, 0 mensajes en
-        // 90 días: inventario de Comunicaciones 2026-10-12 §5.3). Los demás
-        // roles siguen en /messages hasta que se decida qué pasa con ese módulo.
-        { href: '/whatsapp?tab=conversaciones', label: 'Chat', icon: MessageSquare },
+        // «Chat» de la escuela = Comunicaciones (/messages). El acceso al WhatsApp
+        // de la escuela (o a activarlo) vive dentro de esa pantalla, no en la barra.
+        { href: '/messages', label: 'Chat', icon: MessageSquare, also: ['/whatsapp'] },
         { href: '/settings', label: 'Config', icon: Settings },
+      ];
+    // Dueño de espacios (facility_manager): menú corto de alquiler, sin atletas
+    // ni equipos. Mismas cuatro entradas del menú lateral.
+    case 'facility_manager':
+      return [
+        { href: '/venue/dashboard', label: 'Inicio', icon: Home },
+        { href: '/facilities', label: 'Canchas', icon: Building },
+        { href: '/venue/reservas', label: 'Reservas', icon: Calendar },
+        { href: '/venue/cobros', label: 'Cobros', icon: DollarSign },
+        { href: '/school-config', label: 'Config', icon: Settings },
       ];
     case 'coach':
       // Entrenador V2: Hoy · Equipos · Sesiones · Asistencia · Más. Con VITE_ENTRENADOR_V2=false, la anterior.
@@ -112,13 +120,19 @@ export function MobileBottomNav() {
     // encima tapaba el botón de pagar en móvil (informe tienda-baseline §1.5).
     location.pathname.startsWith('/tienda/') ||
     location.pathname.startsWith('/checkout') ||
-    location.pathname === '/carrito'
+    location.pathname === '/carrito' ||
+    // Páginas públicas del torneo (en vivo, partido, link del delegado,
+    // validar carné) y el anotador: la barra del rol tapaba sus botones.
+    location.pathname.startsWith('/torneo/') ||
+    location.pathname.startsWith('/anotador/')
   ) {
     return null;
   }
 
   // Multirol: el rol activo, el mismo con el que decide el Inicio y el «Volver».
-  const rol = (rolActivo ?? profile.role) as typeof profile.role;
+  // useRolActivo devuelve la membresía ('owner') para un perfil que no es de
+  // escuela: el dueño de espacios conserva su rol de perfil o vería la barra genérica.
+  const rol = ((profile.role as string) === 'facility_manager' ? 'facility_manager' : (rolActivo ?? profile.role)) as typeof profile.role;
   const navigationItems = getNavigationItemsForRole(rol, showStore);
   // Barras V2 (cinco pestañas que se reparten el ancho y se encogen con el zoom).
   const compacta = !!pestanasDeRol(rol);

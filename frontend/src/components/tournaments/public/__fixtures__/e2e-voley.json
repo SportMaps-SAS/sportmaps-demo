@@ -1,0 +1,634 @@
+{
+ "payload_version": 2,
+ "event": {
+  "id": "3b7b347a-ab83-480e-adf7-c6ac81aa7d4e",
+  "title": "Copa Demo Vóley E2E",
+  "sport": "Voleibol",
+  "city": "Bogotá",
+  "event_date": "2026-11-14",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "grupos",
+  "status": "in_progress",
+  "start_date": "2026-11-14",
+  "end_date": "2026-11-15",
+  "cover_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/covers/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203361832_r5mqcs.webp",
+  "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203357666_1cbs6k.png",
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": "https://example.com/reglamento-copa-demo.pdf",
+  "venue": {
+   "name": "Coliseo Club Campestre Demo",
+   "address": "Km 5 vía La Calera, Bogotá",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Km%205%20v%C3%ADa%20La%20Calera%2C%20Bogot%C3%A1"
+  },
+  "sponsors": [
+   {
+    "id": "4779a8e1-6eb4-4107-b79c-bedca363105d",
+    "name": "Bebidas El Nevado",
+    "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/patrocinadores/1793203386780_smmiv.png",
+    "url": "https://instagram.com/sportmaps",
+    "tier": "principal"
+   },
+   {
+    "id": "43a1d264-5387-4b71-984f-842894d2397e",
+    "name": "Seguros Demo",
+    "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/patrocinadores/1793203394042_v3dyah.png",
+    "url": "https://instagram.com/sportmaps",
+    "tier": "aliado"
+   }
+  ],
+  "attachments": [
+   {
+    "name": "Reglamento oficial",
+    "url": "https://example.com/reglamento-copa-demo.pdf"
+   }
+  ]
+ },
+ "tournament": {
+  "id": "3b7b347a-ab83-480e-adf7-c6ac81aa7d4e",
+  "title": "Copa Demo Vóley E2E",
+  "sport": "Voleibol",
+  "city": "Bogotá",
+  "event_date": "2026-11-14",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "grupos",
+  "status": "in_progress",
+  "start_date": "2026-11-14",
+  "end_date": "2026-11-15",
+  "cover_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/covers/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203361832_r5mqcs.webp",
+  "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203357666_1cbs6k.png",
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": "https://example.com/reglamento-copa-demo.pdf",
+  "venue": {
+   "name": "Coliseo Club Campestre Demo",
+   "address": "Km 5 vía La Calera, Bogotá",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Km%205%20v%C3%ADa%20La%20Calera%2C%20Bogot%C3%A1"
+  },
+  "sponsors": [
+   {
+    "id": "4779a8e1-6eb4-4107-b79c-bedca363105d",
+    "name": "Bebidas El Nevado",
+    "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/patrocinadores/1793203386780_smmiv.png",
+    "url": "https://instagram.com/sportmaps",
+    "tier": "principal"
+   },
+   {
+    "id": "43a1d264-5387-4b71-984f-842894d2397e",
+    "name": "Seguros Demo",
+    "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/patrocinadores/1793203394042_v3dyah.png",
+    "url": "https://instagram.com/sportmaps",
+    "tier": "aliado"
+   }
+  ],
+  "attachments": [
+   {
+    "name": "Reglamento oficial",
+    "url": "https://example.com/reglamento-copa-demo.pdf"
+   }
+  ]
+ },
+ "categories": [
+  {
+   "id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "name": "General · 1 · Sub 14 Femenino · Femenino"
+  },
+  {
+   "id": "0aa11921-611d-4eaf-b891-88f2f143c7b0",
+   "name": "General · 1 · Mayores Masculino · Masculino"
+  }
+ ],
+ "teams": [
+  {
+   "id": "2090f1c1-0b55-4594-ae9a-02199121b0f9",
+   "name": "Águilas Vóley",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "short_name": "AGU",
+   "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203595315_utjb4aq.png",
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "f58a7a2d-523d-4f77-808d-554bcdf97dcb",
+   "name": "Campestre Mayores",
+   "category_id": "0aa11921-611d-4eaf-b891-88f2f143c7b0",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "3e44afce-b1c4-4c1c-98f0-e457405c0299",
+   "name": "Cóndores Vóley",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "c7a12d07-d02a-48f8-b4c4-7bd0425d1f2d",
+   "name": "Halcones Sub 14",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "c494fa95-8f90-43b5-9161-96d547956821",
+   "name": "Panteras",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": "Club Panteras"
+  },
+  {
+   "id": "f3c31b7f-a7fe-4976-86ca-8db86a966114",
+   "name": "Rivales Mayores",
+   "category_id": "0aa11921-611d-4eaf-b891-88f2f143c7b0",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "name": "Titanes",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "short_name": "TIT",
+   "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/equipos/426e8e8c-10df-4be2-be90-78994139e022/72747591-c335-4844-8e2a-341f236144e3.png",
+   "is_external": true,
+   "club_name": "Club Titanes"
+  }
+ ],
+ "matches": [
+  {
+   "id": "e7818e89-7000-499b-ae7c-9133e2a9986b",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "group",
+   "group_label": "B",
+   "cup_label": null,
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "c7a12d07-d02a-48f8-b4c4-7bd0425d1f2d",
+   "away_team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "home_name": "Halcones Sub 14",
+   "away_name": "Titanes",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 1,
+   "away_score": 2,
+   "status": "played",
+   "scheduled_at": "2026-11-14T09:10:00-05:00",
+   "court": "Cancha 1",
+   "started_at": "2026-10-28T11:30:30.104-05:00",
+   "finished_at": "2026-10-28T11:37:39.124-05:00",
+   "sets": [
+    {
+     "home": 20,
+     "away": 25,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 25,
+     "away": 23,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 12,
+     "away": 15,
+     "closed": true,
+     "deciding": true
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": null,
+   "away_logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/equipos/426e8e8c-10df-4be2-be90-78994139e022/72747591-c335-4844-8e2a-341f236144e3.png",
+   "home_short_name": null,
+   "away_short_name": "TIT"
+  },
+  {
+   "id": "87ae9f95-7a8f-4e33-85d7-79aae8d9a152",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "group",
+   "group_label": "A",
+   "cup_label": null,
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "c494fa95-8f90-43b5-9161-96d547956821",
+   "away_team_id": "3e44afce-b1c4-4c1c-98f0-e457405c0299",
+   "home_name": "Panteras",
+   "away_name": "Cóndores Vóley",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 0,
+   "away_score": 2,
+   "status": "played",
+   "scheduled_at": "2026-11-14T09:30:00-05:00",
+   "court": "Cancha 2",
+   "started_at": "2026-10-28T11:48:38.587-05:00",
+   "finished_at": "2026-10-28T11:51:38.916-05:00",
+   "sets": [
+    {
+     "home": 18,
+     "away": 25,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 19,
+     "away": 25,
+     "closed": true,
+     "deciding": false
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": null,
+   "away_logo_url": null,
+   "home_short_name": null,
+   "away_short_name": null
+  },
+  {
+   "id": "4d165070-9e29-411e-974a-5eace1b5d825",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "group",
+   "group_label": "A",
+   "cup_label": null,
+   "round": 2,
+   "slot": 1,
+   "home_team_id": "3e44afce-b1c4-4c1c-98f0-e457405c0299",
+   "away_team_id": "2090f1c1-0b55-4594-ae9a-02199121b0f9",
+   "home_name": "Cóndores Vóley",
+   "away_name": "Águilas Vóley",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 2,
+   "away_score": 1,
+   "status": "played",
+   "scheduled_at": "2026-11-14T10:20:00-05:00",
+   "court": "Cancha 1",
+   "started_at": "2026-10-28T11:39:41.205-05:00",
+   "finished_at": "2026-10-28T11:44:15.569-05:00",
+   "sets": [
+    {
+     "home": 25,
+     "away": 18,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 22,
+     "away": 25,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 15,
+     "away": 13,
+     "closed": true,
+     "deciding": true
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": null,
+   "away_logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203595315_utjb4aq.png",
+   "home_short_name": null,
+   "away_short_name": "AGU"
+  },
+  {
+   "id": "4579a76d-2d4b-47db-91bc-6315474af4df",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "group",
+   "group_label": "A",
+   "cup_label": null,
+   "round": 3,
+   "slot": 1,
+   "home_team_id": "2090f1c1-0b55-4594-ae9a-02199121b0f9",
+   "away_team_id": "c494fa95-8f90-43b5-9161-96d547956821",
+   "home_name": "Águilas Vóley",
+   "away_name": "Panteras",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 2,
+   "away_score": 0,
+   "status": "played",
+   "scheduled_at": "2026-11-14T11:30:00-05:00",
+   "court": "Cancha 1",
+   "started_at": "2026-10-28T11:44:26.616-05:00",
+   "finished_at": "2026-10-28T11:47:43.761-05:00",
+   "sets": [
+    {
+     "home": 25,
+     "away": 21,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 25,
+     "away": 19,
+     "closed": true,
+     "deciding": false
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203595315_utjb4aq.png",
+   "away_logo_url": null,
+   "home_short_name": "AGU",
+   "away_short_name": null
+  },
+  {
+   "id": "96b95bd0-97ad-40f0-8acd-2107f6b0088d",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "knockout",
+   "group_label": null,
+   "cup_label": "Copa plata",
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "2090f1c1-0b55-4594-ae9a-02199121b0f9",
+   "away_team_id": "c7a12d07-d02a-48f8-b4c4-7bd0425d1f2d",
+   "home_name": "Águilas Vóley",
+   "away_name": "Halcones Sub 14",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": null,
+   "away_score": null,
+   "status": "scheduled",
+   "scheduled_at": "2026-11-14T13:50:00-05:00",
+   "court": "Cancha 1",
+   "started_at": null,
+   "finished_at": null,
+   "sets": [],
+   "model": "sets",
+   "home_logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203595315_utjb4aq.png",
+   "away_logo_url": null,
+   "home_short_name": "AGU",
+   "away_short_name": null
+  },
+  {
+   "id": "ccc2bd34-86f1-4115-9d95-152e17dce27b",
+   "category_id": "cf0ffcc9-329c-4891-8fd0-39a8061cd474",
+   "stage": "knockout",
+   "group_label": null,
+   "cup_label": "Copa oro",
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "3e44afce-b1c4-4c1c-98f0-e457405c0299",
+   "away_team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "home_name": "Cóndores Vóley",
+   "away_name": "Titanes",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 1,
+   "away_score": 2,
+   "status": "played",
+   "scheduled_at": "2026-11-14T12:40:00-05:00",
+   "court": "Cancha 1",
+   "started_at": "2026-10-28T11:59:35.144-05:00",
+   "finished_at": "2026-10-28T12:04:00.904-05:00",
+   "sets": [
+    {
+     "home": 25,
+     "away": 22,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 21,
+     "away": 25,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 13,
+     "away": 15,
+     "closed": true,
+     "deciding": true
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": null,
+   "away_logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/equipos/426e8e8c-10df-4be2-be90-78994139e022/72747591-c335-4844-8e2a-341f236144e3.png",
+   "home_short_name": null,
+   "away_short_name": "TIT"
+  }
+ ],
+ "standings": {
+  "cf0ffcc9-329c-4891-8fd0-39a8061cd474": {
+   "model": "sets",
+   "standings": [],
+   "groups": {
+    "A": [
+     {
+      "team_id": "3e44afce-b1c4-4c1c-98f0-e457405c0299",
+      "team_name": "Cóndores Vóley",
+      "P": 2,
+      "W": 2,
+      "D": 0,
+      "L": 0,
+      "GF": 4,
+      "GA": 1,
+      "GD": 3,
+      "Pts": 5,
+      "SW": 4,
+      "SL": 1,
+      "PF": 112,
+      "PA": 93,
+      "set_diff": 3,
+      "point_diff": 19,
+      "set_ratio": 4,
+      "point_ratio": 1.204,
+      "logo_url": null,
+      "short_name": null,
+      "is_external": true
+     },
+     {
+      "team_id": "2090f1c1-0b55-4594-ae9a-02199121b0f9",
+      "team_name": "Águilas Vóley",
+      "P": 2,
+      "W": 1,
+      "D": 0,
+      "L": 1,
+      "GF": 3,
+      "GA": 2,
+      "GD": 1,
+      "Pts": 4,
+      "SW": 3,
+      "SL": 2,
+      "PF": 106,
+      "PA": 102,
+      "set_diff": 1,
+      "point_diff": 4,
+      "set_ratio": 1.5,
+      "point_ratio": 1.039,
+      "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/1793203595315_utjb4aq.png",
+      "short_name": "AGU",
+      "is_external": true
+     },
+     {
+      "team_id": "c494fa95-8f90-43b5-9161-96d547956821",
+      "team_name": "Panteras",
+      "P": 2,
+      "W": 0,
+      "D": 0,
+      "L": 2,
+      "GF": 0,
+      "GA": 4,
+      "GD": -4,
+      "Pts": 0,
+      "SW": 0,
+      "SL": 4,
+      "PF": 77,
+      "PA": 100,
+      "set_diff": -4,
+      "point_diff": -23,
+      "set_ratio": 0,
+      "point_ratio": 0.77,
+      "logo_url": null,
+      "short_name": null,
+      "is_external": true
+     }
+    ],
+    "B": [
+     {
+      "team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+      "team_name": "Titanes",
+      "P": 1,
+      "W": 1,
+      "D": 0,
+      "L": 0,
+      "GF": 2,
+      "GA": 1,
+      "GD": 1,
+      "Pts": 2,
+      "SW": 2,
+      "SL": 1,
+      "PF": 63,
+      "PA": 57,
+      "set_diff": 1,
+      "point_diff": 6,
+      "set_ratio": 2,
+      "point_ratio": 1.105,
+      "logo_url": "https://luebjarufsiadojhvxgi.supabase.co/storage/v1/object/public/school-assets/logos/25a123f0-6d57-48a4-9800-7b1531d61cd2/torneos/3b7b347a-ab83-480e-adf7-c6ac81aa7d4e/equipos/426e8e8c-10df-4be2-be90-78994139e022/72747591-c335-4844-8e2a-341f236144e3.png",
+      "short_name": "TIT",
+      "is_external": true
+     },
+     {
+      "team_id": "c7a12d07-d02a-48f8-b4c4-7bd0425d1f2d",
+      "team_name": "Halcones Sub 14",
+      "P": 1,
+      "W": 0,
+      "D": 0,
+      "L": 1,
+      "GF": 1,
+      "GA": 2,
+      "GD": -1,
+      "Pts": 1,
+      "SW": 1,
+      "SL": 2,
+      "PF": 57,
+      "PA": 63,
+      "set_diff": -1,
+      "point_diff": -6,
+      "set_ratio": 0.5,
+      "point_ratio": 0.905,
+      "logo_url": null,
+      "short_name": null,
+      "is_external": true
+     }
+    ]
+   }
+  },
+  "0aa11921-611d-4eaf-b891-88f2f143c7b0": {
+   "model": "sets",
+   "standings": [
+    {
+     "team_id": "f58a7a2d-523d-4f77-808d-554bcdf97dcb",
+     "team_name": "Campestre Mayores",
+     "P": 0,
+     "W": 0,
+     "D": 0,
+     "L": 0,
+     "GF": 0,
+     "GA": 0,
+     "GD": 0,
+     "Pts": 0,
+     "SW": 0,
+     "SL": 0,
+     "PF": 0,
+     "PA": 0,
+     "set_diff": 0,
+     "point_diff": 0,
+     "set_ratio": 0,
+     "point_ratio": 0,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    },
+    {
+     "team_id": "f3c31b7f-a7fe-4976-86ca-8db86a966114",
+     "team_name": "Rivales Mayores",
+     "P": 0,
+     "W": 0,
+     "D": 0,
+     "L": 0,
+     "GF": 0,
+     "GA": 0,
+     "GD": 0,
+     "Pts": 0,
+     "SW": 0,
+     "SL": 0,
+     "PF": 0,
+     "PA": 0,
+     "set_diff": 0,
+     "point_diff": 0,
+     "set_ratio": 0,
+     "point_ratio": 0,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    }
+   ]
+  }
+ },
+ "player_stats": [
+  {
+   "member_id": "12736835-b585-4c89-9047-95c5e2585fc3",
+   "name": "Isabella",
+   "team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "ace": 0,
+   "attack": 1,
+   "block": 0,
+   "points": 1
+  },
+  {
+   "member_id": "32639250-fba4-4e9f-b8e9-2a7941ea4947",
+   "name": "Camila R.",
+   "team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "ace": 1,
+   "attack": 0,
+   "block": 0,
+   "points": 1
+  },
+  {
+   "member_id": "28a2a274-784e-47ee-b5d6-635795c44d75",
+   "name": "Laura",
+   "team_id": "426e8e8c-10df-4be2-be90-78994139e022",
+   "ace": 0,
+   "attack": 0,
+   "block": 1,
+   "points": 1
+  }
+ ]
+}

@@ -12,6 +12,7 @@ vi.mock('../config/supabase', () => ({ supabase: {} }));
 import {
     payloadDeBotones, sendInteractiveButtons, parseInboundMessages, encryptToken,
     MAX_BOTONES, MAX_TITULO_BOTON, payloadDeLista, sendList, debeIrComoLista, MAX_FILAS_LISTA,
+    parseStatuses,
 } from './whatsapp.service';
 
 const TEL = '573001112233';
@@ -186,5 +187,20 @@ describe('lista interactiva (más de 3 opciones)', () => {
         } }] }] });
         expect(msg.botonId).toBe('sm_cc_f:2');
         expect(msg.textBody).toBe('2. MENORES FEMENINO');
+    });
+});
+
+describe('estados de entrega', () => {
+    const conEstado = (status: string) => ({ entry: [{ changes: [{ field: 'messages', value: {
+        metadata: { phone_number_id: 'PN1' },
+        statuses: [{ id: 'wamid.x', status, timestamp: '1793300000', recipient_id: TEL }],
+    } }] }] });
+
+    it('«played» (escucharon la nota de voz) se guarda como «read»: el CHECK no lo conoce', () => {
+        expect(parseStatuses(conEstado('played'))[0].status).toBe('read');
+    });
+
+    it('los demás estados pasan tal cual', () => {
+        expect(parseStatuses(conEstado('delivered'))[0].status).toBe('delivered');
     });
 });

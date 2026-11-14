@@ -17,6 +17,8 @@ vi.mock('../config/supabase', () => {
       select: () => api,
       eq: (c: string, v: any) => { filas = filas.filter((f) => f[c] === v); return api; },
       in: (c: string, vs: any[]) => { filas = filas.filter((f) => vs.includes(f[c])); return api; },
+      lte: (c: string, v: any) => { filas = filas.filter((f) => f[c] <= v); return api; },
+      gt: (c: string, v: any) => { filas = filas.filter((f) => f[c] > v); return api; },
       limit: () => api,
       then: (ok: any, ko: any) => Promise.resolve({ data: filas, error: null }).then(ok, ko),
     };
@@ -92,6 +94,22 @@ describe('usage', () => {
     expect(b.schools[0]).toMatchObject({ name: 'Club Demo', cost_usd: 0.64 });
     expect(b.schools[0].coaches[0]).toMatchObject({ name: 'Profe Andrés', pct: 64, analyses: 10 });
     expect(b.by_sport.find((s: any) => s.sport === 'futbol').avg_cost_usd).toBe(0.064);
+  });
+
+  it('cupo ampliado vigente (x3) en el mes en curso: presupuesto y techo multiplicados; vencido no cuenta', async () => {
+    const now = new Date();
+    const period = new Date(now.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 7);
+    for (const t of ['tactical_ai_user_usage', 'tactical_ai_school_usage', 'tactical_ai_runs']) {
+      st.tablas[t] = st.tablas[t].map((f) => ({ ...f, period }));
+    }
+    const iso = (ms: number) => new Date(now.getTime() + ms).toISOString();
+    st.tablas.tactical_ai_quota_overrides = [
+      { school_id: S1, multiplier: 3, starts_at: iso(-86_400_000), expires_at: iso(86_400_000) },
+      { school_id: S1, multiplier: 5, starts_at: iso(-3 * 86_400_000), expires_at: iso(-86_400_000) },
+    ];
+    const b = await (await fetch(`${base}/usage?period=${period}`)).json() as any;
+    expect(b.schools[0]).toMatchObject({ ceiling_usd: 30, quota_multiplier: 3 });
+    expect(b.schools[0].coaches[0]).toMatchObject({ budget_usd: 3, pct: 21.3 });
   });
 });
 

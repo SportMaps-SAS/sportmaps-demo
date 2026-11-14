@@ -136,7 +136,8 @@ export function groupForScorer<T extends DisplayMatch>(matches: T[]): Array<{ co
   }));
 }
 
-const STREAM_HOSTS = ['youtube.com', 'youtu.be', 'facebook.com', 'fb.watch', 'vimeo.com'];
+// Veo (app.veo.co / live.veo.co): su en vivo no se puede incrustar, se abre en Veo.
+const STREAM_HOSTS = ['youtube.com', 'youtu.be', 'facebook.com', 'fb.watch', 'vimeo.com', 'veo.co'];
 
 /** null si es válido (o vacío); si no, el mensaje de error. */
 export function validateStreamUrl(raw: string | null | undefined): string | null {
@@ -146,7 +147,7 @@ export function validateStreamUrl(raw: string | null | undefined): string | null
   try { u = new URL(v); } catch { return 'El enlace no es válido. Pega la dirección completa, empezando por https://'; }
   if (u.protocol !== 'https:') return 'El enlace debe empezar por https://';
   const host = u.hostname.toLowerCase();
-  if (!STREAM_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return 'Solo se admiten enlaces de YouTube, Facebook o Vimeo.';
+  if (!STREAM_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) return 'Solo se admiten enlaces de YouTube, Facebook, Vimeo o Veo.';
   return null;
 }
 

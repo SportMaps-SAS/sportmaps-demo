@@ -23,6 +23,7 @@ import {
 import type { TacticalFrame } from '@/lib/school/tacticalFrames';
 import type { TacticalSport } from '@/lib/school/tacticalSports';
 import type { TacticalPlaybackOptions } from '@/lib/school/tacticalBoardSettings';
+import type { ExportBranding } from './tacticalWatermark';
 
 export interface ExportGifOptions {
   frames: TacticalFrame[];
@@ -36,6 +37,8 @@ export interface ExportGifOptions {
   playerNames?: Record<string, string>;
   /** Cancha de fondo (T4). */
   sport?: TacticalSport | null;
+  /** «Hecho con SportMaps · sportmaps.co» y logo del club en cada cuadro. */
+  branding?: ExportBranding;
   /** 10 por defecto (rango 4-15). */
   fps?: number;
   /** Ancho en px, 360 por defecto (rango 160-720). */
@@ -84,6 +87,7 @@ export async function exportGif(opts: ExportGifOptions): Promise<ExportGifResult
     playerNames: opts.playerNames,
     sport: opts.sport,
     playback: opts.playback,
+    branding: opts.branding,
     width: Math.min(720, Math.max(160, opts.width ?? 360)),
     holdStartMs: opts.holdStartMs ?? 600,
     holdEndMs: opts.holdEndMs ?? 1200,

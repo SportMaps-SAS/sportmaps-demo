@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { supabase } from '../config/supabase';
 import { requireAuth, requireRole, auditLog, AuthenticatedRequest } from '../middlewares/authMiddleware';
-import { invalidateDeviceCache, invalidateMappingCache, getHourBankSettings, computeHourBankBilledMinutes, formatHourBankMinutes } from './access-adms';
+import { invalidateDeviceCache, invalidateMappingCache, reprocessPinEventsForHourBank, getHourBankSettings, computeHourBankBilledMinutes, formatHourBankMinutes } from './access-adms';
 import { getAccessBlockMechanism, buildBlockCommand, computeIsBlocked, athleteKey, BLOCK_COMMAND_TYPES } from '../utils/accessBlockMechanism';
 import { confirmarSugeridas } from '../services/hour-bank-overage-auto.service';
 import { normalizarEscalones } from '../services/hour-bank-balance-notices.shared';
@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { dayNotAllowedBody, isDateAllowedForEnrollment } from '../utils/planDayRules';
 import { FILTRO_SOLO_MENSUALIDAD } from '../services/payment-accounts';
+import { getAccessRoster, isRosterEnabled, type RosterFilter } from '../services/accessRoster.service';
 
 const router = Router();
 
@@ -397,6 +398,7 @@ router.post('/enroll', requireAuth, requireRole('owner', 'admin', 'school_admin'
     );
 
     invalidateMappingCache(pin);
+    await reprocessPinEventsForHourBank(schoolId!, Number(pin));
 
     console.log(`[ENROLL] ${name} (PIN:${pin}) encolado en ${devices.length} dispositivo(s)`);
 
@@ -488,30 +490,90 @@ router.get('/members', requireAuth, requireRole('owner', 'admin', 'school_admin'
     }
 
     // Atletas sin login (la mayoría en tu caso)
-    let uaq = supabase.from('unregistered_athletes').select('id, full_name').eq('school_id', schoolId);
+    let uaq = supabase.from('unregistered_athletes').select('id, full_name, date_of_birth, created_at').eq('school_id', schoolId);
     if (mappedUaIds.size > 0) {
       uaq = uaq.not('id', 'in', `(${Array.from(mappedUaIds).join(',')})`);
     }
     if (q) uaq = uaq.ilike('full_name', `%${q}%`);
     const { data: uas } = await uaq.limit(50);
     const unregistered = (uas || [])
-      .map((u: any) => ({ unregistered_athlete_id: u.id, full_name: u.full_name, role: null, type: 'unregistered' }));
+      .map((u: any) => ({ unregistered_athlete_id: u.id, full_name: u.full_name, role: null, type: 'unregistered', _dob: u.date_of_birth ?? null, _alta: u.created_at ?? null }));
 
     // Alumnos enrolados por el flujo normal de la escuela (sin login propio,
     // asociados a un parent_id) — hasta 2026-09-15 esta tabla nunca se
     // consultaba acá, así que ningún children podía vincularse a un PIN.
-    let cq = supabase.from('children').select('id, full_name').eq('school_id', schoolId).eq('is_active', true);
+    let cq = supabase.from('children').select('id, full_name, date_of_birth, created_at').eq('school_id', schoolId).eq('is_active', true);
     if (mappedChildIds.size > 0) {
       cq = cq.not('id', 'in', `(${Array.from(mappedChildIds).join(',')})`);
     }
     if (q) cq = cq.ilike('full_name', `%${q}%`);
     const { data: kids } = await cq.limit(50);
     const children = (kids || [])
-      .map((c: any) => ({ child_id: c.id, full_name: c.full_name, role: null, type: 'child' }));
+      .map((c: any) => ({ child_id: c.id, full_name: c.full_name, role: null, type: 'child', _dob: c.date_of_birth ?? null, _alta: c.created_at ?? null }));
 
-    return res.json({ members: [...registered, ...unregistered, ...children] });
+    // Detalle para distinguir homónimos al asociar un PIN: plan, estado de cobro y fecha de
+    // nacimiento. Dos lecturas de toda la escuela (inscripciones activas y mensualidades
+    // vencidas), no una por persona.
+    const [enrQ, payQ] = await Promise.all([
+      supabase.from('enrollments')
+        .select('child_id, user_id, unregistered_athlete_id, offering_plans(name)')
+        .eq('school_id', schoolId).eq('status', 'active'),
+      supabase.from('payments')
+        .select('child_id, user_id, unregistered_athlete_id')
+        .eq('school_id', schoolId).eq('status', 'overdue').or(FILTRO_SOLO_MENSUALIDAD),
+    ]);
+    const detailOk = !enrQ.error && !payQ.error;
+    const enrolledKeys = new Set<string>();
+    const planByKey = new Map<string, string>();
+    ((enrQ.data ?? []) as any[]).forEach(e => {
+      const k = athleteKey(e);
+      if (!k) return;
+      enrolledKeys.add(k);
+      const plan = Array.isArray(e.offering_plans) ? e.offering_plans[0]?.name : e.offering_plans?.name;
+      if (plan && !planByKey.has(k)) planByKey.set(k, plan);
+    });
+    const overdueKeys = new Set(((payQ.data ?? []) as any[]).map(p => athleteKey(p)).filter(Boolean) as string[]);
+    const withDetail = (key: string, dob: string | null, alta: string | null) => ({
+      plan: planByKey.get(key) ?? null,
+      billing: !detailOk ? null : overdueKeys.has(key) ? 'mora' : enrolledKeys.has(key) ? 'al_dia' : 'sin_inscripcion',
+      date_of_birth: dob,
+      created_at: alta,
+    });
+
+    // Primero los deportistas (menores y sin cuenta): es a quienes casi siempre se asocia un PIN.
+    const out = [
+      ...children.map(({ _dob, _alta, ...c }) => ({ ...c, detail: withDetail(`c:${c.child_id}`, _dob, _alta) })),
+      ...unregistered.map(({ _dob, _alta, ...u }) => ({ ...u, detail: withDetail(`a:${u.unregistered_athlete_id}`, _dob, _alta) })),
+      ...registered.map((r: any) => ({ ...r, detail: withDetail(`u:${r.user_id}`, null, null) })),
+    ];
+    return res.json({ members: out });
   } catch (err: any) {
     return res.status(500).json({ error: 'Error al listar miembros' });
+  }
+});
+
+// ─── GET /api/v1/access/device-users ─────────────────────────────────────────
+// «IDs del lector» (F1): usuarios que reporta el lector, cruzados con los deportistas de la
+// escuela, su estado de cobro y una sugerencia de a quién asociar cada PIN. Solo lectura.
+// Habilitado por escuela con school_settings.access_roster_enabled.
+router.get('/device-users', requireAuth, requireRole('owner', 'admin', 'school_admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { schoolId } = req;
+    if (!schoolId) return res.status(400).json({ error: 'school_id requerido' });
+    if (!(await isRosterEnabled(schoolId))) {
+      return res.status(403).json({ error: 'Esta escuela no tiene activa la lista de IDs del lector.', code: 'ROSTER_NOT_ENABLED' });
+    }
+    const filter = (['all', 'sin', 'aso', 'mora'].includes(String(req.query.filter)) ? req.query.filter : 'all') as RosterFilter;
+    const result = await getAccessRoster(schoolId, {
+      filter,
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      page: parseInt(String(req.query.page ?? '1'), 10) || 1,
+      pageSize: parseInt(String(req.query.page_size ?? '25'), 10) || 25,
+    });
+    return res.json(result);
+  } catch (err: any) {
+    req.log?.error?.({ err: err?.message }, 'Error en GET /access/device-users');
+    return res.status(500).json({ error: 'Error al listar los IDs del lector' });
   }
 });
 
@@ -532,6 +594,20 @@ router.post('/assign-user', requireAuth, requireRole('owner', 'admin', 'school_a
       return res.status(400).json({ error: 'zk_pin y (user_id, unregistered_athlete_id o child_id) son requeridos' });
     }
 
+    // La persona debe ser de ESTA escuela: sin esto un admin podía atar un PIN a un menor o un
+    // usuario de otra escuela. Se valida la identidad que de verdad se va a guardar
+    // (user_id manda sobre unregistered_athlete_id y este sobre child_id).
+    const subject = user_id
+      ? supabase.from('school_members').select('id').eq('school_id', schoolId).eq('profile_id', user_id)
+      : unregistered_athlete_id
+        ? supabase.from('unregistered_athletes').select('id').eq('school_id', schoolId).eq('id', unregistered_athlete_id)
+        : supabase.from('children').select('id').eq('school_id', schoolId).eq('id', child_id as string);
+    const { data: subjectRows, error: subjectErr } = await subject.limit(1);
+    if (subjectErr) throw subjectErr;
+    if (!subjectRows?.length) {
+      return res.status(403).json({ error: 'Esa persona no pertenece a esta escuela.', code: 'SUBJECT_NOT_IN_SCHOOL' });
+    }
+
     const { error } = await supabase.from('zk_user_mappings').upsert(
       {
         school_id:               schoolId,
@@ -546,7 +622,10 @@ router.post('/assign-user', requireAuth, requireRole('owner', 'admin', 'school_a
 
     invalidateMappingCache(zk_pin);
 
-    return res.json({ success: true, message: `PIN ${zk_pin} asignado.` });
+    // Marcaciones de este PIN que llegaron antes de asociarlo (nunca lanza).
+    const reproceso = await reprocessPinEventsForHourBank(schoolId!, Number(zk_pin));
+
+    return res.json({ success: true, message: `PIN ${zk_pin} asignado.`, hour_bank_reprocessed: reproceso.reprocessed });
   } catch (err: any) {
     return res.status(500).json({ error: 'Error al asignar usuario al PIN' });
   }

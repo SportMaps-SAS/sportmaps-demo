@@ -167,3 +167,216 @@ describe('oferta del bot intercalada por grupo', () => {
         expect(normalizarHora('25:00')).toBeNull();
     });
 });
+
+// ─── Ajustes por escuela (migración M1, Monster 2026-10-30) ────────────────
+
+import { diasSemanaValidos, type FranjaPlaneada, type PlanDeFranjas } from './franjas-cortesia.service';
+import { esFestivoColombia } from '../utils/festivos-colombia';
+import type { ExcepcionSemana } from './semana-equipo.service';
+
+/**
+ * El algoritmo de `planificarFranjas` del 2026-10-29, congelado: la referencia
+ * para probar que sin ajustes el plan nuevo es idéntico al de hoy.
+ */
+function planDeHoy(equipos: EquipoParaFranjas[], desde: string, semanas = 3, incluirFestivos = false): PlanDeFranjas {
+    const norm = (h: unknown) => {
+        const m = String(h ?? '').trim().match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+        if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return null;
+        return `${m[1].padStart(2, '0')}:${m[2]}`;
+    };
+    const leer = (raw: unknown): any[] => {
+        try { const v = typeof raw === 'string' ? JSON.parse(raw) : raw; return Array.isArray(v) ? v : []; } catch { return []; }
+    };
+    const plan: PlanDeFranjas = { franjas: [], festivosOmitidos: [], excluidos: [], choques: [] };
+    const inicio = Date.UTC(+desde.slice(0, 4), +desde.slice(5, 7) - 1, +desde.slice(8, 10));
+    for (const t of equipos) {
+        const nombre = String(t.name ?? '').trim();
+        if (!nombre) continue;
+        if (t.active === false) { plan.excluidos.push({ equipo: nombre, motivo: 'inactivo' }); continue; }
+        if (/\bno\s+usar\b/i.test(nombre)) { plan.excluidos.push({ equipo: nombre, motivo: 'marcado NO USAR' }); continue; }
+        if (t.admite_nuevos === false) { plan.excluidos.push({ equipo: nombre, motivo: 'no admite nuevos' }); continue; }
+        const sesiones = leer(t.schedule).filter((f) => f && Number.isInteger(f.day) && f.day >= 0 && f.day <= 6 && norm(f.time));
+        if (!sesiones.length) { plan.excluidos.push({ equipo: nombre, motivo: 'sin horario cargado' }); continue; }
+        const vistas = new Map<string, FranjaPlaneada>();
+        for (let i = 0; i < semanas * 7; i++) {
+            const fecha = new Date(inicio + i * 86_400_000).toISOString().slice(0, 10);
+            const dow = new Date(inicio + i * 86_400_000).getUTCDay();
+            for (const s of sesiones.filter((x) => x.day === dow)) {
+                const grupo = String(s.group ?? '').trim();
+                const label = grupo ? `${nombre} · ${grupo}` : nombre;
+                const hora = norm(s.time)!;
+                if (!incluirFestivos && esFestivoColombia(fecha)) { plan.festivosOmitidos.push({ fecha, label }); continue; }
+                const clave = `${t.id}|${fecha}|${hora}`;
+                const previa = vistas.get(clave);
+                if (previa) { plan.choques.push({ fecha, hora, labels: [previa.label, label] }); continue; }
+                const franja: FranjaPlaneada = {
+                    team_id: t.id, equipo: nombre, label, slot_date: fecha, start_time: hora,
+                    end_time: norm(s.end), location: String(s.place ?? '').trim() || null,
+                };
+                vistas.set(clave, franja);
+                plan.franjas.push(franja);
+            }
+        }
+    }
+    plan.franjas.sort((a, b) => (a.slot_date + a.start_time + a.label).localeCompare(b.slot_date + b.start_time + b.label));
+    return plan;
+}
+
+/** Dynasty completo (formas reales: subgrupos, choques, «NO USAR», hora sin cero, schedule como string, domingo). */
+const DYNASTY: EquipoParaFranjas[] = [
+    SENIORS,
+    INTERMEDIO,
+    { id: 't-menores', name: 'MENORES', schedule: [{ day: 3, time: '17:00', group: 'White' }, { day: 3, time: '17:00', group: 'Selección' }] },
+    { id: 't-mini', name: 'MINIVOLLEY BENJAMINES', schedule: JSON.stringify([{ day: 1, time: '7:00', end: '9:00', place: ' Coliseo ' }]) },
+    { id: 't-dom', name: 'INFANTIL FEMENINO', schedule: [{ day: 0, time: '11:00', end: '13:00', place: 'Asoalsacia' }, { day: 6, time: '11:00:00' }] },
+    { id: 't-dup', name: 'MINIVOLLEY -BENJAMINES (DUPLICADO - NO USAR)', schedule: SENIORS.schedule },
+    { id: 't-viejo', name: 'VIEJO', active: false, schedule: SENIORS.schedule },
+    { id: 't-cerrado', name: 'JUVENIL MAYORES FEMENINO', admite_nuevos: false, schedule: SENIORS.schedule },
+    { id: 't-sin', name: 'SIN HORARIO', schedule: null },
+];
+
+describe('sin ajustes, el plan es idéntico al de hoy (Dynasty)', () => {
+    it('misma lista de franjas, festivos, excluidos y choques', () => {
+        const hoy = planDeHoy(DYNASTY, HOY);
+        expect(hoy.franjas.length).toBeGreaterThan(20);
+        expect(hoy.festivosOmitidos.length).toBeGreaterThan(0);
+        expect(planificarFranjas(DYNASTY, HOY)).toEqual(hoy);
+        expect(planificarFranjas(DYNASTY, HOY, 3, { excepciones: [], diasSemana: null })).toEqual(hoy);
+        expect(planificarFranjas(DYNASTY, HOY, 3, { diasSemana: [] })).toEqual(hoy);
+        expect(planificarFranjas(DYNASTY, HOY, 2, { incluirFestivos: true })).toEqual(planDeHoy(DYNASTY, HOY, 2, true));
+    });
+
+    it('los ajustes de OTRO equipo no tocan a Dynasty', () => {
+        const otros: ExcepcionSemana[] = [{ team_id: 'otro', fecha: '2026-10-08', tipo: 'cancelada', hora_original: null }];
+        expect(planificarFranjas(DYNASTY, HOY, 3, { excepciones: otros })).toEqual(planDeHoy(DYNASTY, HOY));
+    });
+});
+
+describe('planificarFranjas con la semana del profe', () => {
+    const fechas = (p: PlanDeFranjas) => p.franjas.map((f) => `${f.slot_date} ${f.start_time}`);
+    const X = (o: Partial<ExcepcionSemana>): ExcepcionSemana => ({ team_id: 't-seniors', fecha: '2026-10-08', tipo: 'cancelada', ...o });
+
+    it('cancelada: ese día no tiene franja; los demás siguen', () => {
+        const p = planificarFranjas([SENIORS], HOY, 3, { excepciones: [X({ hora_original: null })] });
+        expect(fechas(p)).toEqual(['2026-10-15 20:00', '2026-10-19 20:00', '2026-10-22 20:00', '2026-10-26 20:00']);
+        const porHora = planificarFranjas([SENIORS], HOY, 1, { excepciones: [X({ hora_original: '20:00:00' })] });
+        expect(porHora.franjas).toHaveLength(0);
+    });
+
+    it('movida: la franja va a la hora nueva, con su lugar y la misma duración', () => {
+        const p = planificarFranjas([SENIORS], HOY, 1, {
+            excepciones: [X({ tipo: 'movida', hora_original: '20:00:00', hora_inicio: '18:00:00', lugar: 'Coliseo El Salitre' })],
+        });
+        expect(p.franjas).toEqual([{
+            team_id: 't-seniors', equipo: 'SENIORS', label: 'SENIORS', slot_date: '2026-10-08',
+            start_time: '18:00', end_time: '20:00', location: 'Coliseo El Salitre',
+        }]);
+    });
+
+    it('extra: una franja más ese día', () => {
+        const p = planificarFranjas([SENIORS], HOY, 1, {
+            excepciones: [X({ tipo: 'extra', fecha: '2026-10-10', hora_inicio: '10:00', hora_fin: '12:00', lugar: 'Coliseo Dynasty DC' })],
+        });
+        expect(fechas(p)).toEqual(['2026-10-08 20:00', '2026-10-10 10:00']);
+        expect(p.franjas[1]).toMatchObject({ label: 'SENIORS', end_time: '12:00', location: 'Coliseo Dynasty DC' });
+    });
+
+    it('festivo + extra: el horario del festivo se omite, el extra sí tiene franja (también a la misma hora)', () => {
+        const otraHora = planificarFranjas([SENIORS], HOY, 2, {
+            excepciones: [X({ tipo: 'extra', fecha: '2026-10-12', hora_inicio: '18:00', hora_fin: '20:00' })],
+        });
+        expect(fechas(otraHora)).toContain('2026-10-12 18:00');
+        expect(fechas(otraHora)).not.toContain('2026-10-12 20:00');
+        expect(otraHora.festivosOmitidos).toEqual([{ fecha: '2026-10-12', label: 'SENIORS' }]);
+        const mismaHora = planificarFranjas([SENIORS], HOY, 2, {
+            excepciones: [X({ tipo: 'extra', fecha: '2026-10-12', hora_inicio: '20:00' })],
+        });
+        expect(fechas(mismaHora)).toContain('2026-10-12 20:00');
+        expect(mismaHora.festivosOmitidos).toEqual([]);
+    });
+
+    it('un equipo sin horario base pero con un extra tiene esa franja (no queda «sin horario»)', () => {
+        const p = planificarFranjas([{ id: 't-nuevo', name: 'NUEVO', schedule: null }], HOY, 1, {
+            excepciones: [{ team_id: 't-nuevo', fecha: '2026-10-10', tipo: 'extra', hora_inicio: '09:00' }],
+        });
+        expect(fechas(p)).toEqual(['2026-10-10 09:00']);
+        expect(p.excluidos).toEqual([]);
+    });
+});
+
+describe('planificarFranjas: días de la clase de prueba y equipos que no la reciben', () => {
+    it('dias_semana {0,6} (Monster): solo sábados y domingos', () => {
+        const p = planificarFranjas(DYNASTY, HOY, 3, { diasSemana: [0, 6] });
+        expect(p.franjas.length).toBeGreaterThan(0);
+        expect(p.franjas.every((f) => [0, 6].includes(new Date(`${f.slot_date}T12:00:00Z`).getUTCDay()))).toBe(true);
+        expect(p.franjas.map((f) => f.team_id)).not.toContain('t-seniors');
+    });
+
+    it('diasSemanaValidos: enteros 0–6 sin repetir; vacío o basura = todos (null)', () => {
+        expect(diasSemanaValidos([6, 0, 6, 7, -1, '5'])).toEqual([6, 0, 5]);
+        expect(diasSemanaValidos([])).toBeNull();
+        expect(diasSemanaValidos(null)).toBeNull();
+        expect(diasSemanaValidos('{0,6}')).toBeNull();
+    });
+
+    it('recibe_clase_prueba = false: sin franjas y se reporta', () => {
+        const p = planificarFranjas([{ ...SENIORS, recibe_clase_prueba: false }, INTERMEDIO], HOY, 1);
+        expect(p.franjas.every((f) => f.team_id === 't-inter')).toBe(true);
+        expect(p.excluidos).toEqual([{ equipo: 'SENIORS', motivo: 'no recibe clase de prueba' }]);
+        expect(planificarFranjas([{ ...SENIORS, recibe_clase_prueba: null }], HOY, 1).franjas).toHaveLength(1);
+    });
+});
+
+describe('compararConExistentes: cupos y reabrir', () => {
+    const ventana = { desde: HOY, hasta: '2026-10-27' };
+    const plan = planificarFranjas([SENIORS], HOY).franjas;   // jue 08, jue 15, lun 19, …
+    const E = (o: Partial<FranjaExistente>): FranjaExistente => ({
+        id: 'x', team_id: 't-seniors', slot_date: '2026-10-08', start_time: '20:00:00',
+        reserved_count: 0, is_open: true, generated_from_schedule: true, max_capacity: CUPOS_SIN_LIMITE, cerrada_por: null, ...o,
+    });
+
+    it('sin cupos_por_sesion no se ajusta ninguna (como antes)', () => {
+        const r = compararConExistentes(plan, [E({ max_capacity: 5 })], ventana);
+        expect(r.ajustarCupo).toEqual([]);
+        expect(r.reabrir).toEqual([]);
+    });
+
+    it('cupos 10: ajusta las generadas abiertas y planeadas cuyas reservas caben (CHECK reserved ≤ max)', () => {
+        const r = compararConExistentes(plan, [
+            E({ id: 'ajusta' }),
+            E({ id: 'igual', slot_date: '2026-10-15', max_capacity: 10 }),
+            E({ id: 'llena', slot_date: '2026-10-19', reserved_count: 11 }),
+            E({ id: 'manual', slot_date: '2026-10-22', generated_from_schedule: false }),
+            E({ id: 'cerrada', slot_date: '2026-10-26', is_open: false, cerrada_por: 'escuela' }),
+            E({ id: 'borde', slot_date: '2026-10-26', start_time: '20:00', reserved_count: 10 }),
+        ], ventana, { cupos: 10 });
+        expect(r.ajustarCupo.map((e) => e.id)).toEqual(['ajusta', 'borde']);
+    });
+
+    it('cupos inválidos (0, decimales) = sin ajuste', () => {
+        expect(compararConExistentes(plan, [E({})], ventana, { cupos: 0 }).ajustarCupo).toEqual([]);
+        expect(compararConExistentes(plan, [E({})], ventana, { cupos: 2.5 }).ajustarCupo).toEqual([]);
+    });
+
+    it('reabrir: solo las que cerró el horario y vuelven a estar en el plan', () => {
+        const r = compararConExistentes(plan, [
+            E({ id: 'horario', is_open: false, cerrada_por: 'horario' }),
+            E({ id: 'escuela', slot_date: '2026-10-15', is_open: false, cerrada_por: 'escuela' }),
+            E({ id: 'antes-de-m1', slot_date: '2026-10-19', is_open: false, cerrada_por: null }),
+            E({ id: 'fuera-del-plan', slot_date: '2026-10-20', is_open: false, cerrada_por: 'horario' }),
+            E({ id: 'manual', slot_date: '2026-10-22', is_open: false, cerrada_por: 'horario', generated_from_schedule: false }),
+        ], ventana, { cupos: 10 });
+        expect(r.reabrir.map((e) => e.id)).toEqual(['horario']);
+        // La reabierta también toma el cupo de la escuela.
+        expect(r.ajustarCupo.map((e) => e.id)).toEqual(['horario']);
+        // Ninguna cerrada se vuelve a crear.
+        expect(r.crear.map((f) => f.slot_date)).toEqual(['2026-10-26']);
+    });
+
+    it('filaParaInsertar con cupos_por_sesion; sin él (o inválido) sin límite', () => {
+        const f = plan[0];
+        expect(filaParaInsertar(f, 's', 'o', HOY, 12).max_capacity).toBe(12);
+        expect(filaParaInsertar(f, 's', 'o', HOY, null).max_capacity).toBe(CUPOS_SIN_LIMITE);
+        expect(filaParaInsertar(f, 's', 'o', HOY, 0).max_capacity).toBe(CUPOS_SIN_LIMITE);
+    });
+});

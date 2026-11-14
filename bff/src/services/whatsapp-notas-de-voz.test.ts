@@ -117,7 +117,7 @@ const INTEGRATION = { id: 'int-1', school_id: 'school-1' } as any;
 const CONV = 'conv-1';
 const req = { log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as any;
 const TRANSCRITO = 'Hola, quería saber cuánto debo de la mensualidad de octubre';
-const PRESENTACION = 'Hola 👋 soy el asistente automático de Dynasty.';
+const PRESENTACION = 'Hola 👋 soy Mapi, el asistente virtual de Dynasty.';
 
 const audio = () => ({
     phoneNumberId: 'pn-1', contactWaId: '573001112233', contactName: 'Mamá',

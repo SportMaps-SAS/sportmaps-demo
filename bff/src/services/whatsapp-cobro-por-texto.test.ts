@@ -46,6 +46,32 @@ describe('leerTextosDelComprobante', () => {
 });
 
 describe('decidirCobroPorTexto', () => {
+    describe('excedente de un cobro parcial (Shara, 2026-11-12)', () => {
+        const PARCIAL = { id: 'nov-parcial', amount: 145000, amount_paid: 20000, concept: 'Mensualidad 11/2026' };
+        it('comprobante de $145.000 sobre un parcial con saldo $125.000 y sin pendientes → a la escuela, nunca «ya registrado»', () => {
+            const d = decidir({ pendientes: [], parciales: [PARCIAL], monto: 145000 });
+            expect(d).toMatchObject({ tipo: 'a_la_escuela', codigo: 'excedente_de_parcial', pagoId: 'nov-parcial' });
+            expect((d as any).resumen).toContain('saldo de $125.000');
+            expect((d as any).resumen).toContain('Excede el saldo en $20.000');
+        });
+        it('el comprobante por el saldo exacto con la palabra «saldo» sigue yendo como saldo_de_parcial', () => {
+            const d = decidir({ pendientes: [], parciales: [PARCIAL], monto: 125000, pie: 'envío el saldo' });
+            expect(d).toMatchObject({ tipo: 'a_la_escuela', codigo: 'saldo_de_parcial' });
+        });
+        it('un monto MENOR al saldo no es excedente', () => {
+            const d = decidir({ pendientes: [], parciales: [PARCIAL], monto: 50000 });
+            expect((d as any)?.codigo).not.toBe('excedente_de_parcial');
+        });
+        it('si el monto es el de un pendiente, manda el pendiente (no se desvía a la escuela)', () => {
+            const d = decidir({ pendientes: [OCT], parciales: [PARCIAL], monto: 200000 });
+            expect((d as any)?.codigo).not.toBe('excedente_de_parcial');
+        });
+        it('dos parciales que exceden: ambiguo, no se elige uno al azar', () => {
+            const d = decidir({ pendientes: [], parciales: [PARCIAL, { ...PARCIAL, id: 'otro', concept: 'Otro' }], monto: 145000 });
+            expect((d as any)?.codigo).not.toBe('excedente_de_parcial');
+        });
+    });
+
     it('«saldo» igual al que le falta a un cobro parcial → a la escuela (el worker no estampa parciales)', () => {
         const d = decidir({
             pendientes: [OCT], monto: 50000, pie: 'envío el resto de septiembre',

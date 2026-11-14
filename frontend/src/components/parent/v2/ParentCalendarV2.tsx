@@ -6,17 +6,22 @@
  */
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { AlertCircle, CalendarX2, Radio, RefreshCw, Trophy } from 'lucide-react';
+import { AlertCircle, CalendarX2, ChevronRight, MapPin, Radio, RefreshCw, Trophy } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { useAuth } from '@/contexts/AuthContext';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn, formatCurrency } from '@/lib/utils';
 import {
   AgendaItem,
   buildAgenda,
+  dayLabel,
   groupByDay,
   longDate,
   timeParts,
 } from './parentCalendarModel';
+import { TarjetaConvocatoria, useConvocatoriasFamilia } from './TarjetaConvocatoria';
+import { convocatoriasDelEvento } from './convocatoriasAcudiente';
 import {
   AGENDA_DAYS,
   OpenTournamentForChild,
@@ -144,6 +149,8 @@ function ProximosPanel({
     return groupByDay(buildAgenda({ ...data, now, days: AGENDA_DAYS }), now);
   }, [data]);
 
+  const [abierto, setAbierto] = useState<AgendaItem | null>(null);
+
   if (loading) return <LoadingList />;
   if (error) return <ErrorState text="No pudimos cargar el calendario." onRetry={onRetry} />;
   if (days.length === 0) {
@@ -164,11 +171,69 @@ function ProximosPanel({
         <section key={d.dayKey} aria-label={d.label} className="space-y-2">
           <h2 className="px-1 text-xs font-bold uppercase tracking-wider text-muted-foreground">{d.label}</h2>
           <ul className="space-y-2">
-            {d.items.map((it) => <AgendaRow key={it.key} item={it} />)}
+            {d.items.map((it) => <AgendaRow key={it.key} item={it} onOpen={() => setAbierto(it)} />)}
           </ul>
         </section>
       ))}
+      <DetalleEvento item={abierto} onClose={() => setAbierto(null)} />
     </div>
+  );
+}
+
+const fmtHora = (d: Date) => { const { time, period } = timeParts(d); return `${time} ${period}`; };
+
+/**
+ * Detalle de un evento de Próximos (antes tocar la fila no abría nada): día,
+ * hora, lugar con enlace al mapa, la descripción completa y, si es un partido
+ * con hijos convocados, «¿Va …?» para responder ahí mismo (B1).
+ */
+function DetalleEvento({ item, onClose }: { item: AgendaItem | null; onClose: () => void }) {
+  const { user } = useAuth();
+  const convocatorias = useConvocatoriasFamilia(user?.id);
+  const convs = item ? convocatoriasDelEvento(convocatorias.data ?? [], item) : [];
+  const cuando = item
+    ? [
+        dayLabel(item.start, new Date()),
+        item.allDay ? 'Todo el día' : `${fmtHora(item.start)}${item.end ? ` a ${fmtHora(item.end)}` : ''}`,
+      ].join(' · ')
+    : '';
+  return (
+    <Sheet open={!!item} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto rounded-t-2xl pb-nav-safe">
+        {item && (
+          <div className="mx-auto flex w-full max-w-page-narrow flex-col gap-4">
+            <SheetHeader className="text-left">
+              {item.tag && (
+                <span className={cn('self-start rounded-full px-2 py-0.5 text-xs font-semibold', TAG_STYLES[item.tag] ?? 'bg-muted text-muted-foreground')}>
+                  {item.tag}
+                </span>
+              )}
+              <SheetTitle className="text-xl leading-snug">{item.title}</SheetTitle>
+              <SheetDescription className="text-base">{cuando}</SheetDescription>
+            </SheetHeader>
+            {item.subtitle && <p className="text-sm text-muted-foreground">{item.subtitle}</p>}
+            {item.location && (
+              <a
+                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.location)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-h-touch items-center gap-3 rounded-xl border px-3 py-2 text-sm hover:bg-muted/50"
+              >
+                <MapPin className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                <span className="flex-1">{item.location}</span>
+                <span className="text-xs font-semibold text-primary">Ver mapa</span>
+              </a>
+            )}
+            {(item.description || item.note) && (
+              <p className="whitespace-pre-line rounded-xl bg-muted/60 p-3 text-sm leading-relaxed">{item.description ?? item.note}</p>
+            )}
+            {convs.map((c) => (
+              <TarjetaConvocatoria key={`${c.lineupId}-${c.childId}`} conv={c} userId={user?.id} />
+            ))}
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -178,16 +243,20 @@ const TAG_STYLES: Record<string, string> = {
   Tuyo: 'bg-muted text-muted-foreground',
 };
 
-function AgendaRow({ item }: { item: AgendaItem }) {
+function AgendaRow({ item, onOpen }: { item: AgendaItem; onOpen: () => void }) {
   const { time, period } = timeParts(item.start);
   return (
-    <li
+    <li>
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`${item.title}: ver detalle`}
       className={cn(
-        'flex min-h-touch items-center gap-3 rounded-2xl border bg-card px-3.5 py-3',
+        'flex min-h-touch w-full items-center gap-3 rounded-2xl border bg-card px-3.5 py-3 text-left transition-colors hover:bg-muted/40 motion-safe:active:scale-[0.99]',
         item.kind === 'notice' && 'border-dashed bg-muted/40',
       )}
     >
-      <div className="flex w-14 shrink-0 flex-col leading-tight">
+      <span className="flex w-14 shrink-0 flex-col leading-tight">
         {item.allDay ? (
           <span className="text-base font-bold text-muted-foreground" aria-label="Todo el día">—</span>
         ) : (
@@ -196,17 +265,19 @@ function AgendaRow({ item }: { item: AgendaItem }) {
             <span className="text-xs font-medium text-muted-foreground">{period}</span>
           </>
         )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold leading-snug">{item.title}</p>
-        {item.subtitle && <p className="text-xs text-muted-foreground">{item.subtitle}</p>}
-        {item.note && <p className="mt-0.5 text-xs font-medium text-foreground/80">{item.note}</p>}
-      </div>
+      </span>
+      <span className="block min-w-0 flex-1">
+        <span className="block text-sm font-semibold leading-snug">{item.title}</span>
+        {item.subtitle && <span className="block text-xs text-muted-foreground">{item.subtitle}</span>}
+        {item.note && <span className="mt-0.5 block text-xs font-medium text-foreground/80">{item.note}</span>}
+      </span>
       {item.tag && (
         <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold', TAG_STYLES[item.tag] ?? 'bg-muted text-muted-foreground')}>
           {item.tag}
         </span>
       )}
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+    </button>
     </li>
   );
 }

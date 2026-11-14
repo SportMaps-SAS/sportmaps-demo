@@ -19,6 +19,7 @@ import { useState, useEffect } from 'react';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
+import type { TablesUpdate } from '@/integrations/supabase/types';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -189,7 +190,7 @@ export function SportMapsPaySettings() {
         try {
             setSaving(true);
 
-            const updateData: Record<string, any> = {
+            const updateData: TablesUpdate<'school_settings'> = {
                 wompi_enabled: settings.wompi_enabled,
                 online_fee_pct: settings.online_fee_pct,
                 fee_payer: settings.fee_payer,

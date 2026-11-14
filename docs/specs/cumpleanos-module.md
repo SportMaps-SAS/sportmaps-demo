@@ -247,3 +247,96 @@ D2/D3 (ningún padre recibe el cumpleaños de un hijo ajeno).
    y los `unregistered` quedan como `skipped_no_account`.
 4. Dos corridas del cron el mismo día dejan exactamente un saludo por atleta.
 5. `npm run seguridad:invariantes` sale en verde.
+
+---
+
+## 11. Ampliación (2026-11-06): saludo personalizado + Mapi
+
+> Agregada el 2026-11-06. Lo marcado *(propuesta)* sale de la revisión contra el código y queda para aprobar
+> junto con el resto del spec.
+
+### D12 — El saludo es distinto para cada deportista, pero no inventado
+
+Se arma con datos reales del deportista (nombre de pila, equipo, deporte, profe, racha de entrenos,
+felicitaciones 👏 recibidas este año) sobre un **banco de ~30 plantillas** que rota. Sin edad (D9), sin
+apellido, sin datos de salud ni de pagos. La escuela puede ver y editar el banco.
+
+Ejemplo: «¡Feliz cumple, Juan! 🎉 El equipo Sub-12 y el profe Carlos te mandan un abrazo. Llevas 12 entrenos
+seguidos, ¡qué racha!»
+
+Cómo se arma *(propuesta)*:
+
+- **El servidor rellena; el modelo no ve al deportista.** El cron elige la plantilla y pone las variables. Mapi
+  puede **proponer plantillas nuevas para el banco** (sin datos de nadie) y la escuela las aprueba. Así se
+  cumple «nunca texto libre sobre un menor» sin mandarle al proveedor de IA datos de un menor por un saludo
+  (Ley 1581, ver `mapi-agente-plan.md` §12).
+- **Solo es elegible la plantilla cuyos datos existen y suman.** La racha solo si es de 4 entrenos o más; las
+  felicitaciones solo si hay al menos una; el profe solo si el equipo tiene uno. Nunca «llevas 0 entrenos
+  seguidos». Siempre queda una plantilla base con solo el nombre y la escuela.
+- **Rotación determinista:** se elige por `hash(deportista, año)` entre las elegibles. El texto cambia de un año
+  a otro y una reejecución da el mismo texto.
+- **La racha hay que calcularla en SQL.** Hoy solo existe en el frontend (`rachaDeEntrenos` en
+  `frontend/src/components/athlete/v2/athleteV2Model.ts`): entrenos asistidos seguidos, y una excusa ni suma ni
+  corta. La racha de post-entreno (`20260911123141`) es otra cosa: cuenta sesiones del equipo. Si el cron no
+  usa el mismo criterio que el frontend, el saludo y la pantalla del deportista dirán números distintos.
+- **Cambia el modelo de datos de §5:** `birthday_message_template text` (una sola plantilla) no alcanza para un
+  banco. Tabla `birthday_templates`: `school_id` nulo = banco por defecto de SportMaps; `texto`; `variables`
+  que exige; `activa`. Lectura para el staff de la escuela, escritura para su administración
+  (`user_admin_school_ids()`), estados con `text + CHECK`.
+
+### D13 — Canales, en este orden
+
+1. **In-app y push** (el despachador unificado está vivo desde el 2026-10-27). Ojo con la cifra: el 47 % es
+   quien **tiene cuenta**, no quien lo ve. Solo el 11 % de los acudientes tiene push (`avisos-a-familias.md`
+   §0, 2026-10-25), y el aviso in-app se ve solo al abrir la app.
+2. **WhatsApp**, solo con plantilla aprobada por Meta, desde el número de la escuela, con el nombre y la frase
+   corta como variables:
+   - Solo en escuelas con WhatsApp conectado, y la plantilla se aprueba **en la WABA de cada escuela**: no hay
+     una plantilla global.
+   - Es probable que Meta la clasifique como **marketing**: cuesta más, requiere opt-in de marketing de la
+     familia, y Meta puede no entregarla por su tope de mensajes de marketing por usuario.
+   - Meta suele rechazar plantillas en las que la variable es casi todo el mensaje: la frase va como variable
+     corta dentro de un texto fijo.
+   - Se valida con una plantilla real en la escuela piloto antes de prometerlo.
+3. **Sin cuenta ni opt-in:** quedan en el tablero para saludo manual con un clic (F4).
+
+### Mapi y los cumpleaños (se cuelga de la RPC `escuela_cumpleanos`)
+
+- **Resumen diario de las 7:00 al admin:** «Hoy cumplen Juan (Sub-12) y Sara (Sub-15)». Mismo job
+  (`bff/src/jobs/whatsapp-resumen-diario.job.ts`), una línea más. Ese job tiene dos límites: hoy solo recorre
+  escuelas con WhatsApp conectado (`school_whatsapp_integrations`) y no se manda si no hay nada pendiente.
+  *(Propuesta)* La línea de cumpleaños va cuando el resumen sale, pero **no lo dispara sola**: un cumpleaños no
+  es un pendiente, y un correo que llega todos los días se aprende a ignorar. Las escuelas sin WhatsApp lo ven
+  en el tablero (F1).
+- **Aviso al profe** la mañana del cumple de alguien de **su equipo**, para que lo salude en persona y le mande
+  su Felicitación 👏. Los equipos del coach salen de `idsDeCoach` (`teams.coach_id` guarda `school_staff.id`, no
+  el uid). Va por `notifications` (D11) con el interruptor `birthday_notify_staff` de §5. *(Propuesta)* Su
+  default pasa a `false` y se enciende escuela por escuela, como D7.
+- **Consulta:** «¿quién cumple esta semana?» → herramienta `cumpleanos(desde, hasta)`. Admin: toda la escuela;
+  coach: solo sus equipos (mismo patrón que `mapi-asistente-por-rol.md` §4.2). *(Propuesta)* Al acudiente y al
+  deportista no se les ofrece: `escuela_cumpleanos` es solo para staff (D3), la familia ya conoce la fecha de su
+  hijo, y abrir otro camino a la fecha de nacimiento de un menor no aporta. Depende del motor de Mapi
+  (`mapi-agente-plan.md`), que no está construido; mientras tanto, la respuesta es el tablero de F1.
+- **Modo Recepción:** confeti y voz cuando el cumpleañero cruza la puerta (F3), con nombre de pila en modo
+  discreto.
+- **Mapi NO envía el saludo por su cuenta:** el envío sigue siendo el cron con el toggle por escuela (D7), y el
+  modelo no participa en armarlo (D12).
+
+### Orden
+
+1. **F0 + F1:** tablero y consulta, sin envíos, riesgo cero.
+2. Línea en el resumen diario.
+3. **F3:** anuncio en recepción.
+4. **F2a** *(propuesta)*: aviso al profe (solo staff) en una escuela de prueba. Mismo cron que F2, con menos
+   riesgo: no le escribe a familias.
+5. **F2b:** saludo automático a familias en una escuela de prueba, con el banco de D12.
+6. **WhatsApp**, solo si la plantilla pasa en la WABA de la escuela piloto.
+
+### Correcciones al resto del spec (2026-11-06)
+
+- **§2.1, §4 y F4: la cifra de deportistas sin a quién saludar no cuadra.** Si la columna «con a quién
+  notificar» de §2.1 cuenta solo a los que tienen fecha, son 468 (878 − 410: 398 menores sin acudiente
+  vinculado + 70 fichas sin cuenta). Si cuenta a todos los activos, son 673 (1083 − 410). §4 y F4 dicen 590.
+  Ninguna de las tres coincide: se vuelve a medir contra la base antes de F0.
+- **F2 y riesgo 6:** el despachador unificado ya está vivo en producción (2026-10-27). Esa dependencia está
+  resuelta.

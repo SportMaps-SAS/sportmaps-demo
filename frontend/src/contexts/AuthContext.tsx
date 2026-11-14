@@ -3,7 +3,6 @@ import { User, Session } from '@supabase/supabase-js';
 import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
-import { emailClient } from '@/lib/email-client';
 import { bffClient } from '@/lib/api/bffClient';
 import { Database } from '@/integrations/supabase/types';
 import { getUserFriendlyError } from '@/lib/error-translator';
@@ -385,17 +384,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           description: "Bienvenido a SportMaps. Tu cuenta ha sido creada.",
         });
 
-        // Send welcome email for school owners (non-blocking)
-        if (userData.role === 'school' && userData.school_name) {
-          emailClient.send({
-            type: 'welcome_school',
-            to: email,
-            data: {
-              userName: userData.full_name || 'Administrador',
-              schoolName: userData.school_name,
-            },
-          }).catch((err) => console.warn('Welcome email failed:', err));
-        }
+        // La bienvenida la manda el BFF (jobs/bienvenida-escuelas.job.ts) al ver
+        // la escuela creada: así sale también con Google y para entrenadores.
       }
     } catch (error: unknown) {
       console.error('Error signing up:', error);
@@ -472,6 +462,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem('sportmaps_favoritos');
       localStorage.removeItem('sportmaps_welcome_dismissed');
       localStorage.removeItem('pending_invite_id');
+      // Código de escuela guardado entre /unirse y el registro (lib/schoolJoinCode).
+      localStorage.removeItem('sportmaps_pending_join_code');
       // Rol elegido (multirol): el próximo inicio de sesión vuelve a preguntar.
       clearStoredContexts();
       // Preferencias de la pizarra táctica: la foto de jugadores menores no

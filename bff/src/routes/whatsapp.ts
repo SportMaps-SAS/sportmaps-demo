@@ -34,11 +34,16 @@ import {
 import {
     runBotTurn, deliver, atenderDesconocido, mensajesRecientes, SILENCIO_HUMANO_MIN,
     TEXTO_MIME_RECHAZADO, vocativosDeEscuela, revisarEscalacionesVencidas, revisarRetomas,
-    reservarPasoUnaVez, enviarRespuestaStaff,
+    reservarPasoUnaVez, enviarRespuestaStaff, abrirEnBuzon, mensajeConContenido, hablaDeLaEscuela,
+    atenderRespuestaDeFormularioEnBot, seguirPorChatTrasFormularioFallido,
 } from '../services/whatsapp-bot.service';
+import { esRespuestaDeFormulario, sincronizarEstadoDeFlow } from '../services/whatsapp-flows.service';
+import { intencionDeProspecto } from '../services/whatsapp-atencion.service';
+import { salvaguardaHabilitada, decidirSalvaguarda, avisarSilencio } from '../services/whatsapp-salvaguarda-silencio';
 import { debeAtender } from '../services/whatsapp-atencion.service';
 import { encolarAdjunto } from '../services/whatsapp-queue.service';
 import { correrTurnoAgrupado, ESPERA_RAFAGA_MS } from '../services/whatsapp-turno-agrupado.service';
+import { anotarTurno, soltarTurno, seguirTarea } from '../services/whatsapp-turnos-pendientes.service';
 import {
     humanoReciente, esCierreSuelto, respuestaATipoNoSoportado, PASO_TIPO_NO_SOPORTADO,
 } from '../services/whatsapp-reglas-turno';
@@ -50,6 +55,10 @@ import { atenderEntrantePlataforma } from '../services/plataforma-wa-entrante.se
 import {
     identificarStaffPorTelefono, procesarMensajeStaff, esDisparadorDeLista, type StaffIdentificado,
 } from '../services/whatsapp-asistencia-staff.service';
+import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
+import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
+import { atenderAdjuntoEntrante } from '../services/whatsapp-bot-oleada1';
+import { esAliasDeUsuario, nombreConUsuario } from '../services/whatsapp-usuario-meta';
 
 /**
  * Corre en segundo plano lo que espera (la ráfaga, el acuse): el webhook
@@ -59,9 +68,10 @@ import {
  * resultado.
  */
 function enSegundoPlano(espera: number, tarea: () => Promise<unknown>, log: Request['log'], que: string): Promise<void> {
-    const p = tarea().then(() => undefined).catch((err: any) => {
+    // `seguirTarea`: el apagado ordenado (index.ts) la espera antes de salir.
+    const p = seguirTarea(tarea().then(() => undefined).catch((err: any) => {
         log?.error({ err: err?.message || err }, `WhatsApp: ${que} falló`);
-    });
+    }));
     return espera > 0 ? Promise.resolve() : p;
 }
 import { procesarEchos, procesarHistorial, registrarAppState, esContactoPersonal, payloadSinContenido }
@@ -183,6 +193,9 @@ router.post('/', async (req: Request, res: Response) => {
     }
 });
 
+/** Los valores del CHECK `whatsapp_messages_status_check`. */
+const ESTADOS_GUARDABLES = new Set(['received', 'queued', 'sent', 'delivered', 'read', 'failed']);
+
 /**
  * Guarda el estado de entrega de los salientes y, sobre todo, lo que Meta cobro.
  *
@@ -202,10 +215,11 @@ async function procesarEstados(req: Request, body: any): Promise<void> {
             continue;
         }
 
-        const parche: Record<string, unknown> = {
-            status: e.status,
-            status_at: e.timestamp,
-        };
+        // Un estado que el CHECK no conoce tumbaría el UPDATE entero y con él
+        // el cobro de Meta: se guarda lo demás.
+        const parche: Record<string, unknown> = ESTADOS_GUARDABLES.has(e.status)
+            ? { status: e.status, status_at: e.timestamp }
+            : {};
         // Solo se pisa lo de cobro si el evento lo trae. Meta manda varios
         // estados por mensaje (sent, delivered, read) y no todos incluyen
         // `pricing`: sobrescribir con null borraria el dato del medidor.
@@ -215,6 +229,7 @@ async function procesarEstados(req: Request, body: any): Promise<void> {
             parche.pricing_raw = e.pricingRaw;
         }
         if (e.errorDetail) parche.error_detail = e.errorDetail;
+        if (Object.keys(parche).length === 0) continue;
 
         const { error } = await supabase
             .from('whatsapp_messages')
@@ -223,6 +238,14 @@ async function procesarEstados(req: Request, body: any): Promise<void> {
 
         if (error) {
             req.log?.warn({ err: error.message, waMessageId: e.waMessageId }, 'WhatsApp: no se pudo guardar el estado');
+        }
+
+        // Un formulario (WhatsApp Flows) que no se entregó —131026: la app de la
+        // persona no lo abre— sigue por chat con su respaldo. Solo mira los fallidos.
+        if (e.status === 'failed') {
+            const siguio = await seguirPorChatTrasFormularioFallido(e.phoneNumberId, e.waMessageId, e.errorCode)
+                .catch(() => false);
+            if (siguio) req.log?.warn({ waMessageId: e.waMessageId, codigo: e.errorCode }, 'WhatsApp: el formulario no llegó; sigue por chat');
         }
     }
 
@@ -240,6 +263,9 @@ const CAMPOS_DE_CUENTA = new Set([
     'phone_number_quality_update',
     'account_update',
     'business_capability_update',
+    // Formularios (WhatsApp Flows): cambio de estado y alertas. Hay que suscribir
+    // el campo `flows` en la app de Meta para que lleguen.
+    'flows',
 ]);
 
 /**
@@ -301,10 +327,11 @@ async function procesarEventosDeCuenta(req: Request, body: any): Promise<void> {
                 ?? v?.max_daily_conversation_per_phone   // business_capability_update
                 ?? v?.current_limit
                 ?? v?.decision
+                ?? v?.new_status          // flows: FLOW_STATUS_CHANGE
                 ?? v?.event
                 ?? null;
             const estadoPrevio = v?.previous_quality_score ?? v?.previous_category
-                ?? v?.old_category ?? null;
+                ?? v?.old_category ?? v?.old_status ?? null;
 
             const { error } = await supabase.from('whatsapp_account_events').insert({
                 integration_id: integrationId,
@@ -321,8 +348,12 @@ async function procesarEventosDeCuenta(req: Request, body: any): Promise<void> {
 
             if (error) {
                 req.log?.error({ err: error.message, field }, 'WhatsApp: no se pudo guardar el evento de cuenta');
-                continue;
             }
+            // Un formulario que Meta bloquea o estrangula deja de mandarse ya (y vuelve al publicarse).
+            if (field === 'flows' && v?.event === 'FLOW_STATUS_CHANGE') {
+                await sincronizarEstadoDeFlow(v?.flow_id, v?.new_status).catch(() => false);
+            }
+            if (error) continue;
 
             // A nivel log va como warn: son cosas que alguien tiene que mirar,
             // no ruido informativo.
@@ -337,7 +368,45 @@ async function procesarEventosDeCuenta(req: Request, body: any): Promise<void> {
 // ─── Procesamiento de un mensaje entrante ────────────────────────────────────
 async function processInboundMessage(req: Request, msg: ParsedInboundMessage): Promise<void> {
     if (!msg.phoneNumberId || !msg.contactWaId || !msg.waMessageId) {
-        req.log?.warn({ msg }, 'WhatsApp: inbound message missing required fields');
+        // Con `{ msg }` pino pisaba el objeto con el texto del aviso y no se veía
+        // qué llegaba (~10 al día, 2026-10-29). Solo la forma, sin texto ni teléfono.
+        const raw = (msg.raw ?? {}) as Record<string, unknown>;
+        req.log?.warn({
+            faltan: [!msg.phoneNumberId && 'phone_number_id', !msg.contactWaId && 'from', !msg.waMessageId && 'id'].filter(Boolean),
+            tipo: msg.type,
+            tipoOriginal: raw.type ?? null,
+            claves: Object.keys(raw),
+            errores: Array.isArray(raw.errors) ? (raw.errors as any[]).map((e) => e?.code ?? e?.title ?? null) : null,
+        }, 'WhatsApp: inbound message missing required fields');
+        // Antes el mensaje se perdía sin rastro (2026-11-10: @dr_xanl preguntó el precio de la
+        // clínica desde un anuncio y nunca lo vimos). Se guarda SOLO la forma y los identificadores
+        // de Meta —sin texto ni teléfono—, en la misma tabla que los demás eventos, para ver qué
+        // manda Meta (p. ej. `from_user_id` de quien usa nombre de usuario) y poder responderle.
+        try {
+            const integ = msg.phoneNumberId ? await resolveIntegration(msg.phoneNumberId) : null;
+            const referral = (raw.referral ?? null) as Record<string, unknown> | null;
+            await supabase.from('whatsapp_account_events').insert({
+                integration_id: integ?.id ?? null,
+                school_id: integ?.school_id ?? null,
+                field: 'inbound_descartado',
+                phone_number_id: msg.phoneNumberId || null,
+                nuevo_estado: String(raw.type ?? msg.type ?? ''),
+                motivo: [!msg.contactWaId && 'sin_from', !msg.waMessageId && 'sin_id', !msg.phoneNumberId && 'sin_phone_number_id'].filter(Boolean).join(','),
+                payload: {
+                    claves: Object.keys(raw),
+                    tipo: raw.type ?? null,
+                    from_user_id: raw.from_user_id ?? null,
+                    user_id: raw.user_id ?? null,
+                    wa_message_id: msg.waMessageId || null,
+                    timestamp: raw.timestamp ?? null,
+                    texto_largo: typeof (raw.text as any)?.body === 'string' ? (raw.text as any).body.length : null,
+                    referral: referral ? { source_id: referral.source_id ?? null, source_type: referral.source_type ?? null, headline: referral.headline ?? null } : null,
+                    errores: Array.isArray(raw.errors) ? raw.errors : null,
+                },
+            });
+        } catch (err) {
+            req.log?.warn({ err: (err as Error)?.message }, 'WhatsApp: no se pudo guardar el inbound descartado');
+        }
         return;
     }
 
@@ -382,7 +451,9 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
         p_integration_id: integration.id,
         p_school_id: integration.school_id,
         p_contact_wa_id: msg.contactWaId,
-        p_contact_name: msg.contactName,
+        // Sin teléfono (nombre de usuario de WhatsApp): el @usuario va en el nombre de la
+        // conversación; es lo que la escuela ve en su celular y por lo que busca el chat.
+        p_contact_name: esAliasDeUsuario(msg.contactWaId) ? nombreConUsuario(msg.contactName, msg.contactUsername) : msg.contactName,
         p_wa_message_id: msg.waMessageId,
         p_type: msg.type,
         p_text_body: personal ? null : msg.textBody,
@@ -410,6 +481,21 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
         return;
     }
 
+    // Atribución por texto (plan docs/plan-anuncios-atribucion-multiescuela-2026-11-06.md):
+    // el chat que NO trae `referral` pero escribe la frase de un anuncio o la marca de un canal
+    // («(Instagram)») queda atribuido igual. En segundo plano y sin lanzar: no frena al bot.
+    void atribuirPorTexto({
+        integrationId: integration.id,
+        schoolId: integration.school_id,
+        conversationId,
+        contactWaId: msg.contactWaId,
+        type: msg.type,
+        texto: msg.textBody,
+        raw: msg.raw,
+    }).then((r) => {
+        if (r === 'atribuida') req.log?.info({ conversationId }, 'WhatsApp: chat atribuido por texto');
+    }).catch(() => undefined);
+
     // La ingesta detecta las palabras de baja (STOP, baja, no molestar…) y ya
     // registró el opt-out. El bot tiene que confirmarlo y NO seguir su flujo
     // normal: a quien pide que no le escriban no se le pregunta el email.
@@ -433,6 +519,19 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
     //    (bot, audio, prospecto) queda en llm_usage para el informe de costo.
     await conContextoLlm({ schoolId: integration.school_id, conversationId, feature: 'bot' },
         () => handleBotTurn(req, integration, conversationId, msg, optedOut));
+}
+
+/** Oleada 1: ¿el adjunto es un soporte de la ficha y el bot se hizo cargo? Nunca lanza (false = sigue como comprobante). */
+async function atenderSoporteDelAdjunto(
+    integration: WhatsAppIntegration, conversationId: string, msg: ParsedInboundMessage,
+): Promise<boolean> {
+    try {
+        return await atenderAdjuntoEntrante(
+            { integration, conversationId, contactWaId: msg.contactWaId, msg, recientes: () => mensajesRecientes(conversationId) },
+            { deliver, abrirEnBuzon, discreto: false });
+    } catch {
+        return false;
+    }
 }
 
 /**
@@ -469,6 +568,10 @@ async function handleBotTurn(
         // comprobante es una gestión sobre su propia plata que él inició, y
         // perderla en silencio es peor que responderle. El worker le agrega la
         // coletilla que le recuerda que tiene las notificaciones apagadas.
+        // OLEADA 1: en las escuelas que exigen soportes (hoy Monster), la foto o el PDF de quien tiene soportes
+        // por cargar se atiende como soporte de la ficha («¿de cuál soporte y de qué deportista?»). Con la función
+        // apagada, o si es un comprobante, devuelve false y el adjunto se encola como siempre.
+        if (await atenderSoporteDelAdjunto(integration, conversationId, msg)) return;
         const resultado = await encolarAdjunto(integration, msg, req.log).catch((err) => {
             req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: encolarAdjunto explotó');
             return 'error' as const;
@@ -492,6 +595,49 @@ async function handleBotTurn(
         return;
     }
 
+    // Lo que WhatsApp no deja leer (error 131051: encuestas, «ver una vez»,
+    // mensajes de una versión vieja). Antes se ignoraba igual que un sticker y
+    // 15 conversaciones quedaron sin respuesta ni buzón (auditoría 2026-10-28,
+    // X-05). A quien el asistente atiende se le pide escribirlo, UNA vez al día,
+    // y la conversación queda abierta en el buzón para que alguien la mire.
+    if (msg.type === 'unsupported') {
+        // Un mensaje borrado para todos (`revoke`) o editado (`edit`) llega como tipo
+        // aparte y NO es un mensaje que no pudimos abrir: pedirle que lo reescriba
+        // confunde (Dynasty 11-05 09:48, Monster 10:59: el acudiente escribió «ya les
+        // transfiero» y recibió «No pude abrir tu último mensaje»).
+        const tipoOriginal = String((msg.raw as any)?.type || '');
+        if (tipoOriginal === 'revoke' || tipoOriginal === 'edit') return;
+        if (optedOut) return;
+        // El buzón se abre SIEMPRE: abrir no escribe nada al contacto. Antes solo se abría si el asistente
+        // iba a atender, y un comprobante o mensaje ilegible de alguien en un flujo de la escuela (caso
+        // Alexandra, Monster 11-12 10:43) quedaba mudo y sin que nadie lo viera.
+        await abrirEnBuzon(integration, conversationId, msg.contactWaId)
+            .catch((err) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: no se pudo abrir en el buzón'));
+        const d = await debeAtender(integration, conversationId, msg.contactWaId).catch(() => null);
+        if (!d?.atender) return;
+        if (!(await reservarPasoUnaVez(conversationId, `${PASO_TIPO_NO_SOPORTADO}_unsupported`, 24))) return;
+        await deliver(integration, conversationId, msg.contactWaId,
+            'No pude abrir tu último mensaje: WhatsApp no me deja verlo. 🙏 ¿Me lo escribes, por favor? ' +
+            'Si era un comprobante, mándame la *foto* o el *PDF*.',
+            { step: `${PASO_TIPO_NO_SOPORTADO}_unsupported` })
+            .catch((err) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: no se pudo responder al mensaje ilegible'));
+        return;
+    }
+
+    // Formulario terminado (WhatsApp Flows, `nfm_reply`): lo atiende su handler con
+    // el token firmado, sin modelo ni ráfaga. Corre aunque el contacto sea
+    // desconocido (el formulario lo mandó el bot); lo que responde sale por
+    // `deliver`, que respeta bot apagado, conversación tomada y modo discreto.
+    if (esRespuestaDeFormulario(msg.raw)) {
+        const resultado = await atenderRespuestaDeFormularioEnBot(integration, conversationId, msg.contactWaId, msg)
+            .catch((err) => {
+                req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: el formulario falló');
+                return 'error' as const;
+            });
+        req.log?.info({ conversationId, resultado }, 'WhatsApp: formulario recibido');
+        return;
+    }
+
     // Los stickers, las reacciones y demás tipos no conversacionales se ignoran
     // como siempre (ya quedaron guardados por la ingesta).
     const esConversacional = msg.type === 'text' || msg.type === 'interactive'
@@ -508,6 +654,21 @@ async function handleBotTurn(
     // acaba de escribir: la ventana de 24 h está abierta). Con la baja pedida
     // (optedOut) no se sigue. Si no es de asistencia, el flujo normal sigue igual.
     if (!optedOut && await atenderAsistenciaDeStaff(req, integration, conversationId, msg)) return;
+
+    // Respuesta a una campaña de marketing de la escuela (plan B5 T4): los
+    // botones de su plantilla (`smc:<campaña>:si|luego|baja`) o un «no me
+    // interesa» corto justo después de ella. El filtro es gratis (prefijo o
+    // frase) y no depende del asistente: la campaña la aprobó la escuela. Sin
+    // campaña detrás, el mensaje sigue el camino de siempre. Un STOP que la
+    // ingesta ya registró (optedOut) lo confirma el bot como siempre.
+    if (esPosibleRespuestaDeCampana(msg) && !(optedOut && !msg.botonId)) {
+        const r = await atenderRespuestaDeCampana({ integration, conversationId, msg })
+            .catch(() => 'no_aplica' as const);
+        if (r !== 'no_aplica') {
+            req.log?.info({ conversationId, campana: r }, 'WhatsApp: respuesta a una campaña');
+            return;
+        }
+    }
 
     // ¿A este contacto el asistente le contesta? Se pregunta ANTES de cualquier
     // respuesta, del modelo y de cualquier borrador.
@@ -584,6 +745,21 @@ async function handleBotTurn(
                     return 'error' as const;
                 });
             req.log?.info({ conversationId, resultado }, 'WhatsApp: desconocido');
+            // Salvaguarda (apagada por defecto, por escuela): un turno mudo ante un mensaje con intención avisa a la escuela.
+            // No le escribe al cliente ni guarda su texto (Monster 2026-11-11, @Andrey_0630: 17 h sin respuesta).
+            if (salvaguardaHabilitada(integration.school_id)) {
+                const d = decidirSalvaguarda({
+                    resultado: String(resultado), texto: msg.textBody, botonId: msg.botonId ?? null,
+                    conContenido: (t) => mensajeConContenido(t),
+                    conSenal: (t) => hablaDeLaEscuela(t) || intencionDeProspecto(t),
+                });
+                if (d === 'avisar') {
+                    req.log?.warn?.({ conversationId, resultado }, 'WhatsApp: desconocido sin respuesta; se avisa a la escuela');
+                    await avisarSilencio({ schoolId: integration.school_id, conversationId,
+                        contactWaId: msg.contactWaId, contactName: msg.contactName ?? null })
+                        .catch((err: any) => req.log?.error({ err: err?.message || err, conversationId }, 'WhatsApp: salvaguarda falló'));
+                }
+            }
             return;
         }
         req.log?.info(
@@ -729,15 +905,25 @@ function lanzarTurno(
     origen: 'texto' | 'audio',
 ): Promise<void> {
     return enSegundoPlano(ESPERA_RAFAGA_MS, async () => {
-        const r = await correrTurnoAgrupado({
-            conversationId,
-            waMessageId: msg.waMessageId,
-            inmediato: optedOut || Boolean(msg.botonId),
-            log: req.log as any,
-            correr: () => runBotTurn(integration, conversationId, msg.contactWaId, texto, msg.waMessageId,
-                optedOut, msg.botonId ?? null, { origen }),
+        // Anotado en la base mientras corre: si el proceso muere a mitad
+        // (despliegue, reinicio), el barrido lo relanza (whatsapp-turnos-pendientes).
+        await anotarTurno({
+            waMessageId: msg.waMessageId, conversationId, integrationId: integration.id,
+            contactWaId: msg.contactWaId, texto, optedOut, botonId: msg.botonId ?? null, origen,
         });
-        if (r !== 'corrido') req.log?.info({ conversationId, turno: r }, 'WhatsApp: turno agrupado');
+        try {
+            const r = await correrTurnoAgrupado({
+                conversationId,
+                waMessageId: msg.waMessageId,
+                inmediato: optedOut || Boolean(msg.botonId),
+                log: req.log as any,
+                correr: () => runBotTurn(integration, conversationId, msg.contactWaId, texto, msg.waMessageId,
+                    optedOut, msg.botonId ?? null, { origen }),
+            });
+            if (r !== 'corrido') req.log?.info({ conversationId, turno: r }, 'WhatsApp: turno agrupado');
+        } finally {
+            await soltarTurno(msg.waMessageId);
+        }
     }, req.log, 'runBotTurn');
 }
 

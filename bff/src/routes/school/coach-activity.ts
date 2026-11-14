@@ -22,6 +22,7 @@ import {
   type AttendanceRecordRow, type AttendanceSessionRow, type MesoEvalRow, type MesocycleRow,
   type PerformanceEntryRow, type StaffRow, type TeamRow, type TrainingSessionRow,
 } from './coach-activity.aggregate';
+import { buildCoachPeriodSummary } from './coach-evaluation-summary';
 
 const router = Router();
 
@@ -176,6 +177,7 @@ router.get(
         mesoEvaluations.push(...await fetchAllRows<MesoEvalRow>(() => supabase
           .from('training_mesocycle_evaluations')
           .select('created_by, created_at, mesocycle_id')
+          .not('score', 'is', null)  // «No aplica» no cuenta como evaluación hecha
           .eq('school_id', schoolId)
           .in('created_by', ids)
           .gte('created_at', fromIso)
@@ -201,6 +203,148 @@ router.get(
       res.json(result);
     } catch (err: any) {
       req.log?.error({ err }, 'school/coach-activity unhandled error');
+      res.status(500).json({ error: 'Error interno del servidor.' });
+    }
+  },
+);
+
+/**
+ * GET /api/v1/school/coach-evaluation-summary?staff_id=&from=YYYY-MM-DD&to=YYYY-MM-DD
+ *
+ * Lo que hizo UN entrenador en el período a calificar (spec
+ * evaluacion-de-entrenadores §7). Solo lo pide la pantalla de calificar (nada
+ * de jobs): lecturas acotadas a sus equipos, su usuario y el rango (máx. 1 año).
+ */
+router.get(
+  '/coach-evaluation-summary',
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const schoolId = req.schoolId;
+      if (!schoolId) return res.status(403).json({ error: 'Sin escuela asociada.' });
+      const { staff_id: staffId, from, to } = req.query;
+      if (typeof staffId !== 'string' || !/^[0-9a-f-]{36}$/i.test(staffId)) {
+        return res.status(400).json({ error: 'staff_id inválido.' });
+      }
+      if (!isValidYmd(from) || !isValidYmd(to) || to < from || to > addDaysYmd(from, 366)) {
+        return res.status(400).json({ error: 'from/to deben ser fechas YYYY-MM-DD, en orden y a lo sumo un año.' });
+      }
+      const today = bogotaYmd(new Date().toISOString());
+
+      const { data: st, error: stErr } = await supabase
+        .from('school_staff')
+        .select('id, full_name, coach_auth_id')
+        .eq('id', staffId)
+        .eq('school_id', schoolId)
+        .maybeSingle();
+      if (stErr) throw stErr;
+      if (!st) return res.status(404).json({ error: 'Ese entrenador no es de tu escuela.' });
+      const staff: StaffRow = { id: st.id, full_name: st.full_name || 'Sin nombre', coach_auth_id: st.coach_auth_id ?? null };
+      const auth = staff.coach_auth_id;
+
+      const teamsRaw = await fetchAllRows<any>(() => supabase
+        .from('teams')
+        .select('id, name, coach_id, active, team_coaches(coach_id)')
+        .eq('school_id', schoolId)
+        .order('id'));
+      const teams: TeamRow[] = teamsRaw
+        .filter((t) => t.active !== false)
+        .map((t) => ({
+          id: t.id,
+          name: t.name || 'Equipo',
+          coach_id: t.coach_id ?? null,
+          extra_coach_ids: (t.team_coaches || []).map((tc: any) => tc.coach_id).filter(Boolean),
+        }));
+      const teamIds = teams
+        .filter((t) => t.coach_id === staff.id || t.extra_coach_ids.includes(staff.id))
+        .map((t) => t.id);
+
+      // Sesiones de sus equipos + las que creó él en otros (si existe created_by).
+      const sessionCols = 'id, team_id, session_date, created_at, updated_at, objectives, session_blocks, microcycle_day_id';
+      const sessionsRaw: any[] = [];
+      for (const ids of chunk(teamIds, IN_CHUNK)) {
+        sessionsRaw.push(...await fetchAllRows<any>(() => supabase
+          .from('training_sessions')
+          .select(`${sessionCols}, created_by, updated_by`)
+          .eq('school_id', schoolId)
+          .in('team_id', ids)
+          .gte('session_date', from)
+          .lte('session_date', to)
+          .order('id')));
+      }
+      if (auth) {
+        const seen = new Set(sessionsRaw.map((s) => s.id));
+        const own = await fetchAllRows<any>(() => supabase
+          .from('training_sessions')
+          .select(`${sessionCols}, created_by, updated_by`)
+          .eq('school_id', schoolId)
+          .eq('created_by', auth)
+          .gte('session_date', from)
+          .lte('session_date', to)
+          .order('id'));
+        for (const s of own) if (!seen.has(s.id)) sessionsRaw.push(s);
+      }
+      const trainingSessions: TrainingSessionRow[] = sessionsRaw.map((s) => ({
+        id: s.id,
+        team_id: s.team_id,
+        session_date: s.session_date,
+        created_by: s.created_by ?? null,
+        updated_by: s.updated_by ?? null,
+        created_at: s.created_at ?? null,
+        updated_at: s.updated_at ?? null,
+        objectives: s.objectives,
+        blocks_count: Array.isArray(s.session_blocks) ? s.session_blocks.length : 0,
+        microcycle_day_id: s.microcycle_day_id ?? null,
+      }));
+
+      // Listas del rango en la escuela (la atribución se decide en el agregado).
+      const attendanceSessions = await fetchAllRows<AttendanceSessionRow>(() => supabase
+        .from('attendance_sessions')
+        .select('id, team_id, session_date, coach_id, created_by, finalized_by, finalized, finalized_at, created_at')
+        .eq('school_id', schoolId)
+        .gte('session_date', from)
+        .lte('session_date', to)
+        .order('id'));
+      const attendanceRecords: AttendanceRecordRow[] = [];
+      for (const ids of chunk(attendanceSessions.map((s) => s.id), IN_CHUNK)) {
+        attendanceRecords.push(...await fetchAllRows<AttendanceRecordRow>(() => supabase
+          .from('attendance_records')
+          .select('session_id, marked_by, status, created_at')
+          .in('session_id', ids)
+          .order('id')));
+      }
+
+      const performanceEntries: PerformanceEntryRow[] = [];
+      const mesoEvaluations: MesoEvalRow[] = [];
+      if (auth) {
+        const fromIso = bogotaStartIso(from);
+        const toIso = bogotaStartIso(addDaysYmd(to, 1));
+        performanceEntries.push(...await fetchAllRows<PerformanceEntryRow>(() => supabase
+          .from('performance_entries')
+          .select('recorded_by, subject_id, recorded_at')
+          .eq('school_id', schoolId)
+          .eq('recorded_by', auth)
+          .gte('recorded_at', fromIso)
+          .lt('recorded_at', toIso)
+          .order('id')));
+        mesoEvaluations.push(...await fetchAllRows<MesoEvalRow>(() => supabase
+          .from('training_mesocycle_evaluations')
+          .select('created_by, created_at, mesocycle_id')
+          .not('score', 'is', null)  // «No aplica» no cuenta como evaluación hecha
+          .eq('school_id', schoolId)
+          .eq('created_by', auth)
+          .gte('created_at', fromIso)
+          .lt('created_at', toIso)
+          .order('id')));
+      }
+
+      res.json(buildCoachPeriodSummary({
+        from, to, today, staff, teams, trainingSessions,
+        attendanceSessions, attendanceRecords, performanceEntries, mesoEvaluations,
+      }));
+    } catch (err: any) {
+      req.log?.error({ err }, 'school/coach-evaluation-summary unhandled error');
       res.status(500).json({ error: 'Error interno del servidor.' });
     }
   },

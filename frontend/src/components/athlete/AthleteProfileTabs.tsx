@@ -128,11 +128,12 @@ export function AthleteProfileTabs() {
       setUploading(true);
       const fileC = await comprimirParaSubir(file, 'avatar');
       const fileExt = fileC.name.split('.').pop();
-      const fileName = `${user.id}-${Date.now()}.${fileExt}`;
+      // Carpeta propia: la policy de INSERT de avatars exige ser dueño de la ruta.
+      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(fileName, fileC, { upsert: true, contentType: fileC.type });
+        .upload(fileName, fileC, { upsert: false, contentType: fileC.type });
 
       if (uploadError) throw uploadError;
 

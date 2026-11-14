@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -8,6 +10,8 @@ import { Badge } from '@/components/ui/badge';
 import { FileText, Loader2, MessageCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
+import { InformeVivoPanel } from '@/components/partido-vivo/informe/InformeVivoPanel';
+import { informeGeneralDe } from '@/components/partido-vivo/informe/informeModel';
 import {
   type MatchReport,
   useMatchReportReplies,
@@ -26,13 +30,57 @@ interface MatchReportDialogProps {
   report?: MatchReport | null;
 }
 
+/**
+ * school_settings.share_match_reports: sin él, el reporte publicado NO llega a
+ * las familias (list_child_match_reports lo exige) y no había pantalla para
+ * encenderlo — solo por migración o SQL (B4). null = sin fila / sin dato.
+ */
+export const qkCompartirReportes = (schoolId: string | null | undefined) => ['match-reports-compartir', schoolId];
+
+function useCompartirReportes(schoolId: string | null | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: qkCompartirReportes(schoolId),
+    enabled: enabled && !!schoolId,
+    queryFn: async (): Promise<boolean | null> => {
+      const { data, error } = await (supabase as any)
+        .from('school_settings')
+        .select('share_match_reports')
+        .eq('school_id', schoolId)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? !!data.share_match_reports : null;
+    },
+  });
+}
+
 const fmtDate = (d: string) =>
   new Date(d).toLocaleDateString('es-CO', { day: 'numeric', month: 'short', year: 'numeric' });
 
 export function MatchReportDialog({ open, onOpenChange, match, report }: MatchReportDialogProps) {
   const { toast } = useToast();
-  const { currentUserRole } = useSchoolContext();
+  const { currentUserRole, schoolId } = useSchoolContext();
   const isAdmin = ADMIN_ROLES.includes(currentUserRole || '');
+  const qc = useQueryClient();
+  const compartir = useCompartirReportes(schoolId, open);
+  const [cambiandoCompartir, setCambiandoCompartir] = useState(false);
+
+  // Ajuste de TODA la escuela (como «compartir evaluaciones»): solo la administración.
+  const cambiarCompartir = async (si: boolean) => {
+    if (!schoolId) return;
+    setCambiandoCompartir(true);
+    const { data, error } = await (supabase as any)
+      .from('school_settings')
+      .update({ share_match_reports: si })
+      .eq('school_id', schoolId)
+      .select('school_id');
+    setCambiandoCompartir(false);
+    if (error || !data?.length) {
+      toast({ title: 'No pudimos cambiar el ajuste de la escuela', variant: 'destructive' });
+      return;
+    }
+    qc.invalidateQueries({ queryKey: qkCompartirReportes(schoolId) });
+    toast({ title: si ? 'Las familias ya pueden ver los reportes publicados' : 'Los reportes dejaron de mostrarse a las familias' });
+  };
 
   const [summary, setSummary] = useState('');
   const [development, setDevelopment] = useState('');
@@ -93,6 +141,8 @@ export function MatchReportDialog({ open, onOpenChange, match, report }: MatchRe
         </DialogHeader>
 
         <div className="space-y-4">
+          {/* Solo con live_match_enabled y partido registrado en vivo; si no, no renderiza nada. */}
+          {match && <InformeVivoPanel matchId={match.id} informeGeneral={informeGeneralDe(summary, development)} />}
           <div className="space-y-2">
             <Label htmlFor="mr-summary">Resumen</Label>
             <Textarea
@@ -142,11 +192,36 @@ export function MatchReportDialog({ open, onOpenChange, match, report }: MatchRe
               <Label htmlFor="mr-publish" className="font-medium">Publicar a las familias</Label>
               <p className="text-xs text-muted-foreground">
                 Se publican juntos el reporte del entrenador y el comentario de la administración.
-                Las familias verán esto solo si la escuela tiene activado el reporte.
+                {compartir.data === false && ' Ojo: hoy la escuela no comparte los reportes con las familias.'}
               </p>
             </div>
             <Switch id="mr-publish" checked={published} onCheckedChange={setPublished} />
           </div>
+
+          {isAdmin && compartir.data != null ? (
+              <div
+                className={compartir.data
+                  ? 'flex items-start justify-between gap-4 rounded-lg border p-3'
+                  : 'flex items-start justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/30'}
+              >
+                <div className="space-y-1">
+                  <Label htmlFor="mr-compartir" className="font-medium">Compartir los reportes de partido con las familias</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Ajuste de toda la escuela. Mientras esté apagado, ningún reporte publicado les llega a las familias.
+                  </p>
+                </div>
+                <Switch
+                  id="mr-compartir"
+                  checked={compartir.data}
+                  disabled={cambiandoCompartir}
+                  onCheckedChange={(v) => cambiarCompartir(v)}
+                />
+              </div>
+          ) : compartir.data === false ? (
+              <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs dark:border-amber-800 dark:bg-amber-950/30">
+                La escuela todavía no comparte los reportes de partido con las familias. Pídele a la administración que lo active.
+              </p>
+          ) : null}
 
           {tooLong && (
             <p className="text-sm text-destructive">Cada campo admite hasta {MAX} caracteres.</p>

@@ -1,4 +1,5 @@
 import { BranchChip } from '@/components/common/BranchChip';
+import { etiquetaEstadoPago } from '@/components/account-statement/estadoCuentaModel';
 import { ENTRENADOR_V2 } from '@/lib/feature-flags';
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -15,6 +16,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { PlanChangeDialog, fetchPlanChangePreview, type PlanChangePreview, type PlanChangeChargeMode } from '@/components/students/PlanChangeDialog';
+import { PlanCombobox } from '@/components/students/PlanCombobox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -24,7 +26,7 @@ import { EmptyState } from '@/components/common/EmptyState';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { StatFilterBar, type StatFilterTone } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
-import { UserPlus, FileUp, Search, Send, UserMinus, UserCheck, Edit, Loader2, CheckSquare, MoreVertical, Trophy, Zap, CalendarIcon, User, Phone, Mail, FileText, Download, Heart, MapPin, X, RefreshCw, Clock, Upload, AlertTriangle } from 'lucide-react';
+import { UserPlus, FileUp, Search, Send, UserMinus, UserCheck, Edit, Loader2, CheckSquare, MoreVertical, Trophy, Zap, CalendarIcon, User, Phone, Mail, FileText, Download, Heart, MapPin, X, RefreshCw, Clock, Upload, AlertTriangle, CalendarX } from 'lucide-react';
 import { HourBankBalanceCard } from '@/components/access/HourBankBalanceCard';
 import { formatHourBankMinutes } from '@/lib/hourBank';
 import { StudentReportPanel } from '@/components/access/StudentReportPanel';
@@ -44,10 +46,20 @@ import { StudentTypeSelector } from '@/components/students/StudentTypeSelector';
 import { EpsCombobox } from '@/components/common/EpsCombobox';
 import { TSHIRT_SIZES, BLOOD_TYPES } from '@/lib/athlete-options';
 import { CreateChildModal } from '@/components/students/CreateChildModal';
+import { ClasePruebaPanel } from '@/components/students/ClasePruebaPanel';
+import { TrialClassSettingsModal } from '@/components/school/TrialClassSettingsModal';
+import { useProspectosClasePrueba, type ProspectoClasePrueba } from '@/hooks/useClasePrueba';
 import { SiblingFamilySection } from '@/components/students/siblings';
 import { EnrollmentFeesSection, NO_FEES_MARKED, cobrarInscripcionSeguro, type FeesMarked } from '@/components/students/EnrollmentFeesSection';
 import { ZkPinField } from '@/components/students/ZkPinField';
 import { CreateAdultAthleteModal } from '@/components/students/CreateAdultAthleteModal';
+import { PorAsignarSection } from '@/components/school-join/PorAsignarSection';
+import { useSoportesEstado } from '@/components/soportes/useSoportesEstado';
+import { SoportesInsignia, SoportesFiltroToggle } from '@/components/soportes/SoportesInsignia';
+import { SoportesPendientesInforme } from '@/components/soportes/SoportesPendientesInforme';
+import { BandejaSolicitudesPlan } from '@/components/solicitudes-de-plan';
+import { FichaDeportistaExtras } from '@/components/students/FichaDeportistaExtras';
+import { llaveSujeto, tipoSujetoDeAtleta } from '@/lib/api/soportes';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
 import { canManageCharges } from '@/lib/cobrosYPagos';
@@ -60,6 +72,8 @@ import {
 } from '@/hooks/useSchoolContext';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import PauseAthleteDialog from '@/components/students/PauseAthleteDialog';
+import ResolverCobrosAbiertosDialog from '@/components/students/ResolverCobrosAbiertosDialog';
+import { fetchCobrosAbiertos, hayAlgoQueResolver, type OrigenVentana } from '@/lib/cobrosAbiertos';
 import PauseRequestsInbox from '@/components/students/PauseRequestsInbox';
 import {
   useActivePauses,
@@ -76,6 +90,7 @@ import { useNavigate } from 'react-router-dom';
 import { comprimirParaSubir } from '@/lib/imageCompression';
 import { fichaVaAlAcudiente, invitacionParaAtleta } from '@/lib/invitations/contactoFicha';
 import { fetchCoachTeams } from '@/lib/coachTeamScope';
+import { carpetasDocumentosDeportista } from '@/components/parent/v2/hijos/hijosUtils';
 
 const studentSchema = z.object({
   full_name:        z.string().min(2, 'Nombre completo es requerido').max(100),
@@ -106,6 +121,12 @@ const studentSchema = z.object({
   blood_type:       z.string().optional(),
   eps_name:         z.string().optional(),
   dorsal:           z.string().max(10).optional(),
+  // Documento del menor (RC/TI/CC/CE/PP): la administración puede corregirlo.
+  doc_type:         z.string().optional(),
+  doc_number:       z.string().max(20).optional(),
+  // Documento del acudiente (CC/CE/PP/NIT), solo fichas de menor / sin cuenta.
+  guardian_doc_type:   z.string().optional(),
+  guardian_doc_number: z.string().max(20).optional(),
   // ID del torniquete (solo escuelas con registrationZkPinEnabled): dígitos, vacío = no tocar.
   zk_pin:           z.string().regex(/^\d{0,8}$/, 'Solo números (hasta 8 dígitos)').optional(),
 });
@@ -291,6 +312,9 @@ export default function SchoolStudentsManagementPage() {
   // ?q= precarga la búsqueda (p. ej. "Cambiar plan" desde Ascensos, F-F).
   const [searchQuery, setSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('q') ?? '');
   const [activeTab, setActiveTab] = useState('active');
+  // Pestaña «Clase de prueba»: prospecto que se está pasando a deportista por el alta normal.
+  const [prospectoEnAlta, setProspectoEnAlta] = useState<ProspectoClasePrueba | null>(null);
+  const [configPruebaOpen, setConfigPruebaOpen] = useState(false);
   // Filtros del listado. 'all' = sin filtrar.
   //   teamFilter:    'all' | 'none' (sin equipo) | <team_id>
   //   planFilter:    'all' | 'with' (con plan) | 'none' (sin plan) | <offering_plan_id>
@@ -331,6 +355,31 @@ export default function SchoolStudentsManagementPage() {
   const [loadingPlanInfo, setLoadingPlanInfo] = useState(false);
 
   const { schoolId, schoolName, teams, branches, activeBranchId, activeBranchName, totalBranches, defaultMonthlyFee, schoolSettings, loading: schoolLoading } = useSchoolContext();
+  const { prospectos: prospectosPrueba, cerrar: cerrarProspecto } = useProspectosClasePrueba(schoolId);
+  // Soportes (solo se ven si la escuela los tiene activos): insignia X/7 y filtro «Faltan soportes».
+  const soportes = useSoportesEstado(schoolId, canManageCharges(schoolRole));
+  const [soloFaltanSoportes, setSoloFaltanSoportes] = useState(false);
+
+  // Estable mientras el alta está abierta: los modales lo aplican al abrir.
+  const prefillProspecto = useMemo(() => prospectoEnAlta ? {
+    fullName: prospectoEnAlta.full_name,
+    parentName: prospectoEnAlta.guardian_name ?? undefined,
+    phone: prospectoEnAlta.phone,
+  } : null, [prospectoEnAlta]);
+
+  /** Alta normal terminada desde un prospecto: sale de «Clase de prueba» amarrado a su inscripción. */
+  const cerrarProspectoInscrito = (result: any) => {
+    const p = prospectoEnAlta;
+    setProspectoEnAlta(null);
+    if (!p) return;
+    cerrarProspecto.mutate({
+      leadId: p.id,
+      estado: 'converted',
+      childId: result?.child_id ?? null,
+      userId: result?.user_id ?? null,
+      unregisteredId: result?.unregistered_athlete_id ?? null,
+    });
+  };
 
   // Pausa por vacaciones/lesión: opt-in por escuela (D7). Con el flag apagado
   // no se muestra nada — es el mismo patrón que `militaryDiscountEnabled`.
@@ -340,6 +389,12 @@ export default function SchoolStudentsManagementPage() {
   // patrón de flag por escuela.
   const teamSchedulingEnabled = schoolSettings?.team_scheduling_enabled === true;
   const [assigningTeamStudent, setAssigningTeamStudent] = useState<any>(null);
+
+  // «Cobros abiertos»: anular meses que no vino / llevar al valor nuevo tras un
+  // cambio de plan. Va por RPC con is_school_admin, así que solo owner/admin.
+  const [cobrosAbiertosDe, setCobrosAbiertosDe] = useState<
+    { enrollmentId: string; nombre: string; origen: OrigenVentana } | null
+  >(null);
   const { byEnrollment: pauseByEnrollment } = useActivePauses(pauseEnabled ? schoolId : null);
   const { data: pauseRequests } = usePendingPauseRequests(
     pauseEnabled && canManageStudents ? schoolId : null
@@ -356,7 +411,8 @@ export default function SchoolStudentsManagementPage() {
         .select('id, name, price, offering_id, offerings!offering_plans_offering_id_fkey(name)')
         .eq('school_id', schoolId)
         .eq('is_active', true)
-        .order('name');
+        .order('sort_order')
+        .order('created_at');
       if (error) return [];
       return (data || []).map((p: any) => ({
         id: p.id,
@@ -462,7 +518,7 @@ export default function SchoolStudentsManagementPage() {
         const avatarPath = `unregistered_athletes/${athleteId}/${timestamp}.${avatarExt}`;
         const { error: avatarUploadError } = await supabase.storage
           .from('avatars')
-          .upload(avatarPath, avatarC, { cacheControl: '3600', upsert: true, contentType: avatarC.type || undefined });
+          .upload(avatarPath, avatarC, { cacheControl: '3600', upsert: false, contentType: avatarC.type || undefined });
         if (!avatarUploadError) {
           const { data: pub } = supabase.storage.from('avatars').getPublicUrl(avatarPath);
           await (supabase as any)
@@ -540,24 +596,42 @@ export default function SchoolStudentsManagementPage() {
       // desde ahí en vez de storage.list().
       loadUnregisteredAthleteDocs(studentId).finally(() => setLoadingDocs(false));
     } else {
-      // children/adult: sin cambios — siguen viviendo en children/{id}/docs
-      // sin fila en athlete_documents (esa tabla es nueva, ver migración
-      // 20260825125806). No se migra retroactivamente en este piloto.
-      supabase.storage
-        .from('identity-documents')
-        .list(`children/${studentId}/docs`, { limit: 20 })
-        .then(async ({ data: files, error }) => {
-          if (error || !files) { setStudentDocs([]); return; }
-          const docs = await Promise.all(
-            files.map(async (f) => {
-              const { data } = await supabase.storage
-                .from('identity-documents')
-                .createSignedUrl(`children/${studentId}/docs/${f.name}`, 300);
-              return { name: f.name, url: data?.signedUrl || '' };
-            })
-          );
-          setStudentDocs(docs.filter(d => d.url));
-        })
+      // children/adult: sin fila en athlete_documents (esa tabla es nueva, ver
+      // migración 20260825125806). Se leen DOS carpetas (B2):
+      //   · children/{id}/docs           — la convención vieja.
+      //   · children/{acudiente}/{id}/docs — donde sube la familia desde Hijos V2
+      //     (la única que el bucket le deja escribir: foldername[2] = auth.uid()).
+      // Antes solo se miraba la vieja y la escuela no veía lo que subía la familia.
+      // No se mueve ningún archivo.
+      (async () => {
+        let parentId: string | null = null;
+        if (athleteTypeForDocs === 'child') {
+          const { data } = await (supabase as any)
+            .from('children').select('parent_id').eq('id', studentId).maybeSingle();
+          parentId = data?.parent_id ?? null;
+        }
+        const carpetas = carpetasDocumentosDeportista(studentId, parentId);
+        const listados = await Promise.all(
+          carpetas.map(async (carpeta) => {
+            const { data: files, error } = await supabase.storage
+              .from('identity-documents')
+              .list(carpeta, { limit: 100 });
+            if (error || !files) return [] as { carpeta: string; name: string }[];
+            // list() también devuelve subcarpetas (sin id): no son archivos.
+            return files.filter((f) => f.id).map((f) => ({ carpeta, name: f.name }));
+          }),
+        );
+        const docs = await Promise.all(
+          listados.flat().map(async ({ carpeta, name }) => {
+            const { data } = await supabase.storage
+              .from('identity-documents')
+              .createSignedUrl(`${carpeta}/${name}`, 300);
+            return { name, url: data?.signedUrl || '' };
+          }),
+        );
+        setStudentDocs(docs.filter(d => d.url));
+      })()
+        .catch(() => setStudentDocs([]))
         .finally(() => setLoadingDocs(false));
     }
 
@@ -790,9 +864,16 @@ export default function SchoolStudentsManagementPage() {
     mutationFn: async (data: StudentFormData & { plan_change_charge?: PlanChangeChargeMode }) => {
       if (!editingStudent || !schoolId) return [] as string[];
 
+      const guardianDocNumber = (data.guardian_doc_number || '').trim();
+      const sendsGuardianDoc = editingAthleteType === 'child' || editingAthleteType === 'unregistered';
+      if (sendsGuardianDoc && guardianDocNumber && !/^[A-Za-z0-9-]{4,20}$/.test(guardianDocNumber)) {
+        throw new Error('Documento del acudiente inválido: usa de 4 a 20 caracteres (letras, números o guion).');
+      }
+
       const { bffClient } = await import('@/lib/api/bffClient');
-      const saved = await bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
+      const putStudent = (allowDuplicate: boolean) => bffClient.put<{ warnings?: string[] }>(`/api/v1/students/${editingStudent.id}`, {
         athlete_type: editingAthleteType,
+        ...(allowDuplicate ? { allow_duplicate: true } : {}),
         // ID del torniquete: solo si cambió; vacío = no tocar (quitarlo se hace en Control de acceso).
         ...(registrationZkPinEnabled && data.zk_pin && Number(data.zk_pin) !== currentZkPin
           ? { zk_pin: Number(data.zk_pin) }
@@ -805,8 +886,14 @@ export default function SchoolStudentsManagementPage() {
           blood_type:    data.blood_type         || null,
           eps_name:      data.eps_name           || null,
           dorsal:        data.dorsal             || null,
+          doc_type:      data.doc_type           || null,
+          doc_number:    data.doc_number         || null,
           parent_email:  data.parent_email       || null,
           parent_phone:  data.parent_phone       || null,
+          ...(sendsGuardianDoc ? {
+            guardian_doc_type:   guardianDocNumber ? (data.guardian_doc_type || 'CC') : null,
+            guardian_doc_number: guardianDocNumber || null,
+          } : {}),
         },
         enrollment: {
           team_id:          data.team_id            || null,
@@ -828,6 +915,20 @@ export default function SchoolStudentsManagementPage() {
           ...(data.plan_change_charge ? { plan_change_charge: data.plan_change_charge } : {}),
         },
       });
+      let saved: { warnings?: string[] };
+      try {
+        saved = await putStudent(false);
+      } catch (e: any) {
+        // Mismo documento en otro deportista: se avisa y la administración decide.
+        if (e?.status === 409 && e?.body?.code === 'DOC_DUPLICADO'
+          && window.confirm(`${e.message}
+
+¿Guardar de todos modos?`)) {
+          saved = await putStudent(true);
+        } else {
+          throw e;
+        }
+      }
 
       // Inscripción / seguro marcados en la ficha: el atleta ya quedó guardado; si el
       // cobro falla se avisa aparte (guardar de nuevo no duplica: el BFF no repite).
@@ -844,7 +945,25 @@ export default function SchoolStudentsManagementPage() {
       }
       return saved?.warnings ?? [];
     },
-    onSuccess: (warnings) => {
+    onSuccess: (warnings, variables) => {
+      // ¿Cambió el plan, el equipo o la cuota? Entonces puede haber cobros abiertos
+      // con el valor anterior (o meses atrasados): se le ofrece resolverlos ya.
+      // Mismos valores con que handleEditStudent llenó el formulario.
+      const antes: any = editingStudent;
+      const teamFeeAntes = antes?.offering_plan_id ? 0 : Number(antes?.team_monthly_fee || 0);
+      const cambioCobro = !!antes && (
+        (variables.offering_plan_id || '') !== (antes.offering_plan_id || '')
+        || (variables.team_id || '') !== (antes.enrolled_team_id || antes.team_id || '')
+        || Number(variables.plan_monthly_fee || 0) !== Number(antes.plan_monthly_fee || 0)
+        || Number(variables.team_monthly_fee || 0) !== teamFeeAntes
+      );
+      if (cambioCobro && canManageStudents && antes?.enrollment_id) {
+        const enrollmentId: string = antes.enrollment_id;
+        const nombre: string = variables.full_name || antes.full_name || '';
+        fetchCobrosAbiertos(enrollmentId)
+          .then((r) => { if (hayAlgoQueResolver(r)) setCobrosAbiertosDe({ enrollmentId, nombre, origen: 'cambio_plan' }); })
+          .catch(() => { /* sin la ventana el guardado igual quedó bien */ });
+      }
       queryClient.invalidateQueries({ queryKey: ['school-students'] });
       setFeesMarked(NO_FEES_MARKED);
       setPlanChangePrompt(null);
@@ -923,9 +1042,26 @@ export default function SchoolStudentsManagementPage() {
     setEditingAthleteType(athleteType);
     setFeesMarked(NO_FEES_MARKED);
     let extraFields = { tshirt_size: '', blood_type: '', eps_name: '' };
+    let docFields = { doc_type: '', doc_number: '' };
+    let guardianDoc = { guardian_doc_type: 'CC', guardian_doc_number: '' };
+    if (athleteType === 'child' || athleteType === 'unregistered') {
+      // Lectura aparte y tolerante: si la columna aún no existe no se rompe el resto de la ficha.
+      try {
+        const { data } = await (supabase as any)
+          .from(athleteType === 'child' ? 'children' : 'unregistered_athletes')
+          .select('guardian_doc_type, guardian_doc_number').eq('id', student.id).maybeSingle();
+        if (data) guardianDoc = { guardian_doc_type: data.guardian_doc_type || 'CC', guardian_doc_number: data.guardian_doc_number || '' };
+      } catch { /* sin dato: queda vacío */ }
+    }
     if (athleteType === 'child') {
-      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name').eq('id', student.id).maybeSingle();
-      if (data) extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
+      const { data } = await (supabase as any).from('children').select('tshirt_size, blood_type, eps_name, doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) {
+        extraFields = { tshirt_size: data.tshirt_size || '', blood_type: data.blood_type || '', eps_name: data.eps_name || '' };
+        docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
+      }
+    } else if (athleteType === 'unregistered') {
+      const { data } = await (supabase as any).from('unregistered_athletes').select('doc_type, doc_number').eq('id', student.id).maybeSingle();
+      if (data) docFields = { doc_type: data.doc_type || '', doc_number: data.doc_number || '' };
     }
     // ID del torniquete: lo lee solo la administración (RLS); un coach lo ve vacío.
     let zkPinNow: number | null = null;
@@ -961,6 +1097,10 @@ export default function SchoolStudentsManagementPage() {
       blood_type:       extraFields.blood_type,
       eps_name:         extraFields.eps_name,
       dorsal:           (student as any).dorsal || '',
+      doc_type:         docFields.doc_type,
+      doc_number:       docFields.doc_number,
+      guardian_doc_type:   guardianDoc.guardian_doc_type,
+      guardian_doc_number: guardianDoc.guardian_doc_number,
       zk_pin:           zkPinNow != null ? String(zkPinNow) : '',
     });
     setDialogOpen(true);
@@ -1258,6 +1398,9 @@ export default function SchoolStudentsManagementPage() {
   const openDebtOf = (studentId: string): AthleteOpenDebt | undefined => openDebtByAthlete?.get(studentId);
   const debtDetail = (d: AthleteOpenDebt) => d.items.map((i) => `${i.label} ${formatCurrency(i.amount)}`).join(' · ');
 
+  const soporteDe = (st: any) =>
+    soportes.activo ? soportes.indice.get(llaveSujeto(tipoSujetoDeAtleta(getAthleteType(st)), st.id)) : undefined;
+
   const filteredStudents = tabStudents.filter(student => {
     const q = normalizeText(searchQuery);
     if (q && !(
@@ -1279,16 +1422,23 @@ export default function SchoolStudentsManagementPage() {
 
     if (paymentFilter !== 'all' && getPaymentState(student, graceDays) !== paymentFilter) return false;
 
+    if (soloFaltanSoportes && soportes.activo) {
+      const d = soporteDe(student);
+      if (!d || d.complete) return false;
+    }
+
     return true;
   });
 
   const activeFilterCount =
-    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0);
+    (teamFilter !== 'all' ? 1 : 0) + (planFilter !== 'all' ? 1 : 0) + (paymentFilter !== 'all' ? 1 : 0) +
+    (soloFaltanSoportes && soportes.activo ? 1 : 0);
 
   const clearFilters = () => {
     setTeamFilter('all');
     setPlanFilter('all');
     setPaymentFilter('all');
+    setSoloFaltanSoportes(false);
   };
 
   // Si cambia la pestaña, un equipo/plan seleccionado puede no existir ahí:
@@ -1320,7 +1470,7 @@ export default function SchoolStudentsManagementPage() {
       case 'paid':    return <Badge className="bg-green-500 dark:bg-green-600 text-xs text-white">Al día</Badge>;
       case 'overdue': return <Badge variant="destructive" className="text-xs">Vencido</Badge>;
       case 'pending': return <Badge variant="secondary" className="text-xs bg-yellow-50 dark:bg-yellow-950/20 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-500/40">Pendiente</Badge>;
-      default:        return <Badge variant="secondary" className="text-xs">{student.payment_status}</Badge>;
+      default:        return <Badge variant="secondary" className="text-xs">{etiquetaEstadoPago(student.payment_status).label}</Badge>;
     }
   };
 
@@ -1365,6 +1515,31 @@ export default function SchoolStudentsManagementPage() {
           <DropdownMenuItem onClick={() => setAccountStudentId(student.id)}>
             <FileText className="h-4 w-4 mr-2" /> {cobrosYPagosOn ? 'Cobros y pagos' : 'Editar estado de cuenta'}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => navigate(`/estado-cuenta?${buildAccountStatementParams(student)}`)}>
+            <FileText className="h-4 w-4 mr-2" /> Ver estado de cuenta
+          </DropdownMenuItem>
+          {pauseEnabled && canManageStudents && student.enrollment_id && (
+            pauseByEnrollment.has(student.enrollment_id)
+              ? (
+                <DropdownMenuItem onClick={() => reactivar.mutate({ enrollmentId: student.enrollment_id })}>
+                  Reactivar de la pausa
+                </DropdownMenuItem>
+              )
+              : (
+                <DropdownMenuItem onClick={() => setPausingStudent(student)}>
+                  🏖️ Vacaciones / pausa
+                </DropdownMenuItem>
+              )
+          )}
+          {/* En escritorio este es el único menú por fila: sin esto, «No asistió»
+              solo se alcanzaba desde las tarjetas (< lg). */}
+          {canManageStudents && student.enrollment_id && (
+            <DropdownMenuItem onClick={() => setCobrosAbiertosDe({
+              enrollmentId: student.enrollment_id, nombre: student.full_name, origen: 'no_asistio',
+            })}>
+              <CalendarX className="h-4 w-4 mr-2" /> No asistió / cobros abiertos
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     );
@@ -1413,6 +1588,15 @@ export default function SchoolStudentsManagementPage() {
                 🏖️ Vacaciones / pausa
               </DropdownMenuItem>
             )
+        )}
+        {/* Meses que no vino / cobros con el valor del plan anterior. No depende
+            del opt-in de la Pausa: anular un mes pasado no es una pausa. */}
+        {canManageStudents && student.enrollment_id && student.status !== 'inactive' && (
+          <DropdownMenuItem onClick={() => setCobrosAbiertosDe({
+            enrollmentId: student.enrollment_id, nombre: student.full_name, origen: 'no_asistio',
+          })}>
+            No asistió / cobros abiertos
+          </DropdownMenuItem>
         )}
         {/* PATCH: label y params según tipo de atleta */}
         <DropdownMenuItem onClick={() => navigate(`/invitations?${buildInviteParams(student)}`)}>
@@ -1505,15 +1689,48 @@ export default function SchoolStudentsManagementPage() {
         />
       )}
 
+      {/* Código de la escuela + bandeja «Por asignar» (solo solicitudes por
+          código; los prospectos van en «Clase de prueba»). Solo administración:
+          asignar crea inscripción y cobro (D3, spec codigo-de-escuela-union-por-codigo). */}
+      {schoolId && canManageCharges(schoolRole) && (
+        <PorAsignarSection
+          schoolId={schoolId}
+          schoolName={schoolName}
+          branches={branches ?? []}
+          prospectos={prospectosPrueba.length}
+          onVerProspectos={() => setActiveTab('prueba')}
+        />
+      )}
+
+      {/* Informe «Soportes pendientes»: no pinta nada si la escuela no tiene soportes activos. */}
+      {schoolId && canManageCharges(schoolRole) && <SoportesPendientesInforme schoolId={schoolId} />}
+      {/* Retiros, pausas y reactivaciones pedidas por las familias (app y WhatsApp). Va con el mismo ajuste que la pausa. */}
+      {schoolId && canManageCharges(schoolRole) && pauseEnabled && <BandejaSolicitudesPlan schoolId={schoolId} />}
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="active">Activos</TabsTrigger>
           <TabsTrigger value="inactive">Inactivos</TabsTrigger>
           <TabsTrigger value="todos">Todos</TabsTrigger>
+          <TabsTrigger value="prueba">
+            Clase de prueba{prospectosPrueba.length > 0 ? ` (${prospectosPrueba.length})` : ''}
+          </TabsTrigger>
         </TabsList>
       </Tabs>
 
-      <Card>
+      {activeTab === 'prueba' && schoolId && (
+        <ClasePruebaPanel
+          schoolId={schoolId}
+          onConfigurar={() => setConfigPruebaOpen(true)}
+          onCompletar={(p) => {
+            setProspectoEnAlta(p);
+            if (p.guardian_name) setShowCreateChildModal(true);
+            else setShowCreateAdultModal(true);
+          }}
+        />
+      )}
+
+      {activeTab !== 'prueba' && <Card>
         <CardHeader className="pb-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
@@ -1554,6 +1771,10 @@ export default function SchoolStudentsManagementPage() {
                 ))}
               </SelectContent>
             </Select>
+
+            {soportes.activo && soportes.estado && (
+              <SoportesFiltroToggle activo={soloFaltanSoportes} onChange={setSoloFaltanSoportes} faltan={soportes.estado.resumen.incompletos} />
+            )}
 
             {activeFilterCount > 0 && (
               <Button variant="ghost" size="sm" onClick={clearFilters} className="sm:self-center text-muted-foreground">
@@ -1638,6 +1859,7 @@ export default function SchoolStudentsManagementPage() {
                       <div className="flex items-center gap-1 flex-wrap">
                         <p className="font-semibold text-sm truncate">{student.full_name}</p>
                         <MedicalAlertBadge medicalInfo={student.medical_info} />
+                        <SoportesInsignia d={soporteDe(student)} />
                         {membresiasPorSujeto.get(student.id) && (
                           <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                         )}
@@ -1733,6 +1955,7 @@ export default function SchoolStudentsManagementPage() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span>{student.full_name}</span>
                             <MedicalAlertBadge medicalInfo={student.medical_info} />
+                            <SoportesInsignia d={soporteDe(student)} />
                             {membresiasPorSujeto.get(student.id) && (
                               <MembershipBadge membresia={membresiasPorSujeto.get(student.id)} compacto />
                             )}
@@ -1838,7 +2061,7 @@ export default function SchoolStudentsManagementPage() {
             }
           />
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Dialogs — sin cambios respecto al original */}
       <PlanChangeDialog
@@ -1910,6 +2133,31 @@ export default function SchoolStudentsManagementPage() {
                   </Popover>
                 </div>
               </div>
+              {editingStudent && editingAthleteType !== 'adult' && (
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label>Tipo de documento</Label>
+                    <Select
+                      value={form.watch('doc_type') || '__none__'}
+                      onValueChange={(val) => form.setValue('doc_type', val === '__none__' ? '' : val, { shouldDirty: true })}
+                    >
+                      <SelectTrigger id="doc_type"><SelectValue placeholder="Seleccionar" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Sin especificar</SelectItem>
+                        <SelectItem value="RC">RC — Registro civil</SelectItem>
+                        <SelectItem value="TI">TI — Tarjeta de identidad</SelectItem>
+                        <SelectItem value="CC">CC — Cédula de ciudadanía</SelectItem>
+                        <SelectItem value="CE">CE — Cédula de extranjería</SelectItem>
+                        <SelectItem value="PP">Pasaporte</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="doc_number">Número de documento</Label>
+                    <Input id="doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('doc_number')} />
+                  </div>
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="medical_info">Información médica</Label>
                 <Textarea id="medical_info" {...form.register('medical_info')} rows={2} />
@@ -2010,6 +2258,28 @@ export default function SchoolStudentsManagementPage() {
                         {...form.register('parent_phone')}
                       />
                     </div>
+                    {editingStudent && (editingAthleteType === 'child' || editingAthleteType === 'unregistered') && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_type">Tipo de documento del acudiente</Label>
+                          <Select
+                            value={form.watch('guardian_doc_type') || 'CC'}
+                            onValueChange={(val) => form.setValue('guardian_doc_type', val, { shouldDirty: true })}
+                          >
+                            <SelectTrigger id="guardian_doc_type"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {['CC', 'CE', 'PP', 'NIT'].map(d => (
+                                <SelectItem key={d} value={d}>{d}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="guardian_doc_number">Número de documento del acudiente</Label>
+                          <Input id="guardian_doc_number" inputMode="text" maxLength={20} placeholder="Ej: 1012345678" {...form.register('guardian_doc_number')} />
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -2106,10 +2376,12 @@ export default function SchoolStudentsManagementPage() {
                 <div className="space-y-3">
                   <div className="space-y-2">
                     <Label>Plan</Label>
-                    <Select
+                    <PlanCombobox
+                      plans={offeringPlans}
+                      noneValue="__none__"
                       disabled={editingIsInactive}
                       value={form.watch('offering_plan_id') || '__none__'}
-                      onValueChange={(val) => {
+                      onChange={(val) => {
                         const v = val === '__none__' ? '' : val;
                         form.setValue('offering_plan_id', v);
                         const p = offeringPlans.find(p => p.id === v);
@@ -2124,17 +2396,7 @@ export default function SchoolStudentsManagementPage() {
                           form.setValue('team_monthly_fee' as any, t?.monthly_fee ?? 0);
                         }
                       }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Sin plan" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Sin plan</SelectItem>
-                        {offeringPlans.map(p => (
-                          <SelectItem key={p.id} value={p.id}>
-                            {p.offering_name ? `${p.offering_name} — ` : ''}{p.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    />
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">Fecha de inscripción</Label>
@@ -2715,6 +2977,17 @@ export default function SchoolStudentsManagementPage() {
                       </div>
                     )}
                   </section>
+
+                  {/* Soportes y «referido por»: solo se pintan con la función activa en la escuela. */}
+                  {schoolId && (
+                    <FichaDeportistaExtras
+                      schoolId={schoolId}
+                      athleteId={s.id}
+                      athleteType={athleteType}
+                      enrollmentId={s.enrollment_id}
+                      puedeAdministrar={canManageCharges(schoolRole)}
+                    />
+                  )}
                 </div>
 
                 <DialogFooter className="flex-col-reverse sm:flex-row gap-2 mt-6">
@@ -2748,6 +3021,14 @@ export default function SchoolStudentsManagementPage() {
         onConfirm={(args) => pausar.mutate(args, { onSuccess: () => setPausingStudent(null) })}
       />
 
+      <ResolverCobrosAbiertosDialog
+        open={!!cobrosAbiertosDe}
+        onOpenChange={(o) => { if (!o) setCobrosAbiertosDe(null); }}
+        enrollmentId={cobrosAbiertosDe?.enrollmentId ?? null}
+        athleteName={cobrosAbiertosDe?.nombre ?? ''}
+        origen={cobrosAbiertosDe?.origen ?? 'no_asistio'}
+      />
+
       <CSVImportModal open={showImportModal} onClose={() => setShowImportModal(false)}
         onSuccess={() => { setShowImportModal(false); toast({ title: "Importación completada", description: "La lista de atletas se ha actualizado." }); queryClient.invalidateQueries({ queryKey: ['school-students'] }); }}
         schoolId={schoolId ?? ''} schoolName={schoolName} branchId={activeBranchId} students={students} teams={teams} branches={branches} />
@@ -2774,8 +3055,23 @@ export default function SchoolStudentsManagementPage() {
           }}
         />
       )}
-      <CreateChildModal open={showCreateChildModal} onClose={() => setShowCreateChildModal(false)} onSuccess={() => { queryClient.invalidateQueries({ queryKey: ['school-students'] }); setShowCreateChildModal(false); }} schoolId={schoolId || ''} canWaiveFees={schoolRole !== 'coach'} />
-      <CreateAdultAthleteModal open={showCreateAdultModal} onClose={() => setShowCreateAdultModal(false)} onSuccess={() => { queryClient.invalidateQueries({ queryKey: ['school-students'] }); setShowCreateAdultModal(false); }} schoolId={schoolId || ''} canWaiveFees={schoolRole !== 'coach'} />
+      <CreateChildModal
+        open={showCreateChildModal}
+        onClose={() => { setShowCreateChildModal(false); setProspectoEnAlta(null); }}
+        onSuccess={(result) => { queryClient.invalidateQueries({ queryKey: ['school-students'] }); setShowCreateChildModal(false); cerrarProspectoInscrito(result); }}
+        schoolId={schoolId || ''}
+        canWaiveFees={schoolRole !== 'coach'}
+        prefill={prefillProspecto}
+      />
+      <CreateAdultAthleteModal
+        open={showCreateAdultModal}
+        onClose={() => { setShowCreateAdultModal(false); setProspectoEnAlta(null); }}
+        onSuccess={(result) => { queryClient.invalidateQueries({ queryKey: ['school-students'] }); setShowCreateAdultModal(false); cerrarProspectoInscrito(result); }}
+        schoolId={schoolId || ''}
+        canWaiveFees={schoolRole !== 'coach'}
+        prefill={prefillProspecto}
+      />
+      <TrialClassSettingsModal open={configPruebaOpen} onOpenChange={setConfigPruebaOpen} />
     </div>
   );
 }

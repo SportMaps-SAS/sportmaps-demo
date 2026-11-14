@@ -15,10 +15,14 @@
 
 import { supabase } from '../config/supabase';
 import { encryptToken, decryptToken } from './whatsapp.service';
+import { avisarPlataformaSobreHistorial, CAMPO_PEDIDO_HISTORIAL } from './whatsapp-coexistence.service';
 
 const GRAPH = `https://graph.facebook.com/${process.env.WHATSAPP_GRAPH_VERSION || 'v21.0'}`;
 const APP_ID = process.env.META_APP_ID || '';
 const APP_SECRET = process.env.WHATSAPP_APP_SECRET || '';
+
+/** El `event` de la sesión del Embedded Signup cuando la escuela conectó el número de su app (Coexistence). */
+export const EVENTO_COEXISTENCIA = 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING';
 
 export interface DatosDeSesion {
     /** `FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING` cuando fue Coexistence. */
@@ -33,7 +37,7 @@ export type ResultadoAlta =
     | { ok: false; error: string; detalle?: string };
 
 /** Canjea el código de un solo uso por el token del negocio. */
-async function canjearCodigo(code: string): Promise<{ token: string } | { error: string }> {
+export async function canjearCodigo(code: string): Promise<{ token: string } | { error: string }> {
     const url = `${GRAPH}/oauth/access_token`
         + `?client_id=${encodeURIComponent(APP_ID)}`
         + `&client_secret=${encodeURIComponent(APP_SECRET)}`
@@ -56,7 +60,7 @@ async function canjearCodigo(code: string): Promise<{ token: string } | { error:
  * SIEMPRE contra Graph con el token recién canjeado — lo que el token alcanza
  * de verdad es lo único que vale.
  */
-async function resolverActivos(
+export async function resolverActivos(
     token: string,
     sesion: DatosDeSesion | null,
 ): Promise<{ wabaId: string; phoneNumberId: string; display: string | null } | { error: string }> {
@@ -82,12 +86,173 @@ async function resolverActivos(
 }
 
 /** Suscribe la app a los webhooks de ese WABA. Sin esto no llega un solo mensaje. */
-async function suscribirWebhooks(token: string, wabaId: string): Promise<boolean> {
+export async function suscribirWebhooks(token: string, wabaId: string): Promise<boolean> {
     const r = await fetch(`${GRAPH}/${wabaId}/subscribed_apps`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
     });
     return r.ok;
+}
+
+/**
+ * ¿El número quedó a la vez en la app WhatsApp Business y en la API?
+ *
+ * No se confía solo en el `event` de la sesión: llega por `postMessage` desde
+ * el navegador, y la pantalla de la escuela mandaba únicamente `sesion.data`
+ * (sin `event`), así que el BFF nunca veía la coexistencia. Graph lo dice con
+ * el token recién canjeado (doc de Meta «Onboarding WhatsApp Business app
+ * users»): `GET /<PHONE_NUMBER_ID>?fields=is_on_biz_app,platform_type` →
+ * `is_on_biz_app: true` + `platform_type: CLOUD_API`. Ante cualquier error,
+ * false: el alta sigue como siempre.
+ */
+export async function numeroEnCoexistencia(token: string, phoneNumberId: string): Promise<boolean> {
+    try {
+        const r = await fetch(`${GRAPH}/${phoneNumberId}?fields=is_on_biz_app,platform_type`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(15_000),
+        });
+        if (!r.ok) return false;
+        const j: any = await r.json().catch(() => null);
+        return j?.is_on_biz_app === true;
+    } catch {
+        return false;
+    }
+}
+
+// ─── Sincronización del historial (Coexistence) ─────────────────────────────
+//
+// Con Coexistence Meta NO manda el historial sola: hay que pedirlo con
+// `POST /<PHONE_NUMBER_ID>/smb_app_data` dentro de las 24 h siguientes al alta
+// y UNA sola vez por tipo; pasado eso, la única salida es desconectar a la
+// escuela y repetir el alta. Hasta el 2026-10-30 nadie lo pedía: Dynasty
+// conectó el 2026-10-02 y tiene 0 mensajes anteriores al alta.
+//
+// Contrato verificado contra la doc de Meta el 2026-10-30:
+//   POST /<PHONE_NUMBER_ID>/smb_app_data
+//   { "messaging_product": "whatsapp", "sync_type": "history" | "smb_app_state_sync" }
+//   → { "messaging_product": "whatsapp", "request_id": "…" }   (guardar el request_id para soporte)
+
+export type TipoSincronizacion = 'history' | 'smb_app_state_sync';
+
+/** Plazo que da Meta desde el alta para pedir el historial. */
+export const PLAZO_SINCRONIZACION_MS = 24 * 3600_000;
+
+/** Pide una sincronización. Nunca lanza. */
+export async function pedirSincronizacion(
+    token: string,
+    phoneNumberId: string,
+    tipo: TipoSincronizacion,
+): Promise<{ ok: true; requestId: string | null } | { ok: false; error: string }> {
+    try {
+        const r = await fetch(`${GRAPH}/${phoneNumberId}/smb_app_data`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messaging_product: 'whatsapp', sync_type: tipo }),
+            signal: AbortSignal.timeout(15_000),
+        });
+        const j: any = await r.json().catch(() => null);
+        if (!r.ok) return { ok: false, error: j?.error?.message || `HTTP ${r.status}` };
+        return { ok: true, requestId: j?.request_id ? String(j.request_id) : null };
+    } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+    }
+}
+
+/**
+ * Qué se pide. Los contactos (`smb_app_state_sync`) traen la agenda PERSONAL de
+ * la dueña y hoy no se procesan (`registrarAppState`): solo con
+ * `WA_SYNC_CONTACTOS=true`. Se piden primero porque así los ordena la doc
+ * (paso 1 contactos, paso 2 historial); no dependen uno del otro.
+ */
+export function tiposDeSincronizacion(): TipoSincronizacion[] {
+    return process.env.WA_SYNC_CONTACTOS === 'true' ? ['smb_app_state_sync', 'history'] : ['history'];
+}
+
+export interface PedidoDeSincronizacion {
+    tipo: TipoSincronizacion;
+    estado: 'pedido' | 'ya_pedido' | 'fallido';
+    requestId?: string | null;
+    error?: string;
+}
+
+/**
+ * Pide el historial (y los contactos, si está la variable) de una integración
+ * en Coexistence y lo deja en `whatsapp_account_events`
+ * (`field = 'history_sync_request'`, `nuevo_estado` pedido|fallido,
+ * `payload.sync_type`, `payload.request_id`, `payload.plazo_hasta`).
+ *
+ * Idempotente: si ya hay un 'pedido' de ese tipo para la integración, no se
+ * vuelve a pedir (Meta deja una sola vez). Un 'fallido' sí se puede reintentar
+ * dentro del plazo. Si falla, el alta NO se cae: queda registrado y se avisa a
+ * la plataforma, porque el plazo es de 24 h. Nunca lanza.
+ */
+export async function pedirHistorialDeCoexistencia(p: {
+    integrationId: string;
+    schoolId: string;
+    wabaId: string | null;
+    phoneNumberId: string;
+    token: string;
+    /** ISO del alta: de ahí corren las 24 h. */
+    conectadoAt: string;
+}): Promise<PedidoDeSincronizacion[]> {
+    const plazoHasta = new Date(new Date(p.conectadoAt).getTime() + PLAZO_SINCRONIZACION_MS).toISOString();
+    const salida: PedidoDeSincronizacion[] = [];
+
+    for (const tipo of tiposDeSincronizacion()) {
+        try {
+            // Si no se puede leer, se pide igual: un pedido de más lo rechaza
+            // Meta; uno de menos pierde el historial para siempre.
+            const { data: previo } = await supabase
+                .from('whatsapp_account_events')
+                .select('id')
+                .eq('integration_id', p.integrationId)
+                .eq('field', CAMPO_PEDIDO_HISTORIAL)
+                .eq('nuevo_estado', 'pedido')
+                .eq('payload->>sync_type', tipo)
+                .limit(1);
+            if (Array.isArray(previo) && previo.length > 0) {
+                salida.push({ tipo, estado: 'ya_pedido' });
+                continue;
+            }
+
+            const r = await pedirSincronizacion(p.token, p.phoneNumberId, tipo);
+            const error = r.ok ? null : r.error.slice(0, 500);
+            const requestId = r.ok ? r.requestId : null;
+            const { error: eIns } = await supabase.from('whatsapp_account_events').insert({
+                integration_id: p.integrationId,
+                school_id: p.schoolId,
+                field: CAMPO_PEDIDO_HISTORIAL,
+                waba_id: p.wabaId,
+                phone_number_id: p.phoneNumberId,
+                nuevo_estado: r.ok ? 'pedido' : 'fallido',
+                motivo: r.ok
+                    ? (tipo === 'history' ? 'Historial de conversaciones pedido a Meta' : 'Contactos pedidos a Meta')
+                    : error,
+                payload: { sync_type: tipo, request_id: requestId, error, plazo_hasta: plazoHasta },
+            });
+            if (eIns) {
+                console.error('[wa-onboarding] no se pudo registrar el pedido de sincronización',
+                    { integrationId: p.integrationId, tipo, err: eIns.message });
+            }
+
+            if (r.ok) {
+                salida.push({ tipo, estado: 'pedido', requestId });
+                continue;
+            }
+            console.error('[wa-onboarding] Meta no aceptó el pedido de sincronización',
+                { integrationId: p.integrationId, tipo, error });
+            await avisarPlataformaSobreHistorial({
+                motivo: 'pedido_fallido', integrationId: p.integrationId, schoolId: p.schoolId,
+                phoneNumberId: p.phoneNumberId, tipo, detalle: error ?? 'error desconocido', plazoHasta,
+            });
+            salida.push({ tipo, estado: 'fallido', error: error ?? undefined });
+        } catch (err: any) {
+            console.error('[wa-onboarding] pedido de sincronización reventó',
+                { integrationId: p.integrationId, tipo, err: err?.message || String(err) });
+            salida.push({ tipo, estado: 'fallido', error: err?.message || String(err) });
+        }
+    }
+    return salida;
 }
 
 export async function conectarEscuela(
@@ -148,6 +313,11 @@ export async function conectarEscuela(
         return { ok: false, error: 'cifrado_fallido' };
     }
 
+    // ¿Coexistence? El evento de la sesión o, si no llegó, Graph (ver
+    // `numeroEnCoexistencia`). Se pregunta antes de escribir, como lo demás.
+    const coexistence = sesion?.event === EVENTO_COEXISTENCIA
+        || await numeroEnCoexistencia(canje.token, activos.phoneNumberId);
+
     // 7. Recién ahora se escribe.
     const ahora = new Date().toISOString();
     const { data: creada, error: e1 } = await supabase
@@ -170,6 +340,22 @@ export async function conectarEscuela(
         return { ok: false, error: 'no_se_pudo_guardar', detalle: e1?.message };
     }
 
+    // 8. Coexistence: pedir el historial YA. Meta da 24 h y una sola vez, y el
+    //    webhook `history` ya encuentra la integración porque está escrita.
+    //    Va antes de los ajustes para que un fallo ahí no lo deje sin pedir. Si
+    //    el pedido falla, el alta sigue: queda en whatsapp_account_events y se
+    //    avisa a la plataforma (pedirHistorialDeCoexistencia nunca lanza).
+    if (coexistence) {
+        await pedirHistorialDeCoexistencia({
+            integrationId: creada.id,
+            schoolId,
+            wabaId: activos.wabaId,
+            phoneNumberId: activos.phoneNumberId,
+            token: canje.token,
+            conectadoAt: ahora,
+        }).catch(() => []);
+    }
+
     // EL ASISTENTE ARRANCA APAGADO, y esto es deliberado.
     //
     // Conectar el numero y prender el bot son dos decisiones distintas, y hasta
@@ -180,9 +366,9 @@ export async function conectarEscuela(
     // mirando.
     //
     // Ademas hay una razon de calendario: la sincronizacion del historial tiene
-    // 24 HORAS de plazo y conviene largarla cuanto antes. Separar las dos cosas
-    // deja que el historial corra de noche y que el bot se prenda cuando haya
-    // gente despierta.
+    // 24 HORAS de plazo y se larga en el paso 8. Separar las dos cosas deja que
+    // el historial corra de noche y que el bot se prenda cuando haya gente
+    // despierta.
     //
     // El costo de equivocarse en este sentido es bajo: la escuela sigue
     // contestando a mano, como lo hacia ayer. Al reves, no.
@@ -203,6 +389,6 @@ export async function conectarEscuela(
         ok: true,
         integrationId: creada.id,
         displayPhoneNumber: activos.display,
-        coexistence: sesion?.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
+        coexistence,
     };
 }

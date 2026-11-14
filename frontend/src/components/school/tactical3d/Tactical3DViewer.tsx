@@ -17,8 +17,8 @@
  * vuelve a la pizarra con el aviso.
  */
 import { Component, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from 'react';
-import { Canvas } from '@react-three/fiber';
-import { ChevronLeft, ChevronRight, Circle, Pause, Play, Repeat, Snowflake, Square, Video, X } from 'lucide-react';
+import { Canvas, useFrame } from '@react-three/fiber';
+import { ChevronLeft, ChevronRight, Circle, Loader2, Pause, Play, Repeat, Snowflake, Square, Video, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { createPlaybackClock, totalDurationMs } from '@/lib/school/tacticalAnimation';
@@ -26,7 +26,7 @@ import type { TacticalFrame } from '@/lib/school/tacticalFrames';
 import type { AnimationCurve } from '@/lib/school/tacticalBoardSettings';
 import { sportDef, type TacticalSport } from '@/lib/school/tacticalSports';
 import {
-  collectPlayerKeys, court3D, defaultMinFps, OVERLAY_COLOR, playerVisual,
+  collectPlayerKeys, court3D, defaultMinFps, defaultViewerCamera, OVERLAY_COLOR, playerVisual,
   prefersReducedMotion, TEAM_COLOR, teamVisual, type CameraMode, type PlayerVisual,
 } from '@/lib/school/tactical3d';
 import type { TacticalTeamsConfig } from '@/lib/school/tacticalTeams';
@@ -73,7 +73,8 @@ export interface Tactical3DViewerProps {
   /** Piso de fps de los primeros 2 s (0 = no caer por lento; lo usan las pruebas). */
   minFps?: number;
   onStats?: (s: Tactical3DStats) => void;
-  /** Cámara al abrir (por defecto Transmisión TV). Acepta las 3 de M4. */
+  /** Cámara al abrir (por defecto Transmisión TV; en el celular vertical,
+   *  Táctica alta, más cerca). Acepta las 3 de M4. */
   initialCamera?: CameraKind | CameraMode;
   /** M6b: colores y número de los dos equipos (sin ella, los de siempre). */
   teams?: TacticalTeamsConfig | null;
@@ -98,7 +99,7 @@ export default function Tactical3DViewer({
   sport, frames, playerLabels, playerJerseys, teamColor = TEAM_COLOR,
   overlayFrames = null, overlayColor = OVERLAY_COLOR, overlayLabels, overlayJerseys,
   overlayName = 'Contraataque del rival', title, onClose, onFallback, minFps = defaultMinFps(), onStats,
-  initialCamera = 'tv', initialTimeMs = 0, autoPlay = false, initialDirector = false, teams = null, curve, watermark = true,
+  initialCamera, initialTimeMs = 0, autoPlay = false, initialDirector = false, teams = null, curve, watermark = true,
 }: Tactical3DViewerProps) {
   const court = useMemo(() => court3D(sport), [sport]);
   const def = sportDef(court.sport);
@@ -110,7 +111,8 @@ export default function Tactical3DViewer({
   const [playing, setPlaying] = useState(autoPlay && totalMs > 0);
   const [speed, setSpeed] = useState<ViewerSpeed>(1);
   const [cameraKind, setCameraKind] = useState<CameraKind>(() => {
-    const k = toKind(initialCamera);
+    const aspect = typeof window !== 'undefined' ? window.innerWidth / Math.max(1, window.innerHeight) : 16 / 9;
+    const k = toKind(initialCamera ?? defaultViewerCamera(aspect));
     return reducedMotion && AUTO_MOVING.has(k) ? 'tv' : k;
   });
   const [director, setDirector] = useState(initialDirector && !reducedMotion);
@@ -261,6 +263,11 @@ export default function Tactical3DViewer({
     if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
   };
 
+  // Mientras three arma la escena (texturas, cancha) se veía una pantalla azul
+  // vacía: el aviso de carga se va con el primer cuadro dibujado.
+  const [ready, setReady] = useState(false);
+  const onReady = useCallback(() => setReady(true), []);
+
   const animated = frames.length > 1 || !!overlay;
   const fxLabel = def.label;
   const liveKind = director ? onAir : resolved.kind;
@@ -317,8 +324,18 @@ export default function Tactical3DViewer({
             debug={debug}
             teams={teams}
           />
+          <FirstFrame onReady={onReady} />
         </Canvas>
       </CanvasBoundary>
+
+      {!ready && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center bg-slate-950" role="status" aria-live="polite" data-testid="tactical-3d-loading">
+          <div className="flex flex-col items-center gap-3 text-sm text-white/85">
+            <Loader2 className="h-8 w-8 animate-spin text-emerald-400" aria-hidden="true" />
+            Cargando la cancha en 3D…
+          </div>
+        </div>
+      )}
 
       {/* Arriba: título, cámaras y cerrar. */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col gap-2 p-3 pt-[max(0.75rem,env(safe-area-inset-top))] bg-gradient-to-b from-black/70 to-transparent">
@@ -485,6 +502,18 @@ export default function Tactical3DViewer({
       )}
     </div>
   );
+}
+
+/** Avisa cuando la escena ya dibujó su primer cuadro (va dentro del Canvas,
+ *  junto a la escena: si la escena suspende, esto también espera). */
+function FirstFrame({ onReady }: { onReady: () => void }) {
+  const done = useRef(false);
+  useFrame(() => {
+    if (done.current) return;
+    done.current = true;
+    onReady();
+  });
+  return null;
 }
 
 function Badge({ className, children }: { className?: string; children: ReactNode }) {

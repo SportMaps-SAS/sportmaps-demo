@@ -28,6 +28,9 @@ describe('enlace de transmisión', () => {
     expect(validateStreamUrl('https://youtu.be/abc')).toBeNull();
     expect(validateStreamUrl('https://fb.watch/xyz')).toBeNull();
     expect(validateStreamUrl('https://vimeo.com/1')).toBeNull();
+    expect(validateStreamUrl('https://app.veo.co/matches/20261029-final-sub-13/')).toBeNull();
+    expect(validateStreamUrl('https://live.veo.co/stream/abc')).toBeNull();
+    expect(validateStreamUrl('https://notveo.co/x')).toMatch(/Veo/);
   });
   it('rechaza http, otros dominios y basura', () => {
     expect(validateStreamUrl('http://youtube.com/x')).toMatch(/https/);

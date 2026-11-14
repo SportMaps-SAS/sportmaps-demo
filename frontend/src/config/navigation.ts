@@ -6,6 +6,7 @@ import {
   PieChart,
   Users,
   Trophy,
+  Award,
   BarChart3,
   Settings,
   Bell,
@@ -174,6 +175,8 @@ const GESTION_DEPORTIVA_ESCUELA: NavItem[] = [
   // Primero: la pregunta del dueño es "¿mis entrenadores están trabajando?"
   // (spec rediseno-seguimiento-deportivo F4). Solo lectura.
   { title: 'Seguimiento deportivo', href: '/seguimiento-deportivo', icon: ClipboardCheck },
+  // Atajo: abre Seguimiento deportivo en modo calificar (sin ruta nueva).
+  { title: 'Calificar entrenadores', href: '/seguimiento-deportivo?calificar=1', icon: Award },
   {
     title: 'Equipos y Planes',
     icon: Users,
@@ -205,8 +208,17 @@ const GESTION_DEPORTIVA_ESCUELA: NavItem[] = [
       { title: 'Encuestas', href: '/dashboard/polls', icon: ClipboardList },
     ],
   },
-  { title: 'Resultados', href: '/results-overview', icon: Trophy },
-  { title: 'Mis Torneos', href: '/school/tournaments', icon: Trophy, addon: 'tournaments' },
+  // Resultados = los partidos de la escuela (/results): cada uno abre la
+  // pantalla del partido. /results-overview (feed de medallas de demostración,
+  // pensado para cheer) sale del menú pero la ruta se conserva.
+  { title: 'Resultados', href: '/results', icon: Trophy },
+  {
+    title: 'Torneos', icon: Trophy, addon: 'tournaments',
+    submenu: [
+      { title: 'Mis Torneos', href: '/school/tournaments', icon: Trophy },
+      { title: 'Crear torneo', href: '/school/tournaments/nuevo-rapido', icon: Plus },
+    ],
+  },
   { title: 'Dotación', href: '/school/equipment', icon: Dumbbell },
   // Solo disponibilidad (disponible / restringido / no disponible) que el
   // profesional de salud y la familia autorizaron compartir; nunca diagnóstico.
@@ -269,8 +281,11 @@ function filterByBuyerStore(items: NavItem[], buyer: BuyerStoreVisibility): NavI
  * (default: todo visible) para no romper si algún caller no lo pasa —
  * `AppSidebar.tsx` sí lo pasa siempre, con el `hasAddon` de `useEntitlements()`.
  */
+/** Rol de menú: los de `UserRole` más el dueño de espacios (facility_manager). */
+export type NavRole = UserRole | 'facility_manager';
+
 export function getNavigationByRole(
-  role: UserRole,
+  role: NavRole,
   hasAddon: (key: AddonKey) => boolean = () => true,
   isModuleEnabled: (key: ModuleKey) => boolean = () => true,
   /** Flag global de la tienda. Default false: fail-closed, como el hook. */
@@ -289,7 +304,30 @@ export function getNavigationByRole(
     ]
   };
 
-  const roleSpecificNav: Record<UserRole, NavGroup[]> = {
+  const roleSpecificNav: Record<NavRole, NavGroup[]> = {
+    // Dueño de espacios (facility_manager, escuela school_type 'venue'): menú
+    // corto de alquiler. Sin atletas, equipos, asistencia ni planes.
+    // Spec: docs/specs/reservas-canchas-plan-unificado-2026-10.md §6.1 y §7.
+    facility_manager: [
+      {
+        title: 'Mi espacio',
+        items: [
+          { title: 'Inicio', href: '/venue/dashboard', icon: Home },
+          { title: 'Instalaciones', href: '/facilities', icon: Building, moduleKey: 'sedes_instalaciones' },
+          { title: 'Reservas', href: '/venue/reservas', icon: Calendar },
+          { title: 'Cobros', href: '/venue/cobros', icon: DollarSign },
+        ]
+      },
+      {
+        title: 'Cuenta',
+        items: [
+          { title: 'Notificaciones', href: '/notifications', icon: Bell },
+          { title: 'Facturación', href: '/mi-plan', icon: CreditCard },
+          { title: 'Configuración', href: '/school-config', icon: Settings }
+        ]
+      }
+    ],
+
     // Deportista V2 (docs/specs/entrenador-deportista-v2.md): las cinco de la
     // barra más la tienda si la escuela vende; lo demás vive en «Más».
     // Con VITE_DEPORTISTA_V2=false vuelve el menú anterior, tal cual.
@@ -478,7 +516,8 @@ export function getNavigationByRole(
           { title: 'Resultados', href: '/results', icon: Trophy },
           { title: 'Reportes', href: '/coach-reports', icon: FileText },
           { title: 'Planillas por revisar', href: '/school/attendance-sheets', icon: ClipboardList },
-          { title: 'Informe Mensual', href: '/informe-mensual', icon: FileText }
+          { title: 'Informe Mensual', href: '/informe-mensual', icon: FileText },
+          { title: 'Mis Evaluaciones', href: '/mis-evaluaciones', icon: Award }
         ]
       },
       {
@@ -737,6 +776,7 @@ export function getNavigationByRole(
         title: 'Sistema',
         items: [
           { title: 'Configuración', href: '/admin/config', icon: Settings },
+          { title: 'Canal WhatsApp', href: '/admin/whatsapp', icon: MessageSquare },
           { title: 'Parámetros de Nómina', href: '/admin/payroll-config', icon: Landmark },
           { title: 'Notificaciones', href: '/notifications', icon: Bell }
         ]
@@ -857,29 +897,23 @@ export function getNavigationByRole(
       }
     ],
 
+    // Organizador: usa el MISMO motor de torneos que la escuela (/school/tournaments*); su organización es
+    // una fila de schools tipo 'event_organizer' (spec organizador-torneos-modulo-aparte §3 y §2.3).
     organizer: [
       {
-        title: 'Principal',
+        title: 'Torneos',
         items: [
-          { title: 'Dashboard', href: '/organizer/dashboard', icon: Home },
-          { title: 'Crear Evento', href: '/organizer/create-event', icon: Plus },
-        ]
-      },
-      {
-        title: 'Gestión',
-        items: [
-          { title: 'Mis Eventos', href: '/organizer/events', icon: Ticket },
-          { title: 'Calendario', href: '/organizer/calendar', icon: Calendar },
-          { title: 'Finanzas', href: '/organizer/finances', icon: DollarSign },
-          { title: 'Reportes', href: '/organizer/reports', icon: BarChart3 },
+          { title: 'Inicio de torneos', href: '/school/tournaments', icon: Home },
+          { title: 'Crear torneo', href: '/school/tournaments/nuevo-rapido', icon: Plus },
+          { title: 'Torneo avanzado', href: '/school/tournaments/new', icon: Trophy },
+          { title: 'Torneos donde participo', href: '/school/delegations', icon: Ticket },
         ]
       },
       {
         title: 'Cuenta',
         items: [
-          { title: 'Perfil', href: '/organizer/profile', icon: Users },
-          { title: 'Facturación', href: '/mi-plan', icon: CreditCard },
-          { title: 'Configuración', href: '/organizer/settings', icon: Settings }
+          { title: 'Mi plan', href: '/mi-plan', icon: CreditCard },
+          { title: 'Configuración', href: '/settings', icon: Settings }
         ]
       }
     ],

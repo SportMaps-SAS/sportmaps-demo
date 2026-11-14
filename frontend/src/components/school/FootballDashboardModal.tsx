@@ -1,31 +1,24 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, ClipboardList, Goal, Trophy, Calendar as CalendarIcon, Plus, Pencil, Trash2, Users } from 'lucide-react';
+import { Loader2, ClipboardList, Goal, Trophy, Calendar as CalendarIcon, Plus, ChevronRight, Trash2, Users } from 'lucide-react';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { todayColombia } from '@/lib/dateUtils';
 import {
   useTeamMatches,
   useFootballLineup,
   useFootballLineups,
-  useCreateTeamMatch,
-  useUpdateTeamMatch,
   useDeleteTeamMatch,
   useTournamentMatches,
 } from '@/hooks/useFootballData';
@@ -33,7 +26,6 @@ import { LineupModal } from './LineupModal';
 import { MatchEventsModal } from './MatchEventsModal';
 import { FootballSeasonStats } from './FootballSeasonStats';
 import { TacticalBoard } from './TacticalBoard';
-import { MatchResultFormDialog } from '../coach/MatchResultFormDialog';
 import { useTeamPerformanceRoster } from '@/hooks/usePerformanceData';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 
@@ -44,16 +36,15 @@ interface FootballDashboardModalProps {
   teamName: string;
 }
 
-const MATCH_TYPES = ['Liga', 'Copa', 'Amistoso', 'Torneo', 'Clasificatorio', 'Final'];
-
 export function FootballDashboardModal({ open, onClose, teamId, teamName }: FootballDashboardModalProps) {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const { currentUserRole } = useSchoolContext();
-  // Mismo criterio y mismos roles que ResultsPage.tsx: corregir un marcador
-  // ya guardado queda restringido a quien dirige la escuela + coach, no a
-  // cualquier 'staff' que abra este panel.
-  const EDIT_RESULTS_ROLES = ['owner', 'admin', 'school_admin', 'super_admin', 'coach'];
-  const canEditResults = EDIT_RESULTS_ROLES.includes(currentUserRole || '');
+  // Programar, corregir el marcador y anotar goles de un partido de club se
+  // hace en la pantalla del partido (/partidos/:id), la misma que usan
+  // Resultados y Equipos › Partidos. Este panel solo enlaza.
+  const abrirPartido = (id: string) => { onClose(); navigate(`/partidos/${encodeURIComponent(id)}`); };
+  const nuevoPartido = () => { onClose(); navigate(`/partidos/nuevo?equipo=${encodeURIComponent(teamId)}`); };
   // match_results_delete (RLS) excluye a 'coach' -- mismo motivo que en
   // ResultsPage.tsx: sin este gate, un coach ve el botón y se encuentra con
   // un error de permisos al apretarlo.
@@ -61,12 +52,8 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
   const canDeleteResults = DELETE_RESULTS_ROLES.includes(currentUserRole || '');
   const { data: matches, isLoading: loadingMatches } = useTeamMatches(teamId);
   const { data: tournamentMatches, isLoading: loadingTournamentMatches } = useTournamentMatches(teamId);
-  const createMatch = useCreateTeamMatch();
-  const updateMatch = useUpdateTeamMatch();
   const deleteMatch = useDeleteTeamMatch();
 
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [editingMatch, setEditingMatch] = useState<any | null>(null);
   const [lineupMatch, setLineupMatch] = useState<{ id: string; label: string; sourceType: 'team_match' | 'tournament_match' } | null>(null);
   const [tacticalMatch, setTacticalMatch] = useState<{ id: string; label: string; sourceType: 'team_match' | 'tournament_match' } | null>(null);
   const [eventsMatch, setEventsMatch] = useState<{ id: string; label: string; sourceType: 'team_match' | 'tournament_match' } | null>(null);
@@ -104,25 +91,6 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
     }
   };
 
-  const handleCreateMatchSubmit = async (formData: any) => {
-    try {
-      await createMatch.mutateAsync({
-        team_id: teamId,
-        opponent: formData.opponent,
-        match_date: formData.match_date,
-        is_home: formData.is_home,
-        match_type: formData.match_type,
-        home_score: formData.home_score === '' ? null : Number(formData.home_score),
-        away_score: formData.away_score === '' ? null : Number(formData.away_score),
-        notes: formData.notes || undefined,
-      });
-      toast({ title: '✅ Partido programado/creado con éxito' });
-      setShowCreateDialog(false);
-    } catch (err: any) {
-      toast({ title: 'Error al crear el partido', description: err.message, variant: 'destructive' });
-    }
-  };
-
   return (
     <>
       <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -151,9 +119,9 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
                 <Button
                   size="sm"
                   className="h-7 gap-1 text-[11px] bg-primary text-primary-foreground"
-                  onClick={() => setShowCreateDialog(true)}
+                  onClick={nuevoPartido}
                 >
-                  <Plus className="w-3.5 h-3.5" /> Programar Partido
+                  <Plus className="w-3.5 h-3.5" /> Partido
                 </Button>
               </div>
 
@@ -166,7 +134,7 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
                 <div className="flex flex-col items-center gap-3 py-10 text-center">
                   <CalendarIcon className="h-8 w-8 text-muted-foreground opacity-40" />
                   <p className="text-sm text-muted-foreground max-w-xs">
-                    Este equipo todavía no tiene partidos registrados. Haz clic en "Programar Partido" para crear uno.
+                    Este equipo todavía no tiene partidos registrados. Toca «+ Partido» para programar uno o registrar uno que ya se jugó.
                   </p>
                 </div>
               ) : (
@@ -208,23 +176,12 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
                         </Button>
                         <Button
                           size="sm"
-                          variant="outline"
                           className="h-7 gap-1 text-[11px]"
-                          onClick={() => setEventsMatch({ id: m.id, label: matchLabel(m), sourceType: 'team_match' })}
+                          onClick={() => abrirPartido(m.id)}
+                          title="Resultado, goles por jugadora, evaluación y reporte"
                         >
-                          <Goal className="w-3 h-3" /> Eventos
+                          Abrir partido <ChevronRight className="w-3 h-3" />
                         </Button>
-                        {canEditResults && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                            onClick={() => setEditingMatch(m)}
-                            title="Editar resultado"
-                          >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </Button>
-                        )}
                         {canDeleteResults && (
                           <Button
                             size="sm"
@@ -321,26 +278,6 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
         </DialogContent>
       </Dialog>
 
-      {showCreateDialog && (
-        <CreateMatchDialog
-          open={showCreateDialog}
-          onClose={() => setShowCreateDialog(false)}
-          onSubmit={handleCreateMatchSubmit}
-          isPending={createMatch.isPending}
-        />
-      )}
-
-      {editingMatch && (
-        <MatchResultFormDialog
-          open={!!editingMatch}
-          onOpenChange={(open) => { if (!open) setEditingMatch(null); }}
-          onSubmit={(data) => updateMatch.mutate({ id: editingMatch.id, ...data })}
-          teamId={teamId}
-          isLoading={updateMatch.isPending}
-          match={editingMatch}
-        />
-      )}
-
       {lineupMatch && (
         <LineupModal
           open={!!lineupMatch}
@@ -378,160 +315,5 @@ export function FootballDashboardModal({ open, onClose, teamId, teamName }: Foot
         />
       )}
     </>
-  );
-}
-
-interface CreateMatchDialogProps {
-  open: boolean;
-  onClose: () => void;
-  onSubmit: (formData: any) => Promise<void>;
-  isPending: boolean;
-}
-
-function CreateMatchDialog({ open, onClose, onSubmit, isPending }: CreateMatchDialogProps) {
-  const [opponent, setOpponent] = useState('');
-  const [matchDate, setMatchDate] = useState(todayColombia());
-  const [isHome, setIsHome] = useState('true');
-  const [matchType, setMatchType] = useState('Amistoso');
-  const [homeScore, setHomeScore] = useState('');
-  const [awayScore, setAwayScore] = useState('');
-  const [notes, setNotes] = useState('');
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!opponent.trim()) return;
-    onSubmit({
-      opponent: opponent.trim(),
-      match_date: matchDate,
-      is_home: isHome === 'true',
-      match_type: matchType,
-      home_score: homeScore,
-      away_score: awayScore,
-      notes: notes.trim(),
-    });
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto custom-scrollbar">
-        <DialogHeader>
-          <DialogTitle>Programar Partido</DialogTitle>
-          <DialogDescription>Registra un nuevo partido para gestionar su alineación y eventos.</DialogDescription>
-        </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="opponent">Nombre del Oponente *</Label>
-            <Input
-              id="opponent"
-              placeholder="Ej: Deportivo Cali Sub-12"
-              value={opponent}
-              onChange={(e) => setOpponent(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="match_date">Fecha del Partido *</Label>
-              <Input
-                id="match_date"
-                type="date"
-                value={matchDate}
-                onChange={(e) => setMatchDate(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="match_type">Tipo de Partido *</Label>
-              <Select value={matchType} onValueChange={setMatchType}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {MATCH_TYPES.map((type) => (
-                    <SelectItem key={type} value={type}>
-                      {type}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="condition">Condición</Label>
-              <Select value={isHome} onValueChange={setIsHome}>
-                <SelectTrigger id="condition">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="true">Local</SelectItem>
-                  <SelectItem value="false">Visitante</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          <div className="border-t pt-3">
-            <span className="text-xs text-muted-foreground font-semibold">Marcador (Opcional — dejar en blanco si aún no se ha jugado)</span>
-            <div className="grid grid-cols-2 gap-4 mt-2">
-              <div className="space-y-2">
-                <Label htmlFor="home_score">Goles Local</Label>
-                <Input
-                  id="home_score"
-                  type="number"
-                  placeholder="Sin jugar"
-                  min={0}
-                  value={homeScore}
-                  onChange={(e) => setHomeScore(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="away_score">Goles Visitante</Label>
-                <Input
-                  id="away_score"
-                  type="number"
-                  placeholder="Sin jugar"
-                  min={0}
-                  value={awayScore}
-                  onChange={(e) => setAwayScore(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="notes">Notas / Observaciones</Label>
-            <Textarea
-              id="notes"
-              placeholder="Detalles sobre el partido, campo, uniforme..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              rows={2}
-            />
-          </div>
-
-          <DialogFooter className="pt-2">
-            <Button type="button" variant="outline" onClick={onClose} disabled={isPending}>
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={isPending || !opponent.trim()}>
-              {isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creando...
-                </>
-              ) : (
-                'Crear Partido'
-              )}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

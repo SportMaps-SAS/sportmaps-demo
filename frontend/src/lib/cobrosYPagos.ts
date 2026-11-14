@@ -777,6 +777,8 @@ export function primaryButtonState(args: {
     previewLoading?: boolean;
     submitting?: boolean;
     noAthlete?: boolean;
+    /** Lo que la vista previa omitió (ya existe, etc.): explica por qué no hay nada que crear. */
+    skippedReasons?: string[];
 }): PrimaryButtonState {
     const { mode, toCreate, toPay, adjustOnly } = args;
     let label: string;
@@ -797,6 +799,9 @@ export function primaryButtonState(args: {
     if (args.submitting) return { label, disabled: true, reason: null };
     if (args.noAthlete) return { label, disabled: true, reason: mode === 'multi' ? 'Elige a quiénes se les cobra.' : 'Elige el atleta.' };
     if (toCreate === 0 && toPay === 0 && adjustOnly === 0) {
+        if (args.skippedReasons?.length) {
+            return { label, disabled: true, reason: `No hay nada que crear: ${args.skippedReasons[0]}.` };
+        }
         return { label, disabled: true, reason: mode === 'multi' ? 'Agrega al menos un cobro.' : 'Marca un cobro pendiente o agrega un cobro nuevo.' };
     }
     if ((args.errors ?? 0) > 0) return { label, disabled: true, reason: 'Corrige lo marcado en rojo.' };

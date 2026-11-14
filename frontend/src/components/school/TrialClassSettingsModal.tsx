@@ -13,6 +13,7 @@ import { useTrialClassSelfServiceSettings, type TrialPaymentMode } from '@/hooks
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { supabase } from '@/integrations/supabase/client';
 import { ShareTrialLinkDialog } from '@/components/school/ShareTrialLinkDialog';
+import { CanalesClasePrueba } from '@/components/school/CanalesClasePrueba';
 
 export interface TrialClassSettingsModalProps {
   open: boolean;
@@ -33,7 +34,6 @@ const EMPTY_FORM: CategoryForm = { name: '', description: '', price: '0', is_act
 
 export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettingsModalProps) {
   const {
-    settings, saveSettings,
     categories, isLoadingCategories,
     createCategory, isCreatingCategory,
     updateCategory, isUpdatingCategory,
@@ -83,10 +83,6 @@ export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettin
       reschedule_cutoff_hours: ssForm.reschedule_cutoff_hours,
       payment_mode: ssForm.payment_mode,
     });
-  };
-
-  const handleToggleEnabled = (enabled: boolean) => {
-    saveSettings({ enabled, requires_approval: settings?.requires_approval ?? false });
   };
 
   const openNewCategory = () => setForm(EMPTY_FORM);
@@ -139,29 +135,24 @@ export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettin
           </DialogTitle>
           {!form && (
             <DialogDescription className="text-muted-foreground/80">
-              Configura si tu escuela ofrece clases de prueba y qué categorías (con su propio precio) puede elegir el owner al agendar.
+              Todo lo de clases de prueba en un solo lugar: por dónde entran (en la escuela, WhatsApp, link) y qué categorías se ofrecen.
             </DialogDescription>
           )}
         </DialogHeader>
 
         {!form ? (
           <div className="space-y-6 py-2">
-            <div className="flex items-center justify-between rounded-xl border border-border/50 bg-muted/30 p-4">
-              <div>
-                <p className="font-semibold text-sm">Habilitar clases de prueba</p>
-                <p className="text-xs text-muted-foreground mt-0.5">Permite agendarlas desde este módulo.</p>
-              </div>
-              <Switch checked={settings?.enabled ?? true} onCheckedChange={handleToggleEnabled} />
-            </div>
+            {/* Interruptor general + canales (en la escuela, WhatsApp): configuración única. */}
+            <CanalesClasePrueba schoolId={schoolId} />
 
             <div className="space-y-4 rounded-xl border border-border/50 bg-muted/20 p-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Smartphone className="h-4 w-4 text-primary" />
                   <div>
-                    <p className="font-semibold text-sm">Agendar desde Mis Inscripciones</p>
+                    <p className="font-semibold text-sm">Link público y Mis Inscripciones</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Un padre/atleta con cuenta puede agendar su propia clase de prueba, sin pasar por vos.
+                      Cualquier persona agenda sola su clase de prueba por el link, o desde Mis Inscripciones si ya tiene cuenta.
                     </p>
                   </div>
                 </div>
@@ -182,7 +173,7 @@ export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettin
                       className="bg-background border-border/50 h-9 w-28"
                     />
                     <p className="text-[11px] text-muted-foreground">
-                      Pasado ese punto, la familia tiene que coordinar el cambio directamente con vos.
+                      Pasado ese punto, la familia tiene que coordinar el cambio directamente con la escuela.
                     </p>
                   </div>
 
@@ -199,7 +190,7 @@ export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettin
                       </label>
                       <label className="flex items-start gap-2 text-xs cursor-pointer">
                         <RadioGroupItem value="manual" className="mt-0.5" />
-                        <span><strong>Manual</strong> — nace un cobro pendiente, lo conciliás igual que una mensualidad.</span>
+                        <span><strong>Manual</strong> — nace un cobro pendiente, se concilia igual que una mensualidad.</span>
                       </label>
                       <label className="flex items-start gap-2 text-xs cursor-pointer">
                         <RadioGroupItem value="gateway" className="mt-0.5" />
@@ -209,7 +200,7 @@ export function TrialClassSettingsModal({ open, onOpenChange }: TrialClassSettin
                   </div>
 
                   <p className="text-[11px] text-muted-foreground bg-background/60 rounded-lg p-2.5 border border-border/40">
-                    ¿Permitir repetir y a qué precio? Eso se configura <strong>por categoría</strong>, no acá — abrí cada categoría abajo.
+                    ¿Permitir repetir y a qué precio? Eso se configura <strong>por categoría</strong>, no aquí: abre cada categoría abajo.
                   </p>
 
                   <div className="flex gap-2">

@@ -13,11 +13,12 @@
  * lib/school/tacticalAi.ts.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, MessageCircle, Play, Save, Sparkles, Square, X } from 'lucide-react';
+import { AlertTriangle, Loader2, MessageCircle, Play, Save, Sparkles, Square, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
-  analyzePlay, fetchAiBalance, humanizeResult, isRivalKey, quotaLabel, requestMoreHref, rivalColorOf,
-  suggestionToBoardFrames, type AiBalance, type AiResult, type AiSuggestion, type AnalyzeRequest,
+  analyzePlay, boostLabel, fetchAiBalance, humanizeResult, isRivalKey, quotaLabel, rechargeOfferOf, requestMoreHref, rivalColorOf,
+  sendSuggestionFeedback, suggestionToBoardFrames,
+  type AiBalance, type AiFeedbackVerdict, type AiResult, type AiSuggestion, type AnalyzeRequest,
 } from '@/lib/school/tacticalAi';
 import type { Viewer3DSource } from '@/lib/school/tactical3dLaunch';
 import type { TacticalBoardEvent } from '@/lib/school/tacticalUsage';
@@ -148,8 +149,35 @@ export interface TacticalAiPanelProps {
   onEvent?: (event: TacticalAiEvent) => void;
 }
 
+/** «Útil / No útil»: un toque marca, otro toque sobre el mismo lo quita. */
+export function SuggestionFeedback({
+  verdict, onVote, titulo,
+}: { verdict: AiFeedbackVerdict | null; onVote: (v: AiFeedbackVerdict | null) => void; titulo: string }) {
+  const btn = (v: AiFeedbackVerdict, label: string, Icon: typeof ThumbsUp) => {
+    const on = verdict === v;
+    return (
+      <Button
+        size="sm"
+        variant="ghost"
+        className={`h-8 gap-1 px-2 text-[11px] ${on ? (v === 'util' ? 'bg-emerald-500/20 text-emerald-200' : 'bg-red-500/20 text-red-200') : 'text-white/70'} hover:bg-white/10 hover:text-white`}
+        aria-pressed={on}
+        aria-label={`${label}: ${titulo}`}
+        onClick={() => onVote(on ? null : v)}
+      >
+        <Icon className="h-3.5 w-3.5" /> {label}
+      </Button>
+    );
+  };
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label="¿Te sirvió esta sugerencia?">
+      {btn('util', 'Útil', ThumbsUp)}
+      {btn('no_util', 'No útil', ThumbsDown)}
+    </div>
+  );
+}
+
 function SuggestionCard({
-  s, id, kind, rivalColor, sport, active, canApply, onPreview, onApply, get3DSource, onEvent,
+  s, id, kind, rivalColor, sport, active, canApply, onPreview, onApply, get3DSource, onEvent, verdict, onVote, onSaved,
 }: {
   s: AiSuggestion; id: string; kind: AiPreviewKind; rivalColor: TacticalArrowColor; sport: TacticalSport;
   active: boolean; canApply: boolean;
@@ -157,6 +185,10 @@ function SuggestionCard({
   onApply: (frames: TacticalFrame[], titulo: string) => void;
   get3DSource?: () => Viewer3DSource;
   onEvent?: (event: TacticalAiEvent) => void;
+  /** Sin análisis identificable (BFF viejo) no se ofrece valorar. */
+  verdict?: AiFeedbackVerdict | null;
+  onVote?: (v: AiFeedbackVerdict | null) => void;
+  onSaved?: () => void;
 }) {
   // Miniatura: último cuadro, con los rivales como material «Rival».
   const thumb = useMemo(() => {
@@ -206,12 +238,13 @@ function SuggestionCard({
           <Button
             size="sm"
             className="h-8 gap-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white"
-            onClick={() => { onEvent?.('ai_save_variant'); onApply(suggestionToBoardFrames(s, rivalColor), s.titulo); }}
+            onClick={() => { onEvent?.('ai_save_variant'); onSaved?.(); onApply(suggestionToBoardFrames(s, rivalColor), s.titulo); }}
           >
             <Save className="h-3.5 w-3.5" /> Guardar como nueva jugada
           </Button>
         )}
       </div>
+      {onVote && <SuggestionFeedback verdict={verdict ?? null} onVote={onVote} titulo={s.titulo} />}
     </article>
   );
 }
@@ -227,6 +260,9 @@ export function AiQuotaBar({ balance, sport }: { balance: AiBalance | null; spor
   return (
     <div className="px-4 py-2 border-b border-white/10 space-y-1.5" data-testid="ai-quota">
       <p className="text-[11px] leading-snug text-white/80" data-testid="ai-balance">{label}</p>
+      {boostLabel(balance) && (
+        <p className="text-[10px] font-semibold text-violet-200" data-testid="ai-boost">{boostLabel(balance)}</p>
+      )}
       <div
         className="h-1.5 w-full overflow-hidden rounded-full bg-white/10"
         role="progressbar"
@@ -241,7 +277,8 @@ export function AiQuotaBar({ balance, sport }: { balance: AiBalance | null; spor
   );
 }
 
-/** Agotado: «Usaste tu IA de este mes» + «Quiero más» (WhatsApp del comercial). */
+/** Agotado: «Usaste tu IA de este mes» + «Quiero +50 % de IA» (WhatsApp del
+ *  comercial). La recarga va en la misma moneda que el medidor. */
 export function AiQuotaExhausted({
   balance, sport, message, requestMoreMessage,
 }: { balance: AiBalance | null; sport: TacticalSport; message?: string | null; requestMoreMessage?: string | null }) {
@@ -255,7 +292,7 @@ export function AiQuotaExhausted({
       </p>
       <Button asChild size="sm" className="h-9 gap-1.5 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold">
         <a href={requestMoreHref(balance, sport, requestMoreMessage)} target="_blank" rel="noopener noreferrer" data-testid="ai-more">
-          <MessageCircle className="h-4 w-4" /> Quiero más
+          <MessageCircle className="h-4 w-4" /> Quiero {rechargeOfferOf(balance).label}
         </a>
       </Button>
     </div>
@@ -278,6 +315,9 @@ function TacticalAiPanelBody({
   const [cached, setCached] = useState(false);
   const [rivalColor, setRivalColor] = useState<TacticalArrowColor>('red');
   const [minimized, setMinimized] = useState(false);
+  const [analysisRef, setAnalysisRef] = useState<string | null>(null);
+  /** Voto por sugerencia ('c0', 'v1'…) del análisis en pantalla. */
+  const [votes, setVotes] = useState<Record<string, AiFeedbackVerdict | null>>({});
   const reqSeq = useRef(0);
 
   useEffect(() => {
@@ -311,6 +351,8 @@ function TacticalAiPanelBody({
       // (la misma que se mandó) o «jugador N» / «rival N».
       setResult(humanizeResult(out.data.result, out.data.keys, (k) => req.labels[k]));
       setCached(out.data.cached);
+      setAnalysisRef(out.data.analysis_ref ?? null);
+      setVotes({});
       if (out.data.balance) setBalance(out.data.balance);
     } else if (out.kind === 'needs_more') {
       setNeedsMore({ message: out.message, requestMoreMessage: out.requestMoreMessage });
@@ -319,6 +361,23 @@ function TacticalAiPanelBody({
       setError(out.message);
     }
   }
+
+  // Valoración optimista: si falla el envío, el voto vuelve a como estaba.
+  const feedbackProps = (kind: AiPreviewKind, index: number) => {
+    if (!analysisRef) return {};
+    const id = `${kind === 'contraataque' ? 'c' : 'v'}${index}`;
+    return {
+      verdict: votes[id] ?? null,
+      onVote: (v: AiFeedbackVerdict | null) => {
+        const prev = votes[id] ?? null;
+        setVotes((m) => ({ ...m, [id]: v }));
+        void sendSuggestionFeedback({ analysisRef, sport, kind, index, verdict: v }).then((ok) => {
+          if (!ok) setVotes((m) => ({ ...m, [id]: prev }));
+        });
+      },
+      onSaved: () => { void sendSuggestionFeedback({ analysisRef, sport, kind, index, saved: true }); },
+    };
+  };
 
   const previewSuggestion = (p: AiPreview | null) => {
     onPreview(p);
@@ -415,7 +474,7 @@ function TacticalAiPanelBody({
                 {result.contraataques.map((s, i) => (
                   <SuggestionCard key={`c${i}`} id={`c${i}`} kind="contraataque" s={s} sport={sport} rivalColor={rivalColor}
                     active={preview?.id === `c${i}`} canApply={canApply} onPreview={previewSuggestion} onApply={onApply}
-                    get3DSource={get3DSource} onEvent={onEvent} />
+                    get3DSource={get3DSource} onEvent={onEvent} {...feedbackProps('contraataque', i)} />
                 ))}
               </section>
             )}
@@ -426,7 +485,7 @@ function TacticalAiPanelBody({
                 {result.variantes.map((s, i) => (
                   <SuggestionCard key={`v${i}`} id={`v${i}`} kind="variante" s={s} sport={sport} rivalColor={rivalColor}
                     active={preview?.id === `v${i}`} canApply={canApply} onPreview={previewSuggestion} onApply={onApply}
-                    get3DSource={get3DSource} onEvent={onEvent} />
+                    get3DSource={get3DSource} onEvent={onEvent} {...feedbackProps('variante', i)} />
                 ))}
               </section>
             )}

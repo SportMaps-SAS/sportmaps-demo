@@ -1,0 +1,177 @@
+{
+ "payload_version": 2,
+ "event": {
+  "id": "e210a34a-aa57-4eec-8b21-c0b992da8100",
+  "title": "Copa Demo Tenis E2E",
+  "sport": "Tenis",
+  "city": "Por definir",
+  "event_date": "2026-11-11",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "liga",
+  "status": "finished",
+  "start_date": "2026-11-11",
+  "end_date": "2026-11-11",
+  "cover_url": null,
+  "logo_url": null,
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": null,
+  "venue": {
+   "name": null,
+   "address": "Por definir, Por definir",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Por%20definir%2C%20Por%20definir"
+  },
+  "sponsors": [],
+  "attachments": []
+ },
+ "tournament": {
+  "id": "e210a34a-aa57-4eec-8b21-c0b992da8100",
+  "title": "Copa Demo Tenis E2E",
+  "sport": "Tenis",
+  "city": "Por definir",
+  "event_date": "2026-11-11",
+  "school_name": "Club Campestre Demo",
+  "live_enabled": true,
+  "stream_url": null,
+  "format": "liga",
+  "status": "finished",
+  "start_date": "2026-11-11",
+  "end_date": "2026-11-11",
+  "cover_url": null,
+  "logo_url": null,
+  "organizer_name": "Club Campestre Demo",
+  "rules_url": null,
+  "venue": {
+   "name": null,
+   "address": "Por definir, Por definir",
+   "maps_url": "https://www.google.com/maps/search/?api=1&query=Por%20definir%2C%20Por%20definir"
+  },
+  "sponsors": [],
+  "attachments": []
+ },
+ "categories": [
+  {
+   "id": "8e7276be-e781-47ca-a501-d4c5e94ccaeb",
+   "name": "General · 1 · General · Mixto"
+  }
+ ],
+ "teams": [
+  {
+   "id": "210ec48f-9723-4d22-8b46-43e4242f12c7",
+   "name": "Andrés Gómez",
+   "category_id": "8e7276be-e781-47ca-a501-d4c5e94ccaeb",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  },
+  {
+   "id": "8b2b345f-3488-4d62-82bb-29350d6225d8",
+   "name": "Juan Pérez",
+   "category_id": "8e7276be-e781-47ca-a501-d4c5e94ccaeb",
+   "short_name": null,
+   "logo_url": null,
+   "is_external": true,
+   "club_name": null
+  }
+ ],
+ "matches": [
+  {
+   "id": "996fd8bf-a552-48c2-bae5-245bbf798e2c",
+   "category_id": "8e7276be-e781-47ca-a501-d4c5e94ccaeb",
+   "stage": "league",
+   "group_label": null,
+   "cup_label": null,
+   "round": 1,
+   "slot": 1,
+   "home_team_id": "8b2b345f-3488-4d62-82bb-29350d6225d8",
+   "away_team_id": "210ec48f-9723-4d22-8b46-43e4242f12c7",
+   "home_name": "Juan Pérez",
+   "away_name": "Andrés Gómez",
+   "home_label": null,
+   "away_label": null,
+   "is_bye": false,
+   "home_score": 2,
+   "away_score": 0,
+   "status": "played",
+   "scheduled_at": null,
+   "court": null,
+   "started_at": "2026-10-28T12:05:49.621-05:00",
+   "finished_at": "2026-10-28T12:08:37.443-05:00",
+   "sets": [
+    {
+     "home": 6,
+     "away": 2,
+     "closed": true,
+     "deciding": false
+    },
+    {
+     "home": 7,
+     "away": 5,
+     "closed": true,
+     "deciding": false
+    }
+   ],
+   "model": "sets",
+   "home_logo_url": null,
+   "away_logo_url": null,
+   "home_short_name": null,
+   "away_short_name": null
+  }
+ ],
+ "standings": {
+  "8e7276be-e781-47ca-a501-d4c5e94ccaeb": {
+   "model": "sets",
+   "standings": [
+    {
+     "team_id": "8b2b345f-3488-4d62-82bb-29350d6225d8",
+     "team_name": "Juan Pérez",
+     "P": 1,
+     "W": 1,
+     "D": 0,
+     "L": 0,
+     "GF": 2,
+     "GA": 0,
+     "GD": 2,
+     "Pts": 2,
+     "SW": 2,
+     "SL": 0,
+     "PF": 13,
+     "PA": 7,
+     "set_diff": 2,
+     "point_diff": 6,
+     "set_ratio": null,
+     "point_ratio": 1.857,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    },
+    {
+     "team_id": "210ec48f-9723-4d22-8b46-43e4242f12c7",
+     "team_name": "Andrés Gómez",
+     "P": 1,
+     "W": 0,
+     "D": 0,
+     "L": 1,
+     "GF": 0,
+     "GA": 2,
+     "GD": -2,
+     "Pts": 0,
+     "SW": 0,
+     "SL": 2,
+     "PF": 7,
+     "PA": 13,
+     "set_diff": -2,
+     "point_diff": -6,
+     "set_ratio": 0,
+     "point_ratio": 0.538,
+     "logo_url": null,
+     "short_name": null,
+     "is_external": true
+    }
+   ]
+  }
+ },
+ "player_stats": []
+}

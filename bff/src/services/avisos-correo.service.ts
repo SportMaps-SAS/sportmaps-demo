@@ -273,25 +273,28 @@ async function llamarSendEmail(body: unknown): Promise<{ ok: boolean; status: nu
  */
 export async function enviarPlantilla(
     tipo: string | null, destinos: string[], data: Record<string, string>, respaldo: Respaldo,
+    opciones: { replyTo?: string } = {},
 ): Promise<{ ok: boolean; error?: string; messageId?: string | null }> {
     if (!destinos.length) return { ok: false, error: 'sin destinatarios' };
     const lote = destinos.slice(0, 100);
+    // send-email solo acepta respuestas hacia @sportmaps.co; sin esto, contestar cae en noreply.
+    const extra = opciones.replyTo ? { reply_to: opciones.replyTo } : {};
 
     // tipo null = sin plantilla en send-email: va directo el HTML del respaldo.
     if (tipo === null) {
         const html = htmlDeRespaldo(respaldo);
-        const d = await llamarSendEmail({ batch: lote.map((to) => ({ to, subject: respaldo.subject, html })) });
+        const d = await llamarSendEmail({ batch: lote.map((to) => ({ to, subject: respaldo.subject, html, ...extra })) });
         if (!d.ok) return { ok: false, error: `send-email ${d.status}: ${d.texto}` };
         let id: string | null = null;
         try { id = JSON.parse(d.texto)?.results?.[0]?.id ?? null; } catch { /* sin id, no importa */ }
         return { ok: true, messageId: id };
     }
 
-    let r = await llamarSendEmail({ batch: lote.map((to) => ({ type: tipo, to, data })) });
+    let r = await llamarSendEmail({ batch: lote.map((to) => ({ type: tipo, to, data, ...extra })) });
     if (!r.ok && /no soportado/i.test(r.texto)) {
         console.warn(`[avisos-correo] send-email no conoce '${tipo}' (¿falta desplegarla?): se manda el respaldo.`);
         const html = htmlDeRespaldo(respaldo);
-        r = await llamarSendEmail({ batch: lote.map((to) => ({ to, subject: respaldo.subject, html })) });
+        r = await llamarSendEmail({ batch: lote.map((to) => ({ to, subject: respaldo.subject, html, ...extra })) });
     }
     if (!r.ok) return { ok: false, error: `send-email ${r.status}: ${r.texto}` };
 
@@ -306,10 +309,12 @@ export async function enviarConReserva(p: {
     destinos: string[]; data: Record<string, string>; respaldo: Respaldo;
     /** Plantilla de send-email, si difiere del tipo que se registra en el log. null = sin plantilla (HTML del respaldo). */
     plantilla?: string | null;
+    /** A dónde llegan las respuestas. Solo @sportmaps.co (lo filtra send-email). */
+    replyTo?: string;
 }): Promise<'enviado' | 'duplicado' | 'fallo'> {
     const reserva = await reservarEnvio(p);
     if (!reserva) return 'duplicado';
-    const r = await enviarPlantilla(p.plantilla === null ? null : (p.plantilla ?? p.tipo), p.destinos, p.data, p.respaldo);
+    const r = await enviarPlantilla(p.plantilla === null ? null : (p.plantilla ?? p.tipo), p.destinos, p.data, p.respaldo, { replyTo: p.replyTo });
     await cerrarEnvio(reserva, r);
     if (!r.ok) console.error('[avisos-correo] envío fallido', { tipo: p.tipo, clave: p.clave, error: r.error });
     return r.ok ? 'enviado' : 'fallo';
@@ -432,7 +437,86 @@ const ESTADOS_TICKET: Record<string, string> = {
     closed: 'Cerrado',
 };
 
-export type OrigenTicket = 'nuevo' | 'escalado';
+export type OrigenTicket = 'nuevo' | 'escalado' | 'no_sirvio';
+
+/**
+ * Prefijo del asunto para filtrar en Gmail lo que necesita a una persona
+ * (2026-10-27). Va en todo caso escalado, en el que el usuario marcó «No me
+ * sirvió», y en el 'nuevo' que ya llegó esperando a una persona.
+ */
+export const PREFIJO_REVISAR = '[Revisar] ';
+
+export function asuntoTicket(p: { origen: OrigenTicket; status?: string | null; nombre: string }): string {
+    const titulo = p.origen === 'nuevo' ? 'Nuevo caso en Mapi'
+        : p.origen === 'escalado' ? 'Mapi pasó un caso a una persona'
+            : 'A alguien no le sirvió la respuesta de Mapi';
+    const revisar = p.origen !== 'nuevo' || p.status === 'waiting_human';
+    return `${revisar ? PREFIJO_REVISAR : ''}${titulo}: ${p.nombre}`;
+}
+
+/**
+ * Markdown de Mapi → HTML seguro para el correo. Mapi escribe **negritas**,
+ * listas numeradas y con guion, y saltos de línea; el correo los mostraba
+ * crudos («**Asistencia**»). Primero se ESCAPA todo y solo después se dibujan
+ * las marcas, así nada que venga del usuario o del modelo llega como HTML.
+ */
+export function markdownAHtml(texto: string): string {
+    const linea = (s: string) => s
+        .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[\s(])\*([^*\n]+?)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+    const bloques: string[] = [];
+    let lista: { tipo: 'ul' | 'ol'; items: string[] } | null = null;
+    let parrafo: string[] = [];
+    const cerrarParrafo = () => {
+        if (parrafo.length) bloques.push(`<p style="margin:0 0 8px;">${parrafo.map(linea).join('<br>')}</p>`);
+        parrafo = [];
+    };
+    const cerrarLista = () => {
+        if (lista) bloques.push(`<${lista.tipo} style="margin:0 0 8px;padding-left:20px;">${lista.items.map((i) => `<li>${linea(i)}</li>`).join('')}</${lista.tipo}>`);
+        lista = null;
+    };
+    for (const cruda of escaparHtml(texto.replace(/\r\n?/g, '\n')).split('\n')) {
+        const l = cruda.trim();
+        const ul = /^[-*•]\s+(.+)$/.exec(l);
+        const ol = /^\d+[.)]\s+(.+)$/.exec(l);
+        if (ul || ol) {
+            const tipo = ul ? 'ul' : 'ol';
+            cerrarParrafo();
+            if (lista && lista.tipo !== tipo) cerrarLista();
+            if (!lista) lista = { tipo, items: [] };
+            lista.items.push((ul ?? ol)![1]);
+        } else if (!l) {
+            cerrarParrafo();
+            cerrarLista();
+        } else {
+            cerrarLista();
+            parrafo.push(l);
+        }
+    }
+    cerrarParrafo();
+    cerrarLista();
+    return bloques.join('');
+}
+
+/** HTML del correo de un ticket de Mapi (todo lo variable pasa por escaparHtml o markdownAHtml). */
+export function htmlTicketSoporte(d: {
+    titulo: string; nombre: string; correo: string; rol: string; escuela: string; estado: string; motivo: string;
+    mensajes: MensajeCorto[]; url: string;
+}): string {
+    const fila = (k: string, v: string) => (v
+        ? `<tr><td style="padding:8px 10px;color:#888;border-bottom:1px solid #eee;">${escaparHtml(k)}</td><td style="padding:8px 10px;font-weight:600;text-align:right;border-bottom:1px solid #eee;">${escaparHtml(v)}</td></tr>`
+        : '');
+    const mensajes = d.mensajes.map((m) => `<div style="background:#f6f7f6;border-left:3px solid #248223;border-radius:6px;padding:10px 12px;margin-bottom:8px;">`
+        + `<div style="color:#888;font-size:12px;margin-bottom:4px;">${escaparHtml(m.quien)} · ${escaparHtml(m.hora)}</div>`
+        + `<div style="color:#4a4a4a;line-height:1.5;">${markdownAHtml(m.texto)}</div></div>`).join('');
+    return `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border-top:3px solid #248223;">`
+        + `<h2 style="color:#248223;margin-top:0;">${escaparHtml(d.titulo)}</h2>`
+        + `<table style="width:100%;border-collapse:collapse;margin:16px 0;text-align:left;">`
+        + fila('Usuario', d.nombre) + fila('Correo', d.correo) + fila('Rol', d.rol) + fila('Escuela', d.escuela)
+        + fila('Motivo', d.motivo) + fila('Estado', d.estado)
+        + `</table>${mensajes}`
+        + `<p style="margin-top:20px;"><a href="${escaparHtml(d.url)}" style="display:inline-block;padding:12px 24px;background:#FB9F1E;color:#fff;text-decoration:none;border-radius:8px;font-weight:bold;">Abrir la bandeja de soporte</a></p></div>`;
+}
 
 /**
  * Correo a SportMaps (`SUPPORT_ALERT_EMAIL`) por un ticket de Mapi.
@@ -445,14 +529,26 @@ export type OrigenTicket = 'nuevo' | 'escalado';
  *    estado "Esperando a una persona" (si no, serían dos correos en un segundo
  *    por el mismo caso). Freno de 6 h por ticket.
  *
+ *  - 'no_sirvio': el usuario tocó «No» en «¿Te sirvió?» y el caso pasó a
+ *    waiting_human. Uno por respuesta de Mapi (id determinístico por
+ *    `respuestaId`), sin freno por ticket: el 'nuevo' ya salió y este es otro
+ *    aviso, el que pide revisar.
+ *
  * Tipo de log distinto por origen ('soporte_ticket_nuevo' /
- * 'soporte_ticket_escalado') para que el freno del escalado no lo bloquee el
- * correo de bienvenida de la mañana. La plantilla es la misma.
+ * 'soporte_ticket_escalado' / 'soporte_ticket_no_sirvio') para que el freno
+ * del escalado no lo bloquee el correo de bienvenida de la mañana.
+ *
+ * El HTML se arma acá (htmlTicketSoporte) y no en la plantilla de send-email:
+ * la plantilla escapaba el cuerpo y el markdown de Mapi llegaba crudo, y así
+ * el arreglo sale con el deploy del BFF sin redesplegar la edge function.
+ * Asunto con «[Revisar] » cuando hace falta una persona (asuntoTicket).
  */
-export async function avisarTicketSoportePorCorreo(p: { ticketId: string; origen: OrigenTicket; motivo?: string }): Promise<void> {
+export async function avisarTicketSoportePorCorreo(p: {
+    ticketId: string; origen: OrigenTicket; motivo?: string; respuestaId?: string;
+}): Promise<void> {
     try {
         const ahora = Date.now();
-        const tipoLog = p.origen === 'nuevo' ? 'soporte_ticket_nuevo' : 'soporte_ticket_escalado';
+        const tipoLog = `soporte_ticket_${p.origen}`;
 
         if (p.origen === 'escalado') {
             const { count } = await supabase.from('support_messages')
@@ -498,40 +594,31 @@ export async function avisarTicketSoportePorCorreo(p: { ticketId: string; origen
         const estado = ESTADOS_TICKET[t.status] ?? t.status;
         const escuela = (escuelaRes as any)?.data?.name || 'Sin escuela';
         const url = `${frontendUrl()}/admin/support`;
-        const titulo = p.origen === 'nuevo' ? 'Nuevo caso en Mapi' : 'Mapi pasó un caso a una persona';
-        const motivo = p.motivo ? motivoLegible(p.motivo) : '';
+        const subject = asuntoTicket({ origen: p.origen, status: t.status, nombre });
+        const titulo = subject.slice(0, subject.lastIndexOf(': '));
+        const motivo = p.origen === 'no_sirvio'
+            ? 'El usuario marcó que la respuesta de Mapi NO le sirvió.'
+            : p.motivo ? motivoLegible(p.motivo) : '';
+
+        const clave = p.origen === 'nuevo' ? `soporte_ticket_nuevo:${p.ticketId}`
+            : p.origen === 'no_sirvio' ? `soporte_ticket_no_sirvio:${p.ticketId}:${p.respuestaId ?? Math.floor(ahora / 60_000)}`
+                : `soporte_ticket_escalado:${p.ticketId}:${Math.floor(ahora / 60_000)}`;
 
         const r = await enviarConReserva({
-            clave: p.origen === 'nuevo'
-                ? `soporte_ticket_nuevo:${p.ticketId}`
-                : `soporte_ticket_escalado:${p.ticketId}:${Math.floor(ahora / 60_000)}`,
+            clave,
             tipo: tipoLog,
-            plantilla: 'soporte_ticket_nuevo',
+            plantilla: null,
             schoolId: t.school_id ?? null,
             refId: p.ticketId,
             destinos,
-            data: {
-                titulo,
-                requesterName: nombre,
-                requesterEmail: per.email || '',
-                rol: per.role || '',
-                escuela,
-                estado,
-                motivo,
-                mensajesJson: JSON.stringify(mensajes),
-                adminUrl: url,
-            },
+            data: {},
             respaldo: {
-                subject: `${titulo}: ${nombre}`,
+                subject,
                 titulo,
-                lineas: [
-                    `Quién: ${nombre}${per.email ? ` <${per.email}>` : ''}${per.role ? ` · rol ${per.role}` : ''}`,
-                    `Escuela: ${escuela}`,
-                    `Estado: ${estado}`,
-                    ...(motivo ? [`Motivo: ${motivo}`] : []),
-                    ...mensajes.map((m) => `${m.quien} (${m.hora}): ${m.texto}`),
-                ],
-                enlace: { url, texto: 'Abrir la bandeja de soporte' },
+                lineas: [],
+                html: htmlTicketSoporte({
+                    titulo, nombre, correo: per.email || '', rol: per.role || '', escuela, estado, motivo, mensajes, url,
+                }),
             },
         });
         if (r === 'enviado') console.info('[avisos-correo] ticket avisado', { ticketId: p.ticketId, origen: p.origen });

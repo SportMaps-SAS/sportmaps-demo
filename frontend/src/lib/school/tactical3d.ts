@@ -255,15 +255,41 @@ export function fixedCameraPose(court: Court3D, mode: Exclude<CameraMode, 'jugad
     };
   }
   // Detrás del arco propio (abajo en el tablero = +z), mirando hacia el rival.
+  // La mira va al medio campo rival (antes, al propio): la toma quedaba con
+  // la mitad de abajo de césped vacío delante del arco.
   const d = Math.max((court.widthM / 2) * 1.15 / halfH, court.lengthM * 0.28);
   return {
     position: { x: 0, y: Math.max(4, court.lengthM * 0.22), z: court.lengthM / 2 + d * 0.6 },
-    target: { x: 0, y: 0, z: court.lengthM * 0.05 },
+    target: { x: 0, y: 0, z: -court.lengthM * 0.08 },
   };
 }
 
 /** Pantalla angosta (celular vertical): los carteles muestran solo el dorsal. */
 export const isCompactAspect = (aspect: number) => aspect < 0.8;
+
+/** Cámara con la que abre el visor: en el celular vertical, «Táctica alta»
+ *  (el ancho de la cancha a lo ancho de la pantalla, el largo a lo alto); la
+ *  de TV mira de costado y en vertical dejaba los jugadores diminutos. */
+export const defaultViewerCamera = (aspect: number): 'tv' | 'tactica' => (isCompactAspect(aspect) ? 'tactica' : 'tv');
+
+/** Figuras más grandes en el celular vertical (se leen sin hacer zoom). */
+export const figureBoost = (aspect: number) => (isCompactAspect(aspect) ? 1.35 : 1);
+
+/** Alto del cartel (fracción del alto de la vista): más chico en vertical. */
+export const labelScreenSize = (aspect: number) => (isCompactAspect(aspect) ? 0.024 : 0.034);
+
+/**
+ * Cartel corto sobre cada jugador: el dorsal o, sin dorsal, las iniciales de
+ * la etiqueta («Defensa central» → «DC»). La etiqueta completa sale solo en el
+ * jugador tocado: con todas a la vez, desde arriba se montaban unas sobre otras.
+ */
+export function shortTag(visual: Pick<PlayerVisual, 'number' | 'label'>): string {
+  if (visual.number) return visual.number;
+  const words = (visual.label || '').replace(/[.()]/g, ' ').split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+  return words.slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+}
 
 /** Altura de los ojos de la «Vista del jugador», metros (escala incluida). */
 export const EYE_HEIGHT_M = 1.65;

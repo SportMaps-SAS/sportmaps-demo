@@ -15,9 +15,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
-import { Send, User, Loader2, Headset } from "lucide-react";
+import { Send, User, Loader2, Headset, ThumbsUp, ThumbsDown } from "lucide-react";
 import { MapiAvatar } from "@/components/brand/MapiAvatar";
 import { bffClient } from "@/lib/api/bffClient";
+import { respuestaACalificar, type Feedback } from "./teSirvio";
 
 // El bot no manda markdown, pero SI puede citar un link de un artículo de
 // ayuda (/ayuda/slug) dentro del texto — sin esto quedaría como texto plano
@@ -72,6 +73,12 @@ interface SupportTicket {
     category: string | null;
 }
 
+interface ThreadResponse {
+    ticket: SupportTicket | null;
+    messages: SupportMessage[];
+    feedback?: Feedback;
+}
+
 interface SupportChatModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -92,6 +99,8 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
     const [input, setInput] = useState("");
     const [loadingThread, setLoadingThread] = useState(false);
     const [sending, setSending] = useState(false);
+    const [feedback, setFeedback] = useState<Feedback>({});
+    const [calificando, setCalificando] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -99,16 +108,18 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
         if (!isOpen) return;
         setLoadingThread(true);
         bffClient
-            .get<{ ticket: SupportTicket | null; messages: SupportMessage[] }>("/api/v1/support/thread")
+            .get<ThreadResponse>("/api/v1/support/thread")
             .then((res) => {
                 setTicket(res.ticket);
                 setMessages(res.messages);
+                setFeedback(res.feedback ?? {});
             })
             .catch(() => {
                 // Sin hilo previo o error de red: arranca en blanco, el primer
                 // mensaje del usuario lo crea igual (POST /open).
                 setTicket(null);
                 setMessages([]);
+                setFeedback({});
             })
             .finally(() => setLoadingThread(false));
     }, [isOpen]);
@@ -144,12 +155,13 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                 setTicket(opened.ticket);
             }
 
-            const res = await bffClient.post<{ messages: SupportMessage[]; ticket: SupportTicket | null }>(
+            const res = await bffClient.post<ThreadResponse>(
                 "/api/v1/support/messages",
                 { ticketId: activeTicketId, body },
             );
             setMessages(res.messages);
             if (res.ticket) setTicket(res.ticket);
+            if (res.feedback) setFeedback(res.feedback);
         } catch (err) {
             // El mensaje optimista queda, pero se marca el error sin perder lo escrito.
             setMessages((prev) => [
@@ -165,6 +177,35 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
             setSending(false);
         }
     };
+
+    // «¿Te sirvió?» — «No» pasa el caso a una persona (el BFF cambia el estado,
+    // Mapi lo dice en el chat y sale el correo [Revisar] a SportMaps).
+    const calificar = async (messageId: string, util: boolean) => {
+        if (!ticket || calificando) return;
+        setCalificando(true);
+        setFeedback((prev) => ({ ...prev, [messageId]: util ? "si" : "no" }));
+        try {
+            const res = await bffClient.post<ThreadResponse>("/api/v1/support/feedback", {
+                ticketId: ticket.id,
+                messageId,
+                util,
+            });
+            setMessages(res.messages);
+            if (res.ticket) setTicket(res.ticket);
+            if (res.feedback) setFeedback(res.feedback);
+        } catch {
+            // Sin guardar: se vuelven a mostrar los botones para reintentar.
+            setFeedback((prev) => {
+                const resto = { ...prev };
+                delete resto[messageId];
+                return resto;
+            });
+        } finally {
+            setCalificando(false);
+        }
+    };
+
+    const aCalificar = respuestaACalificar(messages, ticket?.status);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === "Enter" && !e.shiftKey) {
@@ -212,14 +253,23 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                         {messages.map((m) => (
                             <div key={m.id} className={`flex gap-3 ${m.author_type === "user" ? "justify-end" : "justify-start"}`}>
                                 {m.author_type !== "user" && <BotAvatar isAgent={m.author_type === "agent"} />}
-                                <div
-                                    className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
-                                        m.author_type === "user"
-                                            ? "bg-primary text-primary-foreground rounded-br-md"
-                                            : "bg-muted rounded-bl-md"
-                                    }`}
-                                >
-                                    <MessageBody body={m.body} />
+                                <div className="max-w-[80%] min-w-0">
+                                    <div
+                                        className={`rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap ${
+                                            m.author_type === "user"
+                                                ? "bg-primary text-primary-foreground rounded-br-md"
+                                                : "bg-muted rounded-bl-md"
+                                        }`}
+                                    >
+                                        <MessageBody body={m.body} />
+                                    </div>
+                                    {m.id === aCalificar && (
+                                        <TeSirvio
+                                            valor={feedback[m.id]}
+                                            disabled={calificando || sending}
+                                            onCalificar={(util) => calificar(m.id, util)}
+                                        />
+                                    )}
                                 </div>
                                 {m.author_type === "user" && (
                                     <div className="w-8 h-8 rounded-full bg-primary/15 flex items-center justify-center shrink-0">
@@ -261,6 +311,46 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                 </div>
             </DialogContent>
         </Dialog>
+    );
+}
+
+function TeSirvio({
+    valor,
+    disabled,
+    onCalificar,
+}: {
+    valor?: "si" | "no";
+    disabled: boolean;
+    onCalificar: (util: boolean) => void;
+}) {
+    if (valor === "si") {
+        return <p className="mt-1 px-1 text-xs text-muted-foreground">¡Qué bien! Gracias por contarme.</p>;
+    }
+    if (valor === "no") return null; // Mapi responde con su propio mensaje
+    return (
+        <div className="mt-1.5 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+            <span>¿Te sirvió?</span>
+            <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1 px-3 text-xs"
+                disabled={disabled}
+                onClick={() => onCalificar(true)}
+            >
+                <ThumbsUp className="h-3.5 w-3.5" /> Sí
+            </Button>
+            <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1 px-3 text-xs"
+                disabled={disabled}
+                onClick={() => onCalificar(false)}
+            >
+                <ThumbsDown className="h-3.5 w-3.5" /> No
+            </Button>
+        </div>
     );
 }
 

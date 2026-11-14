@@ -39,6 +39,30 @@ async function namesOf(table: 'schools' | 'profiles', col: 'name' | 'full_name',
   return out;
 }
 
+/**
+ * Cupo ampliado temporal VIGENTE por escuela (20261027110401). Si la tabla
+ * todavía no existe (migración sin aplicar) no hay multiplicador: {}.
+ * Si hay dos vigentes manda el mayor, igual que tactical_ai_quota_multiplier().
+ */
+async function activeQuotaMultipliers(schoolIds: string[]): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (!schoolIds.length) return out;
+  const nowIso = new Date().toISOString();
+  for (let i = 0; i < schoolIds.length; i += 200) {
+    const { data, error } = await supabase.from('tactical_ai_quota_overrides' as any)
+      .select('school_id, multiplier')
+      .in('school_id', schoolIds.slice(i, i + 200))
+      .lte('starts_at', nowIso)
+      .gt('expires_at', nowIso);
+    if (error) return out;
+    for (const r of (data ?? []) as any[]) {
+      const m = Number(r.multiplier);
+      if (Number.isFinite(m) && m > (out[r.school_id] ?? 0)) out[r.school_id] = m;
+    }
+  }
+  return out;
+}
+
 // GET /api/v1/admin/tactical-ai/usage?period=YYYY-MM
 router.get('/usage', async (req: AuthenticatedRequest, res: Response) => {
   const period = typeof req.query.period === 'string' && PERIOD_RE.test(req.query.period) ? req.query.period : currentPeriodBogota();
@@ -67,7 +91,8 @@ router.get('/usage', async (req: AuthenticatedRequest, res: Response) => {
       namesOf('schools', 'name', schoolIds),
       namesOf('profiles', 'full_name', userIds),
     ]);
-    const report = buildUsageReport({ period, users, schools, runs: (r.data ?? []) as any[], schoolNames, userNames });
+    const multipliers = period === currentPeriodBogota() ? await activeQuotaMultipliers(schoolIds) : {};
+    const report = buildUsageReport({ period, users, schools, runs: (r.data ?? []) as any[], schoolNames, userNames, multipliers });
     return res.json({ ...report, truncated_runs: (r.data ?? []).length >= MAX_RUNS });
   } catch (err: any) {
     req.log?.error({ err }, 'admin/tactical-ai/usage');

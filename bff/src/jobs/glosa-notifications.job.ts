@@ -16,6 +16,7 @@
 import { supabase } from '../config/supabase';
 import { emailClient } from '../utils/emailClient';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
+import { destinatarioDelCobro } from '../utils/destinatarioDelCobro';
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://app.sportmaps.co';
 const fmtCop = (n?: number | null) =>
@@ -30,11 +31,13 @@ function bogotaDate(days: number): string {
 }
 
 const REMINDER_SELECT =
-    'id, school_id, responds_by, payments!inner(parent_id, concept, ' +
-    'parent:profiles!payments_parent_id_fkey(full_name, email))';
+    'id, school_id, responds_by, payments!inner(parent_id, user_id, concept, ' +
+    'parent:profiles!payments_parent_id_fkey(full_name, email), ' +
+    'owner:profiles!payments_user_id_fkey(full_name, email))';
 const RATIFY_SELECT =
-    'id, school_id, payments!inner(parent_id, concept, amount, ' +
-    'parent:profiles!payments_parent_id_fkey(full_name, email))';
+    'id, school_id, payments!inner(parent_id, user_id, concept, amount, ' +
+    'parent:profiles!payments_parent_id_fkey(full_name, email), ' +
+    'owner:profiles!payments_user_id_fkey(full_name, email))';
 
 export async function runGlosaNotifications(): Promise<{ reminders: number; ratifyEmails: number }> {
     const nowIso = new Date().toISOString();
@@ -54,25 +57,28 @@ export async function runGlosaNotifications(): Promise<{ reminders: number; rati
         if (error) throw error;
         for (const g of (data ?? []) as any[]) {
             const p = g.payments;
+            // Sin acudiente, al adulto titular del cobro (user_id).
+            const dest = p?.parent_id ? p.parent : p?.owner;
+            const destId = destinatarioDelCobro(p);
             // notif in-app
-            if (p?.parent_id) {
+            if (destId) {
                 await supabase.from('notifications').insert({
-                    user_id: p.parent_id, school_id: g.school_id, type: 'glosa',
+                    user_id: destId, school_id: g.school_id, type: 'glosa',
                     title: 'Tu aclaración vence mañana',
                     message: 'Es la última oportunidad para aclarar tu comprobante antes de que el plazo se cierre.',
                     link: '/my-payments',
                 });
             }
             // email
-            if (p?.parent?.email) {
+            if (dest?.email) {
                 const tpl = await BrandedEmailTemplates.glosaVenceManana({
-                    parentName: p.parent.full_name || 'Acudiente',
+                    parentName: dest.full_name || 'Acudiente',
                     concept: p.concept || 'tu pago',
                     respondsBy: g.responds_by,
                     link: `${FRONTEND_URL}/my-payments`,
                     schoolId: g.school_id,
                 });
-                emailClient.send({ to: p.parent.email, subject: tpl.subject, html: tpl.html })
+                emailClient.send({ to: dest.email, subject: tpl.subject, html: tpl.html })
                     .catch((e: unknown) => console.warn('[glosa-cron] email recordatorio falló', { glosaId: g.id, e }));
                 reminders++;
             }
@@ -93,16 +99,17 @@ export async function runGlosaNotifications(): Promise<{ reminders: number; rati
         if (error) throw error;
         for (const g of (data ?? []) as any[]) {
             const p = g.payments;
-            if (!p?.parent?.email) continue;
+            const dest = p?.parent_id ? p.parent : p?.owner;
+            if (!dest?.email) continue;
             const tpl = await BrandedEmailTemplates.glosaRatificada({
-                parentName: p.parent.full_name || 'Acudiente',
+                parentName: dest.full_name || 'Acudiente',
                 concept: p.concept || 'tu pago',
                 amount: fmtCop(p.amount),
                 link: `${FRONTEND_URL}/my-payments`,
                 schoolId: g.school_id,
                 expired: true,
             });
-            emailClient.send({ to: p.parent.email, subject: tpl.subject, html: tpl.html })
+            emailClient.send({ to: dest.email, subject: tpl.subject, html: tpl.html })
                 .catch((e: unknown) => console.warn('[glosa-cron] email ratificación falló', { glosaId: g.id, e }));
             ratifyEmails++;
         }

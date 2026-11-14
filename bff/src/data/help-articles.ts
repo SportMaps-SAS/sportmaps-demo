@@ -677,159 +677,104 @@ export const helpArticles: HelpArticle[] = [
   {
     slug: "tomar-asistencia-coach",
     categoryId: "operacion-diaria",
-    title: "Cómo tomar asistencia (lista manual, carnet QR y torniquete)",
+    title: "Tomar asistencia: lista, cerrar, corregir, evaluar el entreno y escanear carnets",
     excerpt:
-      "Las tres formas reales en que SportMaps registra asistencia: lista manual por equipo/plan, escaneo del carnet digital, y check-in automático por torniquete.",
-    readTime: "4 min",
-    targetRole: ["coach", "school"],
+      "La lista arranca con todos en «Vino»: toca solo al que no vino (Faltó, Excusa o Tarde). Guardar, cerrar, corregir hoy o ayer, evaluar al equipo y escanear el carnet en la entrada.",
+    readTime: "5 min",
     body: [
-      {
-        type: "p",
-        content:
-          "SportMaps registra la asistencia de tres formas distintas — según cómo llegue el atleta. Esta guía cubre las tres, en el orden en que se usan normalmente.",
-      },
-      { type: "h2", content: "1. Lista manual por equipo o plan (la más usada)" },
-      {
-        type: "p",
-        content:
-          "Desde Asistencias, eliges el equipo o plan (o SportMaps auto-selecciona la sesión del día si solo hay una). La lista carga con todos los atletas en Presente por defecto — solo tienes que destildar a quien no vino, en vez de tocar a cada uno.",
-      },
+      { type: "callout", variant: "info", content: "Ruta: barra de abajo → Asistencia (pestañas Tomar lista e Historial)" },
+      { type: "h2", content: "Tomar lista" },
       {
         type: "ol",
         items: [
-          "Abre Asistencias y elige el equipo o plan",
-          "La lista carga con todos en Presente",
-          "Toca el estado que corresponda a cada excepción: Ausente, Tarde o Excusado",
-          "Guarda asistencia",
-          "(Opcional) Finaliza la sesión cuando termines",
+          "Elige el equipo (si tienes uno solo entra directo) y el día: Hoy o Ayer.",
+          "Toca a cada deportista para cambiar su estado: Vino → Faltó → Excusa → Tarde. Quien avisó por WhatsApp que no venía arranca con excusa.",
+          "En «Más opciones» marca si fue una clase secundaria (descuenta de las clases secundarias del plan).",
+          "Toca «Guardar lista». Tienes unos segundos para «Deshacer»; luego queda «Lista guardada».",
         ],
       },
-      {
-        type: "table",
-        headers: ["Estado", "Qué significa"],
-        rows: [
-          ["Presente", "Vino a la sesión. Es el estado por defecto."],
-          ["Ausente", "No vino. Si venía de Presente, se le devuelve el crédito."],
-          ["Tarde", "Vino, pero después de empezada la sesión."],
-          ["Excusado", "No vino, con una razón que la escuela acepta (no cuenta igual que un Ausente sin más para las alertas de riesgo)."],
-        ],
-      },
-      {
-        type: "callout",
-        variant: "info",
-        content:
-          "Marcar Presente (viniendo de otro estado) descuenta una clase del plan del atleta, o usa una reserva del mismo día si ya la tenía (ahí no se descuenta doble). Si el plan está vencido o sin clases disponibles, la asistencia se registra igual — nunca se bloquea la lista por eso — y el padre recibe el aviso.",
-      },
-      { type: "h3", content: "Corregir un día anterior" },
-      {
-        type: "p",
-        content:
-          "El campo 'Día de la lista' permite retroceder la fecha. Un coach puede retroceder hasta 7 días; un admin, owner o super_admin no tiene tope. Las fechas futuras siempre se rechazan.",
-      },
-      { type: "h3", content: "Finalizar y reabrir" },
-      {
-        type: "p",
-        content:
-          "Al finalizar una sesión, cualquier atleta con inscripción activa que no quedó con ningún registro se marca automáticamente como Ausente, y se notifica al padre (o al atleta si es adulto). Si un atleta acumula ausencias seguidas hasta cruzar un umbral (2 por defecto, configurable por la escuela), se avisa al dueño de la escuela. Si algo quedó mal marcado, 'Reabrir para corregir' desbloquea la sesión con la misma regla de 7 días / sin tope.",
-      },
-      {
-        type: "callout",
-        variant: "warning",
-        content:
-          "Corrección importante: antes decíamos que una sesión finalizada quedaba editable por 24 horas. Eso no es así — el límite real es 7 días para coach, y sin tope para admin, owner o super_admin.",
-      },
-      { type: "h2", content: "2. Escaneo del carnet digital (QR)" },
-      {
-        type: "p",
-        content:
-          "Es una capa rápida sobre la lista manual, no un reemplazo: sirve para marcar Presente en el momento en que el atleta llega, sin abrir la lista completa. Desde Asistencias, toca 'Escanear carnet' y apunta la cámara al QR del carnet digital de cada atleta — no hace falta elegir equipo antes, el carnet ya sabe a cuál pertenece.",
-      },
+      { type: "callout", variant: "tip", content: "Sin señal, la lista se guarda en el teléfono y sube sola cuando vuelva la conexión. No cierres sesión mientras tanto." },
+      { type: "h2", content: "Cerrar y corregir" },
       {
         type: "ul",
         items: [
-          "Solo marca Presente — nunca Ausente ni Tarde, y nunca toca una sesión ya finalizada",
-          "El carnet debe estar activo (no revocado ni vencido) y el atleta debe tener inscripción activa",
-          "Si el equipo tiene más de un bloque de sesión el mismo día, el sistema no adivina: rechaza el check-in en vez de elegir mal",
-          "Escanear el mismo carnet dos veces para la misma sesión es seguro — no descuenta el crédito dos veces",
-          "Es solo en vivo: no admite fechas retroactivas",
+          "Después de guardar toca «Cerrar y evaluar»: la lista queda fija, a las familias de los que vinieron les llega la encuesta «¿Cómo estuvo el entreno?» y se abre la evaluación. Si no la cierras, se cierra sola a las 11:55 p. m. y la encuesta llega a esa hora.",
+          "Para cambiar una lista cerrada, «Reabrir para corregir». Al volver a cerrarla no se manda otra encuesta.",
+          "«Corregir» está disponible para la lista de hoy y la de ayer. Más atrás, la corrige la escuela.",
         ],
       },
-      { type: "h2", content: "3. Automático por torniquete de acceso (si tu escuela lo tiene)" },
+      { type: "h2", content: "Evaluar al equipo" },
       {
         type: "p",
         content:
-          "Si tu escuela tiene instalado un torniquete biométrico de control de acceso, la asistencia se registra sola cuando el atleta entra: no hay pantalla ni botón, es 100% automático. Al pasar por el torniquete (evento de entrada), si el sistema resuelve al atleta con una inscripción activa, se marca Presente con la misma lógica que el escaneo de carnet.",
+          "La evaluación muestra solo a los que vinieron, todos en «Normal». Toca al que le fue «Bien» o al que «Le costó» (o «A todos: Bien»), escribe una nota para las familias si quieres y «Guardar evaluación»: las familias reciben «Así le fue hoy». Si llegas con la lista abierta, «Cerrar la lista y evaluar» la cierra ahí mismo.",
       },
+      { type: "h2", content: "Historial" },
+      { type: "p", content: "El % de asistencia del mes, cuántos entrenos tienen lista, quién falta mucho y cada entreno con «vinieron N de M». Si llegaron planillas en papel por foto, el aviso sale aquí arriba." },
+      { type: "h2", content: "Escanear carnets en la entrada" },
       {
-        type: "callout",
-        variant: "tip",
+        type: "p",
         content:
-          "Si un atleta aparece 'presente' sin que nadie de la escuela lo haya marcado, casi siempre es esto: entró por el torniquete y el sistema lo resolvió solo. No es un error. El acceso físico (si la puerta se abre o no) y el registro de asistencia son decisiones independientes — una nunca bloquea a la otra.",
+          "«Escanear carnets en la entrada» abre la cámara (acepta el permiso la primera vez). Cada deportista muestra el QR de su carnet digital y queda presente al toque, sin elegir equipo antes. Escanear dos veces no duplica.",
       },
+      { type: "h2", content: "Torniquete" },
+      { type: "p", content: "Si tu escuela tiene control de acceso, la entrada por el torniquete se registra sola; no tienes que hacer nada." },
     ],
+    targetRole: ["coach", "school"],
     related: ["calendario-reservas", "reportes-financieros-asistencia"],
   },
   {
-    slug: "inscripcion-padre-paso-a-paso",
-    categoryId: "para-padres-atletas",
-    title: "Cómo me registro como padre y vinculo a mi hijo",
+    slug: 'inscripcion-padre-paso-a-paso',
+    categoryId: 'para-padres-atletas',
+    title: 'Cómo me registro como acudiente y veo a mi hijo',
     excerpt:
-      "La guía corta para padres: aceptar invitación, crear cuenta, ver a tu hijo y empezar a pagar mensualidades online.",
-    readTime: "3 min",
-    targetRole: ["parent"],
+      'Tres caminos para que tu hijo aparezca en tu cuenta: la invitación de la escuela, el código de la escuela o registrarlo tú.',
+    readTime: '3 min',
+    targetRole: ['parent'],
     body: [
       {
-        type: "p",
+        type: 'p',
         content:
-          "Si tu hijo está inscrito en una escuela que usa SportMaps, te enviaron una invitación por email, WhatsApp o QR. Aceptarla toma 2 minutos.",
+          'Para ver a tu hijo en SportMaps necesitas una cuenta de acudiente y que tu hijo quede ligado a esa cuenta. Hay tres caminos; usa el que te corresponda.',
       },
-      { type: "h2", content: "Opción A: Recibiste un email" },
+      { type: 'h2', content: 'Camino 1: la escuela te invitó' },
       {
-        type: "ol",
+        type: 'ol',
         items: [
-          "Abre el email de SportMaps en tu celular o computadora",
-          "Haz clic en el botón grande 'Aceptar invitación'",
-          "Crea una contraseña (o entra con Google)",
-          "Listo: ya ves a tu hijo en tu cuenta",
+          'Abre la invitación que te llegó al correo o al WhatsApp.',
+          'Toca el enlace y crea tu contraseña (o entra con Google).',
+          'Listo: tu hijo aparece en la pestaña Hijos con su equipo y su profe.',
         ],
       },
-      { type: "h2", content: "Opción B: Recibiste un link por WhatsApp" },
+      { type: 'h2', content: 'Camino 2: ya creaste la cuenta y no ves a tu hijo' },
       {
-        type: "ol",
-        items: [
-          "Abre el link",
-          "Crea cuenta con tu email + contraseña (o Google)",
-          "Listo: la vinculación con tu hijo es automática",
-        ],
-      },
-      { type: "h2", content: "Opción C: Escaneaste un QR en la escuela" },
-      {
-        type: "ol",
-        items: [
-          "El QR abre directamente la app",
-          "Te pide email + contraseña",
-          "Quedas vinculado al hijo cuyo QR escaneaste",
-        ],
-      },
-      { type: "h2", content: "Qué puedes hacer una vez vinculado" },
-      {
-        type: "ul",
-        items: [
-          "Ver perfil y progreso de tu hijo (asistencia, evaluaciones)",
-          "Pagar mensualidades online con tarjeta o PSE (Wompi)",
-          "Recibir notificaciones de pagos próximos y sesiones",
-          "Chatear con la escuela y coaches",
-          "Reservar clases adicionales o eventos",
-        ],
-      },
-      {
-        type: "callout",
-        variant: "tip",
+        type: 'p',
         content:
-          "Si tienes más de un hijo en la misma escuela, cada uno te llega como invitación separada. Aceptas cada una y todos quedan en tu misma cuenta.",
+          'Pídele a la escuela su código (3 letras y 4 caracteres, por ejemplo CAM-ABUP). En Inicio aparece «¿Ya tienes escuela?»: tócalo, escribe el código y sigue los pasos. La escuela te asigna la categoría. Ver «Unirme a mi escuela con el código».',
+      },
+      { type: 'h2', content: 'Camino 3: registrarlo tú' },
+      {
+        type: 'ol',
+        items: [
+          'Abre la pestaña Hijos.',
+          'Toca «Agregar hijo» arriba a la derecha.',
+          'Llena los datos básicos (nombre, fecha de nacimiento, documento) y la parte médica.',
+        ],
+      },
+      {
+        type: 'callout',
+        variant: 'tip',
+        content:
+          'Al crear la cuenta, en el segundo paso hay un campo opcional «¿Ya tienes escuela? Ingresa su código». Si lo llenas, al terminar quedas directo en la solicitud a tu escuela.',
+      },
+      {
+        type: 'callout',
+        variant: 'info',
+        content:
+          'Usa siempre el mismo correo con el que la escuela registró a tu hijo. Si entras con otro correo, tu hijo no aparece.',
       },
     ],
-    related: ["invitar-padres-vinculacion"],
+    related: ['unirse-escuela-con-codigo', 'acudiente-app-guia'],
   },
   {
     slug: "calendario-reservas",
@@ -955,63 +900,34 @@ export const helpArticles: HelpArticle[] = [
   {
     slug: "evaluaciones-jugadores",
     categoryId: "operacion-diaria",
-    title: "Evaluar a jugadores: habilidades, progreso y comentarios",
+    title: "Evaluar a tus deportistas: después del entreno y después del partido",
     excerpt:
-      "Registra evaluaciones técnicas, físicas y tácticas de cada jugador con escala 0-100 y comentarios. Los padres lo ven en su app.",
+      "Dos evaluaciones: la del entreno (Bien · Normal · Le costó, un toque por deportista) y la del partido (criterios de tu escuela de 1 a 5, solo a las convocadas).",
     readTime: "3 min",
-    targetRole: ["coach"],
     body: [
-      {
-        type: "p",
-        content:
-          "Las evaluaciones de SportMaps son simples a propósito: el coach define una habilidad, le pone un puntaje 0-100 con slider y agrega comentarios cortos. El padre lo ve en el progreso del hijo. Sin formularios kilométricos.",
-      },
-      { type: "h2", content: "Crear una evaluación" },
-      {
-        type: "callout",
-        variant: "info",
-        content: "Menú: Evaluaciones (en panel de coach)",
-      },
+      { type: "h2", content: "Después del entreno" },
       {
         type: "ol",
         items: [
-          "Selecciona el equipo del jugador",
-          "Selecciona el jugador específico",
-          "Ingresa el nombre de la habilidad (ej: 'Pase corto', 'Resistencia aeróbica', 'Lectura de juego')",
-          "Mueve el slider entre 0 y 100 para indicar el nivel actual",
-          "Agrega comentarios opcionales (qué notaste, qué trabajar)",
-          "Haz clic en 'Guardar'",
+          "Toma la lista y toca «Cerrar y evaluar» (Asistencia → Guardar lista → Cerrar y evaluar), o toca el pendiente «Falta evaluar el entreno» en Hoy.",
+          "En la evaluación todos arrancan en «Normal». Toca solo al que le fue «Bien» o al que «Le costó».",
+          "Si quieres, «Felicitar» a alguien y una nota para las familias.",
+          "«Guardar evaluación»: las familias de los que vinieron reciben «Así le fue hoy».",
         ],
       },
-      { type: "h2", content: "Buenas prácticas" },
+      { type: "h2", content: "Después del partido" },
       {
-        type: "ul",
+        type: "ol",
         items: [
-          "Usa lenguaje claro: 'Pase corto' es mejor que 'Habilidad técnica 1'",
-          "Evalúa al menos 3 habilidades por jugador cada 4-6 semanas",
-          "Sé constructivo en comentarios — los padres los leen",
-          "Marca evaluaciones consistentes en el tiempo (mismo nombre de habilidad) para que el padre vea progreso real",
+          "Abre el partido (Equipos → Partidos) y ve al paso «Evaluar».",
+          "Toca cada convocada y califica de 1 a 5 los criterios de tu escuela; deja un comentario corto.",
+          "«Guardar evaluación». Si tu escuela comparte las evaluaciones de partido, «Publicar a las familias»: cada familia ve solo la de su deportista.",
         ],
       },
-      {
-        type: "callout",
-        variant: "tip",
-        content:
-          "Las evaluaciones aparecen en orden cronológico inverso en el perfil del jugador. Si calificas 'Resistencia aeróbica' con 60 hoy y con 75 en 8 semanas, el padre ve esa mejora claramente.",
-      },
-      { type: "h2", content: "Quién ve las evaluaciones" },
-      {
-        type: "table",
-        headers: ["Rol", "Qué ve"],
-        rows: [
-          ["Coach que la creó", "Todo, editar/eliminar"],
-          ["Otros coaches del equipo", "Solo lectura"],
-          ["Director / admin", "Todo, exportable"],
-          ["Padre", "Solo las evaluaciones de su(s) hijo(s)"],
-          ["Atleta mayor de edad", "Sus propias evaluaciones"],
-        ],
-      },
+      { type: "callout", variant: "warning", content: "Los criterios de partido los define la administración. Si ves «No hay criterios para evaluar», pídeselo." },
+      { type: "callout", variant: "tip", content: "Lo que dejes en blanco no se guarda: evalúa solo lo que viste." },
     ],
+    targetRole: ["coach"],
     related: ["planes-entrenamiento", "reportes-coach"],
   },
   {
@@ -1240,7 +1156,7 @@ export const helpArticles: HelpArticle[] = [
         content:
           "Mientras la dirección ve métricas de toda la academia, cada entrenador ve solo lo de SUS equipos. El panel responde rápido a las preguntas de siempre: ¿cómo va la asistencia?, ¿cómo nos fue en los partidos?, ¿quién va marcando más goles?",
       },
-      { type: "callout", variant: "info", content: "Menú: Reportes (panel del entrenador)" },
+      { type: "callout", variant: "info", content: "Ruta: Más → Informes del entreno (en la vista anterior: menú Reportes)" },
       { type: "h2", content: "Arriba: el equipo y los totales" },
       {
         type: "p",
@@ -1293,7 +1209,7 @@ export const helpArticles: HelpArticle[] = [
         content:
           "El Informe Mensual le cuenta a cada familia cómo le fue a su hijo o hija en el mes: lo que más mejoró, sus métricas por área, su asistencia, goles y asistencias, y la nota del entrenador. Hay dos informes: el individual (uno por deportista, lo recibe la familia) y el grupal (uno por equipo, solo lo ven el entrenador y la administración).",
       },
-      { type: "callout", variant: "info", content: "Menú: Informe Mensual" },
+      { type: "callout", variant: "info", content: "Entrenador: Más → Informe mensual, o Equipos → tu equipo → Evaluar → Informe del mes. Escuela: menú Informe Mensual." },
       { type: "h2", content: "El proceso del mes" },
       {
         type: "ol",
@@ -1421,7 +1337,7 @@ export const helpArticles: HelpArticle[] = [
       {
         type: "callout",
         variant: "info",
-        content: "Menú: Encuestas → click en cualquier encuesta",
+        content: "Escuela: menú Encuestas → click en cualquier encuesta. Entrenador: Más → Encuestas.",
       },
       {
         type: "p",
@@ -2260,7 +2176,7 @@ export const helpArticles: HelpArticle[] = [
       {
         type: "callout",
         variant: "info",
-        content: "Menú: Mis Eventos / Mis Inscripciones",
+        content: "Acudiente: Más → «Mis eventos y torneos» / «Inscripciones y planes». Deportista: Más → «Torneos y eventos» / «Inscripciones y planes».",
       },
       {
         type: "p",
@@ -2293,7 +2209,7 @@ export const helpArticles: HelpArticle[] = [
       {
         type: "callout",
         variant: "info",
-        content: "Menú: Mis Citas",
+        content: "Ruta: Más → Mis citas",
       },
       {
         type: "p",
@@ -2565,6 +2481,503 @@ export const helpArticles: HelpArticle[] = [
     related: ["registrar-nuevo-atleta", "invitar-padres-vinculacion"],
   },
 
+  // ── Manuales V2 (entrenador y acudiente, 2026-10-27) ──
+  {
+    slug: "planillas-y-matriculas-coach",
+    categoryId: "operacion-diaria",
+    title: "Planillas de asistencia en papel y hojas de matrícula por foto",
+    excerpt:
+      "Si la asistencia o una inscripción se llenó en papel, tómale una foto: el sistema lee los nombres y alguien revisa antes de guardar. Nada se guarda solo.",
+    readTime: "3 min",
+    targetRole: ["coach", "school"],
+    body: [
+      { type: "h2", content: "Planillas de asistencia" },
+      {
+        type: "ol",
+        items: [
+          "En Asistencia → Historial, toca «Subir planilla en papel» y toma la foto de la hoja completa, de frente y con buena luz (también se puede mandar por el WhatsApp de la escuela).",
+          "La planilla queda en la lista: ves la foto y una grilla con cada deportista y fecha. Corrige lo que haga falta.",
+          "Solo se guarda lo que dejes marcado al tocar «Guardar». «Descartar» la saca de la lista.",
+        ],
+      },
+      { type: "callout", variant: "info", content: "Como entrenador ves solo las planillas que tú subiste. Para subirlas, tu escuela debe activar «Coaches pueden subir planillas de asistencia» (Pagos → Config → Permisos); si no está activo, la app te lo dice." },
+      { type: "h2", content: "Hojas de matrícula (si tu escuela lo permite)" },
+      {
+        type: "p",
+        content:
+          "Tu escuela puede dejarte subir la foto de la ficha de inscripción en papel. Tú tomas la foto; la escuela revisa los datos que el sistema leyó y crea al deportista. Si no está habilitado verás «Tu escuela no tiene habilitado que los entrenadores suban hojas de matrícula».",
+      },
+      {
+        type: "table",
+        headers: ["Quién", "Qué hace"],
+        rows: [
+          ["Entrenador", "Ficha del deportista → «Ver todo en Mis deportistas» → subir hoja de matrícula."],
+          ["Administración", "Activa el permiso en Pagos → Config → Permisos → «Coaches pueden subir hojas de matrícula» y revisa en «Matrículas por revisar» (Crear atleta o Descartar)."],
+        ],
+      },
+    ],
+    related: ["tomar-asistencia-coach", "registrar-nuevo-atleta"],
+  },
+  {
+    slug: "entrenador-app-v2",
+    categoryId: "operacion-diaria",
+    title: "La app del entrenador: Hoy, Equipos, Sesiones, Asistencia y Más",
+    excerpt:
+      "Cómo está organizada la app del entrenador en el celular: qué hay en cada una de las cinco pestañas de abajo y qué hacer la primera vez que entras.",
+    readTime: "4 min",
+    targetRole: ["coach"],
+    body: [
+      {
+        type: "p",
+        content:
+          "La app del entrenador está pensada para el celular, en la cancha: botones grandes y una sola cosa por pantalla. Todo lo que haces a diario está en las cinco pestañas de abajo; lo que usas pocas veces está en «Más». En el computador, las mismas secciones salen en el menú de la izquierda.",
+      },
+      {
+        type: "table",
+        headers: ["Pestaña", "Para qué la usas"],
+        rows: [
+          ["Hoy", "Qué entrenas hoy o mañana y lo pendiente: evaluar un entreno, convocar a un partido, publicar el informe."],
+          ["Equipos", "Tus equipos, sus deportistas y su ficha, los partidos y convocatorias, y el informe del mes."],
+          ["Sesiones", "El entreno de hoy, la semana y el plan del mes; abrir la sesión en modo cancha."],
+          ["Asistencia", "Tomar lista, escanear carnets en la entrada, el historial y las planillas en papel."],
+          ["Más", "Calendario, informes, rutinas, dotación, salud del equipo, mensajes, anuncios, encuestas, ayuda y tu cuenta."],
+        ],
+      },
+      { type: "h2", content: "La primera vez que entras" },
+      {
+        type: "ol",
+        items: [
+          "La app te pide tu perfil profesional: nombre, documento, WhatsApp y deporte principal (la foto es opcional). Toca «Siguiente».",
+          "Si tienes licencias o certificados, agrégalos con su archivo (PDF o foto). Puedes dejarlo para después.",
+          "Toca «Guardar Perfil». Tus datos los cambias luego en Más → Mi perfil.",
+        ],
+      },
+      { type: "h2", content: "Hoy: lo que toca y lo pendiente" },
+      {
+        type: "p",
+        content:
+          "Arriba ves si entrenas hoy o qué entrenas mañana («Preparar el entreno de mañana» te lleva a Sesiones). Debajo, en amarillo, los pendientes con su botón: «Falta evaluar el entreno», «Convocar al partido», «Informe por publicar». «Más tarde» lo esconde por ahora.",
+      },
+      { type: "h2", content: "Equipos" },
+      {
+        type: "ul",
+        items: [
+          "Cada equipo tiene tres pestañas: Deportistas, Partidos y convocatorias, y Evaluar.",
+          "En Deportistas ves a cada uno con su acudiente y si está al día o vencido (solo el estado, no los valores).",
+          "Al tocar un deportista: Escribir al acudiente (WhatsApp), Felicitar (le llega a la familia) y Ver ficha.",
+          "Para inscribir, mover o dar de alta deportistas: Ver ficha → «Ver todo en Mis deportistas», si tu escuela te dio ese permiso.",
+        ],
+      },
+      { type: "h2", content: "Más" },
+      {
+        type: "table",
+        headers: ["Entrada", "Qué hay"],
+        rows: [
+          ["Agenda y citas", "Clases fijas asignadas y tus horarios disponibles."],
+          ["Calendario", "Entrenos, partidos y torneos; crear eventos."],
+          ["Informe mensual", "Tu nota del mes por equipo, publicar y enviar a las familias."],
+          ["Informes del entreno", "Asistencia, nómina y resultados del equipo; informe grupal y PDF."],
+          ["Rutinas · Mi dotación · Salud del equipo", "Biblioteca de rutinas, lo que tienes a cargo y quién puede entrenar (sin diagnósticos)."],
+          ["Mensajes · Anuncios · Encuestas", "Conversaciones, anuncios y encuestas de asistencia."],
+          ["Ayuda y Cuenta", "WhatsApp de la escuela, Mapi, Centro de ayuda, notificaciones, perfil, cambiar de escuela o rol, cerrar sesión."],
+        ],
+      },
+      {
+        type: "callout",
+        variant: "tip",
+        content: "Varias acciones (convocar, felicitar, evaluar el entreno) te dan unos segundos para «Deshacer». Espera a que desaparezca el aviso antes de cerrar la app.",
+      },
+    ],
+    related: ["partidos-entrenador", "sesiones-entrenador-v2", "tomar-asistencia-coach", "evaluaciones-jugadores"],
+  },
+  {
+    slug: "partidos-entrenador",
+    categoryId: "operacion-diaria",
+    title: "Partidos: programar, convocar, registrar el resultado, evaluar y reportar",
+    excerpt:
+      "Todo el partido en una sola pantalla: Programar → Convocar → Resultado (goles, asistencias y tarjetas) → Evaluar → Reporte. También desde el calendario.",
+    readTime: "6 min",
+    targetRole: ["coach", "school"],
+    body: [
+      {
+        type: "p",
+        content:
+          "Cada partido vive en una sola pantalla con cinco pasos en orden: Programar, Convocar, Resultado, Evaluar y Reporte. Los pasos hechos quedan con un chulo y puedes volver a cualquiera.",
+      },
+      { type: "callout", variant: "info", content: "Ruta: Equipos → tu equipo → Partidos y convocatorias → «+ Partido»" },
+      { type: "h2", content: "1. Programar" },
+      {
+        type: "ul",
+        items: [
+          "Contra quién, fecha, hora (opcional), en casa o de visita, cancha, tipo (Amistoso, Liga, Copa, Torneo, Clasificatorio, Final) y una nota para las familias.",
+          "Fecha futura: «Programar y convocar». El partido queda también en el calendario del equipo.",
+          "Ya se jugó: «Ya se jugó: registrar el resultado» (o «Guardar y registrar el resultado» si la fecha es hoy o pasada) y vas directo al marcador.",
+        ],
+      },
+      { type: "h2", content: "2. Convocar" },
+      {
+        type: "p",
+        content:
+          "Arranca con todo el equipo (o con la convocatoria del último partido). Toca a quien no va para quitarlo y luego «Convocar a N». Si las familias tienen cuenta, el botón dice «Convocar y avisar a N familias» y ves quién va, quién no y quién no ha respondido.",
+      },
+      { type: "h2", content: "3. Resultado" },
+      {
+        type: "ul",
+        items: [
+          "Marcador con + y − para cada lado.",
+          "En fútbol, fútbol sala y microfútbol: toca una jugadora y anótale Gol, Asistencia, Amarilla, Roja o Autogol. Cada anotación se guarda al instante; con − la quitas.",
+          "Tu marcador se llena solo con los goles anotados; si lo cambias a mano, la app te avisa si no cuadra.",
+          "Toca «Guardar resultado».",
+        ],
+      },
+      { type: "h2", content: "4. Evaluar" },
+      {
+        type: "p",
+        content:
+          "Solo se evalúa a las convocadas, con los criterios de tu escuela (de 1 a 5) y un comentario corto. Lo que dejes en blanco no se guarda. Si tu escuela comparte las evaluaciones de partido, aparece «Publicar a las familias»: cada familia ve solo la de su deportista.",
+      },
+      {
+        type: "callout",
+        variant: "warning",
+        content: "Si dice «No hay criterios para evaluar», pídele a la administración que los defina: desde esa misma pantalla tiene el botón «Usar los criterios sugeridos para partidos».",
+      },
+      { type: "h2", content: "5. Reporte" },
+      {
+        type: "p",
+        content:
+          "Resumen, desarrollo del partido y aspectos a mejorar. Con «Publicar a las familias» se lo envías al equipo. «Guardar» y «Terminar»; luego puedes «Ver o editar el reporte».",
+      },
+      { type: "h2", content: "Falta el resultado, pizarra y lista de partidos" },
+      {
+        type: "ul",
+        items: [
+          "Un partido que ya pasó sin marcador aparece en «Falta el resultado»: tócalo para cerrarlo.",
+          "«Armar la alineación en la pizarra» abre la cancha: eliges la formación, ubicas a los convocados y guardas.",
+          "«Ver todos los partidos» muestra la lista completa del equipo.",
+        ],
+      },
+      { type: "h2", content: "Crear el partido desde el calendario" },
+      {
+        type: "ol",
+        items: [
+          "Más → Calendario → «Nuevo Evento».",
+          "Para quién: el equipo. Tipo: Partido Oficial. La app pide el rival y si juegan en casa o de visita.",
+          "Al crearlo queda el evento y el partido. En el detalle del día aparece «Abrir partido».",
+        ],
+      },
+      { type: "callout", variant: "tip", content: "Si se aplaza, cambia la fecha en «Programar»: el calendario se actualiza solo. Si se cancela, «Cancelar este partido»." },
+    ],
+    related: ["entrenador-app-v2", "evaluaciones-jugadores", "reportes-coach"],
+  },
+  {
+    slug: "sesiones-entrenador-v2",
+    categoryId: "operacion-diaria",
+    title: "Sesiones: el entreno de hoy, la semana, el plan del mes y el modo cancha",
+    excerpt:
+      "Cómo ver y planear tus entrenos desde el celular, abrir la sesión en la cancha con letra grande y armar el plan del mes en la planificación completa.",
+    readTime: "4 min",
+    targetRole: ["coach"],
+    body: [
+      { type: "p", content: "La pestaña Sesiones tiene tres vistas: Hoy, Semana y Plan del mes. Crear o editar sesiones y el plan se hace en la planificación completa (más cómoda en el computador)." },
+      { type: "h2", content: "Semana" },
+      { type: "p", content: "Cada día dice qué equipo entrena y si ya tiene sesión planeada. Al tocar un día con sesión ves sus bloques y los botones «Ver sesión» y «Abrir en la cancha». «Planear» te lleva a la planificación completa." },
+      { type: "h2", content: "Clases de prueba que te asignaron" },
+      { type: "p", content: "Cuando la escuela o el bot de WhatsApp agenda una clase de prueba en uno de tus equipos, sale en Semana, dentro del día de la clase: una tarjeta amarilla con campana que dice «Clase de prueba», la hora, el equipo, el nombre y si ya pagó." },
+      {
+        type: "ul",
+        items: [
+          "Después de la clase marca «Asistió» o «No vino» y elige el «Grupo recomendado». La escuela lo ve en Deportistas → Clase de prueba y con eso sigue con la familia.",
+          "Solo ves las clases de tus equipos. Si te dijeron que tenías una y no aparece, pídele a la administración que revise en qué equipo quedó el cupo o que te asigne a ese equipo.",
+          "Si dice «Falta el comprobante: la clase todavía no está confirmada», el cupo está separado pero sin pago: todavía no se puede marcar.",
+          "Quien viene a prueba no está en la lista de Asistencia: todavía no es del equipo.",
+        ],
+      },
+      { type: "h2", content: "Modo cancha" },
+      { type: "p", content: "«Abrir en la cancha» muestra un bloque a la vez en letra grande, con «Anterior» y «Siguiente». La pantalla no se apaga mientras estás ahí. «Salir» arriba a la derecha." },
+      { type: "h2", content: "Plan del mes" },
+      { type: "p", content: "Elige el equipo y ves el objetivo del mes, las cuatro semanas con su carga y el balance de entrenos hechos. Si no hay plan, «Crear el plan»." },
+      { type: "h2", content: "Planificación completa" },
+      {
+        type: "ol",
+        items: [
+          "Elige el equipo en «Panel de Selección».",
+          "Con el botón ⋯ del plan: «Nuevo mesociclo» (inicio, fin, objetivo general y modelo de juego), «Editar» o «Eliminar».",
+          "En la semana, «Agregar sesión» → elige el día.",
+          "Llena materiales, objetivo, principios de juego y los bloques (nombre, minutos, actividad, componente, objetivo, organización) o tráelos «Desde la biblioteca». La evaluación de la sesión es opcional.",
+          "«Crear Sesión»: queda en su día y en Sesiones → Semana del celular.",
+        ],
+      },
+    ],
+    related: ["planes-entrenamiento", "entrenador-app-v2", "tomar-asistencia-coach"],
+  },
+  {
+    slug: 'acudiente-app-guia',
+    categoryId: 'para-padres-atletas',
+    title: 'La app del acudiente: qué hay en cada pestaña',
+    excerpt:
+      'Inicio, Calendario, Hijos, Pagos y Más: dónde está cada cosa en la app de familias.',
+    readTime: '4 min',
+    targetRole: ['parent'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'La app de familias está hecha para el celular. Todo está en cinco pestañas en la barra de abajo. Lo que no cabe en las primeras cuatro está en Más: no se quitó nada.',
+      },
+      {
+        type: 'table',
+        headers: ['Pestaña', 'Para qué sirve', 'Lo más usado'],
+        rows: [
+          ['Inicio', 'Lo importante de hoy', 'Saldo y botón Pagar, próximo entreno, tarjeta de cada hijo con la frase del profe, torneos abiertos'],
+          ['Calendario', 'Entrenos, partidos y torneos de tus hijos', 'Próximos (día por día), Torneos (inscribir), Mes (cuadrícula)'],
+          ['Hijos', 'La ficha de cada hijo', 'Progreso, Asistencia, Informes, Ficha y salud (documentos y carnet)'],
+          ['Pagos', 'Lo que debes y lo que pagaste', 'Por pagar, Pagados, subir comprobante, estado de cuenta'],
+          ['Más', 'Todo lo demás', 'Inscripciones y planes, Mis eventos y torneos, Carnets, Constancias, Tienda y Mis compras, Salud, Mis citas, Escribirle al club, Centro de ayuda, Notificaciones, Mi cuenta'],
+        ],
+      },
+      { type: 'h2', content: 'Inicio' },
+      {
+        type: 'ul',
+        items: [
+          'Arriba, una frase: «Tienes 3 cobros pendientes» o «Todo al día». El botón verde te lleva a pagar.',
+          'Debajo, el próximo entreno de cualquiera de tus hijos: quién, cuándo y dónde.',
+          'La tarjeta de cada hijo con su equipo, su profe, si debe algo y la frase del profe del último informe. «Ver cómo va» abre su ficha.',
+          'Si a la ficha le falta un dato importante (por ejemplo la EPS), Inicio te lo pregunta con botones.',
+        ],
+      },
+      { type: 'h2', content: 'Calendario' },
+      {
+        type: 'p',
+        content:
+          'El calendario lo publica la escuela; tú lo recibes. Ves los eventos de todos tus hijos juntos, con el nombre de cada uno. Tú no creas ni cambias eventos: si algo está mal, escríbele al club.',
+      },
+      { type: 'h2', content: 'Para volver' },
+      {
+        type: 'p',
+        content:
+          'En las pantallas internas (un informe, un carnet, el estado de cuenta) arriba aparece «Volver a …» con la pestaña de donde saliste. El botón redondo de abajo a la derecha es Mapi, el asistente: pregúntale cómo hacer cualquier cosa.',
+      },
+      {
+        type: 'callout',
+        variant: 'tip',
+        content:
+          'Tus datos, tus avisos y tu contraseña están en un solo lugar: Más → Mi cuenta (Perfil, Notificaciones, Privacidad y Seguridad).',
+      },
+    ],
+    related: ['acudiente-ficha-del-hijo', 'acudiente-pagos-comprobante', 'atleta-inscribirse-evento'],
+  },
+  {
+    slug: 'acudiente-pagos-comprobante',
+    categoryId: 'pagos-finanzas',
+    title: 'Pagar la mensualidad y subir el comprobante (familias)',
+    excerpt:
+      'Cómo pagar en línea, cómo subir el comprobante de una transferencia y dónde ver el estado de cuenta de cada hijo.',
+    readTime: '4 min',
+    targetRole: ['parent'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'Todo está en la pestaña Pagos. Arriba ves cuánto debes. Cada cobro ya viene marcado: si los vas a pagar todos, no tienes que tocar nada más.',
+      },
+      { type: 'h2', content: 'Pagar en línea (tarjeta, PSE o Nequi)' },
+      {
+        type: 'ol',
+        items: [
+          'Abre Pagos → Por pagar. Si quieres dejar un cobro para después, desmárcalo: el total se recalcula.',
+          'Toca «Pagar N cobros». Se pagan uno por uno, con el valor de cada cobro.',
+          'Elige «Pagar online». Revisa el valor, el recargo por pago en línea si tu escuela lo cobra, y el total.',
+          'Toca el botón de pagar: vas a la pasarela segura. Al terminar, el cobro pasa a Pagados.',
+        ],
+      },
+      { type: 'h2', content: 'Ya transferí: subir el comprobante' },
+      {
+        type: 'ol',
+        items: [
+          'En Pagos, toca «Ya transferí: subir el comprobante».',
+          'En la ventana, elige «Transferencia / Nequi / Daviplata». Aparecen los datos de la cuenta de la escuela.',
+          'En «Sube tu comprobante» elige la foto o el PDF y espera «Comprobante cargado».',
+          'Confirma. Sale «Pago registrado. Validaremos tu comprobante pronto».',
+        ],
+      },
+      {
+        type: 'callout',
+        variant: 'warning',
+        content:
+          'Al abrir la ventana desde «Ya transferí», revisa que esté elegida «Transferencia / Nequi / Daviplata» y no «Pagar online» antes de subir el comprobante.',
+      },
+      {
+        type: 'p',
+        content:
+          'El cobro queda «En revisión» hasta que la escuela compare el comprobante con su cuenta. Cuando lo aprueba, pasa a Pagados y te llega el aviso «Pago confirmado». Un comprobante por cobro: si hiciste una sola transferencia por varios cobros, súbela en uno y avísale a la escuela.',
+      },
+      { type: 'h2', content: 'Pagados, recibos y estado de cuenta' },
+      {
+        type: 'ul',
+        items: [
+          'Pagados: todo lo que ya pagaste, con valor, medio y fecha. Los que tienen «Recibo» lo abren con un toque.',
+          'Estado de cuenta: elige a tu hijo y ves, mes a mes, qué debe, qué está vencido y qué está en revisión, con «Pagar este cobro» en cada uno y el botón Imprimir (últimos 12 meses).',
+          'Si pagaste en efectivo en la escuela, la escuela lo registra: no tienes que subir nada.',
+        ],
+      },
+    ],
+    related: ['acudiente-app-guia'],
+  },
+  {
+    slug: 'acudiente-ficha-del-hijo',
+    categoryId: 'para-padres-atletas',
+    title: 'La ficha de tu hijo: progreso, informes, partidos, documentos y carnet',
+    excerpt:
+      'Qué ves en la pestaña Hijos: cómo va, si vino a los entrenos, los informes del profe, los partidos, los documentos y el carnet.',
+    readTime: '5 min',
+    targetRole: ['parent'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'En la pestaña Hijos eliges al hijo (si tienes varios) y ves cuatro pestañas: Progreso, Asistencia, Informes y Ficha y salud.',
+      },
+      {
+        type: 'table',
+        headers: ['Pestaña', 'Qué ves'],
+        rows: [
+          ['Progreso', 'Cada habilidad que mide el profe (de 1 a 5), si subió o bajó, y qué trabajar en casa. Solo se compara con su propio avance, nunca con otros niños. «Ver las gráficas» abre el detalle mes a mes.'],
+          ['Asistencia', 'El porcentaje de cada mes y los últimos entrenos: Vino, Llegó tarde, No vino o Con excusa. Llegar tarde cuenta como haber venido.'],
+          ['Informes', 'El informe del mes (con «Descargar PDF»), lo que trabajó el equipo en el entreno y los informes de partidos.'],
+          ['Ficha y salud', 'Documento, EPS, tipo de sangre, alergias y contacto de emergencia («Corregir un dato»), los documentos y «Mostrar carnet».'],
+        ],
+      },
+      { type: 'h2', content: 'Partidos y convocatorias' },
+      {
+        type: 'ul',
+        items: [
+          'Antes del partido: si tu hijo está convocado te llega el aviso «Convocatoria» con fecha, hora y lugar, y el partido aparece en tu Calendario con la nota de llegada y uniforme. Si no puede ir, avísale al profe o a la escuela por WhatsApp (Más → Escribirle al club).',
+          'Después del partido: en Hijos → Informes → Informes de partidos ves el resultado, el resumen, cómo fue y qué van a mejorar. En «Tu respuesta» le puedes escribir al profe.',
+          'Si la escuela comparte la evaluación del partido, la calificación de tu hijo aparece en Progreso. Cada familia ve solo la de su hijo.',
+        ],
+      },
+      { type: 'h2', content: 'Documentos (todos opcionales)' },
+      {
+        type: 'p',
+        content:
+          'En Ficha y salud → Documentos hay diez tipos: documento del deportista (frente y reverso), foto, certificado de la EPS, paz y salvo, documento del acudiente (frente y reverso), firma del acudiente, firma del deportista y otro documento. Ninguno es obligatorio: súbelos si la escuela te los pide. Toca «Subir», elige una foto o PDF y queda «Cargado», con Ver y Cambiar.',
+      },
+      { type: 'h2', content: 'Carnet digital' },
+      {
+        type: 'p',
+        content:
+          'En Más → Carnets (o «Mostrar carnet» en la ficha) están los carnets de tus hijos. Al tocar uno se abre en grande con el código QR para la entrada de la escuela. Abajo: Ver el reverso, Descargar el carnet y Abrir el enlace para compartir.',
+      },
+      {
+        type: 'callout',
+        variant: 'tip',
+        content:
+          'Después de algunos entrenos te llega «¿Cómo estuvo el entreno de hoy?»: 5 preguntas de un toque, menos de 30 segundos. Le ayudan al profe a cuidar cuánto entrena tu hijo.',
+      },
+    ],
+    related: ['acudiente-app-guia', 'atleta-inscribirse-evento'],
+  },
+  {
+    slug: 'unirse-escuela-con-codigo',
+    categoryId: 'primeros-pasos',
+    title: 'Unirme a mi escuela con el código',
+    excerpt:
+      'Si ya tienes cuenta y no ves a tu hijo ni a tu escuela, ingresa el código de la escuela y ella te asigna la categoría.',
+    readTime: '2 min',
+    targetRole: ['parent', 'athlete'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'Cada escuela tiene un código corto: 3 letras y 4 caracteres, por ejemplo CAM-ABUP. Pídeselo a tu escuela. Sirve para quien ya creó su cuenta y todavía no está unido a ninguna escuela.',
+      },
+      { type: 'h2', content: 'Dónde se ingresa' },
+      {
+        type: 'ul',
+        items: [
+          'En Inicio (y en Hijos) aparece «¿Ya tienes escuela? Ingresa el código que te dio tu escuela».',
+          'Al crear la cuenta, el segundo paso trae el campo opcional «¿Ya tienes escuela? Ingresa su código».',
+          'Si la escuela te mandó el enlace o el QR, ábrelo. Si no has entrado, te pide entrar o crear la cuenta y después usa el código solo.',
+        ],
+      },
+      { type: 'h2', content: 'Los pasos' },
+      {
+        type: 'ol',
+        items: [
+          'Escribe el código y toca «Buscar mi escuela».',
+          'Confirma que es tu escuela (nombre, logo y ciudad): «Sí, es mi escuela».',
+          'Elige «Para mi hijo(a)» o «Para mí», escribe nombre completo y fecha de nacimiento, y si quieres la categoría que crees que le toca.',
+          'Toca «Enviar solicitud». Mientras la escuela responde, Inicio muestra la solicitud y puedes cancelarla.',
+        ],
+      },
+      {
+        type: 'callout',
+        variant: 'info',
+        content:
+          'La categoría que escribes es solo una sugerencia: la escuela decide. Al enviar la solicitud no se crea ningún cobro. Cuando la escuela asigna el equipo te llega el aviso de bienvenida y, si la categoría tiene mensualidad, el primer cobro según las reglas de la escuela.',
+      },
+      {
+        type: 'p',
+        content: 'Con el mismo código puedes unir a otro hijo: al final toca «Unir a otro hijo(a)».',
+      },
+    ],
+    related: ['inscripcion-padre-paso-a-paso', 'acudiente-app-guia'],
+  },
+  {
+    slug: 'instalar-app-celular',
+    categoryId: 'primeros-pasos',
+    title: 'Instalar o descargar la app de SportMaps en el celular (acceso directo en Android y iPhone)',
+    excerpt:
+      'Sí hay aplicación para instalar: SportMaps se instala desde el navegador como acceso directo, en Android con Chrome y en iPhone con Safari. Paso a paso.',
+    readTime: '2 min',
+    targetRole: ['all'],
+    body: [
+      {
+        type: 'p',
+        content:
+          'Sí, SportMaps se puede instalar en el celular. No hace falta buscarla en Play Store ni en App Store: se instala desde el navegador y queda un ícono en la pantalla de inicio, como cualquier app. Se hace una sola vez entrando a app.sportmaps.co.',
+      },
+      { type: 'h2', content: 'En Android (Chrome)' },
+      {
+        type: 'ol',
+        items: [
+          'Abre app.sportmaps.co en Chrome.',
+          'Si sale el aviso «Instalar SportMaps», toca Instalar y confirma. Con eso queda lista.',
+          'Si no sale el aviso, toca el menú ⋮ (arriba a la derecha de Chrome).',
+          'Elige «Instalar app» o «Añadir a pantalla de inicio» y confirma.',
+          'Abre el ícono de SportMaps desde la pantalla de inicio e inicia sesión.',
+        ],
+      },
+      {
+        type: 'callout',
+        variant: 'tip',
+        content:
+          'Si abriste el enlace desde WhatsApp, Instagram o Facebook, no se puede instalar desde ahí: toca ⋮ y elige «Abrir en el navegador» (Chrome), y sigue desde el paso 3.',
+      },
+      { type: 'h2', content: 'En iPhone o iPad (Safari)' },
+      {
+        type: 'ol',
+        items: [
+          'Abre app.sportmaps.co en Safari. En iPhone solo funciona desde Safari, no desde Chrome ni desde WhatsApp.',
+          'Toca el botón Compartir (el cuadrado con la flecha hacia arriba): en iPhone está abajo en el centro, en iPad arriba a la derecha.',
+          'Desliza la lista hacia arriba y toca «Añadir a pantalla de inicio» (en algunas versiones dice «Añadir a inicio»).',
+          'Toca «Añadir», arriba a la derecha.',
+          'Abre el ícono de SportMaps desde la pantalla de inicio e inicia sesión.',
+        ],
+      },
+      { type: 'h2', content: 'Si algo no sale' },
+      {
+        type: 'ul',
+        items: [
+          'En Android no aparece el aviso «Instalar»: puede que ya esté instalada o que Chrome aún no lo ofrezca. Usa el menú ⋮ → «Instalar app».',
+          'En iPhone no aparece «Añadir a pantalla de inicio»: confirma que estás en Safari y no dentro de otra app. Si no la ves en la lista, entra a Compartir → Más y actívala.',
+          'La app se ve desactualizada: ciérrala por completo y ábrela de nuevo con internet; se actualiza sola.',
+          'Si la instalaste desde un enlace de pruebas o de otra dirección, borra ese ícono e instala de nuevo desde app.sportmaps.co.',
+        ],
+      },
+    ],
+    related: ['acudiente-app-guia'],
+  },
 ];
 
 export const helpFAQs: HelpFAQ[] = [
@@ -2576,7 +2989,7 @@ export const helpFAQs: HelpFAQ[] = [
   {
     question: "¿SportMaps funciona en celular?",
     answer:
-      "Sí. SportMaps es una PWA (Progressive Web App): funciona en el navegador del celular y puedes instalarla como app desde Chrome/Safari ('Agregar a pantalla de inicio'). No hay app nativa separada todavía.",
+      "Sí. SportMaps es una PWA (Progressive Web App): funciona en el navegador del celular y puedes instalarla como app: en Android desde Chrome (menú ⋮ → Instalar app) y en iPhone desde Safari (Compartir → Añadir a pantalla de inicio). Se instala una sola vez entrando a app.sportmaps.co. No hay app nativa separada todavía.",
   },
   {
     question: "¿Qué métodos de pago acepta SportMaps?",

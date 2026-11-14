@@ -8,8 +8,10 @@ const patch = vi.fn();
 vi.mock('@/lib/api/bffClient', () => ({
   bffClient: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a), delete: vi.fn() },
   BFFError: class BFFError extends Error {},
+  BFF_URL: 'http://bff.test',
 }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useOptionalAuth: () => null }));
 
 import { FixtureGeneratorDialog } from './FixtureGeneratorDialog';
 import { LiveScorer } from './LiveScorer';
@@ -102,7 +104,7 @@ describe('<LiveSettingsPanel />', () => {
 });
 
 describe('<TournamentLivePage />', () => {
-  it('muestra en juego, siguiente, tabla y pie', async () => {
+  it('payload de hoy: en vivo, set en curso, tabla de voleibol, transmisión y pie', async () => {
     const pm = (p: object) => ({ ...baseMatch(), ...p, version: undefined, config: undefined, live_state: undefined, scorer_label: undefined });
     get.mockResolvedValue({
       event: { id: 'e1', title: 'Copa Monster', sport: 'voleibol', city: 'Bogotá', event_date: '2026-10-24', school_name: 'Monster', live_enabled: true, stream_url: 'https://youtu.be/x', format: 'liga' },
@@ -113,10 +115,10 @@ describe('<TournamentLivePage />', () => {
       server_time: '2026-10-24T15:00:00Z',
     });
     render(<MemoryRouter initialEntries={['/torneo/copa/en-vivo']}><Routes><Route path="/torneo/:slug/en-vivo" element={<TournamentLivePage />} /></Routes></MemoryRouter>);
-    await waitFor(() => expect(screen.getByText('En juego ahora')).toBeTruthy());
-    expect(screen.getByText('Set 2 · 5-3')).toBeTruthy();
-    expect(screen.getByText('Siguiente en cada cancha')).toBeTruthy();
-    expect(screen.getByText('SW-SL')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('live-badge')).toBeTruthy());
+    expect(screen.getByText('5-3').getAttribute('aria-current')).toBe('true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Posiciones' }));
+    expect(screen.getByText('SG')).toBeTruthy();
     expect(screen.getByText('Ver transmisión')).toBeTruthy();
     expect(screen.getByText('Powered by SportMaps')).toBeTruthy();
     expect(get.mock.calls[0][2]).toBe('public');

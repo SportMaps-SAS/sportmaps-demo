@@ -111,7 +111,12 @@ export function planDeAvisos(estado: EstadoAlertas, lista: ComprobantePorValidar
     const verdes = lista.filter((c) => c.receipt_verdict === 'verde').length;
 
     const ultimoRecordatorio = estado.last_reminder_at ? Date.parse(estado.last_reminder_at) : 0;
-    const tocaRecordatorio = viejos.length > 0 && ahora - ultimoRecordatorio >= RECORDATORIO_MS;
+    // Un recordatorio por comprobante (2026-10-29): antes se repetía cada 2 h
+    // mientras quedara UNO pendiente («1 comprobante lleva más de 2 h sin revisar»
+    // 16 veces en 4 días a la misma dueña). Ahora solo suena si hay comprobantes
+    // que cumplieron las 2 h DESPUÉS del último recordatorio.
+    const viejosSinAvisar = viejos.filter((c) => (Date.parse(c.enviado_en) || 0) + RECORDATORIO_MS > ultimoRecordatorio);
+    const tocaRecordatorio = viejosSinAvisar.length > 0 && ahora - ultimoRecordatorio >= RECORDATORIO_MS;
 
     if (tocaRecordatorio) {
         const masAntiguo = viejos.reduce((m, c) => Math.min(m, Date.parse(c.enviado_en) || ahora), ahora);

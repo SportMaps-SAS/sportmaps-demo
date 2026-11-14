@@ -37,6 +37,11 @@ import facilitiesRouter from './routes/facilities';
 import trialClassesRouter from './routes/trial-classes';
 import trialClassesSelfRouter from './routes/trial-classes-self.routes';
 import reservationsAdminRouter from './routes/reservations-admin.routes';
+import reservationsCheckoutRouter from './routes/reservations-checkout.routes';
+import reservationsBatchRouter from './routes/reservations-batch.routes';
+import { reservationsJsonBody, RESERVATIONS_BATCH_BODY_LIMIT_BYTES } from './middlewares/reservationsInput';
+import reservationsRouter from './routes/reservations.routes';
+import publicReservationsRouter from './routes/public-reservations.routes';
 import paymentsRouter from './routes/payments.routes';
 import glosasRouter from './routes/glosas.routes';
 import adminPaymentsRouter from './routes/admin-payments.routes';
@@ -60,14 +65,33 @@ import whatsappImportarChatRouter from './routes/whatsapp-importar-chat.routes';
 import whatsappCortesiasRouter from './routes/whatsapp-cortesias.routes';
 import whatsappPlataformaRouter from './routes/whatsapp-plataforma.routes';
 import whatsappBuzonRouter from './routes/whatsapp-buzon.routes';
+// Campañas de marketing por escuela (plan B5 T5). Detrás de whatsapp_campanas_ajustes.
+import whatsappCampanasRouter from './routes/whatsapp-campanas.routes';
+// Anuncios de Meta con clic a WhatsApp: embudo por anuncio y destino (docs/specs/whatsapp-anuncios-atribucion.md).
+import whatsappAnunciosRouter from './routes/whatsapp-anuncios.routes';
+// Coherencia del texto del asistente contra el catálogo (docs/specs/whatsapp-ventas-de-servicio-blindaje.md, frente B).
+import whatsappCoherenciaRouter from './routes/whatsapp-coherencia.routes';
+// Lista de seguimiento: quién escribió, si respondió la escuela o el bot, quién espera (spec ventas de servicio §4.E).
+import whatsappSeguimientoRouter from './routes/whatsapp-seguimiento.routes';
+// Campañas de descuento por referidos, pago por plazos, retiro/pausa por canales y soportes obligatorios
+// (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md). Cada una detrás de su ajuste por escuela.
+import referidosRoutes from './routes/referidos.routes';
+import acuerdosDePagoRouter from './routes/acuerdos-de-pago.routes';
+import retiroYPausaRouter from './routes/retiro-y-pausa.routes';
+import soportesRouter from './routes/soportes.routes';
+import { iniciarReferidosCron } from './jobs/referidos.job';
+import { iniciarSoportesRecordatoriosCron } from './jobs/soportes-recordatorios.job';
 import publicBookingRouter from './routes/public-booking.routes';
 import cobroEnlacePublicoRouter from './routes/cobro-enlace-publico.routes';
+import { estadoCuentaPublicoRouter, estadoCuentaAdminRouter } from './routes/estado-cuenta-enlace.routes';
 import storeGuestRouter from './routes/store-guest.routes';
 import { initMaintenanceJobs } from './jobs/maintenance.job';
 import { debenCorrerLosCrons } from './jobs/crons-solo-en-render';
 import organizerRouter from './routes/organizers.route';
 import eventsRouter from './routes/events.route';
 import tournamentLiveRouter from './routes/tournament-live.route';
+import tournamentFollowRouter from './routes/tournament-follow.route';
+import { iniciarRecordatoriosTorneoCron } from './services/tournament/tournament-follow.cron';
 import templatesRouter from './routes/templates';
 import pollsRouter from './routes/polls';
 import schoolDelegationsRouter from './routes/school-delegations.route';
@@ -92,6 +116,7 @@ import { probeAiProviders, logAiProvidersAtStartup } from './services/ai-provide
 import admsRouter from './routes/access-adms';
 import accessApiRouter from './routes/access-api';
 import accessAdminRouter from './routes/access-admin.routes';
+import adminWhatsappPlataformaRouter from './routes/admin-whatsapp-plataforma.routes';
 import bridgeRouter from './routes/bridge.routes';
 import { attachBridgeWsServer } from './services/bridgeWsServer';
 
@@ -101,7 +126,8 @@ import trainerWorkspaceRouter from './routes/trainer/workspace';
 import trainerClientsRouter from './routes/trainer/clients';
 import trainerAvailabilityRouter from './routes/trainer/availability';
 import trainerRoutinesRouter from './routes/trainer/routines';
-import trainerTrainingPlansRouter from './routes/trainer/training-plans';
+// trainer/training-plans DESMONTADA (2026-10-27): usaba columnas que no existen y
+// un PUT con update(req.body) sin whitelist. Se vuelve a montar cuando se reescriba.
 import trainerWgerRouter from './routes/trainer/wger';
 import trainerBiomechRouter from './routes/trainer/biomech';
 
@@ -139,6 +165,8 @@ import paymentAdjustmentsRouter from './routes/payment-adjustments.routes';
 import athleteChargesRouter from './routes/athlete-charges.routes';
 import { requireStoreEnabled } from './services/store-flag.service';
 import { storeRateLimit } from './middlewares/storeRateLimit';
+import { redactSecretsInUrl } from './utils/redactUrl';
+import { publicBookingRateKey } from './utils/clientIp';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -252,6 +280,12 @@ app.use(cors({
             origin === allowedProductionDomain ||
             origin === 'https://sportmaps.co' ||
             origin === 'https://app.sportmaps.co' ||
+            // App nativa (Capacitor): el WebView sirve los assets desde https://localhost (Android)
+            // o capacitor://localhost (iOS). Sin esto TODA llamada al BFF desde la app instalada
+            // falla con «Failed to fetch» (la glosa, cobros…). Auth por Bearer JWT, sin cookies.
+            origin === 'https://localhost' ||
+            origin === 'capacitor://localhost' ||
+            origin === 'ionic://localhost' ||
             extraOrigins.has(origin);
 
         if (exactAllowed) return callback(null, true);
@@ -279,6 +313,11 @@ app.use(cors({
 // ANTES de express.json() — protocolo texto plano del F22
 app.use('/', admsRouter);
 
+// Reservas de canchas: cuerpo JSON acotado (20 KB; el lote 200 KB), Content-Type JSON obligatorio, 413/415/400 claros.
+// ANTES del parser global de 5 MB (body-parser salta si el cuerpo ya se parseó).
+app.use('/api/v1/reservations/batch', reservationsJsonBody(RESERVATIONS_BATCH_BODY_LIMIT_BYTES));
+app.use(['/api/v1/reservations', '/api/v1/reservations-admin', '/api/v1/public/reservations'], reservationsJsonBody());
+
 app.use(express.json({
     limit: '5mb',
     verify: (req, _res, buf) => {
@@ -289,7 +328,7 @@ app.use(pinoHttp({
     customProps: (req) => ({ requestId: req.id }),
     // En producción no loguear bodies completos (pueden tener PII)
     serializers: {
-        req: (req) => ({ method: req.method, url: req.url, id: req.id }),
+        req: (req) => ({ method: req.method, url: redactSecretsInUrl(req.url), id: req.id }),
         res: (res) => ({ statusCode: res.statusCode }),
     },
 }));
@@ -320,6 +359,8 @@ app.get('/health/ai', requireAuth, requireRole('super_admin'), async (_req: Requ
 app.use('/api/v1', requireOperationalSchool);
 
 app.use('/api/v1/students', generalLimiter, studentsRouter);
+// «Enviar al acudiente»: requireAuth + rol de administración dentro del router.
+app.use('/api/v1/estado-cuenta', generalLimiter, estadoCuentaAdminRouter);
 app.use('/api/v1/students', generalLimiter, createOneRouter);
 app.use('/api/v1/enrollment-intake', generalLimiter, enrollmentIntakeRouter);
 app.use('/api/v1/attendance-sheet-intake', generalLimiter, attendanceSheetIntakeRouter);
@@ -342,11 +383,12 @@ app.use('/api/v1/webhooks/resend-inbound', resendInboundRouter);
 // alguien agrega un comodín ahí, este seguiría respondiendo. En la MISMA línea
 // y no en un app.use aparte: con dos, cada petición del panel pasaría dos veces
 // por generalLimiter y gastaría doble cupo.
-app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappAdminRouter);
+app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappCampanasRouter, whatsappAnunciosRouter, whatsappCoherenciaRouter, whatsappSeguimientoRouter, whatsappAdminRouter);
 
 // Link público de agendamiento de instalaciones — sin requireAuth, rate-limit propio
 const publicBookingLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false,
+    keyGenerator: publicBookingRateKey,
     message: { error: 'Demasiadas peticiones. Intenta de nuevo en unos minutos.' },
 });
 app.use('/api/v1/public/booking', publicBookingLimiter, publicBookingRouter);
@@ -354,6 +396,9 @@ app.use('/api/v1/public/booking', publicBookingLimiter, publicBookingRouter);
 // Enlace público de un cobro (/p/:token, botón de las plantillas de cobranza de
 // WhatsApp). Sin requireAuth: el token es la credencial. Rate limit dentro del router.
 app.use('/api/v1/public/cobro', cobroEnlacePublicoRouter);
+// Enlace público del estado de cuenta de una familia (/e/:token). Sin requireAuth: el token es
+// la credencial. Rate limit por IP y por token dentro del router.
+app.use('/api/v1/public/estado-cuenta', estadoCuentaPublicoRouter);
 // Tienda: compra SIN cuenta y enlace del pedido /pedido/:token (mig. 20261013170553).
 // Rate limit propio por IP real (CF-Connecting-IP) dentro del router. Va antes del
 // reviewsRouter de /api/v1, que le exige sesión a todo lo que pasa por él.
@@ -406,6 +451,15 @@ app.use('/api/v1/facilities', generalLimiter, facilitiesRouter);
 app.use('/api/v1/trial-classes', generalLimiter, trialClassesRouter);
 app.use('/api/v1/trial-classes-self', generalLimiter, trialClassesSelfRouter);
 app.use('/api/v1/reservations-admin', generalLimiter, reservationsAdminRouter);
+// Cobro de reservas de canchas (F2): checkout con la pasarela de la escuela + comprobante de transferencia.
+app.use('/api/v1/reservations/batch', generalLimiter, reservationsBatchRouter);
+app.use('/api/v1/reservations', generalLimiter, reservationsCheckoutRouter);
+app.use('/api/v1/reservations', generalLimiter, reservationsRouter);
+app.use('/api/v1/referidos', generalLimiter, referidosRoutes);
+app.use('/api/v1/payment-agreements', generalLimiter, acuerdosDePagoRouter);
+app.use('/api/v1/plan-requests', generalLimiter, retiroYPausaRouter);
+app.use('/api/v1/soportes', generalLimiter, soportesRouter);
+app.use('/api/v1/public/reservations', publicReservationsRouter);
 // Glosas: montado ANTES de /api/v1/payments para que la ruta más específica gane.
 app.use('/api/v1/payments/glosas', paymentLimiter, glosasRouter);
 app.use('/api/v1/payments/reconciliation', paymentLimiter, reconciliationRouter);
@@ -446,6 +500,8 @@ app.use('/api/v1/organizer', generalLimiter, organizerRouter);
 app.use('/api/v1/events', generalLimiter, eventsRouter);
 // Torneos en vivo: límites propios (varias familias comparten la wifi del coliseo; la carga la contiene la caché de 5 s).
 app.use('/api/v1/tournament-live', tournamentLiveRouter);
+// Seguir, «hoy juega», comentarios, medios, MVP y estadísticas (mismo prefijo, rutas propias).
+app.use('/api/v1/tournament-live', tournamentFollowRouter);
 app.use('/api/v1/school/delegations', generalLimiter, schoolDelegationsRouter);
 app.use('/api/v1/school', generalLimiter, schoolPerformanceRouter);
 app.use('/api/v1/school', generalLimiter, schoolCompetitionResultsRouter);
@@ -489,6 +545,8 @@ app.use('/api/v1/access', generalLimiter, accessApiRouter);
 // X-Bridge-Api-Key dentro del router (ver bridge.routes.ts).
 app.use('/bridge', generalLimiter, bridgeRouter);
 app.use('/api/v1/admin/access-logs', generalLimiter, accessAdminRouter);
+// Canal de WhatsApp de SportMaps (super admin): conectar, plantillas, escuelas, interruptor.
+app.use('/api/v1/admin/whatsapp-plataforma', generalLimiter, adminWhatsappPlataformaRouter);
 // Consola de soporte (super_admin) — F0 solo lectura.
 app.use('/api/v1/admin/support', generalLimiter, adminSupportRouter);
 // Uso de IA de la pizarra (super_admin): consumo por escuela/coach y «Dar más cupo».
@@ -513,7 +571,6 @@ app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerWorkspaceR
 app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerClientsRouter);
 app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerAvailabilityRouter);
 app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerRoutinesRouter);
-app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerTrainingPlansRouter);
 app.use('/api/v1/trainer', generalLimiter, requireTrainerAuth, trainerBiomechRouter);
 
 // Rutas autenticadas del atleta: usa requireAthleteAuth
@@ -574,10 +631,32 @@ const httpServer = app.listen(PORT, () => {
     if (debenCorrerLosCrons()) {
         initMaintenanceJobs();
         iniciarPlanPorAsistenciaCron();
+        iniciarRecordatoriosTorneoCron();
+        iniciarReferidosCron();
+        iniciarSoportesRecordatoriosCron();
     } else {
         console.log('   Crons APAGADOS: este BFF no corre en Render (CRONS_LOCALES=true para probarlos).');
     }
 });
+
+// Apagado ordenado (auditoría 2026-10-28, A-01). Render manda SIGTERM al viejo
+// proceso en cada despliegue y espera ~30 s antes de matarlo. Sin esto, los
+// turnos del bot en curso (ráfaga de 10 s + modelo) morían con él y la familia
+// quedaba sin respuesta. Se deja de recibir y se esperan hasta 25 s; lo que no
+// alcance a terminar queda anotado y lo relanza el barrido del BFF nuevo.
+let apagando = false;
+async function apagar(senal: string): Promise<void> {
+    if (apagando) return;
+    apagando = true;
+    const { esperarTareasEnCurso, tareasEnCurso } = await import('./services/whatsapp-turnos-pendientes.service');
+    console.log(`[apagado] ${senal}: dejo de recibir y espero ${tareasEnCurso()} turno(s) de WhatsApp en curso`);
+    httpServer.close();
+    const todas = await esperarTareasEnCurso(25_000);
+    console.log(todas ? '[apagado] turnos terminados; salgo' : `[apagado] quedan ${tareasEnCurso()} turno(s); los relanza el barrido`);
+    process.exit(0);
+}
+process.once('SIGTERM', () => { void apagar('SIGTERM'); });
+process.once('SIGINT', () => { void apagar('SIGINT'); });
 
 // Bridges locales (ej. scripts/gymrm-door-bridge/) mantienen UNA conexión
 // WS abierta en vez de long-polling HTTP repetido (2026-09-21, ver

@@ -70,13 +70,12 @@ supabase login
 supabase link --project-ref tu-project-ref
 
 # Configurar secrets de las Edge Functions
-supabase secrets set WOMPI_INTEGRITY_SECRET=tu_integrity_secret_de_wompi
-supabase secrets set WOMPI_EVENTS_SECRET=tu_events_secret_de_wompi
+supabase secrets set WOMPI_INTEGRITY_SECRET=tu_integrity_secret_de_wompi   # lo usa wompi-sign
+# WOMPI_EVENTS_SECRET NO va aquí: el webhook de Wompi lo recibe el BFF (ver abajo)
 supabase secrets set RESEND_API_KEY=re_xxxx_tu_api_key
 supabase secrets set ENVIRONMENT=production
 
 # Desplegar las funciones
-supabase functions deploy wompi-webhook
 supabase functions deploy wompi-sign
 supabase functions deploy send-email
 supabase functions deploy payment-reminders-cron
@@ -87,11 +86,18 @@ supabase functions deploy analyze-receipt
 supabase functions list
 ```
 
-**Configurar webhook en Wompi:**
+> No hay Edge Function `wompi-webhook` (retirada el 2026-10-27): el webhook de Wompi lo recibe el BFF.
+> `send-push-notification` sigue en uso por el trigger legacy de web push hasta completar
+> docs/migraciones-pendientes-2026-10-27/LEEME.md.
+
+**Configurar webhook en Wompi (receptor = BFF):**
 1. Ir a dashboard.wompi.co → Configuración → Webhooks
-2. URL del webhook: `https://tu-proyecto.supabase.co/functions/v1/wompi-webhook`
+2. URL del webhook: `https://<host-del-bff>/api/v1/webhooks/wompi/webhook`
+   (el sufijo `/webhook` es obligatorio; sin él el BFF responde 401 y los eventos se pierden en silencio).
+   Código: `bff/src/routes/wompi.ts`.
 3. Eventos: `transaction.updated`
-4. Copiar el **Events Secret** y guardarlo en `supabase secrets set WOMPI_EVENTS_SECRET=...`
+4. El **Events Secret** de cada escuela se guarda con sus credenciales de pasarela (Configuración de pagos);
+   el de la cuenta agregadora va en la variable `WOMPI_EVENTS_SECRET` del BFF (Render), no en `supabase secrets`.
 
 ---
 
@@ -191,7 +197,10 @@ supabase secrets unset NOMBRE_SECRET
 → El usuario no tiene membresía activa en `school_members`. Verificar que su `status = 'active'`.
 
 **Edge Function retorna 500:**
-→ Verificar: `supabase functions logs wompi-webhook`
+→ Verificar: `supabase functions logs <nombre-de-la-funcion>`
+
+**El webhook de Wompi no concilia pagos:**
+→ Revisar los logs del BFF en Render (ruta `/api/v1/webhooks/wompi/webhook`) y que la URL del dashboard de Wompi termine en `/webhook`.
 
 **Bundle sigue siendo grande:**
 → Verifica que `npm run build` usa las importaciones lazy de `App.tsx`.

@@ -198,3 +198,16 @@ export function mesDelPlan(desde: string, hasta: string): string {
   const mitad = new Date(a + (b - a) / 2).toISOString().slice(0, 10);
   return nombreMes(mitad);
 }
+
+/**
+ * «Planear» / «Crear el plan» abren la planificación completa YA en el equipo
+ * y el día (B6): `?equipo=<id>&fecha=<YYYY-MM-DD>`. TrainingPlansPage los lee.
+ */
+export function rutaPlanear(base: string, ctx: { equipo?: string | null; fecha?: string | null } = {}): string {
+  const q = new URLSearchParams();
+  if (ctx.equipo) q.set('equipo', ctx.equipo);
+  if (ctx.fecha) q.set('fecha', ctx.fecha);
+  const s = q.toString();
+  if (!s) return base;
+  return `${base}${base.includes('?') ? '&' : '?'}${s}`;
+}

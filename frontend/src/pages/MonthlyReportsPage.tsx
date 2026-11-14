@@ -110,6 +110,8 @@ export default function MonthlyReportsPage() {
     const [nota, setNota] = useState('');
     /** Informe cuya nota individual se está editando, y su texto. */
     const [notaIndividual, setNotaIndividual] = useState<{ id: string; texto: string } | null>(null);
+    /** Informe YA PUBLICADO que se está corrigiendo (nota + motivo obligatorio). */
+    const [corrigiendo, setCorrigiendo] = useState<{ id: string; texto: string; motivo: string } | null>(null);
 
     const periodo = { year, month };
     const claveInformes = ['monthly-reports', schoolId, year, month];
@@ -268,6 +270,29 @@ export default function MonthlyReportsPage() {
     });
 
     /**
+     * Corregir un informe YA publicado: admin-only (el BFF y la RPC lo exigen
+     * igual, esto solo evita ofrecer un botón que daría 403). No lo revierte a
+     * borrador — re-congela el snapshot con la nota nueva y archiva la versión
+     * anterior (correct_published_athlete_report, migración 20261103202210).
+     */
+    const corregirPublicado = useMutation({
+        mutationFn: ({ id, texto, motivo }: { id: string; texto: string; motivo: string }) =>
+            bffClient.post<{ snapshot_version: number }>(`/api/v1/school/reports/${id}/correct`, {
+                note: texto,
+                reason: motivo,
+            }),
+        onSuccess: (r) => {
+            toast({
+                title: '✅ Informe corregido',
+                description: `Versión ${r.snapshot_version} del snapshot. La anterior quedó archivada.`,
+            });
+            setCorrigiendo(null);
+            queryClient.invalidateQueries({ queryKey: claveInformes });
+        },
+        onError: fallar('No se pudo corregir el informe'),
+    });
+
+    /**
      * Publicar y enviar son la misma puerta: admin siempre, coach solo si la
      * escuela le delegó la liberación. Se calcula una vez y se usa en los dos
      * caminos —el lote del equipo y el puntual de una fila— para que no puedan
@@ -319,7 +344,7 @@ export default function MonthlyReportsPage() {
 
     const ocupado = generar.isPending || guardarNota.isPending || publicarEquipo.isPending
         || enviar.isPending || guardarNotaIndividual.isPending
-        || publicarUno.isPending || enviarUno.isPending;
+        || publicarUno.isPending || enviarUno.isPending || corregirPublicado.isPending;
 
     return (
         <div className="p-4 md:p-6 space-y-5 max-w-5xl">
@@ -595,6 +620,7 @@ export default function MonthlyReportsPage() {
                         <div className="divide-y border-t">
                             {reports.map((r) => {
                                 const editando = notaIndividual?.id === r.id;
+                                const corrigiendoEste = corrigiendo?.id === r.id;
                                 // Publicado = congelado: cambiar la nota despues
                                 // exige regenerar, que versiona y audita.
                                 const editable = r.status !== 'publicado';
@@ -669,6 +695,25 @@ export default function MonthlyReportsPage() {
                                             </Button>
                                         )}
 
+                                        {/* Corregir un publicado: NO lo reabre, re-congela el
+                                            snapshot con la nota nueva y archiva la versión
+                                            anterior. Misma puerta que publicar/enviar
+                                            (puedePublicar): admin siempre, o el coach si la
+                                            escuela le delegó la liberación — acá no se le
+                                            ofrece al coach un botón que le daría 403. */}
+                                        {r.status === 'publicado' && puedePublicar && (
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 text-xs"
+                                                onClick={() => setCorrigiendo(
+                                                    corrigiendoEste ? null : { id: r.id, texto: r.coach_note ?? '', motivo: '' },
+                                                )}
+                                            >
+                                                Corregir
+                                            </Button>
+                                        )}
+
                                         {r.status === 'publicado' && !r.sent_at && r.recipient_id && puedeEnviar && (
                                             <Button
                                                 size="sm"
@@ -711,6 +756,43 @@ export default function MonthlyReportsPage() {
                                                     Guardar
                                                 </Button>
                                                 <Button variant="ghost" size="sm" onClick={() => setNotaIndividual(null)}>
+                                                    Cancelar
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {corrigiendoEste && (
+                                        <div className="mt-2.5 space-y-2 rounded-md border border-amber-300 dark:border-amber-800 p-2.5">
+                                            <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
+                                                Este informe ya está publicado. Corregirlo re-congela el
+                                                snapshot con la nota nueva; la versión anterior queda
+                                                archivada, no se pierde.
+                                            </p>
+                                            <Textarea
+                                                value={corrigiendo.texto}
+                                                onChange={(e) => setCorrigiendo({ ...corrigiendo, texto: e.target.value })}
+                                                rows={3}
+                                                placeholder={`Nota corregida sobre ${r.athlete_name.split(' ')[0]}…`}
+                                            />
+                                            <Textarea
+                                                value={corrigiendo.motivo}
+                                                onChange={(e) => setCorrigiendo({ ...corrigiendo, motivo: e.target.value })}
+                                                rows={2}
+                                                placeholder="Motivo de la corrección (obligatorio, queda en la auditoría)"
+                                            />
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    size="sm"
+                                                    disabled={ocupado || corrigiendo.motivo.trim() === ''}
+                                                    onClick={() => corregirPublicado.mutate(corrigiendo)}
+                                                >
+                                                    {corregirPublicado.isPending && (
+                                                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                                                    )}
+                                                    Guardar corrección
+                                                </Button>
+                                                <Button variant="ghost" size="sm" onClick={() => setCorrigiendo(null)}>
                                                     Cancelar
                                                 </Button>
                                             </div>

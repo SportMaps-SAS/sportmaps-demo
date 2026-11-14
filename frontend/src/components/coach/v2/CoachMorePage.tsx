@@ -2,7 +2,7 @@
  * «Más» del entrenador — quinta pestaña de la V2 (lienzo «CoaMas»).
  *
  * Lo que se usa pocas veces, en grupos: Mi trabajo, Entrenamiento, Mis servicios,
- * Se usan poco (Mensajes, Anuncios, Encuestas: decisión 1 del usuario), Ayuda y Cuenta.
+ * Comunicación (Mensajes, Anuncios, Encuestas: decisión 1 del usuario), Ayuda y Cuenta.
  * Ninguna entrada del menú actual se pierde: sale del menú real filtrado por
  * moduleKey / adicionales / tienda (coachMasModel.ts). Patrón: ParentMorePage.
  */

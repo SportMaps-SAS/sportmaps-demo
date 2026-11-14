@@ -572,3 +572,12 @@ solo reconoce a alguien con una fila en `zk_user_mappings`. Tres inscritos recie
 se crea «lazy» al primer uso. Dreamers nunca la tuvo, así que no se mostraba. **Arreglo:** se activó con la RPC
 `trial_class_self_service_save_settings` (reagendar 12 h, cobro `en_sede`) el 2026-10-13. El link es
 `/agendar-clase/<slug>`; las categorías de clase de prueba de Dreamers están en 0.
+
+### MB360: el borrado de un usuario por SDK se ve solo al reconectar
+
+`SSR_DeleteEnrollDataExt(…, 12)` borra al usuario, pero **en la misma sesión** `SSR_GetUserInfo` lo sigue devolviendo; el
+cambio se refleja al cerrar la conexión. Un script que verifique dentro de la sesión da un falso «no se pudo borrar» y,
+si se detiene ahí, deja al usuario borrado sin restaurar (pasó con el PIN 12 de Dreamers el 2026-10-23; el respaldo
+guardado antes de borrar lo recuperó). Verificar **reconectando**, y guardar siempre el respaldo a disco **antes** de
+borrar. El SDK `zkemkeeper` es COM de 32 bits: va con `SysWOW64\WindowsPowerShell`, no con el Python de 64 bits.
+

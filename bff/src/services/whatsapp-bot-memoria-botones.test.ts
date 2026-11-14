@@ -479,7 +479,7 @@ describe('correo al escalar', () => {
         await runBotTurn(INTEGRATION, CONV, TEL, 'tengo un problema con la inscripción de mi hijo', 'wamid.1');
         await Promise.resolve();
         expect(h.avisarEscalamientoPorCorreo).toHaveBeenCalledTimes(1);
-        expect(h.avisarEscalamientoPorCorreo.mock.calls[0][0]).toMatchObject({ motivo: 'quiere hablar con alguien' });
+        expect(h.avisarEscalamientoPorCorreo.mock.calls[0][0]).toMatchObject({ motivo: 'Resumen del asistente (no verificado): quiere hablar con alguien' });
     });
 
     it('ya estaba abierta: ni push ni correo', async () => {

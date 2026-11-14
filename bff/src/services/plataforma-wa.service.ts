@@ -26,9 +26,24 @@ import { armarPayloadPlantilla, limpiarParametro } from './whatsapp-plantillas.s
 
 // ─── Flags ───────────────────────────────────────────────────────────────────
 
-/** F1: avisos y comandos de suscripción. Apagado si no es exactamente 'true'. */
+/**
+ * Interruptor por variable de entorno (compatibilidad): `PLATFORM_WA_ENABLED=true`
+ * lo prende siempre. Para decidir si el canal está prendido usar
+ * `canalHabilitado()`, que además lee el interruptor de la base.
+ */
 export function plataformaHabilitada(): boolean {
     return process.env.PLATFORM_WA_ENABLED === 'true';
+}
+
+/**
+ * F1: avisos y comandos de suscripción. Prendido si la variable lo prende o si
+ * el super admin lo prendió en /admin/whatsapp (`platform_wa_canal.habilitado`,
+ * migración 20261029190407) con el canal activo. Cache de 1 min (`leerCanal`).
+ */
+export async function canalHabilitado(): Promise<boolean> {
+    if (plataformaHabilitada()) return true;
+    const c = await leerCanal();
+    return c?.habilitado === true && c.status === 'activo';
 }
 
 export function soloDigitos(s: string | null | undefined): string {
@@ -59,6 +74,8 @@ export interface CanalPlataforma {
     display_phone_number: string | null;
     access_token_encrypted: string | null;
     status: 'inactivo' | 'activo' | 'suspendido' | string;
+    /** Interruptor general desde /admin/whatsapp (sin la migración: undefined = apagado). */
+    habilitado?: boolean;
 }
 
 const CANAL_TTL_MS = 60_000;
@@ -70,7 +87,7 @@ export async function leerCanal(ahora = Date.now()): Promise<CanalPlataforma | n
     let valor: CanalPlataforma | null = null;
     try {
         const { data, error } = await supabase.from('platform_wa_canal')
-            .select('phone_number_id, waba_id, display_phone_number, access_token_encrypted, status')
+            .select('phone_number_id, waba_id, display_phone_number, access_token_encrypted, status, habilitado')
             .eq('id', 'sportmaps')
             .maybeSingle();
         if (!error && data) valor = data as CanalPlataforma;
@@ -359,7 +376,7 @@ export async function avisarPorPlataforma(
     const d = { ...DEPS, ...deps };
     const r: ResultadoAviso = { enviados: 0, fallidos: 0, duplicados: 0, silencio: 0, sinPermiso: 0 };
     try {
-        if (!plataformaHabilitada()) return { ...r, omitido: 'apagado' };
+        if (!(await canalHabilitado())) return { ...r, omitido: 'apagado' };
         if (enCortafuegos()) return { ...r, omitido: 'simulacion' };
         const canal = await d.leerCanal();
         if (!canal || canal.status !== 'activo' || !canal.access_token_encrypted) return { ...r, omitido: 'sin_canal' };
@@ -434,6 +451,6 @@ export async function guardarEstadoPlataforma(
 
 /** Para los ganchos: dispara y se olvida, sin dejar promesas rechazadas. */
 export function avisarEnSegundoPlano(a: AvisoPlataforma): void {
-    if (!plataformaHabilitada()) return;
+    // `avisarPorPlataforma` revisa el interruptor (variable o base) antes de mandar.
     void avisarPorPlataforma(a).catch(() => undefined);
 }

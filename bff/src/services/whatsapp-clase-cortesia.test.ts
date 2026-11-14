@@ -17,7 +17,7 @@ vi.mock('./avisos-correo.service', () => ({ destinatariosDeEscuela: vi.fn(), env
 import {
     atenderTurnoCortesia, pideClaseDeCortesia, quiereCancelarClase, leerEdad, filtrarVigentes,
     tituloBoton, BOTON_CC, quiereSalirDelFlujo, leerPerfil, leerNumeroOpcion, leerDia, filtrarPorPerfil,
-    direccionDeSede, QUE_LLEVAR, type CtxCortesia, type EstadoCortesia, type FranjaCortesia,
+    direccionDeSede, QUE_LLEVAR, nombreValido, type CtxCortesia, type EstadoCortesia, type FranjaCortesia,
     type ResultadoReserva, type ResultadoCancelacion, type ReservaVigente,
 } from './whatsapp-clase-cortesia.service';
 
@@ -595,5 +595,23 @@ describe('auditoría Dynasty 2026-10-07: respuestas repetidas y reservas tardía
         expect(t.reservar).not.toHaveBeenCalled();
         expect(t.ultimo().step).toBe('cortesia_franja_vencida');
         expect(t.estado()?.paso).toBe('elegir_franja');
+    });
+});
+
+describe('análisis de las conversaciones de Dynasty (2026-10-29)', () => {
+    it('«Soy la mamá de Josue» no es un nombre (el bot preguntó «¿Qué edad tiene Soy?»)', () => {
+        expect(nombreValido('Soy la mamá de Josue')).toBeNull();
+        expect(nombreValido('Es para mi hija')).toBeNull();
+        expect(nombreValido('Karol Saenz')).toBe('Karol Saenz');
+    });
+
+    it('ningún grupo recibe 4 años → no se ofrecen los horarios de otros (ni los de Seniors)', () => {
+        const conRango = [
+            { ...DYNASTY[2], edadMin: 8, edadMax: 13 },
+            { ...DYNASTY[4], edadMin: 18, edadMax: 60 },
+        ];
+        const r = filtrarPorPerfil(conRango, { edad: 4, menor: true });
+        expect(r.franjas).toEqual([]);
+        expect(r.sinGrupoParaEdad).toBe(4);
     });
 });

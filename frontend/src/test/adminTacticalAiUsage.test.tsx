@@ -80,6 +80,28 @@ describe('AdminTacticalAiUsagePage', () => {
     await waitFor(() => expect(api.get).toHaveBeenCalledTimes(2));
   });
 
+  it('recarga en la moneda del medidor del coach: «+50 % de IA» = US$ 0,50 del presupuesto base', async () => {
+    render(<AdminTacticalAiUsagePage />);
+    const coach = await screen.findByTestId(`ai-coach-${U1}`);
+    fireEvent.click(within(coach).getByRole('button', { name: /Dar más cupo/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^\+50 % de IA/ }));
+    expect(screen.getByRole('button', { name: /^\+100 % de IA/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Dar cupo/ }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/v1/admin/tactical-ai/grant', {
+      school_id: S1, user_id: U1, amount_usd: 0.5, note: 'Recarga +50 % de IA',
+    }));
+  });
+
+  it('a la escuela no se ofrecen recargas de coach; el cupo ampliado temporal se marca', async () => {
+    api.get.mockResolvedValue({ ...report, schools: [{ ...report.schools[0], quota_multiplier: 3 }] });
+    render(<AdminTacticalAiUsagePage />);
+    const school = await screen.findByTestId(`ai-school-${S1}`);
+    expect(school).toHaveTextContent('Cupo ×3 temporal');
+    fireEvent.click(within(school).getByRole('button', { name: /Dar más cupo/ }));
+    await screen.findByLabelText('Monto (USD)');
+    expect(screen.queryByRole('button', { name: /% de IA/ })).toBeNull();
+  });
+
   it('«Dar más cupo» a la escuela: sin user_id', async () => {
     render(<AdminTacticalAiUsagePage />);
     const school = await screen.findByTestId(`ai-school-${S1}`);

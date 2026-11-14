@@ -142,7 +142,7 @@ beforeEach(() => {
     h.state.inserts = [];
     h.state.updates = [];
     h.state.rpcCalls = [];
-    h.chatWithTools.mockResolvedValue({ text: 'Estás al día ✅', toolCalls: [], provider: 'test' });
+    h.chatWithTools.mockResolvedValue({ text: 'Claro, te ayudo con eso 🙌', toolCalls: [], provider: 'test' });
     h.sendTextMessage.mockResolvedValue({ waMessageId: 'wamid.out' });
     h.botEncendido.mockResolvedValue(true);
     baseDeFamilia();
@@ -199,7 +199,7 @@ describe('webhook: filtro de atención antes de responder', () => {
         await handleBotTurn(req, INTEGRATION, CONV, mensaje());
         expect(h.chatWithTools).toHaveBeenCalledTimes(1);
         expect(borradores()).toHaveLength(1);
-        expect(borradores()[0].row).toMatchObject({ proposed_text: 'Estás al día ✅', status: 'pending' });
+        expect(borradores()[0].row).toMatchObject({ proposed_text: 'Claro, te ayudo con eso 🙌', status: 'pending' });
     });
 
     it('bot PRENDIDO y familia en modo auto: envía', async () => {
@@ -388,7 +388,7 @@ describe('desconocido: correo, código vigente o tema escolar', () => {
         expect(borradores()).toHaveLength(1);
         const { proposed_text, tool_context } = borradores()[0].row;
         expect(tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'pagos' });
-        expect(proposed_text).toContain('asistente automático');
+        expect(proposed_text).toContain('asistente virtual');
         expect(proposed_text).toContain('correo electrónico');
         expect(proposed_text).toContain('celular distinto');
         expect(proposed_text).not.toContain('/join/');

@@ -258,6 +258,15 @@ export const COACHES = [
         specialty: 'Natación — iniciación infantil', phone: '+57 311 555 0202',
         teams: [{ disciplina: 'natacion', cat: 'infantil' }],
     },
+    // Agregado el 2026-10-26 para probar y documentar el Entrenador V2 (partidos
+    // con goles/tarjetas solo salen en fútbol). Se crea con add-coach.mjs, sin
+    // volver a correr el seed completo.
+    {
+        key: 'coach_futbol', email: 'entrenador.futbol@demo.sportmaps.co', full_name: 'Andrés Ríos',
+        signup_role: 'coach', member_role: 'coach', branch: 'futbol',
+        specialty: 'Fútbol — formación Sub-12 y Sub-15', phone: '+57 311 555 0203',
+        teams: [{ disciplina: 'futbol', cat: 'sub15' }, { disciplina: 'futbol', cat: 'sub12' }],
+    },
 ];
 
 // ── 3. Usuarios finales nominales ───────────────────────────────────────────

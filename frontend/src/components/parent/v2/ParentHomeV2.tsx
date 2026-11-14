@@ -12,7 +12,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Bell, ChevronRight, Clock, AlertCircle } from 'lucide-react';
+import { ChevronRight, Clock, AlertCircle } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils';
 import {
   chipHijo,
   cobrosQueSeDeben,
+  conPuntoFinal,
   fechaCabecera,
   hijoSinEps,
   iniciales,
@@ -35,6 +36,9 @@ import { parentHomeQueryKey, useParentHomeData } from './useParentHomeData';
 import { useParentAgenda } from './useParentCalendarData';
 import { buildAgenda } from './parentCalendarModel';
 import { fraseEntrenoDeAgenda } from './parentHomeLogic';
+import { TarjetaConvocatoria, useConvocatoriasFamilia } from './TarjetaConvocatoria';
+import { proximaConvocatoriaDe, type ConvocatoriaHijo } from './convocatoriasAcudiente';
+import { HoyJuegaCard } from '@/components/tournaments/live/HoyJuegaCard';
 
 /** EPS más comunes como respuesta de un toque. `value` = lo que guarda `children.eps_name` (lib/colombian-eps). */
 const OPCIONES_EPS = [
@@ -47,8 +51,6 @@ const OPCIONES_EPS = [
 interface ParentHomeV2Props {
   userId: string | undefined;
   nombreAcudiente: string | null | undefined;
-  /** Avisos sin leer (punto en la campana). undefined = no se sabe, sin punto. */
-  avisosSinLeer?: number;
   /** Banners que el tablero ya mostraba al acudiente (invitación pendiente, etc.). */
   extras?: ReactNode;
   /** Lo que va al final, debajo de las tarjetas (torneos abiertos). */
@@ -57,7 +59,7 @@ interface ParentHomeV2Props {
   hoy?: Date;
 }
 
-export function ParentHomeV2({ userId, nombreAcudiente, avisosSinLeer, extras, pie, hoy }: ParentHomeV2Props) {
+export function ParentHomeV2({ userId, nombreAcudiente, extras, pie, hoy }: ParentHomeV2Props) {
   const ahora = useMemo(() => hoy ?? new Date(), [hoy]);
   const { data, isLoading, isError, refetch, isFetching } = useParentHomeData(userId);
 
@@ -65,9 +67,12 @@ export function ParentHomeV2({ userId, nombreAcudiente, avisosSinLeer, extras, p
 
   return (
     <div className="mx-auto flex w-full max-w-page-narrow flex-col gap-4 pb-nav-safe font-poppins animate-in fade-in duration-300">
-      <Cabecera escuela={escuela} fecha={fechaCabecera(ahora)} avisosSinLeer={avisosSinLeer} />
+      <Cabecera escuela={escuela} fecha={fechaCabecera(ahora)} />
 
       {extras}
+
+      {/* «Hoy juega tu hija…» → página en vivo del torneo (solo si hay partido hoy). */}
+      <HoyJuegaCard userId={userId} />
 
       {isLoading || (!data && !isError) ? (
         <CargandoInicio />
@@ -95,7 +100,8 @@ export function ParentHomeV2({ userId, nombreAcudiente, avisosSinLeer, extras, p
   );
 }
 
-function Cabecera({ escuela, fecha, avisosSinLeer }: { escuela: string | null; fecha: string; avisosSinLeer?: number }) {
+// Sin campana propia: la única es la de la cabecera de la app (GlobalNotificationBell).
+function Cabecera({ escuela, fecha }: { escuela: string | null; fecha: string }) {
   const nombre = escuela ?? 'SportMaps';
   return (
     <header className="flex items-center gap-3">
@@ -109,16 +115,6 @@ function Cabecera({ escuela, fecha, avisosSinLeer }: { escuela: string | null; f
         <span className="truncate text-sm font-semibold">{nombre}</span>
         <span className="text-xs text-muted-foreground">{fecha}</span>
       </div>
-      <Link
-        to="/notifications"
-        aria-label={avisosSinLeer ? `Avisos, ${avisosSinLeer} sin leer` : 'Avisos'}
-        className="relative flex h-touch w-touch items-center justify-center rounded-full hover:bg-muted"
-      >
-        <Bell className="h-5 w-5" aria-hidden />
-        {!!avisosSinLeer && avisosSinLeer > 0 && (
-          <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-orange" aria-hidden />
-        )}
-      </Link>
     </header>
   );
 }
@@ -148,6 +144,8 @@ function Contenido({
     [agenda.data, ahora, userId],
   );
   const entreno = entrenoAgenda !== undefined ? entrenoAgenda : proximoEntreno(hijos, ahora);
+  // B1: «¿Va Tomás?» en la tarjeta de cada hijo convocado.
+  const convocatorias = useConvocatoriasFamilia(userId).data ?? [];
   const deudas = cobrosQueSeDeben(cobros);
 
   return (
@@ -169,7 +167,9 @@ function Contenido({
           <Clock className="h-5 w-5 shrink-0" aria-hidden />
           <p className="text-base leading-snug">
             {entreno.frase.quien} entrena <b>{entreno.frase.cuando}</b>
-            {entreno.frase.donde ? ` en ${entreno.frase.donde}.` : '.'}
+            {entreno.frase.donde
+              ? ` en ${conPuntoFinal(entreno.frase.donde)}`
+              : conPuntoFinal(entreno.frase.cuando).slice(entreno.frase.cuando.trimEnd().length)}
           </p>
         </div>
       )}
@@ -187,7 +187,13 @@ function Contenido({
       ) : (
         <section aria-label="Tus deportistas" className="flex flex-col gap-3">
           {hijos.map((h) => (
-            <TarjetaHijo key={h.id} hijo={h} cobros={deudas.filter((c) => c.child_id === h.id)} />
+            <TarjetaHijo
+              key={h.id}
+              hijo={h}
+              cobros={deudas.filter((c) => c.child_id === h.id)}
+              convocatoria={proximaConvocatoriaDe(convocatorias, h.id)}
+              userId={userId}
+            />
           ))}
         </section>
       )}
@@ -197,7 +203,9 @@ function Contenido({
   );
 }
 
-function TarjetaHijo({ hijo, cobros }: { hijo: Hijo; cobros: Cobro[] }) {
+function TarjetaHijo({
+  hijo, cobros, convocatoria, userId,
+}: { hijo: Hijo; cobros: Cobro[]; convocatoria: ConvocatoriaHijo | null; userId: string | undefined }) {
   const chip = chipHijo(cobros);
   const detalle = [hijo.equipo, hijo.profe ? `Profe ${primerNombre(hijo.profe)}` : null].filter(Boolean).join(' · ');
   return (
@@ -228,6 +236,11 @@ function TarjetaHijo({ hijo, cobros }: { hijo: Hijo; cobros: Cobro[] }) {
             «{hijo.fraseProfe}»
             {hijo.profe && <span className="mt-1 block text-xs text-muted-foreground">Profe {primerNombre(hijo.profe)}</span>}
           </p>
+        </div>
+      )}
+      {convocatoria && (
+        <div className="border-t px-4 py-3.5">
+          <TarjetaConvocatoria conv={convocatoria} userId={userId} compacta />
         </div>
       )}
       <Link

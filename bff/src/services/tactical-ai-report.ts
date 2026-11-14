@@ -37,6 +37,8 @@ export interface SchoolReport {
   cost_usd: number; ceiling_usd: number; pct: number;
   hit_limit: boolean; coaches_at_limit: number;
   coaches: CoachReport[];
+  /** Cupo ampliado temporal vigente (×N), si lo hay. */
+  quota_multiplier?: number;
 }
 export interface SportReport {
   sport: BudgetSport; label: string; analyses: number; cache_hits: number; cost_usd: number; avg_cost_usd: number | null;
@@ -62,8 +64,16 @@ export function buildUsageReport(args: {
   runs: RunRow[];
   schoolNames: Record<string, string>;
   userNames: Record<string, string>;
+  /** Cupo ampliado VIGENTE por escuela (tactical_ai_quota_overrides,
+   *  20261027110401). Solo se pasa para el mes en curso: multiplica el
+   *  presupuesto del coach y el techo de la escuela, como hacen las RPC. */
+  multipliers?: Record<string, number>;
 }): UsageReport {
   const { period, users, schools, runs, schoolNames, userNames } = args;
+  const mult = (schoolId: string) => {
+    const m = Number(args.multipliers?.[schoolId]);
+    return Number.isFinite(m) && m > 0 ? m : 1;
+  };
   const bySchool = new Map<string, SchoolReport>();
   const ensure = (id: string): SchoolReport => {
     let s = bySchool.get(id);
@@ -72,6 +82,7 @@ export function buildUsageReport(args: {
         school_id: id, name: schoolNames[id] ?? 'Escuela sin nombre',
         analyses: 0, cache_hits: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, ceiling_usd: 0, pct: 0,
         hit_limit: false, coaches_at_limit: 0, coaches: [],
+        ...(mult(id) !== 1 ? { quota_multiplier: mult(id) } : {}),
       };
       bySchool.set(id, s);
     }
@@ -80,7 +91,7 @@ export function buildUsageReport(args: {
 
   for (const sc of schools) {
     const s = ensure(sc.school_id);
-    const ceiling = n(sc.ceiling_micro_usd) + n(sc.extra_micro_usd);
+    const ceiling = Math.round(n(sc.ceiling_micro_usd) * mult(sc.school_id)) + n(sc.extra_micro_usd);
     s.ceiling_usd = usd(ceiling);
     s.cost_usd = usd(n(sc.used_micro_usd));
     s.pct = pct(n(sc.used_micro_usd), ceiling);
@@ -89,7 +100,7 @@ export function buildUsageReport(args: {
 
   for (const u of users) {
     const s = ensure(u.school_id);
-    const budget = n(u.budget_micro_usd) + n(u.extra_micro_usd);
+    const budget = Math.round(n(u.budget_micro_usd) * mult(u.school_id)) + n(u.extra_micro_usd);
     const coach: CoachReport = {
       user_id: u.user_id,
       name: userNames[u.user_id] ?? 'Usuario sin nombre',

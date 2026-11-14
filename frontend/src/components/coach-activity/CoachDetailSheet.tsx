@@ -1,7 +1,8 @@
 /**
  * Detalle de un entrenador en "Seguimiento deportivo" (solo lectura):
  * mesociclo vigente + serie de 8 semanas arriba, y pestañas
- * Sesiones · Asistencia · Evaluaciones · Documentos.
+ * Sesiones · Asistencia · Evaluaciones · Documentos · Calificación (la
+ * evaluación del entrenador por período, spec evaluacion-de-entrenadores).
  */
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
@@ -11,8 +12,13 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRight, ClipboardList, FileText, Users, Star } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
+import { ArrowRight, ClipboardList, FileText, Users, Star, Award, Loader2 } from 'lucide-react';
+import { deleteEvaluation, listEvaluations, type CoachEvaluation } from '@/components/coach-evaluation/api';
+import { EvaluationHistory } from '@/components/coach-evaluation/EvaluationHistory';
 import { SessionViewer } from '@/components/school/SessionViewer';
 import { dayToLocalDate } from '@/lib/dateUtils';
 import { CoachWeeksChart } from './CoachWeekChart';
@@ -34,8 +40,27 @@ function adherenceTone(pct: number | null): string {
   return 'text-red-700 dark:text-red-400';
 }
 
-export function CoachDetailSheet({ coach, onClose }: { coach: CoachActivity | null; onClose: () => void }) {
+export function CoachDetailSheet({ coach, onClose, onEvaluate, defaultTab = 'sesiones' }: {
+  coach: CoachActivity | null;
+  /** Pestaña con la que abre la ficha. */
+  defaultTab?: string;
+  onClose: () => void;
+  /** Abre la calificación (la monta la página: dos diálogos de Radix abiertos a la vez se cierran solos). */
+  onEvaluate: (coach: CoachActivity, evaluation?: CoachEvaluation | null) => void;
+}) {
   const [viewing, setViewing] = useState<CoachSessionItem | null>(null);
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const evaluationsQ = useQuery({
+    queryKey: ['coach-evaluations', coach?.staff_id],
+    queryFn: () => listEvaluations([coach!.staff_id]),
+    enabled: !!coach,
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteEvaluation(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['coach-evaluations'] }),
+    onError: (err: unknown) => toast({ title: 'No se pudo borrar', description: err instanceof Error ? err.message : undefined, variant: 'destructive' }),
+  });
 
   return (
     <>
@@ -84,12 +109,13 @@ export function CoachDetailSheet({ coach, onClose }: { coach: CoachActivity | nu
 
               <CoachWeeksChart weekly={coach.weekly} name={coach.full_name} />
 
-              <Tabs defaultValue="sesiones" className="w-full">
-                <TabsList className="grid w-full grid-cols-4 h-auto">
+              <Tabs defaultValue={defaultTab} className="w-full">
+                <TabsList className="grid w-full grid-cols-5 h-auto">
                   <TabsTrigger value="sesiones" className="text-xs px-1 py-1.5">Sesiones</TabsTrigger>
                   <TabsTrigger value="asistencia" className="text-xs px-1 py-1.5">Asistencia</TabsTrigger>
                   <TabsTrigger value="evaluaciones" className="text-xs px-1 py-1.5">Evaluaciones</TabsTrigger>
                   <TabsTrigger value="documentos" className="text-xs px-1 py-1.5">Documentos</TabsTrigger>
+                  <TabsTrigger value="calificacion" className="text-xs px-1 py-1.5">Calificación</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="sesiones" className="space-y-2 pt-2">
@@ -186,6 +212,31 @@ export function CoachDetailSheet({ coach, onClose }: { coach: CoachActivity | nu
                       <p className="mt-1 text-xs text-muted-foreground">Sin mesociclo vigente esta semana.</p>
                     )}
                   </div>
+                </TabsContent>
+
+                <TabsContent value="calificacion" className="space-y-3 pt-2">
+                  <Button type="button" className="w-full" onClick={() => onEvaluate(coach)}>
+                    <Award className="mr-1.5 h-4 w-4" /> Calificar a {coach.full_name.split(' ')[0]}
+                  </Button>
+                  {!coach.has_account && (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      Todavía no entra a SportMaps: recomiéndale ingresar para que la calificación se apoye en datos reales.
+                    </p>
+                  )}
+                  {evaluationsQ.isLoading ? (
+                    <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+                  ) : evaluationsQ.isError ? (
+                    <Empty>No se pudieron cargar sus evaluaciones.</Empty>
+                  ) : (
+                    <EvaluationHistory
+                      evaluations={evaluationsQ.data ?? []}
+                      emptyText="Todavía no lo has calificado."
+                      onEdit={(e) => onEvaluate(coach, e)}
+                      onDelete={(e) => {
+                        if (window.confirm('¿Borrar esta evaluación? No se puede deshacer.')) remove.mutate(e.id);
+                      }}
+                    />
+                  )}
                 </TabsContent>
               </Tabs>
             </div>

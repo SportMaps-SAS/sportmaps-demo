@@ -36,8 +36,8 @@ vi.mock('@/lib/api/v2Contratos', () => ({
 }));
 
 import {
-  cargarAsistencia, cargarEquipos, cargarFelicitaciones, cargarFichas, filtroDeportista,
-  useAthleteAttendance, useAthleteTeams, useMyKudos,
+  cargarAsistencia, cargarAutoevalPendiente, cargarEquipos, cargarFelicitaciones, cargarFichas, enviarRpeRapido,
+  filtroDeportista, formularioAutoeval, useAthleteAttendance, useAthleteTeams, useMyKudos,
 } from './useAthleteV2Data';
 
 const YO = '11111111-1111-4111-8111-111111111111';
@@ -155,5 +155,69 @@ describe('felicitaciones de la cuenta y de la ficha (A2)', () => {
     s.kudos.mockResolvedValue({ data: null, error: null, noDisponible: true });
     expect(await cargarFelicitaciones(YO, [FICHA])).toEqual({ oculto: true, data: [] });
     warn.mockRestore();
+  });
+});
+
+describe('«¿Qué tan duro fue?» de la ficha vinculada', () => {
+  const AHORA = new Date('2026-10-26T15:00:00Z');
+  const sesion = (id: string) => ({
+    id, session_date: '2026-10-26', finalized: true, finalized_at: '2026-10-26T12:00:00Z',
+    teams: { name: 'Sub 17' }, schools: { category_id: 'cat' },
+  });
+
+  it('lista las sesiones de la cuenta y de la ficha; la de la ficha se responde por la ficha', async () => {
+    s.filas.attendance_records = [{ session_id: 's-ficha', attendance_date: '2026-10-26', user_id: null, unregistered_athlete_id: FICHA }];
+    s.filas.attendance_sessions = [sesion('s-ficha')];
+    s.filas.sport_metric_definitions = [{ metric_key: 'rpe_borg' }];
+    const p = await cargarAutoevalPendiente(YO, AHORA, [FICHA]);
+    expect(p).toMatchObject({ sessionId: 's-ficha', fichaId: FICHA, requeridas: ['rpe_borg'] });
+    expect(ops('attendance_records')).toContainEqual(['or', [`user_id.eq.${YO},unregistered_athlete_id.in.(${FICHA})`]]);
+    expect(ops('attendance_records')).toContainEqual(['is', ['child_id', null]]);
+    // ¿Ya respondió? Se pregunta por la ficha, no por la cuenta.
+    expect(ops('performance_entries')).toContainEqual(['eq', ['subject_type', 'unregistered']]);
+    expect(ops('performance_entries')).toContainEqual(['eq', ['subject_id', FICHA]]);
+  });
+
+  it('si la sesión está a nombre de la cuenta, manda la cuenta (sin ficha)', async () => {
+    s.filas.attendance_records = [
+      { session_id: 's1', attendance_date: '2026-10-26', user_id: YO, unregistered_athlete_id: null },
+      { session_id: 's1', attendance_date: '2026-10-26', user_id: null, unregistered_athlete_id: FICHA },
+    ];
+    s.filas.attendance_sessions = [sesion('s1')];
+    const p = await cargarAutoevalPendiente(YO, AHORA, [FICHA]);
+    expect(p).toMatchObject({ sessionId: 's1', fichaId: null });
+    expect(ops('performance_entries')).toContainEqual(['eq', ['subject_type', 'profile']]);
+  });
+
+  it('la sesión que cerró el automático de las 23:55 sigue en plazo al día siguiente', async () => {
+    // finalized_at = hora del entreno (hace 2 días); updated_at = cierre real anoche.
+    s.filas.attendance_records = [{ session_id: 's-auto', attendance_date: '2026-10-24', user_id: YO, unregistered_athlete_id: null }];
+    s.filas.attendance_sessions = [{
+      ...sesion('s-auto'), session_date: '2026-10-24',
+      finalized_at: '2026-10-25T04:59:00Z', updated_at: '2026-10-26T04:55:00Z',
+    }];
+    expect(await cargarAutoevalPendiente(YO, AHORA, [])).toMatchObject({ sessionId: 's-auto' });
+    // Pasado el día siguiente, ya no.
+    expect(await cargarAutoevalPendiente(YO, new Date('2026-10-27T05:00:00Z'), [])).toBeNull();
+  });
+
+  it('una ficha que no es suya no genera tarjeta', async () => {
+    s.filas.attendance_records = [{ session_id: 's2', attendance_date: '2026-10-26', user_id: null, unregistered_athlete_id: FICHA2 }];
+    s.filas.attendance_sessions = [sesion('s2')];
+    expect(await cargarAutoevalPendiente(YO, AHORA, [FICHA])).toBeNull();
+  });
+
+  it('envía p_unregistered_athlete_id por la ficha y el formulario lleva ?ficha=', async () => {
+    s.rpc.mockResolvedValue({ data: { saved: 1 }, error: null });
+    await enviarRpeRapido('s-ficha', YO, 5, FICHA);
+    expect(s.rpc).toHaveBeenCalledWith('submit_post_training_self_eval', {
+      p_session_id: 's-ficha', p_child_id: null, p_user_id: null, p_answers: { rpe_borg: 5 }, p_unregistered_athlete_id: FICHA,
+    });
+    await enviarRpeRapido('s1', YO, 3);
+    expect(s.rpc).toHaveBeenLastCalledWith('submit_post_training_self_eval', {
+      p_session_id: 's1', p_child_id: null, p_user_id: YO, p_answers: { rpe_borg: 3 },
+    });
+    expect(formularioAutoeval({ sessionId: 's-ficha', fichaId: FICHA })).toBe(`/post-entreno/s-ficha?ficha=${FICHA}`);
+    expect(formularioAutoeval({ sessionId: 's1', fichaId: null })).toBe('/post-entreno/s1');
   });
 });

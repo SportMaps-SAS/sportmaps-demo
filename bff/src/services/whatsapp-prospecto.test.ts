@@ -12,8 +12,9 @@ vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
     intencionDeProspecto, puertaDeProspecto, soloSaludoOCortesia, buscaParaAdulto,
-    interesesDeProspecto, edadMencionada,
+    interesesDeProspecto, edadMencionada, pideLlamada, pideUbicacion,
 } from './whatsapp-atencion.service';
+import { desisteDeProspecto } from './whatsapp-atencion.service';
 import { resumirProspecto, telefonoDeLeadWa, variantesTelefonoLead } from './whatsapp-prospecto-lead.service';
 
 describe('intención clara de prospecto → abre la puerta', () => {
@@ -27,6 +28,19 @@ describe('intención clara de prospecto → abre la puerta', () => {
         'Consulta, realizan entrenamiento para niñas de 8 años (en etapa de iniciación)',
         'Consulta, realizan entrenamiento para niñas de 8 años ( en etapa de iniciación)',
         'esoty interesada',
+        'Hola! Me interesa entrenar con ustedes',
+        'Me interesa',
+        'Nos interesa inscribir a mi hijo',
+        'Necesito un lugar donde entrenar voleibol',
+        'Busco dónde jugar voleibol para mi hija',
+        'Quiero formar parte del equipo',
+        'Me encantaría pertenecer al club',
+        'Quisiera participar en sus clases',
+        '¿Hay cupo para niñas de 10 años?',
+        'Tienen cupos disponibles?',
+        'Me llama la atención el club, ¿cómo es?',
+        'Me atrae entrenar con ustedes',
+        'Estoy muy motivada a entrar al club',
         'Hola buen día no dan una clase de cortesía…',
         'Hola buen día no dan una clase de cortesía quisiera llevar la niña pero ella quiere ver cómo es el entrenamiento?',
         'Disculpa para ustedes resiven menores en formación o no?',
@@ -68,6 +82,14 @@ describe('personal, ambiguo o de familia → NO abre la puerta', () => {
         'Buenas tardes envío comprobante de mes de isabella de 4 dias a la semana',
         // Negación y vendedores.
         'No estoy interesada, gracias',
+        'No me interesa, gracias',
+        'Ya no me interesa, gracias',
+        'Ya no quiero entrenar',
+        'No gracias',
+        'Descarto la inscripción',
+        'No necesito más información',
+        'Desisto del cupo',
+        'Me interesa saber cuánto debo de mi saldo',
         'Buenas tardes Hablas con Diana Ejecutiva Comercial del Hotel. El motivo del mensaje es ofrecer nuestros servicios de Alojamiento',
         'Colo se llamaba el restaurante',
         'Estoy más estresada',
@@ -145,6 +167,28 @@ describe('¿busca para un adulto?', () => {
     it('la ráfaga del adulto → sí', () => expect(buscaParaAdulto(rafaga.join('\n'))).toBe(true));
     it('«Mi hija tiene 14 años» → no', () => expect(buscaParaAdulto('Quisiera información\nMi hija tiene 14 años')).toBe(false));
     it('«para niñas de 8 años» → no', () => expect(buscaParaAdulto('realizan entrenamiento para niñas de 8 años')).toBe(false));
+    // Dynasty 2026-11-08: «Para mi y tengo 15 años» es un menor, no un adulto.
+    it('«Para mi y tengo 15 años» → no (un menor que pide para sí)', () => {
+        expect(buscaParaAdulto('Para mi y tengo 15 años')).toBe(false);
+        expect(buscaParaAdulto('Hola, quiero entrenar, tengo 16')).toBe(false);
+        expect(buscaParaAdulto('yo juego y tengo 14 años')).toBe(false);
+    });
+    it('con edad de adulto o la palabra «adultos» sigue siendo adulto', () => {
+        expect(buscaParaAdulto('Para mi, tengo 40 años')).toBe(true);
+        expect(buscaParaAdulto('quiero entrenar, tengo 18 años')).toBe(true);
+        expect(buscaParaAdulto('curso para adultos')).toBe(true);
+        expect(buscaParaAdulto('para mi')).toBe(true);
+    });
+    it('pideLlamada: «regrésame la llamada», «me pueden llamar», «hablar con alguien»; no el resto', () => {
+        for (const t of ['Te agradezco si me puedes regresar la llamada me gustaría hablar contigo', 'me pueden llamar?', 'Llámame por favor',
+            'quiero hablar con la directora', 'necesito hablar con alguien', 'prefiero una llamada']) expect(pideLlamada(t)).toBe(true);
+        for (const t of ['Hola', '¿Cuánto cuesta la mensualidad?', 'Quiero una clase de cortesía', 'Gracias', null, '']) expect(pideLlamada(t)).toBe(false);
+    });
+    it('pideUbicacion: «dónde queda la cancha», «la dirección», «cómo llego»; no «dónde pago»', () => {
+        for (const t of ['Donde queda la cancha', '¿Dónde queda?', 'cual es la direccion', 'Me das la ubicación', 'como llego', 'donde es la clase', 'dónde entrenan'])
+            expect(pideUbicacion(t)).toBe(true);
+        for (const t of ['Hola', '¿Cuánto cuesta?', 'donde pago', 'donde esta mi hijo', 'quiero información', null, '']) expect(pideUbicacion(t)).toBe(false);
+    });
     it('resumen del lead del adulto', () => {
         const r = resumirProspecto(rafaga);
         expect(r.adulto).toBe(true);
@@ -159,4 +203,55 @@ describe('teléfono del lead (mismo formato que la reserva de cortesía)', () =>
         expect(telefonoDeLeadWa('13101234567')).toBe('+13101234567');
         expect(variantesTelefonoLead('13101234567')).toEqual(['13101234567', '+13101234567']);
     });
+});
+
+describe('ampliación 2026-11-12: abre la puerta (hijos en 3.ª persona, club para mi hija)', () => {
+    it.each([
+        'quiero que mi hijo juegue con ustedes', 'mi hijo quiere entrenar con ustedes', 'mi hija necesita entrenar',
+        'me gustaría que mi hija practique voleibol', 'queremos que nuestro hijo entrene voleibol',
+        'quisiera que mi hijo hiciera parte del club', 'mi hijo quiere practicar voleibol con ustedes',
+        'necesito una escuela de voleibol para mi hija', 'busco un club para mi hijo de 10 años',
+        'busco una academia de voleibol para mi niña', 'estoy buscando un equipo donde mi hija pueda jugar',
+        'necesito un lugar donde entrenar', 'hay cupos para niñas de 8', 'me encantaría pertenecer al club',
+        'nunca he jugado voleibol, me gustaría empezar',
+    ])('sí: %s', (t) => expect(intencionDeProspecto(t)).toBe(true));
+});
+
+describe('ampliación 2026-11-12: NO abre (otro club, cancha, trabajo, torneo, conocido, app)', () => {
+    it.each([
+        'quiero jugar con ustedes el domingo', 'buscamos jugar un partido contra ustedes', 'necesitamos jugar este sábado, tienen cancha?',
+        'quiero entrenar con mi equipo en su cancha', 'busco un lugar donde entrenar con mi equipo',
+        'necesitamos entrenar en su coliseo, cuánto cuesta alquilarlo?', 'buscamos entrenar el jueves en su cancha, nos prestan?',
+        'quiero entrenar mañana, a qué hora abren la cancha', 'soy de otro club y buscamos entrenar con ustedes',
+        'hay cupo en el torneo?', 'tienen cupos en la clínica?', 'hay cupo para la rifa?', 'hay cupo en el bus?',
+        'necesito saber si tienen cupo en el parqueadero', 'quiero participar como entrenador en su club',
+        'quiero formar parte de su cuerpo técnico', 'busco formar parte del staff', 'tienen vacantes de trabajo?',
+        'hay plazas de entrenador?', 'busco entrenar a un grupo de niñas, necesitan profe?', 'quiero participar en el torneo',
+        'quiero jugar contigo mañana en el parque', 'amigo busco jugar voleibol hoy en la tarde',
+        'busco al profe Carlos, quiero entrenar con él en privado', 'necesito entrenar mi perro', 'quiero practicar mi inglés con ustedes',
+        'necesito aprender a manejar la plataforma', 'quiero unirme al grupo de WhatsApp de los papás',
+        'busco aprender cómo montar una escuela de voleibol', 'buscando equipo para jugar el fin de semana',
+        'mi hijo quiere jugar con ustedes el sábado contra su equipo',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
+});
+
+describe('ampliación 2026-11-12: negaciones', () => {
+    it.each([
+        'no me gustaría entrenar ahí', 'quiero cancelar, mi hija no quiere entrenar más', 'no quisiera entrenar más',
+        'ya no busco donde entrenar', 'no estamos interesados en entrenar', 'nunca quise entrenar vóley',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
+    it.each(['ya no quiero entrenar vóley', 'nunca quise entrenar vóley', 'no estamos interesados en entrenar'])
+        ('desisteDeProspecto: %s', (t) => expect(desisteDeProspecto(t)).toBe(true));
+    it('quien se inscribe a un torneo o clínica sigue abriendo la puerta (inscrib… no pasa por el guardia)', () => {
+        expect(intencionDeProspecto('quiero inscribirme al torneo')).toBe(true);
+    });
+});
+
+describe('falsos positivos medidos en datos reales (2026-11-12)', () => {
+    it.each([
+        '¡Cordial saludo! Somos BCH, fabricamos uniformes para escuelas de fútbol',
+        'Hola, hablas con Stefania entrenadora de Ushuaia, ¿podrían ir a jugar un amistoso?',
+        'Vale muchas gracias por la información',
+        'Este no es el canal para información de Club Monsters Volley',
+    ])('no: %s', (t) => expect(intencionDeProspecto(t)).toBe(false));
 });

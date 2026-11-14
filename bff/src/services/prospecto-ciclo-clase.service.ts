@@ -87,7 +87,7 @@ const DEPS_LLEGADA: DepsLlegada = {
         const variantes = variantesTelefonoLead(contactWaId);
         if (!variantes.length) return null;
         const { data, error } = await supabase.from('school_signup_leads')
-            .select('id, full_name, source_detail, status, school_trial_slots!inner(id, label, slot_date, start_time, end_time, location)')
+            .select('id, full_name, source_detail, status, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, label, slot_date, start_time, end_time, location)')
             .eq('school_id', schoolId)
             .in('phone', variantes)
             .in('status', ['new', 'contacted', 'converted'])
@@ -178,10 +178,13 @@ export function claseTerminada(horaInicio: string, horaFin: string | null, ahora
 /** «¿Cómo le fue?» + el enlace de inscripción. Pura. */
 export function textoSeguimientoClase(a: {
     saludo: string; atleta: string | null; esAcudiente: boolean; enlace: string | null; asistio: boolean;
+    /** Nombre de la clase de la escuela (B3, textos-clase-prueba). Por defecto, «clase de cortesía». */
+    nombreClase?: string;
 }): string {
+    const clase = a.nombreClase || 'clase de cortesía';
     const pregunta = a.esAcudiente && a.atleta
-        ? `¿Cómo le fue a *${a.atleta}* en la clase de cortesía de hoy?`
-        : '¿Cómo te fue en la clase de cortesía de hoy?';
+        ? `¿Cómo le fue a *${a.atleta}* en la ${clase} de hoy?`
+        : `¿Cómo te fue en la ${clase} de hoy?`;
     const cierre = a.enlace
         ? `Si quieren seguir entrenando con nosotros, aquí pueden hacer la inscripción: ${a.enlace}`
         : 'Si quieren seguir entrenando con nosotros, respóndeme por aquí y la escuela les ayuda con la inscripción.';
@@ -209,7 +212,11 @@ export interface DepsSeguimiento {
     botEncendido: (integrationId: string) => Promise<boolean>;
     tomada: (conversationId: string) => Promise<boolean>;
     dadoDeBaja: (integrationId: string, waId: string) => Promise<boolean>;
+    /** Lo que escribió el contacto en las últimas 24 h (para no preguntarle «¿cómo te fue?» a quien canceló). */
+    entrantesDelDia: (conversationId: string) => Promise<string[]>;
     enlace: (schoolId: string) => Promise<string | null>;
+    /** Nombre de la clase de la escuela («clase de cortesía» | «clase de prueba»). */
+    nombreClase?: (schoolId: string) => Promise<string>;
     /** true = este BFF lo tomó (nadie lo había mandado). */
     reclamar: (r: ReservaParaSeguimiento, iso: string) => Promise<boolean>;
     /** Devuelve el reclamo si el envío falló (otro tick lo intenta). */
@@ -218,13 +225,13 @@ export interface DepsSeguimiento {
     enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, payload: Record<string, unknown>) => Promise<boolean>;
 }
 
-const PASO_SEGUIMIENTO_CLASE = 'cortesia_seguimiento_noche';
+export const PASO_SEGUIMIENTO_CLASE = 'cortesia_seguimiento_noche';
 
 const DEPS_SEGUIMIENTO: DepsSeguimiento = {
     async reservasDelDia(fecha) {
         const { data, error } = await supabase.from('school_signup_leads')
             .select('id, school_id, full_name, guardian_name, phone, status, trial_slot_id, source_detail, '
-                + 'school_trial_slots!inner(id, slot_date, start_time, end_time)')
+                + 'school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, slot_date, start_time, end_time)')
             .not('trial_slot_id', 'is', null)
             .in('status', ['new', 'contacted'])
             .eq('school_trial_slots.slot_date', fecha)
@@ -267,9 +274,21 @@ const DEPS_SEGUIMIENTO: DepsSeguimiento = {
         const { estaDadoDeBaja } = await import('./whatsapp-optin.service');
         return estaDadoDeBaja(integrationId, waId);
     },
+    async entrantesDelDia(conversationId) {
+        const { data } = await supabase.from('whatsapp_messages')
+            .select('text_body')
+            .eq('conversation_id', conversationId).eq('direction', 'inbound')
+            .gte('created_at', new Date(Date.now() - 24 * 3600_000).toISOString())
+            .limit(40);
+        return ((data as any[]) ?? []).map((m) => String(m.text_body ?? '')).filter(Boolean);
+    },
     async enlace(schoolId) {
         const { enlaceDeInscripcion } = await import('./whatsapp-bot.service');
         return enlaceDeInscripcion(schoolId);
+    },
+    async nombreClase(schoolId) {
+        const { textosClaseDeEscuela } = await import('./textos-clase-prueba');
+        return (await textosClaseDeEscuela(schoolId)).nombre;
     },
     async reclamar(r, iso) {
         // UPDATE condicional: entre los 3 BFF, solo uno encuentra la marca vacía.
@@ -326,12 +345,18 @@ export async function runSeguimientoNocheCortesia(
             if (!(await d.botEncendido(integ.id)) || await d.tomada(conv.id) || await d.dadoDeBaja(integ.id, waId)) {
                 resumen.omitidos++; continue;
             }
+            // …0683 (2026-10-22): «voy a cancelar la clase» / «No me da tiempo de ir»
+            // y esa noche le llegó «¿Cómo le fue en la clase?».
+            if ((await d.entrantesDelDia(conv.id).catch(() => [] as string[])).some(avisaQueNoVa)) {
+                resumen.omitidos++; continue;
+            }
             if (!(await d.reclamar(r, ahora.toISOString()))) { resumen.omitidos++; continue; }
 
             const { saludo, atleta } = nombresDelLead({ full_name: r.nombre, guardian_name: r.acudiente });
             const texto = textoSeguimientoClase({
                 saludo, atleta, esAcudiente: !!r.acudiente, enlace: await d.enlace(r.schoolId).catch(() => null),
                 asistio: r.etapa === 'asistio',
+                nombreClase: d.nombreClase ? await d.nombreClase(r.schoolId).catch(() => undefined) : undefined,
             });
             const env = await d.enviar(integ, conv.id, waId, texto, {
                 step: PASO_SEGUIMIENTO_CLASE, lead_id: r.leadId, trial_slot_id: r.slot.id,
@@ -344,6 +369,12 @@ export async function runSeguimientoNocheCortesia(
         }
     }
     return resumen;
+}
+
+/** ¿El texto dice que no va a ir a la clase? Pura. */
+export function avisaQueNoVa(texto: string): boolean {
+    const n = texto.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
+    return /\bcancel\w*|\bno (me|nos) da (el )?tiempo\b|\bno (voy|vamos|puedo|podemos|alcanzo|alcanzamos) (a )?(ir|asistir|llegar)\b|\bno (vamos|voy) a poder\b|\bno podre(mos)?\b/.test(n);
 }
 
 // ─── 3. Inscripción con el mismo teléfono o correo ───────────────────────────
@@ -459,7 +490,7 @@ export async function yaReservoClase(schoolId: string, contactWaId: string, ahor
         if (!variantes.length) return false;
         const desde = ahoraBogota(new Date(ahora.getTime() - DIAS_RESERVA_RECIENTE * 86400_000)).iso;
         const { data, error } = await supabase.from('school_signup_leads')
-            .select('id, school_trial_slots!inner(slot_date)')
+            .select('id, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(slot_date)')
             .eq('school_id', schoolId)
             .in('phone', variantes)
             .neq('status', 'discarded')

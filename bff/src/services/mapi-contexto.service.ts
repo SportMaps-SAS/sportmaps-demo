@@ -55,6 +55,17 @@ const ROL_VISIBLE: Record<string, string> = {
 
 const uniq = <T,>(xs: T[]) => [...new Set(xs)];
 
+/**
+ * Ids con los que un coach puede figurar en `teams.coach_id` y
+ * `team_coaches.coach_id`: su perfil (cuentas viejas) y sus filas de
+ * school_staff (coach_auth_id = perfil), que es lo que guarda hoy la app.
+ * TeamsPage acepta las dos.
+ */
+export async function idsDeCoach(userId: string): Promise<string[]> {
+    const { data: staff } = await supabase.from('school_staff').select('id').eq('coach_auth_id', userId);
+    return uniq([userId, ...((staff as any[]) || []).map((s) => s.id)]);
+}
+
 export async function construirContextoMapi(userId: string, schoolId: string | null): Promise<ContextoMapi> {
     const ctx: ContextoMapi = {
         nombre: null,
@@ -75,8 +86,11 @@ export async function construirContextoMapi(userId: string, schoolId: string | n
     ctx.nombre = p?.full_name ?? null;
 
     const filas: any[] = Array.isArray(membresias?.data) ? membresias.data : [];
-    // Si el ticket no trae escuela, la del primer vínculo hace de activa.
-    const idActiva = schoolId ?? filas[0]?.school_id ?? null;
+    // La escuela activa la decide la sesión (req.schoolId), nunca se adivina:
+    // antes, sin escuela se tomaba «la primera» y a quien está en dos escuelas
+    // le podía llegar contexto de la otra. Una escuela que no es suya tampoco
+    // vale (defensa extra: el BFF entra con service_role y salta la RLS).
+    const idActiva = schoolId && filas.some((m) => m.school_id === schoolId) ? schoolId : null;
     const enActiva = filas.filter((m) => m.school_id === idActiva);
     const nombreDe = (m: any) => (Array.isArray(m.schools) ? m.schools[0]?.name : m.schools?.name) ?? null;
 
@@ -94,12 +108,12 @@ export async function construirContextoMapi(userId: string, schoolId: string | n
 
     if (ctx.roles.includes('coach') && idActiva) {
         tareas.push((async () => {
-            // Un coach puede estar asignado por su perfil o por su fila de
-            // school_staff (coach_auth_id) — TeamsPage acepta las dos.
-            const { data: staff } = await supabase.from('school_staff').select('id').eq('coach_auth_id', userId);
-            const ids = [userId, ...((staff as any[]) || []).map((s) => s.id)];
+            const ids = await idsDeCoach(userId);
             const [{ data: directos }, { data: asignados }] = await Promise.all([
-                supabase.from('teams').select('name').eq('school_id', idActiva).eq('coach_id', userId),
+                // teams.coach_id guarda el id de school_staff (no el del perfil):
+                // con .eq('coach_id', userId) Mapi le decía a Carlos Ramírez que
+                // no tenía equipos teniendo Lightning y Thunder (2026-10-27).
+                supabase.from('teams').select('name').eq('school_id', idActiva).in('coach_id', ids),
                 supabase.from('team_coaches').select('teams(name)').eq('school_id', idActiva).in('coach_id', ids),
             ]);
             ctx.equiposQueEntrena = uniq([

@@ -1,0 +1,24 @@
+{
+  "name": "seguimiento_interesado",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! 👋 Soy Mapi, el asistente virtual de {{2}}. Vimos que nos escribiste con interés y queremos ayudarte. ¿Te cuento los grupos, horarios y sedes para que elijas el que mejor te queda?",
+      "example": { "body_text": [["Carolina", "Monster´s Volley Club"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir mensajes cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, cuéntame" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

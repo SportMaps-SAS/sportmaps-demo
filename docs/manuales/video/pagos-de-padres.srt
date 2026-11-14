@@ -1,0 +1,43 @@
+1
+00:00:00,017 --> 00:00:07,290
+Así pagas la mensualidad en SportMaps. Cuando tienes cobros pendientes, el inicio te avisa con este banner verde.
+
+2
+00:00:07,752 --> 00:00:10,369
+Tócalo y llegas directo a Mis Pagos.
+
+3
+00:00:10,829 --> 00:00:18,174
+Arriba ves cuánto tienes pendiente. Abajo, cada mes es un cobro aparte, con su estado y su propio botón Pagar.
+
+4
+00:00:18,637 --> 00:00:21,205
+Toca Pagar en el mes que vas a pagar.
+
+5
+00:00:21,669 --> 00:00:30,118
+El valor ya viene listo. Si pagas en línea con Wompi, con tarjeta, PSE o Nequi, ves el recargo y el total antes de continuar.
+
+6
+00:00:30,583 --> 00:00:39,488
+Si prefieres transferir, elige Transferencia, Nequi o Daviplata. Aparecen los datos de la cuenta de la escuela, con un botón para copiarlos.
+
+7
+00:00:39,949 --> 00:00:44,269
+Después de transferir, sube la foto o el PDF del comprobante.
+
+8
+00:00:44,733 --> 00:00:47,373
+Y toca Pagar para enviarlo a la escuela.
+
+9
+00:00:47,870 --> 00:00:56,702
+Listo. El cobro queda por validar hasta que la escuela revise tu comprobante. Cuando lo apruebe, te llega una notificación y un correo.
+
+10
+00:00:57,431 --> 00:01:03,214
+Y en Estado de cuenta ves todo el historial de tu hijo: lo facturado, lo pagado y lo que queda pendiente.
+
+11
+00:01:03,689 --> 00:01:08,873
+Así de fácil. Si tienes dudas sobre un cobro, escríbele a tu escuela.

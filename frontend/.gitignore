@@ -53,3 +53,6 @@ playwright/.cache/
 # Evidencia de QA exploratorio (capturas y logs): se genera local, no va al repo
 e2e/screenshots/
 e2e/qa-discovery/screenshots/
+
+# QA de reservas: capturas generadas por Playwright (se regeneran)
+e2e/reservas/.capturas/

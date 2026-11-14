@@ -1,8 +1,35 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_DRAFT, groupSizes, knockoutMatches, validateDraft, summarizeDraft, buildFixturesBody, toColombiaIso, moveItem,
+  DEFAULT_CUPS, defaultCupsFor, fitCupsToMax, resolveInitialFormat, validateCups,
   type FormatDraft,
 } from './tournamentFormats';
+
+describe('copas según el tamaño del grupo (B7)', () => {
+  it('reparte las copas por defecto según la posición máxima', () => {
+    expect(defaultCupsFor(4).map((c) => c.positions)).toEqual([[1, 2], [3, 4]]);
+    expect(defaultCupsFor(3).map((c) => c.positions)).toEqual([[1, 2], [3]]);
+    expect(defaultCupsFor(2).map((c) => c.positions)).toEqual([[1], [2]]);
+    expect(defaultCupsFor(1).map((c) => c.positions)).toEqual([[1]]);
+  });
+  it('copas sin tocar se reparten de nuevo; editadas solo se recortan', () => {
+    const fitted = fitCupsToMax(DEFAULT_CUPS, 2);
+    expect(fitted.map((c) => c.positions)).toEqual([[1], [2]]);
+    expect(validateCups(fitted, 2, 2)).toBeNull();
+    expect(fitCupsToMax(fitted, 4).map((c) => c.positions)).toEqual([[1, 2], [3, 4]]);
+    const custom = [{ label: 'Oro', positions: [1, 3], thirdPlace: true }];
+    expect(fitCupsToMax(custom, 2)).toEqual([{ label: 'Oro', positions: [1], thirdPlace: true }]);
+  });
+});
+
+describe('formato inicial del generador (B5)', () => {
+  it('guardado > ?formato= > liga', () => {
+    expect(resolveInitialFormat('grupos', 'copa')).toBe('grupos');
+    expect(resolveInitialFormat(null, 'copa')).toBe('copa');
+    expect(resolveInitialFormat('americano', 'nada')).toBe('liga');
+    expect(resolveInitialFormat(undefined, null)).toBe('liga');
+  });
+});
 
 const d = (p: Partial<FormatDraft>): FormatDraft => ({ ...DEFAULT_DRAFT, ...p });
 

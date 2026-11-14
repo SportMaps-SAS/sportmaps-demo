@@ -189,7 +189,7 @@ describe('prospecto (número desconocido)', () => {
         expect(h.chatWithTools).not.toHaveBeenCalled();
         expect(borradores()).toHaveLength(1);
         const b = borradores()[0].row;
-        expect(b.proposed_text).toContain('asistente automático');
+        expect(b.proposed_text).toContain('asistente virtual');
         expect(b.proposed_text).toContain('*gratis durante una semana*');
         // La marca (?t=slug) depende de school_shows_own_brand; acá importa la ruta.
         expect(b.proposed_text).toContain('https://app.sportmaps.co/join/besser-cortesia');

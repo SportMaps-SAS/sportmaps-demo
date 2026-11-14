@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Monster WhatsApp</title>
+<style>
+:root {
+  --bg: #f4f2ee;
+  --surface: #ffffff;
+  --ink: #1d1d1b;
+  --ink-2: #55534e;
+  --line: #e2ded6;
+  --accent: #f2b705;
+  --accent-ink: #1d1d1b;
+  --tag-existe: #dff3e4; --tag-existe-ink: #1d6b35;
+  --tag-ajusta: #fff1c7; --tag-ajusta-ink: #7a5600;
+  --tag-nuevo: #e3e9ff; --tag-nuevo-ink: #2a3f9e;
+  --tag-meta: #f6e3ff; --tag-meta-ink: #6b2a8f;
+  --tag-humano: #ffe3df; --tag-humano-ink: #9b2c1f;
+  /* WhatsApp */
+  --wa-head: #008069; --wa-head-ink: #ffffff;
+  --wa-wall: #efeae2;
+  --wa-in: #ffffff; --wa-out: #d9fdd3;
+  --wa-ink: #111b21; --wa-meta: #667781;
+  --wa-btn: #ffffff; --wa-btn-ink: #027eb5;
+  --wa-chip: #ffffffd9; --wa-chip-ink: #54656f;
+  --wa-tick: #53bdeb;
+  --wa-sys: #fff6c5; --wa-sys-ink: #54656f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161614; --surface: #1f1f1d; --ink: #f1efe9; --ink-2: #b4b0a6; --line: #34322e;
+    --accent: #f2b705; --accent-ink: #161614;
+    --tag-existe: #173822; --tag-existe-ink: #8fdca6;
+    --tag-ajusta: #3a2e08; --tag-ajusta-ink: #f5d06a;
+    --tag-nuevo: #1c2652; --tag-nuevo-ink: #a9b8ff;
+    --tag-meta: #33193f; --tag-meta-ink: #dfa6ff;
+    --tag-humano: #3f1914; --tag-humano-ink: #ffa99c;
+    --wa-head: #202c33; --wa-head-ink: #e9edef; --wa-wall: #0b141a;
+    --wa-in: #202c33; --wa-out: #005c4b; --wa-ink: #e9edef; --wa-meta: #8696a0;
+    --wa-btn: #202c33; --wa-btn-ink: #53bdeb; --wa-chip: #182229; --wa-chip-ink: #8696a0;
+    --wa-sys: #182229; --wa-sys-ink: #ffd279;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161614; --surface: #1f1f1d; --ink: #f1efe9; --ink-2: #b4b0a6; --line: #34322e;
+  --accent: #f2b705; --accent-ink: #161614;
+  --tag-existe: #173822; --tag-existe-ink: #8fdca6;
+  --tag-ajusta: #3a2e08; --tag-ajusta-ink: #f5d06a;
+  --tag-nuevo: #1c2652; --tag-nuevo-ink: #a9b8ff;
+  --tag-meta: #33193f; --tag-meta-ink: #dfa6ff;
+  --tag-humano: #3f1914; --tag-humano-ink: #ffa99c;
+  --wa-head: #202c33; --wa-head-ink: #e9edef; --wa-wall: #0b141a;
+  --wa-in: #202c33; --wa-out: #005c4b; --wa-ink: #e9edef; --wa-meta: #8696a0;
+  --wa-btn: #202c33; --wa-btn-ink: #53bdeb; --wa-chip: #182229; --wa-chip-ink: #8696a0;
+  --wa-sys: #182229; --wa-sys-ink: #ffd279;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--ink);
+  font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+header.top { padding: 32px 0 8px; }
+.banner {
+  display: inline-block; font-size: 12px; letter-spacing: .02em; color: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; margin-bottom: 12px;
+}
+h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+h1 span { background: var(--accent); color: var(--accent-ink); padding: 0 6px; border-radius: 4px; }
+.lead { color: var(--ink-2); max-width: 760px; margin: 0 0 16px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 8px; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
+.t-existe { background: var(--tag-existe); color: var(--tag-existe-ink); }
+.t-ajusta { background: var(--tag-ajusta); color: var(--tag-ajusta-ink); }
+.t-nuevo { background: var(--tag-nuevo); color: var(--tag-nuevo-ink); }
+.t-meta { background: var(--tag-meta); color: var(--tag-meta-ink); }
+.t-humano { background: var(--tag-humano); color: var(--tag-humano-ink); }
+
+nav.steps {
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  border-bottom: 1px solid var(--line); margin: 16px -16px 0; padding: 8px 16px;
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin;
+}
+nav.steps a {
+  flex: 0 0 auto; text-decoration: none; color: var(--ink); font-size: 13px;
+  border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px;
+}
+nav.steps a:hover { border-color: var(--accent); }
+
+section.paso { padding: 40px 0 8px; border-bottom: 1px solid var(--line); scroll-margin-top: 56px; }
+section.paso h2 { font-size: 21px; margin: 0 0 4px; }
+section.paso h2 .n {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font-size: 14px; margin-right: 8px; vertical-align: 2px;
+}
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.grid { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 32px; align-items: start; }
+.grid.dos { grid-template-columns: minmax(0, 360px) minmax(0, 360px) minmax(0, 1fr); }
+@media (max-width: 1080px) { .grid.dos { grid-template-columns: minmax(0, 360px) minmax(0, 1fr); } .grid.dos .notas { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .grid, .grid.dos { grid-template-columns: minmax(0, 1fr); } }
+
+/* Teléfono */
+.phone {
+  width: 100%; max-width: 360px; border-radius: 28px; overflow: hidden;
+  border: 8px solid #1b1b1b; background: var(--wa-wall); box-shadow: 0 10px 30px #0000002e;
+}
+.wa-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--wa-head); color: var(--wa-head-ink); }
+.wa-head .back { font-size: 18px; opacity: .9; }
+.avatar {
+  width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
+  background: #111; color: #f2b705; font-weight: 800; font-size: 13px; border: 2px solid #f2b705;
+}
+.wa-head .who { line-height: 1.2; min-width: 0; }
+.wa-head .who b { display: block; font-size: 15px; }
+.wa-head .who small { font-size: 12px; opacity: .85; }
+.chat { padding: 10px 10px 14px; display: flex; flex-direction: column; gap: 4px; color: var(--wa-ink); font-size: 14px; line-height: 1.38; }
+.chip { align-self: center; background: var(--wa-chip); color: var(--wa-chip-ink); font-size: 12px; padding: 3px 10px; border-radius: 8px; margin: 6px 0; text-align: center; }
+.sys { align-self: center; background: var(--wa-sys); color: var(--wa-sys-ink); font-size: 12px; padding: 4px 10px; border-radius: 8px; margin: 8px 6px; text-align: center; }
+.m { max-width: 86%; padding: 6px 8px 4px; border-radius: 8px; position: relative; box-shadow: 0 1px .5px #0b141a21; overflow-wrap: anywhere; }
+.m p { margin: 0 0 2px; white-space: pre-line; }
+.m .t { display: block; text-align: right; font-size: 11px; color: var(--wa-meta); margin-top: -2px; }
+.m .t .ck { color: var(--wa-tick); font-style: normal; letter-spacing: -3px; margin-left: 3px; }
+.m.in { align-self: flex-start; background: var(--wa-in); border-top-left-radius: 0; }
+.m.out { align-self: flex-end; background: var(--wa-out); border-top-right-radius: 0; }
+.m.gap { margin-top: 6px; }
+.m .quien { display: block; font-size: 12px; font-weight: 700; color: #b8860b; margin-bottom: 2px; }
+.m .tplh { display: block; font-weight: 700; margin-bottom: 2px; }
+.m .tplf { display: block; font-size: 12px; color: var(--wa-meta); margin-top: 2px; }
+.btns { align-self: flex-start; width: 86%; display: flex; flex-direction: column; gap: 2px; margin-top: 2px; }
+.btns span {
+  display: block; text-align: center; background: var(--wa-btn); color: var(--wa-btn-ink);
+  font-size: 14px; padding: 7px 6px; border-radius: 8px; box-shadow: 0 1px .5px #0b141a21;
+}
+.btns span::before { content: "↩ "; font-size: 12px; opacity: .8; }
+.btns span.list::before { content: "☰ "; }
+.btns span.url::before { content: "↗ "; }
+.receipt {
+  background: #ffffff; color: #1d1d1b; border-radius: 6px; padding: 10px; margin-bottom: 4px;
+  font-size: 12px; border: 1px solid #00000014; min-width: 190px;
+}
+.receipt .rh { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 4px; }
+.receipt .dot { width: 18px; height: 18px; border-radius: 5px; background: #da0081; display: inline-block; }
+.receipt .dot.dv { background: #e3001b; }
+.receipt .amt { font-size: 18px; font-weight: 800; margin: 2px 0; }
+.receipt .ok { color: #1d6b35; font-weight: 700; }
+.doc { display: flex; gap: 8px; align-items: center; background: #00000010; border-radius: 6px; padding: 8px; margin-bottom: 4px; font-size: 13px; }
+.sheet { align-self: stretch; background: var(--wa-in); border-radius: 12px; margin: 6px 0 4px; padding: 10px 0 6px; box-shadow: 0 -2px 10px #0000001f; }
+.sheet .sh-h { text-align: center; font-weight: 700; font-size: 14px; padding: 0 12px 6px; }
+.sheet .sh-s { font-size: 12px; color: var(--wa-head); font-weight: 700; padding: 8px 14px 2px; }
+.sheet .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px; }
+.sheet .row small { display: block; color: var(--wa-meta); font-size: 12px; }
+.radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--wa-meta); flex: 0 0 auto; }
+.radio.on { border-color: var(--wa-head); box-shadow: inset 0 0 0 3px var(--wa-in), inset 0 0 0 9px var(--wa-head); }
+.sheet .send { text-align: center; color: var(--wa-head); font-weight: 700; padding: 8px 0 2px; border-top: 1px solid #8696a033; margin-top: 4px; }
+.typing { align-self: flex-start; background: var(--wa-in); border-radius: 8px; padding: 6px 12px; font-size: 18px; letter-spacing: 2px; color: var(--wa-meta); }
+
+/* Notas */
+.notas { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+.notas h3 { font-size: 15px; margin: 0 0 8px; }
+.notas h3 + .tags { margin-bottom: 10px; }
+.notas .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.notas ul { margin: 0 0 12px; padding-left: 20px; }
+.notas li { margin: 4px 0; }
+.notas p { margin: 0 0 10px; }
+.notas .ojo { border-left: 3px solid var(--accent); padding: 4px 0 4px 10px; color: var(--ink-2); margin: 10px 0 0; }
+.notas table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 6px 0 12px; }
+.notas th, .notas td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.notas th { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+code { font-family: Consolas, "SFMono-Regular", Menlo, monospace; font-size: 12.5px; background: var(--bg); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+
+/* Pantallas de SportMaps */
+.app { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.app .ah { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 700; font-size: 14px; }
+.app .ab { padding: 12px 14px; font-size: 14px; }
+.app .tabs { display: flex; gap: 14px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--line); padding: 0 14px; overflow-x: auto; }
+.app .tabs span { padding: 8px 0; white-space: nowrap; }
+.app .tabs span.on { color: var(--ink); border-bottom: 2px solid var(--accent); font-weight: 600; }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.card .ct { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-weight: 700; }
+.card .cm { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.pill { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--tag-existe); color: var(--tag-existe-ink); font-weight: 600; }
+.pill.am { background: var(--tag-ajusta); color: var(--tag-ajusta-ink); }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; color: var(--ink-2); margin-bottom: 3px; }
+.field .in { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; background: var(--bg); display: flex; justify-content: space-between; gap: 8px; }
+.btnp { display: inline-block; background: var(--accent); color: var(--accent-ink); font-weight: 700; padding: 7px 14px; border-radius: 8px; font-size: 14px; }
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; font-size: 12px; text-align: center; }
+.week div { border: 1px solid var(--line); border-radius: 6px; padding: 6px 2px; min-height: 64px; }
+.week b { display: block; font-size: 11px; color: var(--ink-2); }
+.week .slot { display: block; margin-top: 4px; background: var(--tag-existe); color: var(--tag-existe-ink); border-radius: 4px; padding: 2px; font-weight: 600; }
+.week .slot.x { background: var(--tag-humano); color: var(--tag-humano-ink); text-decoration: line-through; }
+.apps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 760px) { .apps { grid-template-columns: minmax(0, 1fr); } }
+
+.final { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; padding-top: 40px; }
+@media (max-width: 760px) { .final { grid-template-columns: minmax(0, 1fr); } }
+.final ol { margin: 0; padding-left: 20px; }
+.final li { margin: 6px 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="banner">Maqueta interna de SportMaps · propuesta para aprobar · 29 oct 2026</div>
+  <h1>Bot de WhatsApp de <span>Monsters Volley</span>: el recorrido completo</h1>
+  <p class="lead">Lo que vería una persona interesada, un acudiente del club y la escuela, de punta a punta. Los textos son los que envió Monster, ajustados a lo que WhatsApp permite: máximo 3 botones de 20 caracteres por mensaje, listas de hasta 10 opciones y, pasadas 24 horas sin respuesta, solo plantillas aprobadas por Meta. Los botones no pueden tener color; el 🟡 y el ⚫ van como emoji.</p>
+  <div class="legend">
+    <span class="tag t-existe">Ya existe</span>
+    <span class="tag t-ajusta">Existe, se ajusta</span>
+    <span class="tag t-nuevo">Se construye</span>
+    <span class="tag t-meta">Plantilla para aprobar en Meta</span>
+    <span class="tag t-humano">Lo atiende una persona</span>
+  </div>
+  <nav class="steps" aria-label="Pasos">
+    <a href="#p1">1 · Bienvenida</a>
+    <a href="#p2">2 · Preguntas</a>
+    <a href="#p3">3 · Categoría y horario</a>
+    <a href="#p4">4 · Pago y agenda</a>
+    <a href="#p5">5 · Recordatorio</a>
+    <a href="#p6">6 · Seguimiento</a>
+    <a href="#p7">7 · Matrícula</a>
+    <a href="#p8">8 · Clínica</a>
+    <a href="#p9">9 · Afiliados</a>
+    <a href="#p10">10 · Una persona</a>
+    <a href="#p11">11 · En SportMaps</a>
+    <a href="#p12">Encender</a>
+  </nav>
+</header>
+
+<!-- 1 · Bienvenida -->
+<section class="paso" id="p1">
+  <h2><span class="n">1</span>Bienvenida y sede</h2>
+  <p class="sub">Alguien escribe por primera vez desde un número que el club no conoce.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="chip">Hoy</div>
+        <div class="m out"><p>Hola buenas tardes, quiero información 👋</p><span class="t">6:40 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Hola! 👋 Bienvenid@ a <b>Club Monsters Volley</b> 🏐⚡
+
+Nos alegra que estés aquí: estás a un paso de unirte a una de las mejores comunidades de voleibol de Bogotá.
+
+Para enviarte la información exacta que necesitas, cuéntanos: ¿cuál sede te queda más cerca?
+🟡 <b>Sede Norte</b> · Calle 201 #67-12
+⚫ <b>Sede Suba</b> · Calle 152 #94A-67</p><span class="t">6:40 p. m.</span></div>
+        <div class="btns"><span>🟡 Sede Norte</span><span>⚫ Sede Suba</span><span>Ya soy del club</span></div>
+        <div class="m out gap"><p>🟡 Sede Norte</p><span class="t">6:41 p. m.<i class="ck">✓✓</i></span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-ajusta">Existe, se ajusta</span><span class="tag t-nuevo">Pregunta de sede: nueva</span></div>
+      <ul>
+        <li>Hoy la bienvenida es fija: «Ya soy del club / Quiero información / Otro tema». Para Monster cambia por su texto y las dos sedes, que salen de las sedes cargadas en SportMaps (nombre y dirección).</li>
+        <li>Si el número ya es de un acudiente o deportista del club, no ve esto: entra directo al menú de afiliados (paso 9).</li>
+        <li><b>Ya soy del club</b> es para el afiliado que escribe desde otro celular: el bot le pide el nombre del deportista y lo verifica antes de mostrarle cualquier dato.</li>
+        <li>Si en vez de tocar un botón escribe «Suba», «la del norte» o «calle 152», el bot lo entiende igual.</li>
+      </ul>
+      <p class="ojo">La persona elige la sede una sola vez. Desde ahí, precios, horarios, entrenador y dirección son siempre los de esa sede.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2 · Preguntas -->
+<section class="paso" id="p2">
+  <h2><span class="n">2</span>Preguntas del deportista (reemplaza el Google Form)</h2>
+  <p class="sub">Una pregunta por mensaje, con botones cuando la respuesta es cerrada. Menos de un minuto.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m in"><p>¡Genial, <b>Sede Norte</b>! 🟡 Allí entrenamos <b>sábados y domingos de 8:00 a 10:00 a. m.</b>
+
+Para ubicarte en la categoría correcta te hago 5 preguntas rápidas 🙌
+
+1️⃣ ¿Cuál es el <b>nombre completo</b> del deportista?</p><span class="t">6:41 p. m.</span></div>
+        <div class="m out gap"><p>Mariana Gómez Rojas</p><span class="t">6:42 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Mucho gusto, Mariana! 😊
+2️⃣ ¿Cuál es su <b>fecha de nacimiento</b>? (día/mes/año)</p><span class="t">6:42 p. m.</span></div>
+        <div class="m out gap"><p>14/03/2011</p><span class="t">6:42 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>3️⃣ ¿Es <b>hombre o mujer</b>?</p><span class="t">6:42 p. m.</span></div>
+        <div class="btns"><span>Mujer</span><span>Hombre</span></div>
+        <div class="m out gap"><p>Mujer</p><span class="t">6:42 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>4️⃣ ¿En qué <b>posición</b> juega?</p><span class="t">6:42 p. m.</span></div>
+        <div class="btns"><span class="list">Elegir posición</span></div>
+        <div class="sheet">
+          <div class="sh-h">Posición de juego</div>
+          <div class="row"><span>Armador(a)</span><i class="radio"></i></div>
+          <div class="row"><span>Opuesto</span><i class="radio"></i></div>
+          <div class="row"><span>Punta</span><i class="radio on"></i></div>
+          <div class="row"><span>Central</span><i class="radio"></i></div>
+          <div class="row"><span>Líbero</span><i class="radio"></i></div>
+          <div class="row"><span>Aún no tengo posición</span><i class="radio"></i></div>
+          <div class="send">Enviar</div>
+        </div>
+        <div class="m out gap"><p>Punta</p><span class="t">6:43 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>5️⃣ ¿Cuál es su <b>trayectoria</b> en el voleibol?</p><span class="t">6:43 p. m.</span></div>
+        <div class="btns"><span>Estoy empezando</span><span>Colegio o escuela</span><span>Club y torneos</span></div>
+        <div class="m out gap"><p>Club y torneos</p><span class="t">6:43 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Qué bien! 🏆 Cuéntame en un mensaje <b>en qué clubes ha entrenado y qué torneos ha jugado</b>.</p><span class="t">6:43 p. m.</span></div>
+        <div class="m out gap"><p>Dos años en Club Titanes, jugó el Distrital 2025 y el Festival Nacional sub-15</p><span class="t">6:44 p. m.<i class="ck">✓✓</i></span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-ajusta">Existe, se ajusta</span></div>
+      <ul>
+        <li>Hoy el bot hace 4 preguntas fijas (deportista, edad, acudiente, qué quiere). Para Monster pasan a ser <b>sus</b> preguntas: nombre, fecha de nacimiento, sexo, posición y trayectoria. Las preguntas quedan configurables por escuela; Dynasty sigue igual.</li>
+        <li>Se pide la <b>fecha completa</b> una sola vez: sirve para la categoría (año) y para la ficha (día y mes). La sede ya se eligió en el paso 1.</li>
+        <li>Si la persona responde varias cosas en un mensaje («Mariana, 2011, punta») el bot las toma y no las vuelve a preguntar.</li>
+        <li>Todo queda guardado en <b>Deportistas → Clase de prueba</b> con cada respuesta en su campo. Nadie tiene que copiar nada de un correo.</li>
+      </ul>
+      <h3>Otra opción: formulario dentro de WhatsApp</h3>
+      <p>WhatsApp permite formularios nativos (WhatsApp Flows): una sola pantalla con casillas, lista desplegable y calendario, sin salir del chat. Se ve más ordenado, pero Meta tiene que aprobar el formulario y toma más tiempo construirlo. Propuesta: arrancar con las preguntas de arriba y dejar el formulario para una segunda etapa.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 3 · Categoría y horario -->
+<section class="paso" id="p3">
+  <h2><span class="n">3</span>Categoría, entrenador y horario de la clase de prueba</h2>
+  <p class="sub">El bot ubica la categoría por año de nacimiento, sexo y nivel, y ofrece solo los horarios reales del entrenador de esa categoría. Dos ejemplos: Norte (un solo horario) y Suba (el nivel decide el grupo).</p>
+  <div class="grid dos">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m in"><p>¡Listo! ✨ Por su año (<b>2011</b>) a Mariana le corresponde <b>Infantil Femenino</b> en la Sede Norte, con el profe <b>Iván Sossa</b>.
+
+Para empezar en el club se agenda una <b>clase de prueba</b>, que cuesta <b>$15.000</b>. En ella el entrenador la evalúa y confirma su grupo y nivel.
+
+Estos son los próximos horarios 👇</p><span class="t">6:44 p. m.</span></div>
+        <div class="btns"><span class="list">Ver horarios</span></div>
+        <div class="sheet">
+          <div class="sh-h">Clase de prueba · Infantil Femenino</div>
+          <div class="sh-s">Sábado 31 de octubre</div>
+          <div class="row"><span>8:00 – 10:00 a. m.<small>Sede Norte · Profe Iván · 5 cupos</small></span><i class="radio on"></i></div>
+          <div class="sh-s">Domingo 1 de noviembre</div>
+          <div class="row"><span>8:00 – 10:00 a. m.<small>Sede Norte · Profe Iván · 6 cupos</small></span><i class="radio"></i></div>
+          <div class="sh-s">Sábado 7 de noviembre</div>
+          <div class="row"><span>8:00 – 10:00 a. m.<small>Sede Norte · Profe Iván · 6 cupos</small></span><i class="radio"></i></div>
+          <div class="send">Enviar</div>
+        </div>
+        <div class="m out gap"><p>Sábado 31 de octubre · 8:00 – 10:00 a. m.</p><span class="t">6:45 p. m.<i class="ck">✓✓</i></span></div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="sys">Otra persona: eligió ⚫ Sede Suba · Sofía, 2012, mujer, líbero, «Estoy empezando»</div>
+        <div class="m in"><p>¡Listo! ✨ Como Sofía está empezando, le corresponde <b>U15 Femenino Proyección</b> en la Sede Suba, con el profe <b>Sebastián Hurtado</b>. Es el grupo ideal para tomar bases y crecer 💪
+
+La <b>clase de prueba</b> cuesta <b>$15.000</b> y ahí el profe confirma su grupo y nivel.
+
+Estos son los próximos horarios 👇</p><span class="t">7:10 p. m.</span></div>
+        <div class="btns"><span class="list">Ver horarios</span></div>
+        <div class="sheet">
+          <div class="sh-h">Clase de prueba · U15 Fem Proyección</div>
+          <div class="sh-s">Sábado 31 de octubre</div>
+          <div class="row"><span>9:00 – 11:00 a. m.<small>Pinar 2 · Profe Sebastián · 4 cupos</small></span><i class="radio"></i></div>
+          <div class="sh-s">Domingo 1 de noviembre</div>
+          <div class="row"><span>9:30 – 11:30 a. m.<small>Fesan · Profe Sebastián · 6 cupos</small></span><i class="radio on"></i></div>
+          <div class="sh-s">Lunes 9 de noviembre</div>
+          <div class="row"><span>4:00 – 6:00 p. m.<small>Pinar 2 · Profe Sebastián · 6 cupos</small></span><i class="radio"></i></div>
+          <div class="send">Enviar</div>
+        </div>
+        <div class="m out gap"><p>Domingo 1 de noviembre · 9:30 – 11:30 a. m.</p><span class="t">7:11 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="sys">El lunes 2 de noviembre no aparece: es festivo</div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-ajusta">Horarios desde los entrenamientos: existe</span><span class="tag t-nuevo">Sede, nivel, precio y semana del profe: nuevo</span></div>
+      <ul>
+        <li><b>Sede:</b> hoy el bot no filtra por sede. Se construye: solo ofrece grupos de la sede elegida en el paso 1.</li>
+        <li><b>Categoría:</b> Norte ya la tiene por año (Benjamines 2015-16, Mini 2013-14, Infantil 2011-12, Menores 2009-10, Juvenil 2007-08, Mayores 2006 o antes). En Suba las 13 categorías solo dicen «U13», «U15»… en el nombre: hay que cargarles los años.</li>
+        <li><b>Nivel:</b> la trayectoria del paso 2 decide el grupo donde Suba tiene dos niveles:
+          <table>
+            <tr><th>Edad</th><th>«Estoy empezando» / «Colegio»</th><th>«Club y torneos»</th></tr>
+            <tr><td>U13</td><td>U7-U13 Mixto Proyección</td><td>U13 Mixto</td></tr>
+            <tr><td>U15 fem.</td><td>U15 Fem Proyección</td><td>U15 Fem Competitivo</td></tr>
+            <tr><td>U17 masc.</td><td>U17 Masc Proyección</td><td>U17 Masc Competitivo</td></tr>
+            <tr><td>Mayores</td><td>Mayores Mixto Proyección</td><td>Mayores Fem / Masc Competencia</td></tr>
+          </table>
+          Es una propuesta: <b>Monster confirma la regla</b>. Si «Colegio o escuela» va a Proyección o a Competitivo, lo decide el club.</li>
+        <li><b>Horario:</b> los entrenamientos de esa categoría (el cuadro de 13 categorías que mandaron), tal como el profe los dejó para esa semana. Festivos y entrenamientos cancelados no aparecen (paso 11).</li>
+        <li><b>Cupos:</b> se descuenta uno por clase agendada; un horario lleno no se ofrece.</li>
+        <li>Nunca dice «gratis» ni «cortesía»: para Monster es <b>clase de prueba</b> con valor. Hoy el bot de Dynasty dice «clase de cortesía gratis»; eso pasa a ser un ajuste por escuela.</li>
+        <li>Si no hay grupo para su año y sexo (por ejemplo, un niño de 2011 en Norte: no hay Infantil Masculino), el bot no inventa: le ofrece la otra sede o lo pasa a una persona con los datos ya guardados.</li>
+      </ul>
+      <p class="ojo">En la confirmación el bot da la dirección de la cancha (Pinar, Pinar 2, Fesan, Lestonnac, La Enseñanza), no la de la sede. Monster tiene que pasarnos esas direcciones.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 · Pago y agenda -->
+<section class="paso" id="p4">
+  <h2><span class="n">4</span>Pago de la clase y agenda automática</h2>
+  <p class="sub">El comprobante llega por el mismo chat, ya marcado como «Clase de prueba». Sin correo.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m in"><p>¡Perfecto! Te separo el cupo del <b>sábado 31 de octubre a las 8:00 a. m.</b> durante 24 horas ⏳
+
+Para confirmarlo, paga la clase de prueba (<b>$15.000</b>) por <b>Nequi</b> o <b>Daviplata</b> al número <b>319 450 5150</b> y envíame aquí mismo la foto o el PDF del comprobante 📸</p><span class="t">6:45 p. m.</span></div>
+        <div class="m out gap"><div class="receipt"><div class="rh"><i class="dot"></i>Nequi</div><span class="ok">¡Envío exitoso!</span><div class="amt">$15.000</div>Para: 319 450 5150<br>29 oct 2026 · 6:51 p. m.</div><span class="t">6:51 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="typing">• • •</div>
+        <div class="m in gap"><p>¡Recibido! ✅ Comprobante de <b>$15.000</b> → <b>Clase de prueba · Mariana Gómez Rojas</b>
+
+Tu clase quedó <b>agendada</b> 🎉
+📅 Sábado 31 de octubre, 8:00 – 10:00 a. m.
+📍 Sede Norte · Calle 201 #67-12
+👤 Te recibe el profe Iván
+🎒 Ven con ropa deportiva e hidratación
+
+¡Te esperamos en la cancha! 🏐🔥</p><span class="t">6:51 p. m.</span></div>
+        <div class="m in gap"><p>¿Te puedo escribir por aquí el <b>recordatorio</b> de la clase y las <b>novedades del club</b>? 🔔</p><span class="t">6:51 p. m.</span></div>
+        <div class="btns"><span>Sí, claro</span><span>No, gracias</span></div>
+        <div class="m out gap"><p>Sí, claro</p><span class="t">6:52 p. m.<i class="ck">✓✓</i></span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-nuevo">Se construye</span></div>
+      <ul>
+        <li><b>El motivo llega ya marcado:</b> el bot acaba de pedir la clase de prueba, así que el comprobante se guarda como «Clase de prueba · Mariana Gómez Rojas», sin preguntar.</li>
+        <li>El bot <b>lee el comprobante</b> (monto, fecha y número de destino). Si el monto es $15.000 y el destino es el 319 450 5150, agenda en el acto.</li>
+        <li>Si algo no coincide (otro monto, otra cuenta, imagen ilegible), <b>no agenda</b>: deja el cupo separado y lo pasa a una persona con todo adjunto.</li>
+        <li>Al agendar, sin que nadie haga nada: aparece en <b>Deportistas → Clase de prueba</b> con el pago, entra al calendario del profe Iván y a él le llega el aviso con los datos (paso 11).</li>
+        <li>La escuela puede revisar el comprobante después, en la lista de comprobantes. Esa revisión no frena la agenda.</li>
+        <li>Si en 24 horas no llega el comprobante, el cupo se libera y el bot le escribe una sola vez: «¿Te guardo otro horario?».</li>
+        <li>La línea 🎒 la escribe Monster (qué llevar a la clase). Si no la define, no se dice nada.</li>
+        <li><b>Consentimiento:</b> sin ese «Sí, claro», Meta no permite escribirle pasadas 24 horas, ni el recordatorio ni los seguimientos. Hoy el bot solo se lo pregunta a familias registradas; preguntárselo a interesados es nuevo.</li>
+      </ul>
+      <p class="ojo">Esto reemplaza los tres pasos de hoy (formulario + pago + correo con los datos) y el trabajo de leer el correo y asignar el entrenador a mano.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 5 · Recordatorio -->
+<section class="paso" id="p5">
+  <h2><span class="n">5</span>Recordatorio y llegada</h2>
+  <p class="sub">El día anterior a las 6:00 p. m. y el mismo día al llegar.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="chip">Viernes</div>
+        <div class="m in"><p>Hola 👋 Te recordamos la <b>clase de prueba</b> de <b>Mariana</b> mañana <b>sábado 31 de octubre a las 8:00 a. m.</b> en la <b>Sede Norte</b> (Calle 201 #67-12). ¿Nos acompañan?</p><span class="tplf">Monsters Volley</span><span class="t">6:00 p. m.</span></div>
+        <div class="btns"><span>✅ Ahí estaremos</span><span>Cambiar horario</span><span>No puedo ir</span></div>
+        <div class="m out gap"><p>✅ Ahí estaremos</p><span class="t">6:12 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Súper! Nos vemos mañana 💛🖤</p><span class="t">6:12 p. m.</span></div>
+        <div class="chip">Sábado</div>
+        <div class="m out"><p>Ya llegamos</p><span class="t">7:52 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Bienvenidas! 🙌 Ya le avisé al profe Iván que llegaron. ¡Que disfrutes la clase, Mariana! 🏐</p><span class="t">7:52 a. m.</span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-existe">Ya existe</span><span class="tag t-meta">Plantilla de utilidad</span></div>
+      <ul>
+        <li>El recordatorio y el «ya llegamos» ya existen para Dynasty; solo cambia el texto («clase de prueba», sede y profe).</li>
+        <li>El recordatorio sale por <b>plantilla de utilidad</b> (más de 24 h desde el último mensaje de la persona), así que se manda a aprobación de Meta antes de encender. Solo le llega a quien dijo «Sí, claro» en el paso 4.</li>
+        <li><b>Cambiar horario</b> vuelve a la lista de horarios <b>sin cobrar de nuevo</b>: el pago queda asociado a la clase, no al día.</li>
+        <li><b>No puedo ir</b> libera el cupo y ofrece otro día. El pago se conserva para la nueva fecha.</li>
+        <li>«Ya llegamos» le avisa al profe en la app y marca a Mariana como «asistió».</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 6 · Seguimiento -->
+<section class="paso" id="p6">
+  <h2><span class="n">6</span>Seguimiento automático y regalo de cierre de año</h2>
+  <p class="sub">Después de la clase, y a quienes preguntaron y no siguieron. Sin enviar nada a mano.</p>
+  <div class="grid dos">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="chip">Sábado · después de la clase</div>
+        <div class="m in"><p>¡Hola! ¿Cómo le fue a Mariana en su clase de prueba? 🏐 El profe Iván la ubicó en <b>Infantil Femenino</b>.
+
+🎁 <b>Regalo de cierre de año:</b> si haces la matrícula ahora, <b>todo noviembre de entrenamiento es gratis</b>.</p><span class="t">7:00 p. m.</span></div>
+        <div class="btns"><span>Quiero matricularla</span><span>Ver valores</span><span>Tengo una pregunta</span></div>
+        <div class="chip">3 días después, sin respuesta</div>
+        <div class="m in"><p>¡Hola! ¿Cómo estás?
+
+Te escribo porque mostraste interés en ingresar a <b>Monster’s Volley</b> y quería contarte algo que me parece una excelente oportunidad.
+
+Si realizas tu matrícula ahora, te obsequiamos <b>todo noviembre de entrenamiento</b>. Además, la renovación de matrícula a finales de enero será mucho más económica, porque no incluye la sudadera.
+
+Es un beneficio por tiempo limitado. ¿Te gustaría que te contara cómo realizar tu matrícula?</p><span class="tplf">Monsters Volley</span><span class="t">10:00 a. m.</span></div>
+        <div class="btns"><span>Sí, cuéntame</span><span>Más adelante</span><span>No recibir más</span></div>
+        <div class="m out gap"><p>Sí, cuéntame</p><span class="t">10:21 a. m.<i class="ck">✓✓</i></span></div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m in"><p>¡Claro! 🎁 Al realizar tu matrícula en <b>Club Deportivo Monster’s Volley</b> recibes <b>noviembre completamente gratis</b>.
+
+Estos son los valores de la Sede Norte:
+• <b>Matrícula 2026: $310.000</b>. Incluye el kit de uniforme oficial de competencia (2 camisetas, 1 pantaloneta y 1 par de medias), la sudadera y la póliza de seguro deportivo.
+• <b>Uniformes de entrenamiento: $60.000</b> (2 camisetas).
+• <b>Mensualidad: $165.000</b>. ¡GRATIS en noviembre!
+
+<b>¿Cuánto pagas para ingresar?</b> Solo <b>$370.000</b> (matrícula + uniformes de entrenamiento). La mensualidad de noviembre corre por nuestra cuenta.
+
+A finales de enero renuevas la matrícula por solo <b>$170.000</b>, porque no incluye la sudadera.
+
+¿Te animas a dar el primer paso con nosotros? 💪</p><span class="t">10:21 a. m.</span></div>
+        <div class="btns"><span>Quiero matricularla</span><span>Tengo una pregunta</span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-ajusta">Seguimiento después de la clase: existe</span><span class="tag t-nuevo">Secuencia de 3 y 7 días: nueva</span><span class="tag t-meta">Plantilla de marketing</span></div>
+      <table>
+        <tr><th>Cuándo</th><th>A quién</th><th>Cómo sale</th></tr>
+        <tr><td>Noche de la clase</td><td>Quien asistió</td><td>Mensaje normal (escribió en las últimas 24 h)</td></tr>
+        <tr><td>Día 1</td><td>Quien preguntó y no agendó</td><td>Mensaje normal si aún está dentro de las 24 h; si no, plantilla</td></tr>
+        <tr><td>Día 3</td><td>Ambos, si no respondieron</td><td>Plantilla de marketing con el texto de Monster</td></tr>
+        <tr><td>Día 7</td><td>Ambos, si no respondieron</td><td>Plantilla de marketing, último aviso</td></tr>
+      </table>
+      <ul>
+        <li>La secuencia <b>se detiene sola</b> si la persona responde, se matricula o toca «No recibir más».</li>
+        <li><b>Por qué hoy bloquean la cuenta:</b> desde la app WhatsApp Business, mandar el mismo texto a muchas personas se ve como spam y WhatsApp suspende el número cerca de los 80 envíos. Conectado a SportMaps (API oficial de Meta), estos envíos son plantillas aprobadas y <b>no dependen de nadie escribiendo a mano</b>.</li>
+        <li><b>«Ilimitado» no existe:</b> Meta arranca con un tope de 250 personas por día y lo sube (1.000, 10.000…) si la calidad es buena, es decir, si casi nadie bloquea ni reporta. Por eso la secuencia es corta y siempre ofrece «No recibir más».</li>
+        <li>Cada plantilla de marketing tiene un costo pequeño que cobra Meta por mensaje entregado.</li>
+        <li><b>Qué se construye:</b> hoy SportMaps solo envía plantillas de utilidad y hace un único seguimiento a las 20 horas, dentro de la ventana de 24 horas. Se construyen las plantillas de marketing, la secuencia de días 3 y 7 y un freno automático: si Meta baja la calidad del número, los envíos se pausan solos.</li>
+        <li><b>Valores por sede:</b> el ejemplo es Norte. En Suba el bot dice mensualidad <b>$145.000</b> (Mayores Mixto <b>$135.000</b>, sin coliseo) e incluye la <b>sesión de psicología deportiva</b>. Matrícula ($310.000) y uniformes de entrenamiento ($60.000) son iguales en las dos sedes, así que el ingreso con el regalo es $370.000 en ambas.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 7 · Matrícula -->
+<section class="paso" id="p7">
+  <h2><span class="n">7</span>Matrícula con varios comprobantes</h2>
+  <p class="sub">Cada comprobante se asigna a un deportista y a un motivo. Sirve para todas las escuelas: matrícula, uniformes, torneos, clínicas, mensualidades.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m out"><p>Quiero matricularla</p><span class="t">10:24 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Qué alegría! 🎉 Para matricular a Mariana:
+
+1️⃣ Paga <b>$370.000</b> por Nequi o Daviplata al <b>319 450 5150</b> (en uno o en varios pagos).
+2️⃣ Envíame aquí los comprobantes.
+3️⃣ Te mando el enlace para completar su ficha en SportMaps (documentos y firma).</p><span class="t">10:24 a. m.</span></div>
+        <div class="m out gap"><div class="receipt"><div class="rh"><i class="dot"></i>Nequi</div><span class="ok">¡Envío exitoso!</span><div class="amt">$310.000</div>Para: 319 450 5150</div><span class="t">11:02 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m out"><div class="receipt"><div class="rh"><i class="dot dv"></i>Daviplata</div><span class="ok">Transacción exitosa</span><div class="amt">$60.000</div>Para: 319 450 5150</div><span class="t">11:02 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Recibí <b>2 comprobantes</b>! ✅
+1. <b>$310.000</b> → Matrícula 2026 · Mariana
+2. <b>$60.000</b> → Uniformes de entrenamiento · Mariana
+🎁 Noviembre: <b>$0</b> (regalo)
+
+¿Está bien así?</p><span class="t">11:02 a. m.</span></div>
+        <div class="btns"><span>Sí, está bien</span><span>Cambiar un motivo</span></div>
+        <div class="m out gap"><p>Sí, está bien</p><span class="t">11:03 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Bienvenida a la familia Monsters, Mariana! 💛🖤
+Completa su ficha aquí (2 minutos):</p><span class="t">11:03 a. m.</span></div>
+        <div class="btns"><span class="url">Completar ficha</span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-nuevo">Se construye (para todas las escuelas)</span></div>
+      <ul>
+        <li><b>Varios comprobantes seguidos</b> se agrupan en una sola respuesta, no uno por uno.</li>
+        <li><b>Cómo se decide el motivo</b>, en este orden: (1) lo que el bot acaba de pedir, como en la clase de prueba; (2) el monto, porque $310.000 calza con la matrícula y $60.000 con los uniformes; (3) si no calza, pregunta con botones: [Matrícula] [Uniformes] [Otro].</li>
+        <li><b>Hermanos:</b> si el acudiente tiene más de un deportista, pregunta de quién es cada comprobante.</li>
+        <li>Un solo pago de $370.000 se reparte solo entre matrícula y uniformes.</li>
+        <li>Si el total no cuadra («pagué $300.000»), dice cuánto falta y deja el resto pendiente, sin inventar.</li>
+        <li>Cada comprobante queda en SportMaps con su deportista, su motivo y la imagen. La escuela los filtra por motivo (paso 11).</li>
+        <li>La misma lógica sirve si el acudiente sube el comprobante desde la app: elige deportista y motivo, o le llega ya marcado si entró por un enlace de cobro.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 8 · Clínica -->
+<section class="paso" id="p8">
+  <h2><span class="n">8</span>Clínica de armadores y atacantes</h2>
+  <p class="sub">Para quien escribe por la clínica, sea o no del club.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m out"><p>Hola, quiero info de la clínica de armadores</p><span class="t">4:10 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Hola! ¡Bienvenido/a a Monster’s Volley! 🏐 Nos alegra mucho tu interés en la <b>Clínica de armadores y atacantes</b>, dirigida por <b>Jorge Mesa</b>, armador de la Selección Colombia y la Selección Antioquia ⭐
+
+📅 21 y 22 de noviembre
+🕘 9:00 a. m. a 3:00 p. m.
+📍 Colegio Bilingüe La Enseñanza
+💰 <b>$300.000</b>: incluye camiseta oficial del evento y foto con los ponentes
+
+⚠️ Si la fecha cambia, quien ya tiene su cupo conserva el valor de $300.000.</p><span class="t">4:10 p. m.</span></div>
+        <div class="btns"><span>Reservar mi cupo</span><span>Más detalles</span><span>Hablar con alguien</span></div>
+        <div class="m out gap"><p>Reservar mi cupo</p><span class="t">4:11 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Genial! ¿Qué posición vas a trabajar en la clínica?</p><span class="t">4:11 p. m.</span></div>
+        <div class="btns"><span>Armador(a)</span><span>Opuesto</span><span>Punta</span></div>
+        <div class="m out gap"><p>Armador(a)</p><span class="t">4:11 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>Paga <b>$300.000</b> por Nequi o Daviplata al <b>319 450 5150</b> y envíame aquí el comprobante 📸</p><span class="t">4:11 p. m.</span></div>
+        <div class="m out gap"><div class="receipt"><div class="rh"><i class="dot"></i>Nequi</div><span class="ok">¡Envío exitoso!</span><div class="amt">$300.000</div>Para: 319 450 5150</div><span class="t">4:30 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Cupo reservado! ✅ <b>$300.000</b> → <b>Clínica de armadores · Mariana (armadora)</b>. Te escribimos con los detalles del evento 🔥
+
+MONSTER’S VOLLEY · Vive y respira Volley.</p><span class="t">4:30 p. m.</span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-ajusta">Catálogo de servicios del bot: existe</span><span class="tag t-meta">Plantilla de marketing para difundirla</span></div>
+      <ul>
+        <li>La clínica se carga como un <b>servicio con precio y fecha</b> en el catálogo de la escuela; el bot ya sabe responder por servicios del catálogo.</li>
+        <li>Si quien escribe ya es del club, el bot sabe quién es y no pide nombre ni fecha de nacimiento. Si no es del club, los pide antes del pago (los datos que hoy van en el correo).</li>
+        <li>El comprobante llega marcado como «Clínica de armadores» con la posición. La escuela ve la lista de inscritos con su pago.</li>
+        <li>Para avisarles a todos los del club se manda una plantilla de marketing (con «No recibir más»).</li>
+      </ul>
+      <p class="ojo">Falta saber de Monster: ¿la clínica es para las dos sedes?, la dirección del colegio y si hay cupo máximo.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 9 · Afiliados -->
+<section class="paso" id="p9">
+  <h2><span class="n">9</span>Atención a afiliados</h2>
+  <p class="sub">Un acudiente o deportista del club escribe desde su número registrado.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m out"><p>Hola</p><span class="t">8:15 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Hola, Carolina! 👋 Soy Mapi, el asistente virtual de Monsters Volley. ¿En qué te ayudo con <b>Mariana</b>?</p><span class="t">8:15 a. m.</span></div>
+        <div class="btns"><span class="list">Ver opciones</span></div>
+        <div class="sheet">
+          <div class="sh-h">¿Qué necesitas?</div>
+          <div class="row"><span>Mis pagos<small>Lo que debo y lo que ya pagué</small></span><i class="radio"></i></div>
+          <div class="row"><span>Enviar comprobante<small>Mensualidad, torneo, uniforme…</small></span><i class="radio"></i></div>
+          <div class="row"><span>Horario de la semana<small>Entrenamientos y cambios</small></span><i class="radio on"></i></div>
+          <div class="row"><span>Hablar con una persona</span><i class="radio"></i></div>
+          <div class="send">Enviar</div>
+        </div>
+        <div class="m out gap"><p>Horario de la semana</p><span class="t">8:15 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>Esta semana Mariana (<b>Infantil Femenino</b>) entrena:
+📅 <b>Sábado 7 nov</b> · 8:00 – 10:00 a. m. · Sede Norte
+❌ <b>Domingo 8 nov</b> · <i>cancelado por el profe Iván</i></p><span class="t">8:15 a. m.</span></div>
+        <div class="m out gap"><p>y cuánto debo?</p><span class="t">8:16 a. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>Mariana está <b>al día</b> ✅
+🎁 Noviembre: $0 (regalo de bienvenida)
+Su próxima mensualidad es la de <b>diciembre: $165.000</b>.</p><span class="t">8:16 a. m.</span></div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Qué pasa por detrás</h3>
+      <div class="tags"><span class="tag t-existe">Ya existe</span><span class="tag t-nuevo">Horario de la semana con cambios del profe: nuevo</span></div>
+      <ul>
+        <li>El bot reconoce al acudiente <b>por su número</b> (sin correo ni código) y solo le muestra datos de sus deportistas.</li>
+        <li>Pagos, cómo pagar, enviar comprobantes y sedes ya funcionan para las familias.</li>
+        <li><b>Nuevo:</b> el horario sale de lo que el profe publicó para esa semana, con cancelaciones y cambios, no del horario fijo del grupo.</li>
+        <li>Para que esto sirva desde el día 1, los acudientes de Monster tienen que tener el celular cargado en SportMaps. Antes de encender se revisa cuántos no lo tienen.</li>
+      </ul>
+      <p class="ojo"><b>Decisión pendiente:</b> desde el 29 de octubre el bot está en «modo discreto» para todas las escuelas. En ese modo responde comprobantes, el horario de hoy y cómo pagar, pero si alguien escribe «cuánto debo» se lo pasa a la escuela (los botones sí funcionan). Para Monster proponemos que el bot responda todo lo de esta pantalla. Hoy ese modo es uno solo para todas las escuelas; hacerlo por escuela es nuevo.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 10 · Una persona -->
+<section class="paso" id="p10">
+  <h2><span class="n">10</span>Cuándo responde una persona</h2>
+  <p class="sub">El bot resuelve lo de todos los días y pasa a una persona lo que necesita criterio.</p>
+  <div class="grid">
+    <div class="phone">
+      <div class="wa-head"><span class="back">←</span><span class="avatar">MV</span><span class="who"><b>Monsters Volley</b><small>Cuenta de empresa</small></span></div>
+      <div class="chat">
+        <div class="m out"><p>Hola, quería saber si hay becas o algún descuento por hermanos</p><span class="t">3:02 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="m in gap"><p>¡Buena pregunta! 🙌 Eso lo revisa directamente una persona del club. Ya le pasé tu mensaje con los datos de Mariana y te responden <b>por aquí mismo</b>.</p><span class="t">3:02 p. m.</span></div>
+        <div class="sys">El bot queda en pausa en esta conversación</div>
+        <div class="m in"><span class="quien">Asesor(a) del club</span><p>Hola Carolina, ¿cómo estás? Te cuento cómo funcionan las becas en Monsters…</p><span class="t">3:20 p. m.</span></div>
+        <div class="m out gap"><p>Listo, muchas gracias 🙏</p><span class="t">3:24 p. m.<i class="ck">✓✓</i></span></div>
+        <div class="sys">Si no hay más mensajes de la persona del club, el bot vuelve a atender solo</div>
+      </div>
+    </div>
+    <div class="notas">
+      <h3>Reglas propuestas (Monster las confirma)</h3>
+      <div class="tags"><span class="tag t-existe">Paso a una persona: existe</span><span class="tag t-nuevo">Lista por escuela: se construye</span><span class="tag t-humano">Lo atiende una persona</span></div>
+      <table>
+        <tr><th>Lo resuelve el bot</th><th>Pasa a una persona</th></tr>
+        <tr><td>Bienvenida, sedes, precios, horarios</td><td>Becas, descuentos, hermanos</td></tr>
+        <tr><td>Preguntas y categoría</td><td>Quejas o reclamos</td></tr>
+        <tr><td>Agenda y cambio de la clase de prueba</td><td>Comprobante con monto o cuenta que no coincide</td></tr>
+        <tr><td>Comprobantes que coinciden</td><td>No hay grupo para su año o sexo</td></tr>
+        <tr><td>Recordatorios y seguimientos</td><td>Retiros, cambios de sede, lesiones o salud</td></tr>
+        <tr><td>Matrícula, clínica y regalo de noviembre</td><td>Pide hablar con alguien, o el bot no entendió 2 veces</td></tr>
+      </table>
+      <ul>
+        <li>Cuando la persona del club escribe (desde el celular, con la app WhatsApp Business conectada, o desde SportMaps), <b>el bot se calla</b> en esa conversación durante 12 horas desde su último mensaje, o hasta que toque «Soltar» en SportMaps. Esto ya existe.</li>
+        <li>A la escuela le llega el aviso (notificación en la app y en el celular, y un resumen diario por correo) con los datos ya guardados: no tiene que preguntar de nuevo.</li>
+        <li>Si nadie responde en 2 horas hábiles, a la escuela le llega otro aviso (ya existe). <b>Nuevo:</b> el bot le confirma a la persona que su mensaje sigue en fila, para que nunca quede en silencio.</li>
+        <li>Hoy la lista de temas que pasan a una persona es la misma para todas las escuelas. Que Monster tenga la suya es nuevo.</li>
+      </ul>
+      <p class="ojo">Monster define quién atiende y en qué horario.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 11 · En SportMaps -->
+<section class="paso" id="p11">
+  <h2><span class="n">11</span>Lo que ven la escuela y el entrenador en SportMaps</h2>
+  <p class="sub">Todo lo del chat aterriza solo en la app. Nadie copia datos de un correo.</p>
+  <div class="apps">
+    <div class="app">
+      <div class="ah"><span>Deportistas</span><span class="tag t-ajusta">Existe, se amplía</span></div>
+      <div class="tabs"><span>Activos</span><span class="on">Clase de prueba</span><span>Inactivos</span></div>
+      <div class="ab">
+        <div class="card">
+          <div class="ct"><span>Mariana Gómez Rojas</span><span class="pill">Agendada · pagó $15.000</span></div>
+          <div class="cm">2011 · Mujer · Punta · Club y torneos (Club Titanes, Distrital 2025, Festival Nacional sub-15)</div>
+          <div class="cm">🟡 Sede Norte · Infantil Femenino · Profe Iván · Sáb 31 oct, 8:00 a. m.</div>
+          <div class="cm">Llegó por WhatsApp · 319 *** **12</div>
+        </div>
+        <div class="card">
+          <div class="ct"><span>Samuel Ortiz</span><span class="pill am">Cupo separado · sin comprobante</span></div>
+          <div class="cm">2009 · Hombre · Central · Colegio o escuela</div>
+          <div class="cm">⚫ Sede Suba · U17 Masculino Proyección · Profe Sebastián · Mié 4 nov, 4:00 p. m. · Pinar 2</div>
+        </div>
+      </div>
+    </div>
+    <div class="app">
+      <div class="ah"><span>Mi semana · Profe Iván</span><span class="tag t-nuevo">Se construye</span></div>
+      <div class="ab">
+        <div class="week">
+          <div><b>Lun</b></div><div><b>Mar</b></div><div><b>Mié</b></div><div><b>Jue</b></div><div><b>Vie</b></div>
+          <div><b>Sáb 7</b><span class="slot">8–10 Infantil F</span></div>
+          <div><b>Dom 8</b><span class="slot x">8–10 Infantil F</span></div>
+        </div>
+        <p style="margin:10px 0 6px;font-size:13px;color:var(--ink-2)">El profe ve su semana, cancela o mueve un entrenamiento y repite la semana anterior con un toque. El bot solo ofrece lo que está aquí.</p>
+        <div class="card" style="margin:0">
+          <div class="ct"><span>🔔 Nueva clase de prueba</span></div>
+          <div class="cm">Mariana Gómez Rojas · 2011 · Punta · Club y torneos · Sáb 31 oct, 8:00 a. m. · Pagó ✅</div>
+          <div class="cm">Después de la clase: [Asistió] [No vino] · Grupo y nivel recomendado</div>
+        </div>
+      </div>
+    </div>
+    <div class="app">
+      <div class="ah"><span>Comprobantes</span><span class="tag t-nuevo">Por motivo: se construye</span></div>
+      <div class="tabs"><span class="on">Todos</span><span>Clase de prueba</span><span>Matrícula</span><span>Uniformes</span><span>Clínica</span><span>Mensualidad</span></div>
+      <div class="ab">
+        <div class="card"><div class="ct"><span>$15.000 · Clase de prueba</span><span class="pill">Coincide</span></div><div class="cm">Mariana Gómez Rojas · Nequi · 29 oct · por WhatsApp</div></div>
+        <div class="card"><div class="ct"><span>$310.000 · Matrícula 2026</span><span class="pill">Coincide</span></div><div class="cm">Mariana Gómez Rojas · Nequi · 2 nov · por WhatsApp</div></div>
+        <div class="card"><div class="ct"><span>$60.000 · Uniformes</span><span class="pill">Coincide</span></div><div class="cm">Mariana Gómez Rojas · Daviplata · 2 nov · por WhatsApp</div></div>
+        <div class="card" style="margin:0"><div class="ct"><span>$145.000 · Mensualidad nov</span><span class="pill am">Revisar: otra cuenta</span></div><div class="cm">Juan Pérez · Bancolombia · 3 nov · subido en la app</div></div>
+      </div>
+    </div>
+    <div class="app">
+      <div class="ah"><span>Subir comprobante (acudiente)</span><span class="tag t-nuevo">Se construye</span></div>
+      <div class="ab">
+        <div class="field"><label>Deportista</label><div class="in"><span>Mariana Gómez Rojas</span><span>▾</span></div></div>
+        <div class="field"><label>Motivo</label><div class="in"><span>Uniformes de entrenamiento</span><span>▾</span></div></div>
+        <div class="field"><label>Comprobante</label><div class="in"><span>📎 comprobante-daviplata.jpg</span><span>Cambiar</span></div></div>
+        <p style="margin:0 0 10px;font-size:13px;color:var(--ink-2)">Si entró por un enlace de cobro («Paga la clínica»), el motivo ya viene elegido.</p>
+        <span class="btnp">Enviar comprobante</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Encender -->
+<section class="final" id="p12">
+  <div class="notas">
+    <h3>Cómo se enciende: conectar, aprobar y prender</h3>
+    <ol>
+      <li><b>Cargamos el orden de Monster:</b> el cuadro de horarios de las 13 categorías de Suba, el horario de Norte (sábados y domingos de 8 a 10 a. m. para sus 9 categorías), los años de cada categoría de Suba, el nivel de cada grupo y las direcciones de las canchas. Los entrenadores por grupo ya están cargados.</li>
+      <li><b>Probamos todo en el número de pruebas de SportMaps</b> simulando a Monster (<code>/escuela monsters-volley-club</code>, <code>/como prospecto</code>), de punta a punta, antes de tocar su número. Hoy ese número solo prueba texto y botones: se amplía para recibir comprobantes y simular recordatorios y seguimientos.</li>
+      <li><b>Conectan su número</b> (319 450 5150) por coexistencia: siguen usando la app WhatsApp Business en el celular y el bot atiende al tiempo.</li>
+      <li><b>Mandamos las plantillas a Meta</b> (lista al lado) y esperamos la aprobación.</li>
+      <li><b>Encendemos</b>: la primera semana en modo asistido (el bot propone y una persona revisa); después, automático.</li>
+    </ol>
+  </div>
+  <div class="notas">
+    <h3>Plantillas para aprobar en Meta</h3>
+    <table>
+      <tr><th>Plantilla</th><th>Tipo</th><th>Uso</th></tr>
+      <tr><td>Recordatorio de clase de prueba</td><td><span class="tag t-meta">Utilidad</span></td><td>Día anterior, 6:00 p. m.</td></tr>
+      <tr><td>Seguimiento de interés (texto de Monster)</td><td><span class="tag t-meta">Marketing</span></td><td>Días 3 y 7</td></tr>
+      <tr><td>Regalo de cierre de año</td><td><span class="tag t-meta">Marketing</span></td><td>Hasta el 30 de noviembre</td></tr>
+      <tr><td>Clínica de armadores y atacantes</td><td><span class="tag t-meta">Marketing</span></td><td>Difusión al club</td></tr>
+      <tr><td>Cupo liberado sin pago</td><td><span class="tag t-meta">Utilidad</span></td><td>24 h después de separar</td></tr>
+    </table>
+    <h3>Lo que falta que defina Monster</h3>
+    <ul>
+      <li>Regla de nivel en Suba (tabla del paso 3): qué trayectoria va a Competitivo y cuál a Proyección.</li>
+      <li>Años de nacimiento de cada categoría de Suba: ¿U15 en 2026 = nacidos en 2011 y 2012?</li>
+      <li>Direcciones de las canchas: Pinar, Pinar 2, Fesan, Lestonnac, La Enseñanza y «Pinar - Oxxo».</li>
+      <li>Tres horas del cuadro que parecen errores: U17 Fem Proyección «sábado 11 PM - 1 PM», U17 Masc Competitivo «domingo 9:30 AM - 11:30 PM» y U19-U21 Fem «sábado 1M - 3PM».</li>
+      <li>El afiche de Suba dice «sábados y domingos de 8 a 10 a. m.», pero el cuadro por categoría da otros horarios. Proponemos que mande el cuadro.</li>
+      <li>¿El regalo de noviembre y la clínica aplican a las dos sedes? ¿La renovación de $170.000 también va en Suba?</li>
+      <li>Qué llevar a la clase de prueba, y quién atiende como asesor y en qué horario.</li>
+    </ul>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

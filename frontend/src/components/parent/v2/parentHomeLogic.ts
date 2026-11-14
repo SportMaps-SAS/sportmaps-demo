@@ -87,6 +87,9 @@ export function fechaCabecera(hoy: Date): string {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
+/** Punto final de una frase, sin duplicarlo cuando ya termina en «p. m.». */
+export const conPuntoFinal = (frase: string) => (/\.\s*$/.test(frase) ? frase.trimEnd() : `${frase.trimEnd()}.`);
+
 /** «4:00 p. m.» a partir de «16:00» o «16:00:00». */
 export function horaColombia(hhmm: string): string {
   const [hS, mS = '00'] = hhmm.split(':');
@@ -198,7 +201,18 @@ export function resumenFamilia(
     .sort((a, b) => fechaLocal(a.due_date)!.getTime() - fechaLocal(b.due_date)!.getTime())[0];
   const partes: string[] = [];
   const venc = masUrgente ? fraseVencimiento(masUrgente.due_date, hoy) : null;
-  if (venc) partes.push(venc);
+  if (venc && deudas.length === 1) partes.push(venc);
+  else if (venc && masUrgente) {
+    // Con varios cobros, decir de CUÁL es la fecha: «Venció el 13 de agosto»
+    // suelto se leía como si fuera todo lo que se debe.
+    const quien = nombreDe(masUrgente.child_id);
+    const que = `${queSeDebe(masUrgente)}${quien ? ` de ${quien}` : ''}`;
+    const vencido = venc.startsWith('Venció');
+    const cuando = venc.replace(/^Venció /, '').replace(/^Vence /, '').replace(/\.$/, '');
+    partes.push(vencido
+      ? `El más antiguo, ${que}, venció el ${cuando.replace(/^el /, '')}.`
+      : `El próximo, ${que}, vence ${cuando}.`);
+  }
   const alDia = hijos.filter((h) => !deudas.some((c) => c.child_id === h.id)).map((h) => primerNombre(h.nombre)).filter(Boolean);
   if (alDia.length === 1) partes.push(`Lo de ${alDia[0]} está al día.`);
   else if (alDia.length > 1) partes.push(`Lo de ${alDia.slice(0, -1).join(', ')} y ${alDia[alDia.length - 1]} está al día.`);
@@ -292,6 +306,18 @@ export function proximoEntreno(hijos: Hijo[], ahora: Date): ProximoEntreno | nul
       : `el ${DIAS[mejor.f.day]} a las ${hora}`;
   const donde = mejor.f.place || mejor.hijo.lugar || null;
   return { hijoId: mejor.hijo.id, frase: { quien: primerNombre(mejor.hijo.nombre), cuando, donde } };
+}
+
+/**
+ * La foto del hijo solo si es una foto de verdad. Los avatares generados
+ * (dicebear, la mascota) parecen un muñeco y se confundían con Mapi: en ese
+ * caso se muestran las iniciales. El lémur queda solo para Mapi.
+ */
+export function fotoDeVerdad(url: string | null | undefined): string | null {
+  const u = (url ?? '').trim();
+  if (!u) return null;
+  if (/dicebear\.com|\/mapi\/|mascot|ui-avatars\.com/i.test(u)) return null;
+  return u;
 }
 
 export const iniciales = (nombre: string) =>

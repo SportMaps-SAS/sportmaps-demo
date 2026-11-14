@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -7,12 +8,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import { Trophy, Plus, TrendingUp, Minus, Equal, Trash2, Pencil, FileText } from 'lucide-react';
-import { MatchResultFormDialog } from '@/components/coach/MatchResultFormDialog';
+import { Trophy, Plus, TrendingUp, Minus, Equal, Trash2, ChevronRight } from 'lucide-react';
 import { CompetitionResultFormDialog } from '@/components/coach/CompetitionResultFormDialog';
 import { CompetitionResultsList } from '@/components/coach/CompetitionResultsList';
 import { LevelProgressionPanel } from '@/components/coach/LevelProgressionPanel';
-import { MatchReportDialog } from '@/components/coach/MatchReportDialog';
 import { useMatchReports } from '@/hooks/useMatchReports';
 import { useToast } from '@/hooks/use-toast';
 import {
@@ -32,23 +31,17 @@ export default function ResultsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingMatch, setEditingMatch] = useState<any | null>(null);
+  const navigate = useNavigate();
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [competitionDialogOpen, setCompetitionDialogOpen] = useState(false);
-  const [reportMatch, setReportMatch] = useState<any | null>(null);
+  // Cada partido se programa, convoca, cierra, evalúa y reporta en UNA
+  // pantalla (/partidos/:id). Esta lista solo lista y abre.
+  const abrirPartido = (id: string) => navigate(`/partidos/${encodeURIComponent(id)}`);
+  const nuevoPartido = () => navigate(`/partidos/nuevo?equipo=${encodeURIComponent(selectedTeamId)}`);
 
   const { schoolId, activeBranchId, currentUserRole } = useSchoolContext();
-  // Corregir un resultado ya guardado queda restringido a la dirección de la
-  // escuela + coach -- a diferencia de crear/eliminar (que ya estaban
-  // abiertos a todo el que llega a esta página), fue un pedido explícito
-  // para no dejar que un 'staff' cualquiera reescriba el marcador de un
-  // partido jugado. 'owner'/'admin'/'school_admin'/'super_admin' son roles
-  // DISTINTOS en este sistema (ver RLS de match_results) -- "admin" acá se
-  // lee como "quien dirige la escuela", no el string literal 'admin' solo
-  // (la cuenta owner de la escuela demo no veía el botón con ese gate).
-  const EDIT_RESULTS_ROLES = ['owner', 'admin', 'school_admin', 'super_admin', 'coach'];
-  const canEditResults = EDIT_RESULTS_ROLES.includes(currentUserRole || '');
+  // Editar/registrar partidos: lo decide la pantalla del partido (PartidoFlujo),
+  // con el mismo criterio de roles que tenía esta página.
   // match_results_delete (RLS) excluye a 'coach' a propósito -- a diferencia
   // de insert/update, que sí lo incluyen. Sin este gate, un coach veía el
   // botón de borrar y se encontraba con un error de permisos sin explicación
@@ -150,48 +143,6 @@ export default function ResultsPage() {
     enabled: !!selectedTeamId && !usesSets,
   });
 
-  // Create result mutation
-  const createMutation = useMutation({
-    mutationFn: async (input: any) => {
-      const { data, error } = await supabase
-        .from('match_results')
-        .insert(input)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['match-results', selectedTeamId] });
-      toast({ title: '✅ Resultado registrado' });
-    },
-    onError: (error: any) => {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    },
-  });
-
-  // Update result mutation
-  const updateMutation = useMutation({
-    mutationFn: async ({ id, ...input }: any) => {
-      const { data, error } = await supabase
-        .from('match_results')
-        .update(input)
-        .eq('id', id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['match-results', selectedTeamId] });
-      toast({ title: '✅ Resultado actualizado' });
-      setEditingMatch(null);
-    },
-    onError: (error: any) => {
-      toast({ title: 'Error', description: error.message, variant: 'destructive' });
-    },
-  });
-
   // Delete result mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -203,7 +154,7 @@ export default function ResultsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['match-results', selectedTeamId] });
-      toast({ title: 'Resultado eliminado' });
+      toast({ title: 'Partido eliminado' });
       setDeleteId(null);
     },
   });
@@ -261,17 +212,16 @@ export default function ResultsPage() {
         <Button
           className="gap-2"
           onClick={() => {
-            setEditingMatch(null);
             if (usesSets) {
               setCompetitionDialogOpen(true);
             } else {
-              setDialogOpen(true);
+              nuevoPartido();
             }
           }}
           disabled={!selectedTeamId}
         >
           <Plus className="w-4 h-4" />
-          Registrar Resultado
+          {usesSets ? 'Registrar Resultado' : 'Partido'}
         </Button>
       </div>
 
@@ -341,7 +291,11 @@ export default function ResultsPage() {
                   return (
                     <div
                       key={match.id}
-                      className="flex items-center justify-between p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => abrirPartido(match.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') abrirPartido(match.id); }}
+                      className="flex cursor-pointer flex-wrap items-center justify-between gap-3 p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors"
                     >
                       <div className="flex items-center gap-4">
                         {getResultIcon(result)}
@@ -378,35 +332,17 @@ export default function ResultsPage() {
                             {reportsByMatch[match.id].published_at ? 'Publicado' : 'Con reporte'}
                           </Badge>
                         )}
-                        {canEditResults && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-1"
-                            onClick={() => setReportMatch(match)}
-                          >
-                            <FileText className="h-4 w-4" />
-                            Reporte
-                          </Button>
-                        )}
-                        {canEditResults && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setEditingMatch(match); setDialogOpen(true); }}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        )}
                         {canDeleteResults && (
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => setDeleteId(match.id)}
+                            aria-label="Eliminar partido"
+                            onClick={(e) => { e.stopPropagation(); setDeleteId(match.id); }}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
                         )}
+                        <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
                       </div>
                     </div>
                   );
@@ -418,10 +354,10 @@ export default function ResultsPage() {
                     <p>No hay resultados registrados aún</p>
                     <Button
                       className="mt-4 gap-2"
-                      onClick={() => { setEditingMatch(null); setDialogOpen(true); }}
+                      onClick={nuevoPartido}
                     >
                       <Plus className="w-4 h-4" />
-                      Registrar Primer Resultado
+                      Programar o registrar un partido
                     </Button>
                   </div>
                 )}
@@ -459,17 +395,6 @@ export default function ResultsPage() {
         </Card>
       )}
 
-      {selectedTeamId && !usesSets && (
-        <MatchResultFormDialog
-          open={dialogOpen}
-          onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingMatch(null); }}
-          onSubmit={(data) => (editingMatch ? updateMutation.mutate({ id: editingMatch.id, ...data }) : createMutation.mutate(data))}
-          teamId={selectedTeamId}
-          isLoading={editingMatch ? updateMutation.isPending : createMutation.isPending}
-          match={editingMatch}
-        />
-      )}
-
       {selectedTeamId && usesSets && (
         <CompetitionResultFormDialog
           open={competitionDialogOpen}
@@ -478,19 +403,12 @@ export default function ResultsPage() {
         />
       )}
 
-      <MatchReportDialog
-        open={!!reportMatch}
-        onOpenChange={(open) => { if (!open) setReportMatch(null); }}
-        match={reportMatch}
-        report={reportMatch ? reportsByMatch?.[reportMatch.id] ?? null : null}
-      />
-
       <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>¿Eliminar resultado?</AlertDialogTitle>
+            <AlertDialogTitle>¿Eliminar partido?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción no se puede deshacer.
+              Se borra el partido con su resultado. Esta acción no se puede deshacer.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

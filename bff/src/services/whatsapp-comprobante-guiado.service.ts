@@ -31,6 +31,7 @@
 import { supabase } from '../config/supabase';
 import type { BotonInteractivo } from './whatsapp.service';
 import { deportistasEsperados, type DeportistaEsperado } from './whatsapp-pago-esperado.service';
+import type { ValorMotivoElegido } from './wa-cobro-desde-comprobante.service';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -56,7 +57,30 @@ export interface GuiaGuardada {
     /** Lo que ya se sabe de la propuesta (se agrega al motivo cuando va a la bandeja). */
     propuesta?: string | null;
     parentId?: string | null;
+    /**
+     * (Plan B4, 2026-10-30) Pregunta de hermanos: el motivo ya está resuelto
+     * (matrícula de $310.000) y solo falta de cuál deportista es. Al contestar,
+     * se crea el cobro de ESE deportista.
+     */
+    motivo?: (ValorMotivoElegido & { esperadoId?: string | null }) | null;
 }
+
+/** Lo que dejó la pregunta que no salió porque había otra abierta (la persiste `en_fila`). */
+export interface PreguntaGuiadaEnFila {
+    texto: string;
+    paso: string;
+    botones: BotonInteractivo[] | null;
+    monto: number | null;
+}
+
+/**
+ * (Plan B4 §3 T4.7) Resumen de una ráfaga en la que el asistente asignó
+ * motivos: «¡Recibí 2 comprobantes! ✅ …» con [Sí, está bien][Cambiar un motivo].
+ * Lo arma la cola; lo contesta whatsapp-respuesta-de-cobro.
+ */
+export const PASO_RESUMEN_MOTIVOS = 'resumen_motivos';
+export const BOTON_MOTIVOS_OK = { id: 'sm_motivos_ok', title: 'Sí, está bien' } as const;
+export const BOTON_MOTIVOS_CAMBIAR = { id: 'sm_motivos_cambiar', title: 'Cambiar un motivo' } as const;
 
 export const PASO_PREGUNTA_MES = 'ask_mes';
 export const PASO_PREGUNTA_CONCEPTO = 'ask_concepto';
@@ -268,13 +292,19 @@ export async function guardarPreguntaGuiada(
     base: { ocr: unknown; sha: string; storagePath: string | null; parentId: string | null; referencias?: string[] },
     tipo: TipoGuia,
     guia: GuiaGuardada,
+    /**
+     * (Plan B4) `enFila`: la pregunta no salió porque el contacto ya tenía otra
+     * abierta. Queda con `pregunta_at` null y sale cuando conteste la anterior.
+     */
+    o: { enFila?: PreguntaGuiadaEnFila | null } = {},
 ): Promise<void> {
+    const enFila = o.enFila ? { ...o.enFila, monto: o.enFila.monto ?? guia.monto ?? null } : null;
     await supabase.from('whatsapp_inbound_queue')
         .update({
             status: 'waiting_user', locked_until: null, updated_at: new Date().toISOString(),
             pregunta_opciones: [],
-            pregunta_ocr: { ...base, referencias: base.referencias ?? [], tipo, guia },
-            pregunta_at: new Date().toISOString(),
+            pregunta_ocr: { ...base, referencias: base.referencias ?? [], tipo, guia, ...(enFila ? { en_fila: enFila } : {}) },
+            pregunta_at: enFila ? null : new Date().toISOString(),
         })
         .eq('id', queueId);
 }
@@ -324,9 +354,11 @@ export async function resolverRespuestaGuiada(
     if (!opcion) {
         if ((fila.retries ?? 0) < 1) {
             await supabase.from('whatsapp_inbound_queue').update({ retries: (fila.retries ?? 0) + 1 }).eq('id', fila.id);
+            const deSiempre = guia.opciones.every((o) => typeof o.valor === 'string');
             await responder(
                 tipo === 'mes' ? 'No te entendí 🙏 Toca el mes al que corresponde el comprobante.'
-                    : 'No te entendí 🙏 Toca si es mensualidad, inscripción u otro.',
+                    : deSiempre ? 'No te entendí 🙏 Toca si es mensualidad, inscripción u otro.'
+                        : 'No te entendí 🙏 Toca de qué es el comprobante.',
                 tipo === 'mes' ? PASO_PREGUNTA_MES : PASO_PREGUNTA_CONCEPTO, botonesDeOpciones(guia.opciones));
             return true;
         }
@@ -353,8 +385,14 @@ export async function resolverRespuestaGuiada(
     }
 
     // concepto
-    const c = opcion.valor as 'mensualidad' | 'inscripcion' | 'otro';
-    const etiqueta = c === 'mensualidad' ? 'mensualidad' : c === 'inscripcion' ? 'inscripción' : 'otro concepto';
+    // (Plan B4) Con el interruptor, la opción es un motivo con precio (objeto).
+    // Si llegó acá es porque el monto no es ese precio (o no se pudo crear): a
+    // la bandeja nombrándolo por su etiqueta, como «otro concepto».
+    const v = opcion.valor;
+    const c = (v && typeof v === 'object' ? 'otro' : v) as 'mensualidad' | 'inscripcion' | 'otro';
+    const etiqueta = v && typeof v === 'object'
+        ? String((v as { etiqueta?: string }).etiqueta ?? opcion.etiqueta).toLowerCase()
+        : c === 'mensualidad' ? 'mensualidad' : c === 'inscripcion' ? 'inscripción' : 'otro concepto';
     const motivo = c === 'otro' || c === 'inscripcion'
         ? `otro_concepto: ${etiqueta} (la familia lo eligió) · ${sujeto} · ${montoTxt}${pagoPor}${prop}`
         : `monto_no_cuadra: la familia dice que es mensualidad de ${sujeto} pero ${montoTxt} no cuadra con la cuota${pagoPor}${prop}`;

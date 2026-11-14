@@ -1,0 +1,211 @@
+1
+00:00:00,009 --> 00:00:08,301
+La app para deportistas está pensada para el celular. Lo del día a día está en estas cinco pestañas: Hoy, Entrenos,
+
+2
+00:00:08,301 --> 00:00:09,959
+Progreso, Carnet y Más.
+
+3
+00:00:09,959 --> 00:00:17,129
+Hoy te dice en una mirada qué tienes que hacer. Si debes algo, lo primero es la frase y el botón verde para pagar.
+
+4
+00:00:17,129 --> 00:00:22,475
+Si eres menor de edad, la app no te muestra plata: los pagos los maneja tu acudiente.
+
+5
+00:00:22,475 --> 00:00:30,588
+Si el profe te convocó, sale la tarjeta Convocatoria, con el rival, la fecha, la hora, el lugar y la nota del profe.
+
+6
+00:00:30,588 --> 00:00:39,140
+Toca Voy o No puedo ir. Durante unos segundos aparece Deshacer, por si te equivocaste. Después puedes tocar Cambiar.
+
+7
+00:00:39,140 --> 00:00:41,868
+Tu profe ve tu respuesta al instante.
+
+8
+00:00:41,868 --> 00:00:48,101
+Cuando tu profe te felicita, su mensaje sale aquí. Debajo, cuántos entrenos del mes viniste,
+
+9
+00:00:48,101 --> 00:00:51,014
+y tu racha de entrenos seguidos sin faltar.
+
+10
+00:00:51,014 --> 00:00:59,575
+En Entrenos ves cuándo y dónde entrenas. Arriba, los partidos a los que te convocaron, con tu respuesta. Debajo,
+
+11
+00:00:59,575 --> 00:01:01,486
+tus entrenos día por día.
+
+12
+00:01:01,486 --> 00:01:09,182
+Para la casa son las rutinas que tu profe dejó para que hagas por tu cuenta, con duración y nivel. Agrégalas a tu día,
+
+13
+00:01:09,182 --> 00:01:10,291
+y tu profe lo ve.
+
+14
+00:01:10,291 --> 00:01:16,968
+Ver todos mis entrenamientos abre la pantalla completa: sesiones con entrenador personal, actividad libre,
+
+15
+00:01:16,968 --> 00:01:18,228
+rutinas e historial.
+
+16
+00:01:18,228 --> 00:01:24,179
+Y Ver el mes completo abre el calendario: la cuadrícula del mes y los próximos eventos que publica tu escuela.
+
+17
+00:01:26,042 --> 00:01:32,793
+Progreso es todo lo que tu profe dice de ti, en un solo lugar. Solo te comparas con tu propio avance,
+
+18
+00:01:32,793 --> 00:01:34,665
+nunca con otros deportistas.
+
+19
+00:01:34,665 --> 00:01:41,604
+Cómo me fue trae la frase del mes, la gráfica de qué tan duro fue, y lo que dijo el profe de tus últimos entrenos.
+
+20
+00:01:41,604 --> 00:01:49,085
+En qué mejoro muestra las habilidades que mide tu profe, con tu nivel y cuánto subiste. Mientras no haya medido nada,
+
+21
+00:01:49,085 --> 00:01:50,492
+la pestaña te lo dice.
+
+22
+00:01:50,492 --> 00:01:57,213
+En Informes está lo que trabajó tu equipo en el mes, y tus informes mensuales, que se descargan en PDF.
+
+23
+00:01:57,213 --> 00:02:02,266
+Y Felicitaciones guarda todas las que te ha dejado tu profe, con quién y cuándo.
+
+24
+00:02:02,266 --> 00:02:09,642
+Carnet es tu carnet digital: lo muestras en la entrada del club, en los torneos y donde te lo pidan. Ves tu foto,
+
+25
+00:02:09,642 --> 00:02:12,906
+tu equipo, el código Q R y hasta cuándo es válido.
+
+26
+00:02:12,906 --> 00:02:20,789
+Toca el código para agrandarlo a pantalla completa, y acércalo al lector. Si no lo toma, sube el brillo de la pantalla.
+
+27
+00:02:20,789 --> 00:02:25,836
+Guardar imagen descarga el carnet a tu celular, para tenerlo aunque no haya internet.
+
+28
+00:02:25,836 --> 00:02:28,924
+Compartir lo envía por WhatsApp o por donde quieras.
+
+29
+00:02:30,778 --> 00:02:35,536
+Si eres mayor de edad, en Más, Pagos, pagas lo tuyo. Si eres menor,
+
+30
+00:02:35,536 --> 00:02:40,152
+esta pantalla solo te dice que tus pagos los maneja tu acudiente.
+
+31
+00:02:40,152 --> 00:02:47,506
+Cada cobro trae su concepto, desde cuándo está vencido, y si incluye recargo por mora. Los cobros ya vienen marcados:
+
+32
+00:02:47,506 --> 00:02:51,528
+desmarca el que no quieras pagar ahora, y el total se recalcula.
+
+33
+00:02:51,528 --> 00:02:58,684
+Toca Pagar y elige Pagar online: tarjeta, PSE o Nequi. Si la escuela cobra un recargo por pago en línea,
+
+34
+00:02:58,684 --> 00:03:01,574
+lo ves antes de pagar, con el total final.
+
+35
+00:03:01,574 --> 00:03:07,839
+Si pagaste por transferencia, toca Ya transferí: subir el comprobante.
+
+36
+00:03:07,839 --> 00:03:17,003
+Ahí ves los datos de la cuenta de la escuela, con botón para copiarlos. Elige la foto o el PDF del comprobante,
+
+37
+00:03:17,003 --> 00:03:19,810
+de máximo cinco megas, y confirma.
+
+38
+00:03:19,810 --> 00:03:25,532
+El cobro queda En revisión. Cuando la escuela lo aprueba, pasa a Pagados.
+
+39
+00:03:25,532 --> 00:03:32,709
+¿Quieres adelantar un pago? Pagar otro concepto te deja pagar por adelantado la mensualidad de tus inscripciones.
+
+40
+00:03:32,709 --> 00:03:39,574
+En Pagados ves cada pago con su valor, el medio y la fecha. Abajo está tu estado de cuenta, tu historial en Excel,
+
+41
+00:03:39,574 --> 00:03:42,525
+y la factura electrónica, si la escuela la emite.
+
+42
+00:03:44,415 --> 00:03:53,167
+Más tiene todo lo que no está en la barra. Arriba, tu nombre, tu equipo y tu escuela. Después, Pagos, con lo que debes,
+
+43
+00:03:53,167 --> 00:03:55,153
+solo si eres mayor de edad.
+
+44
+00:03:55,153 --> 00:04:01,842
+En Inscripciones y planes están tus planes activos, para ver y agendar clases, y tus reservas.
+
+45
+00:04:01,842 --> 00:04:07,339
+En Torneos y eventos, los torneos a los que te inscribiste, con su estado.
+
+46
+00:04:07,339 --> 00:04:12,814
+En Mis objetivos creas tus metas deportivas, y marcas tu avance.
+
+47
+00:04:12,814 --> 00:04:19,681
+Bienestar tiene tu salud, tus citas, y tus medidas, como peso y talla, para ver su evolución.
+
+48
+00:04:19,681 --> 00:04:25,450
+En Cuenta están tus notificaciones, tus datos, y la configuración de avisos y contraseña.
+
+49
+00:04:25,450 --> 00:04:30,830
+El documento de identidad es de solo lectura: para cambiarlo, habla con la escuela.
+
+50
+00:04:30,830 --> 00:04:36,057
+Si no sabes cómo hacer algo, escríbele a Mapi, el botón redondo de abajo a la derecha,
+
+51
+00:04:36,057 --> 00:04:42,925
+como le escribirías a una persona. Te responde paso a paso, y si no puede resolverlo, pasa tu pregunta a soporte.
+
+52
+00:04:42,925 --> 00:04:48,656
+También puedes tocar Escribirle al club, que abre WhatsApp con el número de tu escuela, o el Centro de ayuda,
+
+53
+00:04:48,656 --> 00:04:49,813
+con guías paso a paso.

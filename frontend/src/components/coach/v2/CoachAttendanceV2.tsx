@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ScanLine, WifiOff, CloudUpload, ChevronRight, CalendarCheck, Lock, AlertTriangle, RotateCcw, Loader2, Check, X,
+  ScanLine, WifiOff, CloudUpload, ChevronRight, CalendarCheck, Lock, AlertTriangle, RotateCcw, Loader2, Check, X, Camera,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
@@ -32,19 +32,19 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AvisoFichaStaff } from '@/components/common/AvisoFichaStaff';
 import { AvailabilityBadge } from '@/components/clinical/AvailabilityBadge';
-import { CoachPostTrainingRatingDialog } from '@/components/attendance/CoachPostTrainingRatingDialog';
 import {
-  ETIQUETA, capitalizar, construirRegistros, estadoDesdeRegistros, estadoInicial, faltanMucho, fechaHumana, fechasCorregibles,
-  horaHumana, iniciales, porcentajeAsistencia, resumir, sePuedeCorregir, siguienteEstado, sumarDias, textoAyuda,
-  type EstadoLista,
+  ETIQUETA, capitalizar, construirRegistros, estadoDesdeRegistros, estadoInicial, faltanMucho, fechaHumana, fechaMinimaCorregible,
+  horaHumana, iniciales, opcionDeFecha, opcionesDeDia, porcentajeAsistencia, resumir, sePuedeCorregir, siguienteEstado, sumarDias,
+  textoAyuda, textoListaGuardada, textoVentanaCorreccion,
+  type EstadoLista, type OpcionDia,
 } from './asistenciaModel';
 import { DESHACER_MS, claveLista } from './colaAsistencia';
 import { useColaAsistencia, useWakeLock } from './useCoachV2Senal';
 import {
-  claveContexto, esAdministracion, useClasesHoy, useEquiposCoach, useHistorial, useOrigenClase, usePlanesCoach,
+  cerrarListaSesion, claveContexto, esAdministracion, useClasesHoy, useEquiposCoach, useHistorial, useOrigenClase, usePlanesCoach,
   usePlanillasPorRevisar, usePtDeHoy, useRoster, useSesionDelDia, useSoloEquipos,
   type ContextoLista, type RosterV2,
 } from './useAsistenciaV2Data';
@@ -149,7 +149,7 @@ function TomarLista({ pedido, onPedidoAtendido }: { pedido: { ctx: ContextoLista
   const [fecha, setFecha] = useState(hoy);
   const [autoNota, setAutoNota] = useState<string | null>(null);
   const [elegir, setElegir] = useState(false);
-  const fechas = fechasCorregibles(hoy, coachAttendanceRetroDays);
+  const retroDias = coachAttendanceRetroDays;
 
   // Pedido desde el Historial («Corregir»).
   useEffect(() => {
@@ -241,7 +241,7 @@ function TomarLista({ pedido, onPedidoAtendido }: { pedido: { ctx: ContextoLista
           {ctx && !elegir && (
             <ListaDelEntreno
               key={`${claveContexto(ctx)}|${fecha}`}
-              ctx={ctx} fecha={fecha} fechas={fechas} hoy={hoy} onFecha={setFecha}
+              ctx={ctx} fecha={fecha} retroDias={retroDias} hoy={hoy} onFecha={setFecha}
               onElegirClase={(id) => elegirCtx({ tipo: 'session', id, nombre: ctx.nombre })}
             />
           )}
@@ -291,11 +291,12 @@ function SelectorLista({ equipos, planes, clases, actual, onElegir, onCerrar }: 
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
-  ctx: ContextoLista; fecha: string; fechas: string[]; hoy: string;
+function ListaDelEntreno({ ctx, fecha, retroDias, hoy, onFecha, onElegirClase }: {
+  ctx: ContextoLista; fecha: string; retroDias: number; hoy: string;
   onFecha: (f: string) => void; onElegirClase: (sessionId: string) => void;
 }) {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const { schoolId } = useSchoolContext();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -342,8 +343,6 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
   const [isSecondary, setIsSecondary] = useState(false);
   const [masOpciones, setMasOpciones] = useState(false);
   const [ahora, setAhora] = useState(Date.now());
-  const [confirmarCierre, setConfirmarCierre] = useState(false);
-  const [calificar, setCalificar] = useState(false);
   const iniciado = useRef(false);
 
   // Estado inicial UNA vez por lista: lo guardado en el teléfono manda, luego la base, luego «todos Vino».
@@ -375,7 +374,13 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
   const r = resumir(estado, ids);
   const primerAviso = roster.find((a) => estado[a.id] === 'excused' && a.aviso_ausencia)?.full_name.split(' ')[0] ?? null;
   const puedeEditar = editando && !cerrada && !sesionQ.data?.varias && !sesionQ.data?.sinClase;
-  const sePuedeGuardar = sePuedeCorregir(fecha, hoy, fechas.length - 1) && !!schoolId && roster.length > 0;
+  const sePuedeGuardar = sePuedeCorregir(fecha, hoy, retroDias) && !!schoolId && roster.length > 0;
+  const opcionesDia = opcionesDeDia(retroDias);
+  const elegirDia = (o: OpcionDia) => {
+    if (o === 'hoy') onFecha(hoy);
+    else if (o === 'ayer') onFecha(sumarDias(hoy, -1));
+    else if (opcionDeFecha(fecha, hoy) !== 'otro') onFecha(sumarDias(hoy, -2));
+  };
 
   const tocar = (id: string) => {
     if (!puedeEditar) return;
@@ -414,15 +419,21 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
     if (cola?.reintentar(k)) void flush(true);
   };
 
+  // «Cerrar y evaluar»: un toque cierra la lista (sale la encuesta a las
+  // familias) y abre la evaluación, que exige la lista cerrada. Antes el botón
+  // grande era «Evaluar al equipo» sin cerrar y caía en «Primero cierra la
+  // lista»: en Besser no salió encuesta ni evaluación del 24 al 29 de octubre.
   const finalizar = useMutation({
     mutationFn: async () => {
       if (!sesion?.id) throw new Error('Guarda la lista antes de cerrarla.');
-      return bffClient.patch<any>(`/api/v1/attendance/session/${sesion.id}/finalize`, {});
+      return cerrarListaSesion(sesion.id);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['v2-asis-sesion', claveContexto(ctx), fecha] });
-      toast({ title: 'Lista cerrada', description: 'Ya no se puede cambiar sin reabrirla.' });
-      setCalificar(true);
+      toast({ title: 'Lista cerrada', description: 'Ahora cuéntanos cómo le fue a cada uno.' });
+      // B10: la V2 califica en «Evaluar al equipo» (Bien · Normal · Le costó);
+      // el modal viejo de porcentajes ya no se abre.
+      if (sesion?.id) navigate(`/coach/evaluar/${sesion.id}`);
     },
     onError: (e: Error) => toast({ title: 'No se pudo cerrar la lista', description: e.message, variant: 'destructive' }),
   });
@@ -473,12 +484,26 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
         </div>
       ))}
 
-      {/* Fecha: hoy o ayer («se puede corregir hasta el día siguiente») */}
-      {fechas.length > 1 && (
-        <Segmentado
-          etiqueta="Día de la lista" valor={fecha} onCambio={onFecha}
-          opciones={fechas.map((f) => ({ v: f, l: f === hoy ? 'Hoy' : 'Ayer' }))}
+      {/* Día de la lista: hoy, ayer u otro día dentro de la ventana de la escuela */}
+      {opcionesDia.length > 1 && (
+        <Segmentado<OpcionDia>
+          etiqueta="Día de la lista" valor={opcionDeFecha(fecha, hoy)} onCambio={elegirDia}
+          opciones={opcionesDia.map((o) => ({ v: o, l: o === 'hoy' ? 'Hoy' : o === 'ayer' ? 'Ayer' : 'Otro día' }))}
         />
+      )}
+      {opcionDeFecha(fecha, hoy) === 'otro' && (
+        <label className="flex items-center justify-between gap-3 rounded-xl border bg-card px-3 py-2 text-sm">
+          <span className="font-medium">¿Qué día?</span>
+          <input
+            type="date"
+            className="min-h-touch rounded-lg border bg-background px-2 text-sm"
+            value={fecha}
+            min={fechaMinimaCorregible(hoy, retroDias)}
+            max={sumarDias(hoy, -2)}
+            onChange={(e) => { if (e.target.value && sePuedeCorregir(e.target.value, hoy, retroDias)) onFecha(e.target.value); }}
+            data-testid="lista-otro-dia"
+          />
+        </label>
       )}
       {fecha !== hoy && (
         <p className="rounded-xl bg-muted px-3 py-2 text-xs text-muted-foreground">
@@ -624,7 +649,7 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
             ) : enVentana ? (
               <div role="status" className="flex items-center gap-3" data-testid="aviso-deshacer">
                 <p className="min-w-0 flex-1 text-sm">
-                  {online ? `Lista guardada: vinieron ${r.vinieron}, faltaron ${r.faltaron + r.excusas}.` : 'Guardada en el teléfono. Sube sola cuando vuelva la señal.'}
+                  {online ? textoListaGuardada(r) : 'Guardada en el teléfono. Sube sola cuando vuelva la señal.'}
                 </p>
                 <Button variant="outline" className="min-h-touch shrink-0" onClick={deshacer}>Deshacer · {segundosVentana}</Button>
               </div>
@@ -640,13 +665,22 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
               <div role="status" className="space-y-2" data-testid="aviso-guardada">
                 <p className="flex items-center gap-2 text-sm font-medium"><Check className="h-4 w-4 text-emerald-600" /> Lista guardada</p>
                 <div className="flex flex-wrap gap-2">
-                  <Button asChild className="min-h-touch flex-1"><Link to={sesion?.id ? `/coach/evaluar/${sesion.id}` : '/teams'}>Evaluar al equipo</Link></Button>
+                  <Button
+                    className="min-h-touch flex-1" disabled={!online || !sesion?.id || finalizar.isPending}
+                    onClick={() => finalizar.mutate()} data-testid="cerrar-y-evaluar"
+                  >
+                    {finalizar.isPending ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Cerrando…</> : 'Cerrar y evaluar'}
+                  </Button>
                   <Button variant="outline" className="min-h-touch" onClick={() => setEditando(true)}>Corregir</Button>
-                  {sesion?.id && fecha === hoy && (
-                    <Button variant="ghost" className="min-h-touch" disabled={!online} onClick={() => setConfirmarCierre(true)}>Cerrar la lista</Button>
-                  )}
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  {online
+                    ? 'Al cerrarla, a las familias de los que vinieron les llega la encuesta del entreno.'
+                    : 'Sin señal: ciérrala cuando vuelva. Si no, se cierra sola a las 11:55 p. m.'}
+                </p>
               </div>
+            ) : cerrada && sesion?.id ? (
+              <Button asChild className="min-h-touch w-full"><Link to={`/coach/evaluar/${sesion.id}`}>Evaluar al equipo</Link></Button>
             ) : puedeEditar ? (
               <Button className="h-auto min-h-touch w-full whitespace-normal py-2 text-base leading-tight" size="lg" onClick={guardar} disabled={!sePuedeGuardar} data-testid="guardar-lista">
                 {online ? 'Guardar lista' : 'Guardar en el teléfono'}
@@ -656,19 +690,6 @@ function ListaDelEntreno({ ctx, fecha, fechas, hoy, onFecha, onElegirClase }: {
         </>
       )}
 
-      <Dialog open={confirmarCierre} onOpenChange={setConfirmarCierre}>
-        <DialogContent className="max-w-modal-sm">
-          <DialogHeader>
-            <DialogTitle>¿Cerrar la lista?</DialogTitle>
-            <DialogDescription>Ya no se podrá cambiar sin reabrirla. Después puedes calificar el entreno.</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" className="min-h-touch" onClick={() => setConfirmarCierre(false)}>Seguir</Button>
-            <Button className="min-h-touch" onClick={() => { setConfirmarCierre(false); finalizar.mutate(); }}>Sí, cerrar</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <CoachPostTrainingRatingDialog sessionId={sesion?.id ?? null} open={calificar} onOpenChange={setCalificar} />
     </section>
   );
 }
@@ -762,6 +783,17 @@ function Historial({ onCorregir }: { onCorregir: (ctx: ContextoLista, fecha: str
 
   return (
     <div className="space-y-4">
+      {/* B4: subir planilla siempre a mano, haya o no planillas pendientes. */}
+      {!(planillasQ.data && planillasQ.data.total > 0) && (
+        <Link to="/school/attendance-sheets" className="flex min-h-touch items-center gap-3 rounded-2xl border bg-card p-3" data-testid="subir-planilla">
+          <Camera className="h-5 w-5 shrink-0 text-primary" aria-hidden />
+          <span className="min-w-0 flex-1">
+            <span className="block font-semibold">Subir planilla en papel</span>
+            <span className="block text-xs text-muted-foreground">Le tomas foto a la lista de papel y la pasamos a la app.</span>
+          </span>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+        </Link>
+      )}
       {planillasQ.data && planillasQ.data.total > 0 && (
         <Link to="/school/attendance-sheets" className="flex min-h-touch items-center gap-3 rounded-2xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/40">
           <span className="min-w-0 flex-1">
@@ -835,7 +867,7 @@ function Historial({ onCorregir }: { onCorregir: (ctx: ContextoLista, fecha: str
                 );
               })}
             </ul>
-            <p className="px-1 text-xs text-muted-foreground">Se puede corregir hasta el día siguiente. Después, lo corrige la escuela.</p>
+            <p className="px-1 text-xs text-muted-foreground">{textoVentanaCorreccion(coachAttendanceRetroDays)}</p>
           </section>
 
           {faltan.length > 0 && (

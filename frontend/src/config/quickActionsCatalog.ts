@@ -47,7 +47,7 @@ export const QUICK_ACTIONS_CATALOG_SCHOOL: QuickActionCandidate[] = [
   { id: 'invitations', label: 'Invitaciones', icon: Send, href: '/invitations' },
   { id: 'attendance_supervision', label: 'Supervisión de Asistencias', icon: BarChart3, href: '/attendance-supervision' },
   { id: 'attendance_history', label: 'Histórico de Asistencias', icon: History, href: '/attendance-history' },
-  { id: 'results', label: 'Resultados', icon: Trophy, href: '/results-overview' },
+  { id: 'results', label: 'Resultados', icon: Trophy, href: '/results' },
   { id: 'tournaments', label: 'Mis Torneos', icon: Trophy, href: '/school/tournaments' },
   { id: 'equipment', label: 'Dotación', icon: Dumbbell, href: '/school/equipment' },
   { id: 'access_control', label: 'Control de Acceso', icon: ShieldCheck, href: '/school/access-control' },

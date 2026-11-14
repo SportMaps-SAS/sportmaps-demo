@@ -467,14 +467,17 @@ export default function AttendanceSupervisionPage() {
     queryKey: ['supervision-facility-reservations', schoolId, selectedDate],
     queryFn: async () => {
       if (!schoolId) return [];
-      const { data, error } = await supabase
-        .from('facility_reservations')
-        .select('id, facility_id, start_time, end_time, status')
-        .eq('school_id', schoolId)
-        .eq('reservation_date', selectedDate)
-        .eq('status', 'confirmed');
+      // M6: el coach ya no lee facility_reservations (datos de contacto/pagos). RPC con solo columnas no sensibles.
+      const next = new Date(`${selectedDate}T12:00:00-05:00`);
+      next.setUTCDate(next.getUTCDate() + 1);
+      const nextDay = next.toISOString().slice(0, 10);
+      const { data, error } = await (supabase as any).rpc('agenda_reservas_escuela', {
+        p_school_id: schoolId,
+        p_from: `${selectedDate}T00:00:00-05:00`,
+        p_to: `${nextDay}T00:00:00-05:00`,
+      });
       if (error) throw error;
-      return data || [];
+      return ((data as any[]) || []).filter((r) => r.status === 'confirmed');
     },
     enabled: !!schoolId,
   });

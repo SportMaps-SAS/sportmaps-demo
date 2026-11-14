@@ -45,7 +45,7 @@ vi.mock('../middlewares/authMiddleware', () => ({
     auditLog: async () => undefined,
 }));
 vi.mock('./access-adms', () => ({
-    invalidateDeviceCache: vi.fn(), invalidateMappingCache: vi.fn(),
+    invalidateDeviceCache: vi.fn(), invalidateMappingCache: vi.fn(), reprocessPinEventsForHourBank: vi.fn(async () => ({ reprocessed: 0 })),
     getHourBankSettings: vi.fn(), computeHourBankBilledMinutes: vi.fn(), formatHourBankMinutes: vi.fn(),
 }));
 vi.mock('../services/bridgeWsHub', () => ({ wakeSchool: vi.fn() }));

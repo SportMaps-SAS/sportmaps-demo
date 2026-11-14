@@ -27,12 +27,14 @@ import { supabase } from '../config/supabase';
 import type { WhatsAppIntegration } from './whatsapp.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
 import { FILTRO_SIN_MARCA_MANUAL, esMarcaNoFamilia, leerConMarca, type TipoMarcado } from './whatsapp-tipo-contacto';
+import { rolDePersonal } from './whatsapp-personal-escuela.service';
 
 /**
  * - familia            → acudiente con cuenta de un atleta activo (por teléfono o por OTP)
  * - familia_sin_cuenta → el número está en la ficha de un atleta activo, sin cuenta
  * - ambiguo            → el número está en dos cuentas: lo resuelve un humano
- * - staff              → administra la escuela (owner/admin)
+ * - staff              → personal: administra la escuela (owner/admin), es profe de
+ *                        la escuela o admin de la plataforma (whatsapp-personal-escuela)
  * - desconocido        → nada de lo anterior: amigos, proveedores, prospectos
  * - personal | negocio | otro_club | plataforma
  *                      → la escuela lo marcó a mano como no-familia (manda sobre todo;
@@ -182,6 +184,11 @@ async function clasificarSinGuardar(
         p_wa_phone_number: contactWaId,
     });
     if ((staff as any)?.estado === 'identificado') return 'staff';
+
+    // El resto del personal (profes) y los admins de la plataforma: tampoco son
+    // prospectos (Monster 2026-11-08: un admin de SportMaps le escribió a Iván y Mapi le
+    // contestó el guion de prospecto). Una consulta por escuela, cacheada.
+    if (await rolDePersonal(integration.school_id, contactWaId)) return 'staff';
 
     return 'desconocido';
 }
@@ -441,6 +448,18 @@ const YA_LE_PAGA: RegExp[] = [
  * «el valor pendiente» son de familia, y mandarles el enlace de inscripción es
  * ruido. Pura y determinista, como `temaEscolar`.
  */
+/**
+ * «Quiero inscribir a mi hija»: intención de inscribirse, no de pagar algo que
+ * ya debe. A esa persona no se le pide el correo de familia (auditoría
+ * 2026-10-28, X-07). Pura.
+ */
+export function quiereInscribirse(texto: string | null | undefined): boolean {
+    if (!texto) return false;
+    const t = normalizarTexto(texto);
+    if (!t || YA_LE_PAGA.some((re) => re.test(t))) return false;
+    return INSCRIPCION_FUERTES.slice(0, 3).some((re) => re.test(t));
+}
+
 export function preguntaPrecioComoProspecto(texto: string | null | undefined): boolean {
     if (!texto) return false;
     const t = normalizarTexto(texto);
@@ -492,8 +511,6 @@ const PROSPECTO_FUERTE: RegExp[] = [
     /\b(entrenamientos?|entrenan|clases?|cursos?|grupos?|categorias?|escuela|voley|volley|voleibol|volleyball)\b(\s+\w+){0,3}\s+para\s+(ninos?|ninas?|menores|adultos?|principiantes|jovenes|mayores)\b/,
     /\betapa de iniciacion\b/,
     // «quiero empezar a entrenar», «me gustaría aprender a jugar voleibol»
-    /\b(quiero|quisiera|queremos|deseo|deseamos|me gustaria|nos gustaria)\s+(empezar|iniciar|comenzar|entrar|ingresar|aprender|practicar)\b(\s+\w+){0,3}\s+(entrenar|jugar|voley|volley|voleibol|volleyball|club|academia|escuela|clases?)\b/,
-    /\b(quiero|quisiera|queremos|deseo|me gustaria)\s+(entrenar|practicar (voley|volley|voleibol)\w*|jugar (voley|volley|voleibol)\w*)\b/,
     // «horarios… para poder pasar y mirar las instalaciones»
     /\b(mirar|conocer|visitar|ver) (las )?instalaciones\b/,
     // Dynasty 2026-10-06, 5 prospectos sin respuesta: «me gustaría conocer el
@@ -511,7 +528,57 @@ const PROSPECTO_FUERTE: RegExp[] = [
     /\bno (es|esta|estudia|pertenece|hace parte)\b(\s+\w+){0,3}\s+(de |en |a )?(la |el )?(escuela|club|academia)\b/,
     // «papá de Sofía Gómez Uribe para información»
     /\b(papa|mama|madre|padre|abuel[oa]|tio|tia) de\b(\s+\w+){1,5}\s+(para )?(info|informacion|informes)\b/,
+    // Verbos de querer/buscar + el acto de entrar o practicar (Monster 2026-11-12: ampliar sinónimos):
+    // «necesito un lugar donde entrenar», «busco dónde jugar voleibol», «quiero formar parte del equipo»,
+    // «me encantaría pertenecer al club», «quisiera participar en sus clases».
+    // Sustantivos de ingreso: «¿hay cupo?», «cupos disponibles», «vacantes para niñas» (el cupo de un servicio lo
+    // atiende la venta antes de llegar acá).
 ];
+
+/**
+ * Verbo/cupo + entrar o practicar: es ANCHO, por eso solo cuenta si NO_ES_ALUMNO no lo desmiente
+ * (Monster 2026-11-12: la auditoría de 143 frases dejaba pasar otro club, alquiler de cancha, trabajo, torneos…).
+ */
+const PROSPECTO_VERBO: RegExp[] = [
+    // Principiante: «nunca he jugado voleibol, me gustaría empezar».
+    /\b(nunca|jamas) (he|hemos|ha|han) (jugado|entrenado|practicado)\b/,
+    /\b(quiero|quisiera|queremos|deseo|deseamos|me gustaria|nos gustaria)\s+(empezar|iniciar|comenzar|entrar|ingresar|aprender|practicar)\b(\s+\w+){0,3}\s+(entrenar|jugar|voley|volley|voleibol|volleyball|club|academia|escuela|clases?)\b/,
+    /\b(quiero|quisiera|queremos|deseo|me gustaria)\s+(entrenar|practicar (voley|volley|voleibol)\w*|jugar (voley|volley|voleibol)\w*)\b/,
+    /\b(quiero|quisiera|queria|queremos|quisieramos|deseo|deseamos|necesito|necesitamos|busco|buscamos|buscando|me gustaria|nos gustaria|me encantaria|nos encantaria|ando buscando|estamos buscando)\b(\s+\w+){0,5}\s+(entrenar\w*|practicar|jugar|aprender|participar|formar parte|hacer parte|ser parte|pertenecer|unirme|unirnos|integrarme|integrarnos|matricular\w*)\b/,
+    /\b(hay|tienen|tendran|quedan|manejan)\b(\s+\w+){0,2}\s+(cupos?|vacantes?|plazas?)\b/,
+    /\b(cupos?|vacantes?|plazas?)\s+(disponibles?|libres?|abiertos?|para (ninos?|ninas?|adultos?|menores|jovenes|mi hij[oa]|nuevos?))\b/,
+    // Tercera persona y «que mi hijo + subjuntivo»: «mi hijo quiere entrenar con ustedes», «quiero que mi hijo juegue».
+    /\b(mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|sobrin[oa]s?|niet[oa]s?)\b(\s+\w+){0,3}\s+(quiere|quieren|necesita|necesitan|desea|desean|se quiere|le gustaria|les gustaria)\s+(entrenar\w*|practicar|jugar|aprender|participar|unirse|ingresar|entrar|meterse)\b/,
+    /\b(quiero|quisiera|queremos|quisieramos|necesito|necesitamos|me gustaria|nos gustaria|deseo)\s+que\s+(mi|nuestr[oa]) (hij[oa]|nin[oa]|sobrin[oa])\b(\s+\w+){0,2}\s+(juegue|entrene|practique|aprenda|participe|ingrese|entre|haga parte|hiciera parte|jugara|entrenara|practicara|aprendiera|pudiera)\b/,
+    // «busco un club/academia/escuela para mi hija»
+    /\b(busco|buscamos|buscando|necesito|necesitamos)\b(\s+\w+){0,3}\s+(club|academia|escuela|clases?|curso|grupo)\b(\s+\w+){0,6}\s+para (mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|sobrin[oa]s?)\b/,
+    /\b(equipo|club|academia|escuela|lugar|sitio|donde)\b(\s+\w+){0,3}\s+(mi|nuestr[oa]) (hij[oa]|nin[oa])\b(\s+\w+){0,2}\s+(pueda|puedan) (jugar|entrenar|practicar)\b/,
+];
+
+/** Quien dice esto NO quiere entrar como alumno: otro club, cancha, trabajo, torneo/evento, conocido, app. */
+const NO_ES_ALUMNO = new RegExp([
+    String.raw`\b(trabajo|empleo|hoja de vida|cuerpo tecnico|staff|ponente|voluntari\w*|practicante|cargo)\b`,
+    String.raw`\b(como|de) (entrenador\w*|profe|profesor\w*|coach|arbitro)\b`,
+    String.raw`\b(vacantes?|plazas?) (de|para) (el |la )?(entrenador\w*|profe\w*|coordinador\w*|trabajo|cargo)\b`,
+    String.raw`\bequipo de (entrenadores|profes|profesores)\b|\bentrenar a (un|una|unos|unas|mi|mis|los|las)\b|\bnecesitan (un |una )?(profe|profesor|entrenador|coach)\b`,
+    String.raw`\b(torneos?|campeonato|cuadrangular|triangular|clinica|rifa|festival|bus|viaje|parqueadero)\b`,
+    String.raw`\b(cancha|canchas|coliseo|alquil\w*|prestan|prestas|prestar|pruebas|saque)\b`,
+    String.raw`\b(mi|mis|nuestro|nuestros) (equipo|jugadores|amigos)\b|\b(con|de) (mis )?amigos\b|\bparche\b|\bcontigo\b|\ben privado\b|\bentrenador personal\b`,
+    String.raw`\b(otro|otra) (club|equipo|escuela|academia)\b|\bcontra (ustedes|nosotros|su equipo|el equipo)\b|\b(rival|partido|amistoso)\b`,
+    String.raw`\b(perro|ingles|parque|plataforma|aplicacion|app|grupo de (whatsapp|padres|papas)|montar una escuela)\b`,
+    // juego puntual: «jugar con ustedes el domingo», «jugar hoy», «jugar el fin de semana»
+    String.raw`\b(jugar|jugamos|juguemos)\b(\s+\w+){0,4}\s+(hoy|manana|(el |este )?(lunes|martes|miercoles|jueves|viernes|sabado|domingo)|(el |este )?fin de semana|esta (tarde|noche))\b`,
+].join('|'));
+
+/** Otro canal o proveedor: «este no es el canal para información…», «somos X, fabricamos/ofrecemos…». */
+const AJENO = /\bno es el canal\b|\bcanal (no )?(oficial )?(para|de) informacion\b|\b(somos|soy de|hablas? con|le escribe de)\b[^.]{0,60}\b(fabricamos|fabricante|vendemos|ofrecemos|distribuimos|proveedor|agencia|empresa de)\b/;
+
+/**
+ * Negación o desistimiento (antónimos de «me interesa / quiero»): «no me interesa», «ya no quiero»,
+ * «no estoy interesada», «no necesito». Gana sobre cualquier señal de interés: quien dice que no, no es prospecto.
+ */
+export const DESISTE =
+    /\b(ya )?no (me |nos |les |le )?(interesa\w*|interesad\w*|quiero|queremos|quiere|quieren|quisiera|quisieramos|gustaria\w*|busco|buscamos|pienso|pensamos|deseo|deseamos|necesito|necesitamos|gracias)\b|\bno (estoy|estamos) (muy )?interesad\w*|\bya no (voy|vamos|va|estoy|estamos|quiero|queremos|quiere|quieren|busco|buscamos|me interesa\w*|necesito|necesitamos)\b|\b(desisto|desistimos|descarto|descartamos|dejo de|dejamos de|dejaron de)\b|\bnunca (quise|quiero|quisimos|quisiera|me intereso|me intereso\w*|vamos|voy)\b|\b(cancelar|retirar\w*|me retiro|nos retiramos|dar de baja|darla de baja|darlo de baja)\b/;
 
 /** «Soy nuevo», «somos nuevos»: prospecto solo con contexto de escuela/deporte. */
 const SOY_NUEVO = /\b(soy|somos) nuev[oa]s?\b/;
@@ -534,8 +601,9 @@ const SOLO_PEDIDO_DE_INFO = new Set([
 ]);
 
 /** «interesado/a» (y «esoty interesada») — se exige contexto o mensaje corto. */
-const INTERES = /\binteresad[oa]s?\b/;
-const INTERES_NEGADO = /\bno (estoy |estamos |me |nos )?(muy )?interesad/;
+// «interesado/a» y también el verbo: «me interesa entrenar con ustedes» (Monster 2026-11-11, @Andrey_0630: el bot calló 17 h).
+const INTERES = /\binteresad[oa]s?\b|\b(me|nos) (interesan?|interesaria|interesarian?|atrae|atraen|motiva|motivan|animo|animamos|animaria|llama(n)? la atencion)\b|\bestoy (muy )?motivad[oa]\b/;
+const INTERES_NEGADO = /\bno (estoy |estamos |me |nos )?(muy )?interes(ad|an?\b)/;
 
 /** Palabras que, solas, hacen de un mensaje un saludo/cortesía sin contenido. */
 const RELLENO = new Set([
@@ -558,8 +626,13 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     if (!t) return false;
     // Un cobro que ya existe es de familia, no de prospecto.
     if (YA_LE_PAGA.some((re) => re.test(t))) return false;
+    // «No me interesa», «ya no quiero»: dijo que no.
+    if (DESISTE.test(t)) return false;
+    // Autorrespuesta de otro canal («este no es el canal para información…») o proveedor que ofrece lo suyo.
+    if (AJENO.test(t)) return false;
 
     if (PROSPECTO_FUERTE.some((re) => re.test(t))) return true;
+    if (PROSPECTO_VERBO.some((re) => re.test(t)) && !NO_ES_ALUMNO.test(t)) return true;
     if (SOY_NUEVO.test(t) && CONTEXTO_PROSPECTO.test(t)) return true;
 
     if (INTERES.test(t) && !INTERES_NEGADO.test(t)) {
@@ -569,7 +642,8 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     }
 
     // «Info», «más información por favor», «información del club».
-    if (PEDIDO_DE_INFO.test(t) && t.split(' ').every((w) => RELLENO.has(w) || SOLO_PEDIDO_DE_INFO.has(w))) return true;
+    // «Vale muchas gracias por la información» es un cierre, no un pedido.
+    if (PEDIDO_DE_INFO.test(t) && !/\b(gracias|agradezco|agradecemos) por\b/.test(t) && t.split(' ').every((w) => RELLENO.has(w) || SOLO_PEDIDO_DE_INFO.has(w))) return true;
 
     // «Estoy averiguando un club de vóley», «quiero averiguar».
     //  Corto solo en primera persona: «averigua eso» es un encargo entre amigos.
@@ -580,15 +654,21 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     }
 
     // Precio/valor/costos de entrenar o del club (no de un cobro: YA_LE_PAGA arriba).
-    if (CONCEPTOS_GENERICOS.precio.test(t) && CONTEXTO_PROSPECTO.test(t)) return true;
+    if (CONCEPTOS_GENERICOS.precio.test(t) && CONTEXTO_PROSPECTO.test(t) && !NO_ES_ALUMNO.test(t)) return true;
     // «horarios … para pasar», «horarios para niñas»
     if (CONCEPTOS_GENERICOS.horario.test(t)
-        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes)\b/.test(t)) {
+        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes)\b/.test(t)
+        && !NO_ES_ALUMNO.test(t)) {
         return true;
     }
 
     // Lo que ya abría la puerta de siempre por inscripción («información de la academia»).
-    return temaEscolar(texto) === 'inscripcion';
+    return temaEscolar(texto) === 'inscripcion' && !NO_ES_ALUMNO.test(t);
+}
+
+/** ¿Dice que NO (o que ya no) quiere entrar? Para que el tema «inscripción» tampoco abra la puerta. */
+export function desisteDeProspecto(texto: string | null | undefined): boolean {
+    return !!texto && DESISTE.test(normalizarTexto(texto));
 }
 
 /** ¿El mensaje es solo saludo, agradecimiento o cortesía? («Hola buenas tardes», «Ok gracias»). */
@@ -656,8 +736,45 @@ export function buscaParaAdulto(texto: string | null | undefined): boolean {
     if (!texto) return false;
     const t = normalizarTexto(texto);
     if (/\b(mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|nen[ea]s?|sobrin[oa]s?|niet[oa]s?)\b/.test(t)) return false;
-    return /\badultos?\b/.test(t)
+    const explicito = /\badultos?\b/.test(t);
+    // «Para mi y tengo 15 años» es un MENOR que pide para sí mismo, no un adulto (Dynasty
+    // 2026-11-08: el bot le contestó «como buscas clases para adultos»). Con una edad menor
+    // de 18 dicha por la persona, ni «para mi» ni «quiero entrenar» la vuelven adulta: solo
+    // la palabra «adultos» escrita lo hace.
+    const edad = edadDeQuienEscribe(t);
+    if (!explicito && edad !== null && edad < 18) return false;
+    return explicito
         || /\b(para mi|conmigo|yo tengo|yo juego|yo jugaba|quiero (empezar a )?entrenar|quiero aprender)\b/.test(t);
+}
+
+/** Edad que dice el texto ya normalizado («15 anos», «tengo 15», «tiene 9»), o null. Pura. */
+function edadDeQuienEscribe(t: string): number | null {
+    const m = t.match(/\b(\d{1,2}) ?(?:anos|ano)\b/) ?? t.match(/\b(?:tengo|tiene|edad(?: de)?) (\d{1,2})\b/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return n >= 3 && n <= 90 ? n : null;
+}
+
+/**
+ * ¿Pide que lo llamen o hablar con una persona? («regrésame la llamada», «me pueden llamar»,
+ * «quiero hablar con la directora»). Pura. Dynasty 2026-11-04: a «te agradezco si me puedes
+ * regresar la llamada» el bot contestó con la oferta de la clase de cortesía.
+ */
+export function pideLlamada(texto: string | null | undefined): boolean {
+    const t = normalizarTexto(texto || '');
+    if (!t) return false;
+    return /\b(llamame|llamenme|llamarme|me llam(an|as|en|aran|arian)|me (pueden|puedes|podrian|podrias|podria|puede) llamar|(regresar|regresame|devolver|devuelveme|regresarme|devolverme) (me )?la llamada|una llamada|prefiero (una )?llamada|hablar por (telefono|llamada)|hablar contigo|comunicarme (con|a)|hablar con (alguien|una persona|la directora|el director|el profe|la escuela|un asesor|una asesora)|necesito hablar)\b/.test(t);
+}
+
+/**
+ * ¿Pregunta dónde queda la escuela o cómo llegar? («¿dónde queda la cancha?», «¿cuál es la
+ * dirección?»). Pura. Dynasty 2026-11-08: a «donde queda la cancha» el bot contestó con el
+ * enlace de inscripción y la clase de cortesía, sin la dirección.
+ */
+export function pideUbicacion(texto: string | null | undefined): boolean {
+    const t = normalizarTexto(texto || '');
+    if (!t) return false;
+    return /\b(donde (queda|quedan|entrenan|juegan|practican)|donde (es|son|esta|estan) (la |el |las |los )?(cancha|canchas|sede|sedes|escuela|club|coliseo|gimnasio|clase|clases|entrenamiento|entrenamientos|ubicad[oa]s?)|(cual es )?la (direccion|ubicacion)|(su|tu) (direccion|ubicacion)|como (llego|se llega|llegar)|ubicacion de la (cancha|sede|escuela|club))\b/.test(t);
 }
 
 /** Edad que dice el mensaje («mi hija tiene 14 años», «niñas de 8 años»), o null. */

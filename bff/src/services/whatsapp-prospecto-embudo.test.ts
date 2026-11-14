@@ -32,10 +32,14 @@ const h = vi.hoisted(() => {
         b.insert = (row: any) => { state.inserts.push({ table, row }); ops.push(['insert', [row]]); return b; };
         b.update = (row: any) => { state.updates.push({ table, row, ops }); ops.push(['update', [row]]); return b; };
         b.delete = () => { state.deletes.push({ table, ops }); ops.push(['delete', []]); return b; };
-        b.upsert = (row: any) => { ops.push(['upsert', [row]]); return b; };
+        b.upsert = (row: any) => {
+            // notifications entra por upsert+ignoreDuplicates: se registra como insert y devuelve la fila.
+            if (table === 'notifications') { state.inserts.push({ table, row }); b.__fila = row; }
+            ops.push(['upsert', [row]]); return b;
+        };
         b.maybeSingle = () => { ops.push(['maybeSingle', []]); return Promise.resolve(state.resolve(table, ops)); };
         b.single = () => { ops.push(['maybeSingle', []]); return Promise.resolve(state.resolve(table, ops)); };
-        b.then = (res: any, rej: any) => Promise.resolve(state.resolve(table, ops)).then(res, rej);
+        b.then = (res: any, rej: any) => Promise.resolve(b.__fila ? { data: [{ id: b.__fila.id }], error: null } : state.resolve(table, ops)).then(res, rej);
         return b;
     }
     return {
@@ -273,6 +277,20 @@ describe('precio en el seguimiento', () => {
     it('«y cuánto cuesta?» después de la primera respuesta → los valores', async () => {
         base({ filas: conRespuesta('y cuánto cuesta?'), pasos: ['desconocido_tema_escolar'] });
         await handleBotTurn(req, INTEGRATION, CONV, mensaje('y cuánto cuesta?', 'wamid.1'));
+        expect(borradores()).toHaveLength(1);
+        expect(borradores()[0].proposed_text).toContain('💰');
+        expect(borradores()[0].tool_context).toMatchObject({ step: 'prospecto_seguimiento_precios' });
+    });
+
+    it('«Costos» + «Mensualidad» en ráfaga → los valores, no silencio (…1177, 2026-10-29)', async () => {
+        // «Mensualidad» sola es tema `pagos`; el turno lo corre el último mensaje.
+        const filas: Fila[] = [
+            ...conRespuesta('Costos').slice(0, 2),
+            { wa_message_id: 'wamid.1', direction: 'inbound', text_body: 'Costos', ai_generated: false, created_at: hace(9) },
+            { wa_message_id: 'wamid.2', direction: 'inbound', text_body: 'Mensualidad', ai_generated: false, created_at: hace(1) },
+        ];
+        base({ filas, pasos: ['desconocido_tema_escolar'] });
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje('Mensualidad', 'wamid.2'));
         expect(borradores()).toHaveLength(1);
         expect(borradores()[0].proposed_text).toContain('💰');
         expect(borradores()[0].tool_context).toMatchObject({ step: 'prospecto_seguimiento_precios' });

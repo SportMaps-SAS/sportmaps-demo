@@ -76,7 +76,8 @@ export function BookingConfirmation({
         .from('bookings')
         .insert({
           athlete_id: user.id,
-          team_id: teamId,
+          // bookings no tiene team_id (el equipo sale del cupo): mandarlo
+          // hacía fallar el insert con «column not found».
           availability_slot_id: selectedSlot.id,
           booking_type: 'program',
           status: 'pending', // Will be 'confirmed' after payment

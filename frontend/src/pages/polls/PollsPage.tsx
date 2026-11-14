@@ -43,7 +43,9 @@ export default function PollsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Encuestas de asistencia</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Crea la encuesta del día y compártela por WhatsApp
+            {isAdmin
+              ? 'Crea la encuesta del día y compártela por WhatsApp'
+              : 'Las encuestas de asistencia de tu escuela'}
           </p>
         </div>
         {isAdmin && (
@@ -57,7 +59,7 @@ export default function PollsPage() {
       {!polls?.length && (
         <Card>
           <CardContent className="py-12 flex flex-col items-center gap-3">
-            <p className="text-muted-foreground text-sm">No hay encuestas creadas aún</p>
+            <p className="text-muted-foreground text-sm">{isAdmin ? 'No hay encuestas creadas aún' : 'No hay encuestas por ahora'}</p>
             {isAdmin && (
               <Button variant="outline" onClick={() => setShowCreate(true)}>
                 <Plus className="w-4 h-4 mr-2" />

@@ -58,13 +58,14 @@ import { useOcultarFabSoporte } from '@/lib/supportFab';
 import { AdjuntoDelMensaje, type MedioDelMensaje } from './AdjuntoDelMensaje';
 import { EnviarPlantilla } from './EnviarPlantilla';
 import { TipoDeContactoDialog } from './TipoDeContactoDialog';
+import { AgendarClasePruebaDialog } from './AgendarClasePruebaDialog';
 import {
     OPCIONES_DE_TIPO, esMarcaNoFamilia, esSoloNoFamilia, pedidoDeTipo, textoDelResultado,
     type OpcionDeTipo, type RespuestaDeTipo,
 } from './tipoDeContacto';
 import {
     MessageSquare, Send, Bot, User, Clock, Loader2, ChevronLeft, ChevronDown, ChevronRight, Sparkles, X,
-    CheckCircle2, Hand, Unlock, Search, MoreVertical, RefreshCw, MessageCircle, FileText, Tags,
+    CheckCircle2, Hand, Unlock, Search, MoreVertical, RefreshCw, MessageCircle, FileText, Tags, CalendarPlus,
 } from 'lucide-react';
 
 interface UltimoMensaje {
@@ -116,7 +117,7 @@ function textoDeToma(t: Toma): string {
 export type TipoDeContacto =
     | 'familia' | 'familia_sin_cuenta' | 'ambiguo' | 'staff' | 'desconocido'
     // Marcas manuales de no-familia (ver tipoDeContacto.ts).
-    | 'personal' | 'negocio' | 'otro_club' | 'plataforma'
+    | 'personal' | 'negocio' | 'otro_club' | 'plataforma' | 'equipo'
     // Reservado: si el backend llega a guardar la detección de prospectos como tipo.
     | 'prospecto';
 
@@ -131,6 +132,7 @@ const ETIQUETA_TIPO: Record<TipoDeContacto, { texto: string; clase: string }> = 
     negocio:            { texto: 'Negocio',     clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
     otro_club:          { texto: 'Otro club',   clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
     plataforma:         { texto: 'Plataforma',  clase: 'border-slate-400 text-slate-600 dark:text-slate-300' },
+    equipo:             { texto: 'Staff',       clase: 'border-violet-300 text-violet-700 dark:text-violet-400' },
     prospecto:          { texto: 'Interesado',   clase: 'border-fuchsia-300 text-fuchsia-700 dark:text-fuchsia-400' },
 };
 
@@ -218,6 +220,14 @@ function guardarBandeja(b: Bandeja) {
 }
 
 /** Minúsculas y sin tildes, para buscar «maria» y encontrar «María». */
+/**
+ * Quien usa nombre de usuario de WhatsApp y no comparte su teléfono entra con un
+ * identificador interno («wau-…», ver bff whatsapp-usuario-meta): no es un número
+ * y no se le muestra a la escuela. Su @usuario va en el nombre del contacto.
+ */
+const numeroVisible = (waId: string | null | undefined) =>
+    String(waId ?? '').startsWith('wau-') ? 'Sin teléfono · usuario de WhatsApp' : String(waId ?? '');
+
 const normalizar = (s: string | null | undefined) =>
     (s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
@@ -394,6 +404,7 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
     const [clasificacion, setClasificacion] = useState(true);
     /** Conversación cuyo tipo se está eligiendo (Familia / Personal / Negocio…), con la opción preseleccionada. */
     const [tipoDialogo, setTipoDialogo] = useState<{ c: Conversacion; tipo: OpcionDeTipo } | null>(null);
+    const [agendando, setAgendando] = useState<Conversacion | null>(null);
     const [accionando, setAccionando] = useState(false);
     // Sin la migración de «tomar» el BFF manda toma_disponible=false: el botón se deshabilita.
     const [tomaDisponible, setTomaDisponible] = useState(true);
@@ -745,7 +756,7 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
             >
                 <div className="flex items-start justify-between gap-2 min-w-0">
                     <span className={`text-sm truncate ${sinResponder(c) ? 'font-semibold' : 'font-medium'}`}>
-                        {c.contact_name || c.contact_wa_id}
+                        {c.contact_name || numeroVisible(c.contact_wa_id)}
                     </span>
                     <span className="text-xs text-muted-foreground shrink-0">{cuando(c.last_message_at)}</span>
                 </div>
@@ -1055,10 +1066,10 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
                     )}
                     <div className="min-w-0 flex-1">
                         <p className="font-medium text-sm truncate">
-                            {abierta.contact_name || abierta.contact_wa_id}
+                            {abierta.contact_name || numeroVisible(abierta.contact_wa_id)}
                         </p>
                         <p className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
-                            <span>{abierta.contact_wa_id}</span>
+                            <span>{numeroVisible(abierta.contact_wa_id)}</span>
                             {abierta.ventana_vence !== undefined && <ChipVentana c={abierta} />}
                         </p>
                     </div>
@@ -1082,6 +1093,11 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
                             <Button variant="outline" size="sm" disabled={accionando}
                                     onClick={() => setTipoDialogo({ c: abierta, tipo: tipoActual(abierta) })}>
                                 <Tags className="h-3.5 w-3.5 mr-1" /> Tipo de contacto
+                            </Button>
+                            <Button variant="outline" size="sm" disabled={accionando}
+                                    title="Asignarle un cupo de clase de prueba a este contacto"
+                                    onClick={() => setAgendando(abierta)}>
+                                <CalendarPlus className="h-3.5 w-3.5 mr-1" /> Agendar
                             </Button>
                             <Button variant="outline" size="sm" disabled={accionando || abierta.status === 'closed'}
                                     onClick={() => void cerrar()}>
@@ -1259,10 +1275,20 @@ export function Conversaciones({ schoolId, conversacionInicial }: { schoolId: st
             {panelLista}
             {panelHilo}
 
+            {agendando && (
+            <AgendarClasePruebaDialog
+                schoolId={schoolId}
+                conversacionId={agendando?.id ?? null}
+                nombreInicial={agendando?.contact_name ?? null}
+                abierto={!!agendando}
+                onAbiertoChange={(v) => { if (!v) setAgendando(null); }}
+                onHecho={({ mensaje }) => setTexto(mensaje)}
+            />
+            )}
             <TipoDeContactoDialog
                 schoolId={schoolId}
                 conversacionId={tipoDialogo?.c.id ?? null}
-                nombre={tipoDialogo ? (tipoDialogo.c.contact_name || tipoDialogo.c.contact_wa_id) : null}
+                nombre={tipoDialogo ? (tipoDialogo.c.contact_name || numeroVisible(tipoDialogo.c.contact_wa_id)) : null}
                 tipoInicial={tipoDialogo?.tipo ?? 'familia'}
                 tambienFamiliaInicial={tipoDialogo?.c.tambien_familia === true}
                 abierto={!!tipoDialogo}

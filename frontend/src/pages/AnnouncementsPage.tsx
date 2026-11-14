@@ -15,8 +15,47 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { Bell, Plus, Send, Users, UserCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
+/**
+ * Quién puede CREAR anuncios. El acudiente y el deportista llegan aquí por URL
+ * (o por un aviso) y pueden LEER los de los equipos de sus hijos, pero no
+ * crear: antes veían «Nuevo Anuncio» y el envío moría en un 403 (B9).
+ */
+export const puedeCrearAnuncios = (role: string | null | undefined): boolean =>
+  !!role && !['parent', 'athlete'].includes(role);
+
+/** Anuncios para la familia: los de los equipos de sus hijos dirigidos a padres. */
+async function anunciosDeLaFamilia(parentId: string) {
+  const { data: hijos, error: e1 } = await supabase
+    .from('children')
+    .select('id, team_id')
+    .eq('parent_id', parentId);
+  if (e1) throw e1;
+  const childIds = (hijos ?? []).map((h) => h.id);
+  const teamIds = new Set((hijos ?? []).map((h) => h.team_id).filter(Boolean) as string[]);
+  if (childIds.length > 0) {
+    const { data: ins, error: e2 } = await supabase
+      .from('enrollments')
+      .select('team_id')
+      .in('child_id', childIds)
+      .eq('status', 'active');
+    if (e2) throw e2;
+    for (const i of ins ?? []) if (i.team_id) teamIds.add(i.team_id);
+  }
+  if (teamIds.size === 0) return [];
+  const { data, error } = await supabase
+    .from('announcements')
+    .select('*, teams(name)')
+    .in('team_id', [...teamIds])
+    .in('audience', ['parents', 'both'])
+    .order('sent_at', { ascending: false })
+    .limit(50);
+  if (error) throw error;
+  return data ?? [];
+}
+
 export default function AnnouncementsPage() {
   const { user, profile } = useAuth();
+  const puedeCrear = puedeCrearAnuncios(profile?.role);
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [subject, setSubject] = useState('');
@@ -81,8 +120,8 @@ export default function AnnouncementsPage() {
   ] : [];
 
   const { data: announcementsData, isLoading, refetch } = useQuery({
-    queryKey: ['announcements', user?.id],
-    queryFn: () => announcementsApi.getAnnouncements(user!.id),
+    queryKey: ['announcements', user?.id, puedeCrear],
+    queryFn: () => (puedeCrear ? announcementsApi.getAnnouncements(user!.id) : anunciosDeLaFamilia(user!.id)),
     enabled: !!user?.id,
   });
 
@@ -153,9 +192,10 @@ export default function AnnouncementsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Anuncios</h1>
           <p className="text-muted-foreground mt-1">
-            Comunícate con padres y jugadores
+            {puedeCrear ? 'Comunícate con padres y jugadores' : 'Lo que la escuela y los profes les cuentan a las familias'}
           </p>
         </div>
+        {puedeCrear && (
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button className="gap-2">
@@ -243,13 +283,14 @@ export default function AnnouncementsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        )}
       </div>
 
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Bell className="w-5 h-5 text-primary" />
-            <CardTitle>Historial de Anuncios</CardTitle>
+            <CardTitle>{puedeCrear ? 'Historial de Anuncios' : 'Anuncios'}</CardTitle>
           </div>
         </CardHeader>
         <CardContent>
@@ -292,7 +333,7 @@ export default function AnnouncementsPage() {
             {announcements && announcements.length === 0 && (
               <div className="text-center py-8 text-muted-foreground">
                 <Bell className="w-12 h-12 mx-auto mb-2 opacity-20" />
-                <p>No has enviado anuncios aún</p>
+                <p>{puedeCrear ? 'No has enviado anuncios aún' : 'Todavía no hay anuncios para tu familia'}</p>
               </div>
             )}
           </div>

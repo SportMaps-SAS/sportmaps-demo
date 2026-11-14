@@ -333,9 +333,12 @@ describe('avisarTicketSoportePorCorreo', () => {
         expect(llamadas).toHaveLength(1);
         const lote = llamadas[0].batch;
         expect(lote.map((x: any) => x.to)).toEqual(['soporte@sportmaps.co', 'otro@sportmaps.co']);
-        expect(lote[0]).toMatchObject({ type: 'soporte_ticket_nuevo' });
-        expect(lote[0].data).toMatchObject({ escuela: 'Dynasty', estado: 'Esperando a una persona' });
-        expect(lote[0].data.adminUrl).toMatch(/\/admin\/support$/);
+        // El HTML lo arma el BFF (markdown de Mapi → HTML), no la plantilla de send-email.
+        expect(lote[0].type).toBeUndefined();
+        expect(lote[0].subject).toBe('[Revisar] Nuevo caso en Mapi: admin@dynasty.co');
+        expect(lote[0].html).toContain('Dynasty');
+        expect(lote[0].html).toContain('Esperando a una persona');
+        expect(lote[0].html).toMatch(/href="[^"]*\/admin\/support"/);
     });
 
     it("'escalado' en el primer mensaje no manda (lo cubre 'nuevo'); en uno posterior sí, con freno de 6 h", async () => {
@@ -348,7 +351,56 @@ describe('avisarTicketSoportePorCorreo', () => {
         await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'escalado', motivo: 'tool_error' });
         expect(llamadas).toHaveLength(1);
         expect(llamadas[0].batch[0].to).toBe('contacto@sportmaps.co');
-        expect(llamadas[0].batch[0].data.motivo).toMatch(/no pudo consultar/);
+        expect(llamadas[0].batch[0].html).toMatch(/no pudo consultar/);
+        expect(llamadas[0].batch[0].subject).toBe('[Revisar] Mapi pasó un caso a una persona: admin@dynasty.co');
+    });
+
+    it("'nuevo' que Mapi resolvió va sin [Revisar]", async () => {
+        estado.tablas.support_tickets[0].status = 'bot_handled';
+        await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'nuevo' });
+        expect(llamadas[0].batch[0].subject).toBe('Nuevo caso en Mapi: admin@dynasty.co');
+    });
+
+    it("'no_sirvio' sale con [Revisar], uno por respuesta, aunque ya haya salido el 'nuevo'", async () => {
+        await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'nuevo' });
+        await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'no_sirvio', respuestaId: 'm-9' });
+        await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'no_sirvio', respuestaId: 'm-9' });
+        expect(llamadas).toHaveLength(2);
+        const b = llamadas[1].batch[0];
+        expect(b.subject).toBe('[Revisar] A alguien no le sirvió la respuesta de Mapi: admin@dynasty.co');
+        expect(b.html).toContain('NO le sirvió');
+    });
+
+    it('el cuerpo convierte el markdown de Mapi y escapa lo demás', async () => {
+        estado.tablas.support_messages[1].body = '1. Abre **Asistencia**.\n2. Toca **Guardar lista**.\n<img src=x onerror=alert(1)>';
+        await svc.avisarTicketSoportePorCorreo({ ticketId: 't-1', origen: 'nuevo' });
+        const html = llamadas[0].batch[0].html as string;
+        expect(html).toContain('<li>Abre <strong>Asistencia</strong>.</li>');
+        expect(html).not.toContain('**');
+        expect(html).not.toContain('<img');
+        expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    });
+});
+
+describe('markdownAHtml', () => {
+    it('negritas, listas y saltos de línea', () => {
+        expect(svc.markdownAHtml('Hola **Ana**\nsegunda línea')).toBe('<p style="margin:0 0 8px;">Hola <strong>Ana</strong><br>segunda línea</p>');
+        expect(svc.markdownAHtml('- uno\n- **dos**')).toBe('<ul style="margin:0 0 8px;padding-left:20px;"><li>uno</li><li><strong>dos</strong></li></ul>');
+        expect(svc.markdownAHtml('Pasos:\n1. a\n2. b\n\nListo')).toBe(
+            '<p style="margin:0 0 8px;">Pasos:</p><ol style="margin:0 0 8px;padding-left:20px;"><li>a</li><li>b</li></ol><p style="margin:0 0 8px;">Listo</p>');
+    });
+
+    it('escapa ANTES de dibujar: un ** con HTML adentro no se cuela', () => {
+        const html = svc.markdownAHtml('**<script>alert(1)</script>** & "x"');
+        expect(html).toContain('<strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong>');
+        expect(html).toContain('&amp; &quot;x&quot;');
+        expect(html).not.toMatch(/<script/);
+    });
+
+    it('asuntoTicket', () => {
+        expect(svc.asuntoTicket({ origen: 'nuevo', status: 'bot_handled', nombre: 'Ana' })).toBe('Nuevo caso en Mapi: Ana');
+        expect(svc.asuntoTicket({ origen: 'nuevo', status: 'waiting_human', nombre: 'Ana' })).toBe('[Revisar] Nuevo caso en Mapi: Ana');
+        expect(svc.asuntoTicket({ origen: 'escalado', nombre: 'Ana' })).toMatch(/^\[Revisar\] Mapi pasó/);
     });
 });
 

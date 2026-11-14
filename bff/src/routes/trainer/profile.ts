@@ -1,8 +1,13 @@
 import { Router, Request, Response } from 'express';
-import { requireAuth } from '../../middlewares/authMiddleware';
+import { requireAuth, requireRole } from '../../middlewares/authMiddleware';
 import { supabase } from '../../config/supabase';
 
 const router = Router();
+
+// Quien puede buscar a un acudiente por correo o teléfono: el personal de la escuela que da de alta
+// deportistas. Estas búsquedas devolvían perfil, documento, fecha de nacimiento e información médica
+// de menores SIN sesión (auditoría 2026-11-14); ahora exigen sesión, escuela y rol de staff.
+const ROLES_QUE_BUSCAN = ['owner', 'admin', 'school_admin', 'coach', 'staff'] as const;
 
 /**
  * GET /api/v1/trainer/profile
@@ -130,8 +135,8 @@ router.get('/public/:userId', async (req: Request, res: Response) => {
     }
 });
 
-// ── Search profile (accessible to school admins and trainers) ──
-router.get('/search-profile', async (req: Request, res: Response) => {
+// ── Search profile (solo staff de la escuela) ──
+router.get('/search-profile', requireAuth, requireRole(...ROLES_QUE_BUSCAN), async (req: Request, res: Response) => {
   const q = (req.query.q as string)?.trim();
   if (!q) return res.status(400).json({ error: 'Parámetro q requerido.' });
 
@@ -159,9 +164,10 @@ router.get('/search-profile', async (req: Request, res: Response) => {
 });
 
 // GET /api/v1/trainer/search-parent-children?q=email_o_telefono
-router.get('/search-parent-children', async (req: Request, res: Response) => {
+router.get('/search-parent-children', requireAuth, requireRole(...ROLES_QUE_BUSCAN), async (req: Request, res: Response) => {
   const q = (req.query.q as string)?.trim();
-  const schoolId = req.headers['x-school-id'] as string;
+  // La escuela sale de la membresía verificada, no del header que mande quien llama.
+  const schoolId = req.schoolId;
   if (!q || !schoolId) return res.status(400).json({ error: 'q y x-school-id requeridos.' });
 
   const isEmail = q.includes('@');
@@ -177,9 +183,9 @@ router.get('/search-parent-children', async (req: Request, res: Response) => {
     // Buscar por parent_id o parent_email_temp por separado y unir resultados (más seguro que .or complejo)
     const [byParentId, byEmail] = await Promise.all([
       supabase.from('children').select('id, full_name, doc_type, doc_number, date_of_birth, gender, grade, medical_info, parent_name_temp, parent_email_temp, parent_phone_temp')
-        .eq('parent_id', profile.id),
+        .eq('parent_id', profile.id).eq('school_id', schoolId),
       supabase.from('children').select('id, full_name, doc_type, doc_number, date_of_birth, gender, grade, medical_info, parent_name_temp, parent_email_temp, parent_phone_temp')
-        .eq('parent_email_temp', profile.email),
+        .eq('parent_email_temp', profile.email).eq('school_id', schoolId),
     ]);
     
     // Deduplicar por id
@@ -191,7 +197,8 @@ router.get('/search-parent-children', async (req: Request, res: Response) => {
   // Sin perfil — buscar por email_temp o phone_temp
   let childrenQuery = supabase
     .from('children')
-    .select('id, full_name, doc_type, doc_number, date_of_birth, gender, grade, medical_info, parent_name_temp, parent_email_temp, parent_phone_temp');
+    .select('id, full_name, doc_type, doc_number, date_of_birth, gender, grade, medical_info, parent_name_temp, parent_email_temp, parent_phone_temp')
+    .eq('school_id', schoolId);
 
   if (isEmail) {
     childrenQuery = childrenQuery.eq('parent_email_temp', q.toLowerCase());

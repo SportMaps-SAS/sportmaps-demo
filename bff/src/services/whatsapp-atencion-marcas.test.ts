@@ -63,7 +63,7 @@ beforeEach(() => {
 });
 
 describe('debeAtender con marcas manuales', () => {
-    for (const marca of ['negocio', 'otro_club', 'plataforma', 'personal']) {
+    for (const marca of ['negocio', 'otro_club', 'plataforma', 'equipo', 'personal']) {
         it(`${marca}: no se atiende y no se reclasifica`, async () => {
             h.conv = { id: 'conv-1', contact_kind: marca, tambien_familia: false };
             h.identificacion = { estado: 'identificado', parent_id: 'p-1' };
@@ -101,7 +101,7 @@ describe('debeAtender con marcas manuales', () => {
         expect(d).toMatchObject({ atender: true, tipo: 'familia', tambienFamilia: false });
         expect(h.updates[0]).toEqual({
             row: { contact_kind: 'familia' },
-            or: 'contact_kind.is.null,contact_kind.not.in.(personal,negocio,otro_club,plataforma)',
+            or: 'contact_kind.is.null,contact_kind.not.in.(personal,negocio,otro_club,plataforma,equipo)',
         });
     });
 });

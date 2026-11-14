@@ -19,6 +19,7 @@ import type { TacticalPlaybackOptions } from '@/lib/school/tacticalBoardSettings
 import type { TacticalStaticPlayer } from '@/components/school/TacticalStaticSvg';
 import { renderTacticalPng } from './tacticalImage';
 import { canvasToBlob, loadImage } from './tacticalExportUtils';
+import { loadLogo, wantsWatermark, WATERMARK_TEXT, type ExportBranding } from './tacticalWatermark';
 
 export { exportExercisePdf, stripSlots, type ExercisePdfInput } from './tacticalPdf';
 export {
@@ -44,6 +45,7 @@ export { pickAnimationKind, animationLabel, type TacticalAnimationKind } from '.
 export { shareFile, canShareFiles, whatsappTextUrl, isMobileDevice, type ShareResult, type ShareMethod } from './tacticalShare';
 export { interpolateFrames, framesDuration, frameToStatic, easeInOutCubic, type InterpolatedState } from './tacticalInterpolation';
 export { exportFileName, cleanPdfText } from './tacticalExportUtils';
+export { WATERMARK_TEXT, resolveExportBranding, type ExportBranding } from './tacticalWatermark';
 
 /** Lo que la pizarra entrega al menú de exportar. */
 export interface TacticalExportInput {
@@ -75,6 +77,8 @@ export interface TacticalExportInput {
   /** Ajustes de la pizarra del coach (M6g): curva de velocidad y rastros
    *  para el GIF/video y el visor 3D. */
   playback?: TacticalPlaybackOptions;
+  /** Marca de agua «Hecho con SportMaps» y logo del club (tacticalWatermark.ts). */
+  branding?: ExportBranding;
 }
 
 export interface ExportPngInput {
@@ -88,6 +92,8 @@ export interface ExportPngInput {
   widthPx?: number;
   /** Deporte de la cancha (T4). Sin él, fútbol 11. */
   sport?: TacticalSport | null;
+  /** Marca de agua y logo del club. Sin dato: marca de agua, sin logo. */
+  branding?: ExportBranding;
 }
 
 const BRAND_GREEN = '#1a6118';
@@ -99,13 +105,15 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxW: number): str
   return `${t.trimEnd()}…`;
 }
 
-/** Jugada → PNG con una franja abajo: título + equipo a la izquierda, «SportMaps» a la derecha. */
+/** Jugada → PNG con una franja abajo: (logo del club) título + equipo a la
+ *  izquierda, «Hecho con SportMaps · sportmaps.co» a la derecha. */
 export async function exportPng(input: ExportPngInput): Promise<Blob> {
   const width = Math.round(input.widthPx ?? 1080);
   const { dataUrl, aspect } = await renderTacticalPng(input.players || [], input.arrows || [], width, input.sport, input.teams);
   const pitchH = Math.round(width * aspect);
   const band = Math.max(48, Math.round(width * 0.085));
   const img = await loadImage(dataUrl);
+  const logo = await loadLogo(input.branding?.clubLogoUrl);
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -117,29 +125,38 @@ export async function exportPng(input: ExportPngInput): Promise<Blob> {
   ctx.fillStyle = BRAND_GREEN;
   ctx.fillRect(0, pitchH, width, band);
   const pad = Math.round(band * 0.32);
-  const brandFont = Math.round(band * 0.3);
-  ctx.font = `800 ${brandFont}px Helvetica, Arial, sans-serif`;
-  const brand = 'SportMaps';
-  const brandW = ctx.measureText(brand).width;
   ctx.fillStyle = '#ffffff';
   ctx.textBaseline = 'middle';
-  ctx.textAlign = 'right';
-  ctx.fillText(brand, width - pad, pitchH + band / 2);
+  let brandW = 0;
+  if (wantsWatermark(input.branding)) {
+    ctx.font = `700 ${Math.round(band * 0.24)}px Helvetica, Arial, sans-serif`;
+    brandW = ctx.measureText(WATERMARK_TEXT).width;
+    ctx.textAlign = 'right';
+    ctx.fillText(WATERMARK_TEXT, width - pad, pitchH + band / 2);
+  }
+  // Logo del club (solo con el permiso del tier) a la izquierda de la franja.
+  let left = pad;
+  if (logo) {
+    const lh = band - pad;
+    const lw = Math.min(lh * 3, lh * (logo.naturalWidth / Math.max(1, logo.naturalHeight)));
+    ctx.drawImage(logo, pad, pitchH + pad / 2, lw, lh);
+    left = pad * 2 + lw;
+  }
 
-  const maxW = width - pad * 3 - brandW;
+  const maxW = width - left - pad * 2 - brandW;
   const title = (input.title ?? '').trim();
   const team = (input.teamName ?? '').trim();
   ctx.textAlign = 'left';
   if (title && team) {
     ctx.font = `700 ${Math.round(band * 0.28)}px Helvetica, Arial, sans-serif`;
-    ctx.fillText(fitText(ctx, title, maxW), pad, pitchH + band * 0.36);
+    ctx.fillText(fitText(ctx, title, maxW), left, pitchH + band * 0.36);
     ctx.globalAlpha = 0.85;
     ctx.font = `500 ${Math.round(band * 0.22)}px Helvetica, Arial, sans-serif`;
-    ctx.fillText(fitText(ctx, team, maxW), pad, pitchH + band * 0.7);
+    ctx.fillText(fitText(ctx, team, maxW), left, pitchH + band * 0.7);
     ctx.globalAlpha = 1;
   } else if (title || team) {
     ctx.font = `700 ${Math.round(band * 0.3)}px Helvetica, Arial, sans-serif`;
-    ctx.fillText(fitText(ctx, title || team, maxW), pad, pitchH + band / 2);
+    ctx.fillText(fitText(ctx, title || team, maxW), left, pitchH + band / 2);
   }
 
   return canvasToBlob(canvas, 'image/png');

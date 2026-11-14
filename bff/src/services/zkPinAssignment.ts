@@ -130,8 +130,10 @@ export async function assignZkPin(schoolId: string, pin: number, subject: ZkSubj
 
     // Import perezoso: access-adms arrastra el router entero y este servicio también
     // lo cargan los tests de las rutas de alta, que solo mockean supabase.
-    const { invalidateMappingCache } = await import('../routes/access-adms');
+    const { invalidateMappingCache, reprocessPinEventsForHourBank } = await import('../routes/access-adms');
     invalidateMappingCache(pin);
+    // Marcaciones de este ID que llegaron antes de asociarlo (nunca lanza).
+    await reprocessPinEventsForHourBank(schoolId, pin);
 }
 
 /**

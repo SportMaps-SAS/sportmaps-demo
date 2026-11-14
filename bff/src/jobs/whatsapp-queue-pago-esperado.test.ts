@@ -340,18 +340,18 @@ describe('A. monto menor a la cuota → abono en revisión (el plan NO se cambia
 // ─── B. Deportista y mes con botones ────────────────────────────────────────
 
 describe('B. deportista con botones', () => {
-    it('número sin ficha cuyo nombre se parece a DOS deportistas → botones con los nombres (no «escríbeme el nombre»)', async () => {
+    it('número sin ficha cuyo nombre se parece a DOS deportistas → la pregunta ESCRITA, nunca botones con nombres (privacidad, Monster 2026-11-05)', async () => {
         state.atencion = { atender: false, tipo: 'desconocido', botEncendido: true };
         state.children = [{ id: 'c1', full_name: 'Sofía Pérez Gómez' }, { id: 'c2', full_name: 'Sofía Ramírez Ortiz' }, { id: 'c3', full_name: 'Laura Peña' }];
         state.claim = [FILA('f1', { media_caption: 'pago de Sofia' })];
         extractReceiptMock.mockResolvedValue(comprobante(150000, { originName: null }));
         await runWhatsAppQueue();
-        const botones = sendInteractiveButtonsMock.mock.calls[0][3] as any[];
-        expect(botones.map((b) => b.title)).toEqual(['1. Sofía Pérez', '2. Sofía Ramírez']);
-        expect(enviados()[0]).toContain('¿De cuál deportista es?');
+        expect(sendInteractiveButtonsMock).not.toHaveBeenCalled();
+        expect(enviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
+        for (const t of enviados()) expect(t).not.toMatch(/sof[ií]a|p[eé]rez|ram[ií]rez/i);
         const espera = updatesCola.find((u) => u.status === 'waiting_user');
         expect(espera.pregunta_ocr).toMatchObject({ tipo: 'deportista' });
-        expect(espera.pregunta_ocr.guia.opciones.map((o: any) => o.valor.id)).toEqual(['c1', 'c2']);
+        expect(espera.pregunta_ocr.guia).toBeUndefined();
     });
 
     it('sin ningún parecido → la pregunta de siempre, para escribir el nombre', async () => {

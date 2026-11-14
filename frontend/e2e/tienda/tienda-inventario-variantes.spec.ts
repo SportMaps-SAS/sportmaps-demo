@@ -27,6 +27,7 @@ test.beforeAll(async () => {
                  and vendor_profile_id = '${TIENDA.vendorProfileId}';`);
 });
 
+// eslint-disable-next-line no-empty-pattern -- Playwright exige desestructurar el 1.er argumento
 test.beforeEach(({}, info) => {
     test.skip(info.project.name !== 'desktop-chrome', 'escenario de escritorio');
 });

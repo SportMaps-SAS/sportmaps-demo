@@ -5,6 +5,7 @@
  * chunk no baja, avisa y se queda en 2D.
  */
 import { lazy, Suspense, useEffect, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
@@ -51,7 +52,11 @@ export function Tactical3DLauncher({ getInput, disabled, className, onOpen, minF
         {label}
       </Button>
       {source && (
-        <Suspense fallback={<div className="fixed inset-0 z-50 grid place-items-center bg-slate-950 text-sm text-white">Cargando la cancha en 3D…</div>}>
+        <Suspense fallback={(
+          <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950 text-sm text-white" role="status" aria-live="polite">
+            <span className="flex flex-col items-center gap-3"><Loader2 className="h-8 w-8 animate-spin text-emerald-400" aria-hidden="true" />Cargando la cancha en 3D…</span>
+          </div>
+        )}>
           <Tactical3DModal source={source} onClose={() => setSource(null)} onFallback={fallbackTo2D} minFps={minFps ?? minFpsOverride()} />
         </Suspense>
       )}

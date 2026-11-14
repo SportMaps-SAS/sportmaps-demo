@@ -20,12 +20,11 @@ import { Plus, School, Users } from 'lucide-react';
 import { AddChildDialog } from '@/components/children/AddChildDialog';
 import { EditChildDialog } from '@/components/children/EditChildDialog';
 import { UploadChildDocumentsDialog } from '@/components/children/UploadChildDocumentsDialog';
-import RequestPauseDialog from '@/components/children/RequestPauseDialog';
-import { ChildPauseSection } from '@/components/children/ChildPauseSection';
-import { useParentPauseActions } from '@/hooks/usePauses';
+import { BloqueFamiliaHijo } from '@/components/familia/FamiliaBloques';
 import { HijosV2 } from '@/components/parent/v2/hijos/HijosV2';
 import { SectionSkeleton } from '@/components/parent/v2/hijos/parts';
-import { activeEnrollment, type Hijo } from '@/components/parent/v2/hijos/hijosUtils';
+import type { Hijo } from '@/components/parent/v2/hijos/hijosUtils';
+import { JoinSchoolCodeBanner } from '@/components/school-join/JoinSchoolCodeBanner';
 
 interface InvitacionPendiente {
   id: string;
@@ -38,12 +37,6 @@ export default function MyChildrenPage() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingChild, setEditingChild] = useState<Hijo | null>(null);
   const [uploadingDocsFor, setUploadingDocsFor] = useState<Hijo | null>(null);
-
-  // Pausa por vacaciones/lesión (spec §9.2). El gate por escuela lo resuelve
-  // ChildPauseSection con `usePauseConfig`: un acudiente puede tener hijos en
-  // escuelas distintas y una puede tenerlo habilitado y la otra no.
-  const [pausingChild, setPausingChild] = useState<{ child: Hijo; enrollmentId: string; maxMonths: number } | null>(null);
-  const { solicitar, retirar } = useParentPauseActions();
 
   const { data: children, isLoading, error, refetch } = useQuery({
     queryKey: ['children', user?.id],
@@ -132,6 +125,9 @@ export default function MyChildrenPage() {
         </Button>
       </div>
 
+      {/* Sin escuela: unirse con el código de la escuela (spec codigo-de-escuela). */}
+      <JoinSchoolCodeBanner />
+
       {invitacionPendiente && (
         <div className="flex items-start gap-3 rounded-2xl border border-primary/30 bg-primary/5 p-4 text-sm">
           <School className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
@@ -177,29 +173,11 @@ export default function MyChildrenPage() {
           hijos={hijos}
           onEdit={setEditingChild}
           onUploadDocs={setUploadingDocsFor}
-          fichaExtra={(hijo) => (
-            // Pausa por vacaciones/lesión. Se auto-oculta si la escuela no la
-            // habilitó o si no hay inscripción activa.
-            <ChildPauseSection
-              child={hijo}
-              enrollmentId={activeEnrollment(hijo)?.id ?? null}
-              onSolicitar={setPausingChild}
-              onRetirar={(requestId) => retirar.mutate(requestId)}
-              isRetiring={retirar.isPending}
-            />
-          )}
+          // Pausa / retiro / reactivación del plan (BFF /plan-requests) y soportes del
+          // deportista. Cada bloque se oculta solo si la escuela no tiene la función.
+          fichaExtra={(hijo) => <BloqueFamiliaHijo hijo={hijo} />}
         />
       )}
-
-      <RequestPauseDialog
-        open={!!pausingChild}
-        onOpenChange={(o) => { if (!o) setPausingChild(null); }}
-        athleteName={pausingChild?.child?.full_name ?? ''}
-        enrollmentId={pausingChild?.enrollmentId ?? null}
-        maxMonths={pausingChild?.maxMonths}
-        isSubmitting={solicitar.isPending}
-        onSubmit={(args) => solicitar.mutate(args, { onSuccess: () => setPausingChild(null) })}
-      />
 
       <AddChildDialog
         open={showAddDialog}

@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { todayColombia } from '@/lib/dateUtils';
 import { supabase } from '@/integrations/supabase/client';
+import type { TablesUpdate } from '@/integrations/supabase/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import type { Event, EventRegistration, EventFormData, EventFilters, TelemetryEventType, EventStats } from '@/types/events';
@@ -181,7 +182,9 @@ export function useEvents() {
     try {
       const { error } = await supabase
         .from('events')
-        .update(updates)
+        // Event (tipo de la app) es más ancho que la tabla; se manda tal cual,
+        // igual que antes de supabase-js 2.118 (que rechaza propiedades extra).
+        .update(updates as TablesUpdate<'events'>)
         .eq('id', eventId)
         .eq('creator_id', user?.id);
 

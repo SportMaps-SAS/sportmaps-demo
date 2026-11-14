@@ -40,7 +40,7 @@ import {
 import { normalizeSchoolName } from '../utils/brandingUtils';
 // Una sola regla de duplicados (spec cobros-multiples §16.3): la misma que el modal «Cobros y pagos».
 import { buscarDuplicadoParaAlta } from '../services/athlete-duplicates.service';
-import { todayInZone } from '../utils/businessDate';
+import { addDaysToDateString, todayInZone } from '../utils/businessDate';
 import {
   enrollmentFeeDueDate,
   EnrollmentFeeWaivers,
@@ -48,6 +48,7 @@ import {
   cancelWaivedFeeRows,
   auditEnrollmentFeeWaiver,
   findActiveInsurance,
+  conceptoDePlan,
 } from '../services/enrollmentBilling';
 import {
   resolverAtleta, verCobrosUnicos, cobrarUnicosDespues, CobroUnicoError, type AthleteType,
@@ -115,7 +116,7 @@ const feeWaiversOf = (d: { waive_registration_fee?: boolean; waive_insurance_fee
 
 const ChildSchema = EnrollmentBase.extend({
   type:          z.literal('child'),
-  doc_type:      z.enum(['TI', 'CC', 'CE', 'PP']).default('TI'),
+  doc_type:      z.enum(['RC', 'TI', 'CC', 'CE', 'PP']).default('TI'),
   doc_number:    z.string().trim().min(1).nullable().optional(),   // documento opcional
   full_name:     z.string().min(2).max(150).trim(),
   date_of_birth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
@@ -383,10 +384,17 @@ export function buildAltaPayments(p: {
   personName: string;
   remaining: RemainingCtx | null;
   today: string;
+  /**
+   * Acudiente CON cuenta del menor (children.parent_id). Sin esto el cobro nacía
+   * con parent_id NULL: la familia lo ve por child_id, pero el bot de WhatsApp y
+   * el pago en línea buscan por parent_id (B5). Solo se escribe si viene.
+   */
+  parentId?: string | null;
 }): Record<string, any>[] {
   if (!p.baseFee || p.baseFee < 10000) return [];
   const common = {
     [p.athleteCol]:   p.athleteId,
+    ...(p.parentId ? { parent_id: p.parentId } : {}),
     school_id:        p.schoolId,
     branch_id:        p.branchId,
     team_id:          p.teamId,
@@ -445,6 +453,38 @@ export function buildAltaPayments(p: {
         }
       : {}),
   }];
+}
+
+/**
+ * El primer cobro de un alta no vence el MISMO día en que nace (B5).
+ *
+ * calcFirstPayment acota el vencimiento al día del alta cuando el corte ya
+ * pasó («un cobro no nace vencido»), pero eso deja un cobro que vence hoy: la
+ * familia se entera por el aviso cuando ya está en el límite. Se aplica la
+ * regla de la escuela que ya usa el flujo por QR y billingDue()
+ * (`GREATEST(corte, hoy + payment_grace_days)`): si vence hoy o antes, pasa a
+ * hoy + días de gracia. El PERIODO no se toca. Con gracia 0 queda como estaba.
+ * Solo filas de mensualidad sin clases restantes (esas traen su propia fecha).
+ */
+export function vencimientoPrimerCobroAlta(
+  rows: Record<string, any>[],
+  today: string,
+  graceDays: number,
+): Record<string, any>[] {
+  if (!graceDays || graceDays <= 0) return rows;
+  const piso = addDaysToDateString(today, graceDays);
+  const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+    'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const textoPiso = `vence el ${Number(piso.slice(8, 10))} de ${MESES[Number(piso.slice(5, 7)) - 1]}`;
+  return rows.map((r) => {
+    if (r.payment_category != null && r.payment_category !== 'mensualidad') return r;
+    if (typeof r.due_date !== 'string' || r.due_date > today) return r;
+    // El concepto dice «vence día N» (calcFirstPayment): que diga la fecha real.
+    const concept = typeof r.concept === 'string'
+      ? r.concept.replace(/vence día \d+/, textoPiso)
+      : r.concept;
+    return { ...r, due_date: piso, concept };
+  });
 }
 
 /**
@@ -630,13 +670,15 @@ router.post(
       const [{ data: school }, { data: settings }] = await Promise.all([
         supabase.from('schools').select('name').eq('id', schoolId).single(),
         supabase.from('school_settings')
-          .select('billing_cycle_type, payment_cutoff_day, require_payment_proof, coach_can_create_athletes, parent_email_optional')
+          .select('billing_cycle_type, payment_cutoff_day, payment_grace_days, require_payment_proof, coach_can_create_athletes, parent_email_optional')
           .eq('school_id', schoolId)
           .maybeSingle(),
       ]);
       const schoolName     = normalizeSchoolName(school?.name || 'la Academia');
       const cycleType      = (settings?.billing_cycle_type || 'prorated') as BillingCycleType;
       const cutoffDay      = settings?.payment_cutoff_day || 10;
+      // 0 explícito es válido (misma lectura que getBillingConfig).
+      const graceDays      = Number((settings as any)?.payment_grace_days ?? 5);
       const requireProof   = settings?.require_payment_proof ?? true;
 
       // Sin fila de settings se aplica el default de la columna (false): un
@@ -818,7 +860,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: data.full_name, remaining, today,
           }),
         });
@@ -989,7 +1031,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: profile.full_name, remaining, today,
           }),
         });
@@ -1022,7 +1064,7 @@ router.post(
         // 1. Verificar que el menor exista
         const { data: child } = await supabase
           .from('children')
-          .select('id, full_name, school_id')
+          .select('id, full_name, school_id, parent_id')
           .eq('id', child_id)
           .maybeSingle();
 
@@ -1055,14 +1097,21 @@ router.post(
           startDate: data.start_date,
           enrollmentMonthlyFee: (data.monthly_fee && data.monthly_fee > 0) ? data.monthly_fee : null,
           firstPaymentMode, personName: child.full_name,
-          payments: buildAltaPayments({
-            schoolId: schoolId!, athleteCol: 'child_id', athleteId: child_id,
-            branchId: data.branch_id || null, teamId: data.team_id || null,
-            offeringPlanId: data.offering_plan_id || null,
-            baseFee: feeForPayments, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: 'Suscripción',
-            personName: child.full_name, remaining, today,
-          }),
+          // B5 (alta por código de escuela, y toda asignación de un menor que ya
+          // tiene ficha): el pagador es el acudiente con cuenta y el primer cobro
+          // no vence el mismo día del alta.
+          payments: (() => {
+            const rows = buildAltaPayments({
+              schoolId: schoolId!, athleteCol: 'child_id', athleteId: child_id,
+              branchId: data.branch_id || null, teamId: data.team_id || null,
+              offeringPlanId: data.offering_plan_id || null,
+              baseFee: feeForPayments, discountPct: data.discount_pct, startDate: data.start_date,
+              cycleType, cutoffDay, conceptName: 'Suscripción',
+              personName: child.full_name, remaining, today,
+              parentId: (child as any).parent_id ?? null,
+            });
+            return remaining ? rows : vencimientoPrimerCobroAlta(rows, today, graceDays);
+          })(),
         });
         const enrollmentsCreated = alta.enrollmentsCreated;
         const paymentCreated = alta.paymentCreated;
@@ -1216,7 +1265,7 @@ router.post(
             branchId: data.branch_id || null, teamId: data.team_id || null,
             offeringPlanId: hasPlan ? data.offering_plan_id : null,
             baseFee, discountPct: data.discount_pct, startDate: data.start_date,
-            cycleType, cutoffDay, conceptName: planName ? `Plan ${planName}` : `Equipo ${teamName}`,
+            cycleType, cutoffDay, conceptName: planName ? conceptoDePlan(planName) : `Equipo ${teamName}`,
             personName: data.full_name, remaining, today,
           }),
         });

@@ -42,6 +42,26 @@ export interface Hijo {
   [key: string]: unknown;
 }
 
+// ─── Documentos (bucket identity-documents) ────────────────────────────────
+
+/**
+ * Carpeta donde la FAMILIA sube los documentos de un hijo. Es la única que el
+ * bucket le deja escribir (policy identity_docs_authenticated_insert:
+ * foldername[2] = auth.uid()) y la escuela la puede leer
+ * (identity_docs_children_staff_read, rama de 4+ carpetas por children.id).
+ */
+export const carpetaDocsFamilia = (parentId: string, childId: string) => `children/${parentId}/${childId}/docs`;
+
+/**
+ * Carpetas que la escuela revisa para los documentos de un deportista (B2): la
+ * vieja `children/{id}/docs` y, si tiene acudiente con cuenta, la de la familia.
+ */
+export function carpetasDocumentosDeportista(athleteId: string, parentId: string | null | undefined): string[] {
+  const carpetas = [`children/${athleteId}/docs`];
+  if (parentId) carpetas.push(carpetaDocsFamilia(parentId, athleteId));
+  return carpetas;
+}
+
 // ─── Cabecera ──────────────────────────────────────────────────────────────
 
 export function initials(fullName: string): string {
@@ -138,6 +158,7 @@ export interface RawEntry {
   value: number | string;
   context_type?: string | null;
   recorded_at: string;
+  notes?: string | null;
 }
 
 /**
@@ -230,8 +251,21 @@ function signed(n: number): string {
   return `${r > 0 ? '+' : '−'}${fmt(Math.abs(r))}`;
 }
 
-export function isSkillMetric(m: { metric_key: string; category?: string | null }): boolean {
+/**
+ * Criterios de TEXTO («Comentario del coach», scale = 'text' en
+ * school_metric_definitions): se guardan con value = 0 y el texto en `notes`.
+ * No son habilidades: pintarlos como barra daba «Comentario 0» y el comentario
+ * no se veía nunca.
+ */
+export function isTextMetric(m: { metric_key: string; display_name?: string | null; label?: string | null; scale?: string | null }): boolean {
+  if (m.scale === 'text') return true;
+  if (/^comentario/i.test(m.metric_key)) return true;
+  return /^comentario/i.test((m.display_name ?? m.label ?? '').trim());
+}
+
+export function isSkillMetric(m: { metric_key: string; category?: string | null; display_name?: string | null; label?: string | null; scale?: string | null }): boolean {
   if (SESSION_METRICS.has(m.metric_key)) return false;
+  if (isTextMetric(m)) return false;
   if (m.metric_key.startsWith('focus_')) return false;
   if (m.category === 'attendance') return false;
   return true;
@@ -280,6 +314,8 @@ export function skillRows(
       .filter((p) => Number.isFinite(Number(p.value)))
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     if (series.length === 0) continue;
+    // Sin rango ni unidad y siempre 0: es un criterio de texto con otro nombre.
+    if (m.min_value == null && m.max_value == null && !m.unit && series.every((p) => Number(p.value) === 0)) continue;
     const last = Number(series[series.length - 1].value);
     const prev = series.length > 1 ? Number(series[series.length - 2].value) : null;
     const score = toFiveScale(last, m);
@@ -311,6 +347,32 @@ export function skillRows(
   return rows
     .sort((a, b) => new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime())
     .slice(0, limit);
+}
+
+export interface ComentarioProfe {
+  fecha: string;
+  texto: string;
+  /** 'competition' = partido; 'session' = entreno; otro/null = evaluación suelta. */
+  contexto: string | null;
+}
+
+/**
+ * «Lo que dijo el profe»: el texto de los criterios de texto (va en `notes`),
+ * del más reciente al más viejo y sin repetir el mismo comentario.
+ */
+export function comentariosDelProfe(entries: RawEntry[] | null | undefined, limit = 2): ComentarioProfe[] {
+  const vistos = new Set<string>();
+  return [...(entries ?? [])]
+    .filter((e) => isTextMetric(e) && (e.notes ?? '').trim())
+    .sort((a, b) => new Date(b.recorded_at).getTime() - new Date(a.recorded_at).getTime())
+    .filter((e) => {
+      const t = e.notes!.trim();
+      if (vistos.has(t)) return false;
+      vistos.add(t);
+      return true;
+    })
+    .slice(0, limit)
+    .map((e) => ({ fecha: e.recorded_at, texto: e.notes!.trim(), contexto: e.context_type ?? null }));
 }
 
 /** Respaldo: métricas del último informe mensual publicado (ya traen su variación). */

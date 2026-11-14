@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { bffClient } from '@/lib/api/bffClient';
 import { useToast } from '@/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -6,11 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ArrowDown, ArrowUp, Dices } from 'lucide-react';
+import { ArrowDown, ArrowUp, Dices, Plus, Trash2 } from 'lucide-react';
 import type { FixtureFormat, FixturesResponse } from '@/lib/tournamentTypes';
 import {
-  buildFixturesBody, DEFAULT_DRAFT, moveItem, summarizeDraft, validateDraft, type FormatDraft,
+  buildFixturesBody, DEFAULT_DRAFT, fitCupsToMax, moveItem, positionsText, resolveInitialFormat, summarizeDraft, validateDraft,
+  type CupDraft, type FormatDraft,
 } from '@/lib/tournamentFormats';
+import type { LiveConfigDto } from '@/lib/tournamentTypes';
 
 const selectCls = 'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 
@@ -26,11 +28,68 @@ interface Props {
   /** Equipos de la categoría (si se conocen). Vacío = el BFF valida la cantidad. */
   teams: TeamRef[];
   onGenerated: (r: FixturesResponse) => void;
+  /** Formato guardado del torneo. Si no se pasa, el diálogo lo lee de la configuración en vivo. */
+  initialFormat?: string | null;
 }
 
 const FORMAT_LABEL: Record<FixtureFormat, string> = { liga: 'Liga', copa: 'Copa', grupos: 'Grupos + fase final' };
 
-export function FixtureGeneratorDialog({ open, onOpenChange, eventId, categoryId, teams, onGenerated }: Props) {
+/** Copas desde grupos: nombre, qué posiciones de cada grupo la juegan y si tiene partido por el 3.º. */
+export function CupsEditor({ cups, maxPosition, onChange }: { cups: CupDraft[]; maxPosition: number; onChange: (c: CupDraft[]) => void }) {
+  const set = (i: number, p: Partial<CupDraft>) => onChange(cups.map((c, j) => (j === i ? { ...c, ...p } : c)));
+  const usedElsewhere = (i: number) => new Set(cups.filter((_, j) => j !== i).flatMap((c) => c.positions));
+  const positions = Array.from({ length: Math.max(1, Math.min(maxPosition, 12)) }, (_, k) => k + 1);
+  const nextLabel = ['Copa oro', 'Copa plata', 'Copa bronce', 'Copa cobre'][cups.length] ?? `Copa ${cups.length + 1}`;
+  return (
+    <div className="space-y-2" data-testid="cups-editor">
+      {cups.map((c, i) => {
+        const taken = usedElsewhere(i);
+        return (
+          <div key={i} className="space-y-2 rounded border p-2">
+            <div className="flex gap-2">
+              <Input aria-label={`Nombre de la copa ${i + 1}`} value={c.label} maxLength={40} onChange={(e) => set(i, { label: e.target.value })} />
+              <Button type="button" size="icon" variant="ghost" aria-label={`Quitar ${c.label || 'copa'}`} disabled={cups.length <= 1}
+                onClick={() => onChange(cups.filter((_, j) => j !== i))}><Trash2 className="h-4 w-4" /></Button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Juegan:</span>
+              {positions.map((p) => {
+                const on = c.positions.includes(p);
+                return (
+                  <Button key={p} type="button" size="sm" variant={on ? 'default' : 'outline'} className="h-7 px-2"
+                    aria-pressed={on} disabled={!on && taken.has(p)}
+                    onClick={() => set(i, { positions: on ? c.positions.filter((x) => x !== p) : [...c.positions, p].sort((a, b) => a - b) })}>
+                    {p}.º
+                  </Button>
+                );
+              })}
+              {/* Posiciones que ya no existen (grupos más chicos): se ven en rojo y se quitan con un toque. */}
+              {c.positions.filter((p) => p > positions.length).map((p) => (
+                <Button key={`out-${p}`} type="button" size="sm" variant="destructive" className="h-7 px-2" data-testid="cup-position-out"
+                  aria-label={`Quitar ${p}.º (no existe en el grupo más pequeño)`} title="No existe en el grupo más pequeño: tócalo para quitarlo"
+                  onClick={() => set(i, { positions: c.positions.filter((x) => x !== p) })}>
+                  {p}.º ✕
+                </Button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`fx-cup-third-${i}`} className="text-xs">Partido por el tercer puesto</Label>
+              <Switch id={`fx-cup-third-${i}`} checked={c.thirdPlace} onCheckedChange={(v) => set(i, { thirdPlace: v })} />
+            </div>
+            {c.positions.length > 0 && <p className="text-xs text-muted-foreground">{positionsText(c.positions)} de cada grupo.</p>}
+          </div>
+        );
+      })}
+      {cups.length < 8 && (
+        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...cups, { label: nextLabel, positions: [], thirdPlace: false }])}>
+          <Plus className="mr-1 h-4 w-4" /> Agregar copa
+        </Button>
+      )}
+    </div>
+  );
+}
+
+export function FixtureGeneratorDialog({ open, onOpenChange, eventId, categoryId, teams, onGenerated, initialFormat }: Props) {
   const { toast } = useToast();
   const [draft, setDraft] = useState<FormatDraft>(DEFAULT_DRAFT);
   const [allMatches, setAllMatches] = useState(true);
@@ -45,6 +104,33 @@ export function FixtureGeneratorDialog({ open, onOpenChange, eventId, categoryId
     if (open) { setDraft((d) => ({ ...d, teamOrder: teams.map((t) => t.id) })); setServerError(null); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, categoryId, teams.length]);
+
+  const formatTouched = useRef(false);
+  // Al abrir: el formato elegido en el asistente (guardado en el torneo, o ?formato= de respaldo), no siempre «liga».
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    formatTouched.current = false;
+    const fromUrl = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('formato') : null;
+    // Si el usuario ya eligió otro formato mientras cargaba, se respeta su elección.
+    const apply = (saved: unknown) => { if (alive && !formatTouched.current) setDraft((d) => ({ ...d, format: resolveInitialFormat(saved, fromUrl) })); };
+    if (initialFormat !== undefined) { apply(initialFormat); return () => { alive = false; }; }
+    Promise.resolve()
+      .then(() => bffClient.get<LiveConfigDto>(`${LIVE_BASE}/school/${eventId}/config`))
+      .then((c) => apply(c?.event?.competition_format ?? null))
+      .catch(() => apply(null));
+    return () => { alive = false; };
+  }, [open, eventId, initialFormat]);
+
+  // Copas ajustadas al grupo más pequeño: con 5 equipos en 2 grupos no hay 3.º ni 4.º.
+  const maxPosition = known ? Math.max(1, Math.floor(known / Math.max(draft.groupCount, 1))) : 8;
+  useEffect(() => {
+    if (draft.format !== 'grupos' || !draft.cupsOn) return;
+    setDraft((d) => {
+      const fitted = fitCupsToMax(d.cups, maxPosition);
+      return JSON.stringify(fitted) === JSON.stringify(d.cups) ? d : { ...d, cups: fitted };
+    });
+  }, [maxPosition, draft.format, draft.cupsOn]);
 
   const error = useMemo(() => validateDraft(draft, known), [draft, known]);
   const summary = useMemo(() => summarizeDraft(draft, teams.length), [draft, teams.length]);
@@ -79,7 +165,7 @@ export function FixtureGeneratorDialog({ open, onOpenChange, eventId, categoryId
         <div className="space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="fx-format">Formato</Label>
-            <select id="fx-format" className={selectCls} value={draft.format} onChange={(e) => patch({ format: e.target.value as FixtureFormat })}>
+            <select id="fx-format" className={selectCls} value={draft.format} onChange={(e) => { formatTouched.current = true; patch({ format: e.target.value as FixtureFormat }); }}>
               {(Object.keys(FORMAT_LABEL) as FixtureFormat[]).map((f) => <option key={f} value={f}>{FORMAT_LABEL[f]}</option>)}
             </select>
           </div>
@@ -116,16 +202,31 @@ export function FixtureGeneratorDialog({ open, onOpenChange, eventId, categoryId
             <div className="space-y-3 rounded-md border p-3">
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5"><Label>Cuántos grupos</Label>{numField(draft.groupCount, (n) => patch({ groupCount: n }), 2)}</div>
-                <div className="space-y-1.5"><Label>Clasifican por grupo</Label>{numField(draft.advance, (n) => patch({ advance: n }))}</div>
+                {!draft.cupsOn && <div className="space-y-1.5"><Label>Clasifican por grupo</Label>{numField(draft.advance, (n) => patch({ advance: n }))}</div>}
               </div>
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="fx-gdouble">Ida y vuelta en grupos</Label>
                 <Switch id="fx-gdouble" checked={draft.doubleRound} onCheckedChange={(v) => patch({ doubleRound: v })} />
               </div>
               <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="fx-gthird">Partido por el tercer puesto</Label>
-                <Switch id="fx-gthird" checked={draft.thirdPlace} onCheckedChange={(v) => patch({ thirdPlace: v })} />
+                <div>
+                  <Label htmlFor="fx-cups">Varias copas (oro, plata…)</Label>
+                  <p className="text-xs text-muted-foreground">Por ejemplo: 1.º y 2.º de cada grupo a la Copa oro; 3.º y 4.º a la Copa plata.</p>
+                </div>
+                <Switch id="fx-cups" checked={draft.cupsOn} onCheckedChange={(v) => patch({ cupsOn: v })} />
               </div>
+              {!draft.cupsOn ? (
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="fx-gthird">Partido por el tercer puesto</Label>
+                  <Switch id="fx-gthird" checked={draft.thirdPlace} onCheckedChange={(v) => patch({ thirdPlace: v })} />
+                </div>
+              ) : (
+                <CupsEditor
+                  cups={draft.cups}
+                  maxPosition={maxPosition}
+                  onChange={(cups) => patch({ cups })}
+                />
+              )}
             </div>
           )}
 

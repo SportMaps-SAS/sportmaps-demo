@@ -21,7 +21,7 @@ sportmaps-demo/
   frontend/          React SPA (~88 paginas, PWA)
   bff/               Express API REST (/api/v1/*)
   supabase/
-    functions/       Edge Functions (send-email, payment-reminders-cron, wompi-webhook, etc.)
+    functions/       Edge Functions (send-email, payment-reminders-cron, wompi-sign, etc.; el webhook de Wompi vive en el BFF)
     migrations/      Migraciones SQL
   docs/              Documentacion del proyecto
 ```

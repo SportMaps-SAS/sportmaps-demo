@@ -40,7 +40,13 @@ import {
   DropdownMenuSeparator, DropdownMenuCheckboxItem, DropdownMenuSub, DropdownMenuSubTrigger,
   DropdownMenuSubContent, DropdownMenuRadioGroup, DropdownMenuRadioItem,
 } from '@/components/ui/dropdown-menu';
-import { Settings2, Shirt, Loader2, Square, X, Bookmark, Redo2, Trash2, PenLine, Undo2, Eraser, Ruler, Sparkles, Plus, Play, Copy, RotateCw, Pencil, Type, Users, MoreHorizontal, Package, LayoutGrid } from 'lucide-react';
+import { Settings2, Shirt, Loader2, Square, X, Bookmark, Redo2, Trash2, PenLine, Undo2, Eraser, Ruler, Sparkles, Plus, Play, Copy, RotateCw, Pencil, Type, Users, MoreHorizontal, Package, LayoutGrid, ChevronDown, ChevronUp, Eye, CalendarPlus } from 'lucide-react';
+import type { ExportBranding } from '@/lib/export/tacticalWatermark';
+import { whatsappTextUrl } from '@/lib/export/tacticalShare';
+import { boardHasContent, rosterCounts, rosterCountsLabel } from '@/lib/school/tacticalBoardUx';
+import { buildSharedPlayPayload, sharedPlayMessage, sharedPlayUrl } from '@/lib/school/tacticalSharedPlay';
+import { createSharedPlay } from '@/lib/school/tacticalSharedPlayApi';
+import { getFootballLineups } from '@/lib/school/footballQueries';
 import { useToast } from '@/hooks/use-toast';
 import { startHintFormationLabel } from '@/lib/school/tacticalStartHint';
 import { useTeamPerformanceRoster } from '@/hooks/usePerformanceData';
@@ -107,7 +113,7 @@ import {
 import { TacticalTimeline, TacticalFramePlayback, type PlayState, type PlaybackSpeed } from './TacticalTimeline';
 import { TacticalAiOverlay, TacticalAiPanel, type AiPreview } from './TacticalAiPanel';
 import { FormationGallery } from './FormationGallery';
-import { countRivals, removeRivalShapes, replaceRivalShapes } from '@/lib/school/tacticalFormationGallery';
+import { countRivals, galleryFormations, initialPlayersFilter, removeRivalShapes, replaceRivalShapes } from '@/lib/school/tacticalFormationGallery';
 // M6g «Ajustes de la pizarra»: la lógica vive en módulos propios; acá solo los enganches.
 import { PinNameTag, TacticalBoardPrefsProvider, useTacticalBoardPrefs } from './tacticalBoardPrefs';
 import { TacticalBoardSettingsButton } from './TacticalBoardSettingsDialog';
@@ -132,6 +138,8 @@ import { LazySchoolVideosPanel } from './schoolVideos/LazySchoolVideosPanel';
 // «Campo»): chunk aparte, no engordan la pizarra.
 const TacticalTeamsDialog = lazy(() => import('./TacticalTeamsDialog').then((m) => ({ default: m.TacticalTeamsDialog })));
 const TacticalCourtDialog = lazy(() => import('./TacticalCourtDialog').then((m) => ({ default: m.TacticalCourtDialog })));
+// Pizarra libre (/pizarra): «Agregar a una sesión».
+const PizarraAgregarASesionDialog = lazy(() => import('./PizarraAgregarASesionDialog').then((m) => ({ default: m.PizarraAgregarASesionDialog })));
 
 const SITUATION_LABEL: Record<TacticalSituation, string> = {
   ataque: 'Ataque',
@@ -162,6 +170,10 @@ interface TacticalBoardProps {
   /** Deporte de la cancha (T4). Sin él, la pizarra lo resuelve del equipo
    *  (teams.sport con sportFromTeam); sin deporte reconocible → fútbol 11. */
   sport?: TacticalSport | null;
+  /** Pizarra libre (/pizarra): no está atada a una sesión ni a un partido. No
+   *  carga ni guarda una alineación propia; «Guardar» ofrece «Guardar en Mis
+   *  jugadas» y «Agregar a una sesión» (un bloque de entrenamiento del equipo). */
+  scratch?: boolean;
 }
 
 const subjectKey = (t: string, id: string) => `${t}:${id}`;
@@ -1362,7 +1374,7 @@ function PlaybackPin({ subject, meta, x, top, opacity, pinStyle, showPhotos }: {
  *  lectura y se enteran desde el principio. */
 const TACTICAL_EDIT_ROLES = ['owner', 'coach', 'super_admin'];
 
-export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sourceId, contextLabel, mode = 'edit', sport: sportProp }: TacticalBoardProps) {
+export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sourceId, contextLabel, mode = 'edit', sport: sportProp, scratch = false }: TacticalBoardProps) {
   const { toast } = useToast();
   const { currentUserRole, schoolId: activeSchoolId, schoolBranding } = useSchoolContext();
   // T4: el deporte del equipo manda la cancha. Quien abre puede pasarlo; si
@@ -1373,6 +1385,26 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   const loadingSport = !sportProp && teamSport.isLoading;
   // T0: la métrica va a la escuela del EQUIPO (fallback: la escuela activa).
   const metricSchoolId = teamSport.schoolId ?? activeSchoolId ?? null;
+  // Marca de agua de PNG/PDF/video (siempre, salvo marca blanca) y logo del
+  // club SOLO si el tier de la escuela incluye la marca propia
+  // (school_has_branding_feature: permiso por plan, no school_shows_own_brand).
+  // Se resuelve al exportar (lib/export/tacticalBrandingApi.ts) y se guarda.
+  const brandingRef = useRef<{ key: string; value: Promise<ExportBranding> } | null>(null);
+  const exportBranding = useCallback((): Promise<ExportBranding> => {
+    // El logo del contexto es el de la escuela ACTIVA: solo si es la del equipo.
+    const logoUrl = metricSchoolId && metricSchoolId === activeSchoolId ? schoolBranding?.logo_url : null;
+    const setting = metricSchoolId === activeSchoolId ? schoolBranding?.branding_settings?.show_sportmaps_watermark : null;
+    const key = `${metricSchoolId}|${logoUrl ?? ''}|${String(setting)}`;
+    if (brandingRef.current?.key !== key) {
+      brandingRef.current = {
+        key,
+        value: import('@/lib/export/tacticalBrandingApi')
+          .then((m) => m.fetchExportBranding({ schoolId: metricSchoolId, logoUrl, showWatermarkSetting: setting }))
+          .catch(() => ({ watermark: true, clubLogoUrl: null })),
+      };
+    }
+    return brandingRef.current.value;
+  }, [metricSchoolId, activeSchoolId, schoolBranding]);
   const logEvent = useCallback((event: TacticalBoardEvent, source: string = sourceType) => {
     logTacticalEvent({ schoolId: metricSchoolId, event, teamId, sourceType: source, sport });
   }, [metricSchoolId, teamId, sourceType, sport]);
@@ -1398,7 +1430,8 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   const [presetTag, setPresetTag] = useState<string | null>(null);
   useEffect(() => { if (!open) setMediaDialog(null); }, [open]);
   const { data: roster, isLoading: loadingRoster } = useTeamPerformanceRoster({ team_id: teamId });
-  const { data: existingList, isLoading: loadingList } = useFootballLineups({ source_type: sourceType, source_id: sourceId });
+  // Pizarra libre: no hay alineación que cargar (la consulta queda apagada).
+  const { data: existingList, isLoading: loadingList } = useFootballLineups(scratch ? {} : { source_type: sourceType, source_id: sourceId });
   const existingLineupId = existingList?.[0]?.id;
   const { data: existingLineup, isLoading: loadingLineup } = useFootballLineup(existingLineupId);
   const saveLineup = useSaveFootballLineup();
@@ -1476,15 +1509,36 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   const isMobile = isPortraitPhone || landscapePhone;
   // M6g: Ajustes de la pizarra del coach (curva, rastros, posesión, nombres, tema, pantalla completa).
   const prefs = useTacticalBoardPrefs(open);
+  /** Pestaña de la hoja (celular) donde vive cada herramienta. */
+  const tabOfTool = (t: DrawTool): MobileTab =>
+    t === 'freehand' || t === 'text' || t === 'eraser' ? 'escribir'
+      : t === 'arrow' || t === 'curve' || t === 'zone' || t === 'ball_path' ? 'lineas'
+      : 'material';
+  /** «Dibujar» abre el panel CON el modo dibujo prendido: antes había que tocar
+   *  además «Activar dibujo». Al cerrarlo se apaga, para volver a arrastrar
+   *  jugadores. */
   function toggleTactics() {
-    setTacticsOpen((v) => !v);
+    const next = !tacticsOpen;
+    setTacticsOpen(next);
+    setDrawMode(next);
+    if (next) {
+      setMeasureMode(false);
+      setMobileTab(tabOfTool(drawShapeType));
+      setSheetCollapsed(false);
+    } else {
+      polygon.cancel();
+    }
     if (isMobile) setRosterOpen(false);
   }
+  // Celular vertical: la hoja de herramientas se pliega a una fila (las
+  // pestañas) para que la cancha no se encoja mientras se dibuja.
+  const [sheetCollapsed, setSheetCollapsed] = useState(false);
   // Hoja de la pizarra en celular: una pestaña a la vez (todo apilado no
   // entraba en 42vh y las acciones quedaban fuera de vista).
   const [mobileTab, setMobileTab] = useState<MobileTab>('escribir');
-  /** Clase de una sección del panel: en celular solo se ve la de la pestaña. */
-  const tabCls = (k: MobileTab) => (isMobile && mobileTab !== k ? 'hidden' : '');
+  /** Clase de una sección del panel: en celular solo se ve la de la pestaña
+   *  (y ninguna con la hoja plegada). */
+  const tabCls = (k: MobileTab) => (isMobile && (mobileTab !== k || (isPortraitPhone && sheetCollapsed)) ? 'hidden' : '');
   function toggleRoster() {
     setRosterOpen((v) => !v);
     if (isMobile) setTacticsOpen(false);
@@ -1721,6 +1775,8 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
     const key = subjectKey(s.subject_type, s.subject_id);
     return !placed[key] && !benchKeys.has(key);
   });
+  // «En cancha N · Banco M» (antes contaba solo a los de afuera y se leía al revés).
+  const counts = rosterCounts(subjectByKey.keys(), Object.keys(placed));
 
   // PointerSensor unifica mouse + touch + pen (D7) -- no se combina con
   // TouchSensor aparte, porque los dos a la vez pueden disparar el drag dos
@@ -2075,7 +2131,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
     setBenchKeys(new Set());
     toast({
       title: 'XI sugerido por minutos jugados',
-      description: 'Formación genérica (no conoce la posición real de cada jugador) -- reacomoda a mano lo que haga falta.',
+      description: 'Formación genérica (no conoce la posición real de cada jugador): reacomoda a mano lo que haga falta.',
     });
   }
 
@@ -2089,6 +2145,10 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   const [emptyHintDismissed, setEmptyHintDismissed] = useState(false);
   useEffect(() => { if (open) setEmptyHintDismissed(false); }, [open]);
   const defaultFormation = defaultBoardFormation(sportCfg, subjects.length);
+  // La galería abre en la modalidad de la cancha (F7 → las de 7, no «38 de Fútbol 11»).
+  const galleryPlayers = initialPlayersFilter(galleryFormations(sport, sportCfg.formations), {
+    currentKey: formationKey, onPitch: counts.onPitch, defaultPlayers: defaultFormation.players,
+  });
   const loadedPresetName = loadedPresetId ? (presets?.find((p) => p.id === loadedPresetId)?.name ?? null) : null;
   const pitchIsEmpty = Object.keys(placed).length === 0 && drawnCount === 0 && emptySlots.length === 0 && frames.length === 1;
 
@@ -2149,18 +2209,32 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   function openMaterial() {
     if (tacticsOpen && mobileTab === 'material') {
       setTacticsOpen(false);
+      setDrawMode(false);
       return;
     }
     setTacticsOpen(true);
     setMobileTab('material');
+    setSheetCollapsed(false);
     if (isMobile) setRosterOpen(false);
     requestAnimationFrame(() => materialSectionRef.current?.scrollIntoView({ block: 'nearest' }));
   }
   function openDrawingFromHint() {
     setEmptyHintDismissed(true);
     setTacticsOpen(true);
+    // Se puede dibujar de una: lápiz elegido y modo dibujo prendido.
+    setDrawShapeType('freehand');
+    setDrawMode(true);
+    setMeasureMode(false);
     setMobileTab('escribir');
+    setSheetCollapsed(false);
     if (isMobile) setRosterOpen(false);
+  }
+  /** «Pídele una jugada a la IA»: solo abre el panel de IA de siempre. */
+  const canAskAi = roleCanEdit && hasAiAnalysis(sport);
+  function openAiFromHint() {
+    setEmptyHintDismissed(true);
+    setAiPreview(null);
+    setAiOpen(true);
   }
 
   /** Hay algo que "Reproducir" en modo ver: líneas de movimiento o recorridos
@@ -2385,7 +2459,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   // En celular, tocar un objeto puesto abre sus controles (tamaño, giro,
   // duplicar, quitar): si no, quedan en otra pestaña y no se encuentran.
   useEffect(() => {
-    if (isMobile && selectedIsObject) setMobileTab('ajustes');
+    if (isMobile && selectedIsObject) { setMobileTab('ajustes'); setSheetCollapsed(false); }
   }, [isMobile, selectedIsObject, selectedShape]);
   const panelSize = selectedIsObject ? (selected!.size ?? 1) : newObjSize;
   const panelRot = selectedIsObject ? (selected!.rot ?? 0) : newObjRot;
@@ -2405,9 +2479,14 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
     if (kind) setBallKind(kind);
     setDrawMode(true);
     setMeasureMode(false);
+    // Celular vertical: elegida la herramienta, la hoja se pliega y la cancha
+    // recupera el alto (tocar una pestaña la vuelve a abrir).
+    if (isPortraitPhone) setSheetCollapsed(true);
   }
-  async function handleSave() {
+  async function handleSave(target?: { sourceId: string; label: string }) {
     if (!canEdit) return;
+    // La pizarra libre no tiene destino propio: guarda solo con «Agregar a una sesión».
+    if (scratch && !target) return;
     if (playingSequence) return; // posiciones intermedias de la reproducción
     // Un jugador de una alineación guardada puede ya no estar en el roster
     // (dado de baja, cambiado de equipo): no se puede guardar y no cuenta para
@@ -2457,23 +2536,73 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
 
     try {
       await saveLineup.mutateAsync({
-        team_id: teamId, source_type: sourceType, source_id: sourceId, players,
+        team_id: teamId,
+        source_type: target ? 'training_session' : sourceType,
+        source_id: target ? target.sourceId : sourceId,
+        players,
         arrows: allFrames[0].arrows,
         // null = un solo cuadro: la fila no carga una animación de 1 cuadro.
         frames: serializeFrames(allFrames),
         ...media.payload(),
         teams: teamsCtl.teams,
       });
-      logEvent('save');
+      logEvent('save', target ? 'training_session' : sourceType);
       toast({
-        title: 'Jugada guardada',
+        title: target ? `Agregada a ${target.label}` : 'Jugada guardada',
         description: missingCount > 0
           ? `${missingCount} ${missingCount === 1 ? 'jugador ya no está' : 'jugadores ya no están'} en el equipo y no se guardó.`
           : undefined,
       });
-      onClose();
+      // Pizarra libre: se queda abierta (se puede seguir o agregarla a otra sesión).
+      if (!target) onClose();
     } catch (err: any) {
       toast({ title: 'No se pudo guardar', description: err?.message, variant: 'destructive' });
+    }
+  }
+
+  // ── Pizarra libre: «Agregar a una sesión» ──────────────────────────────
+  const [addToSessionOpen, setAddToSessionOpen] = useState(false);
+  /** Elegido el bloque: si ya tiene una jugada, se pregunta antes de reemplazarla. */
+  async function addToSessionBlock(blockId: string, label: string) {
+    setAddToSessionOpen(false);
+    let existing = false;
+    try {
+      existing = (await getFootballLineups({ source_type: 'training_session', source_id: blockId })).length > 0;
+    } catch {
+      existing = false;
+    }
+    if (!existing) { void handleSave({ sourceId: blockId, label }); return; }
+    setConfirmAction({
+      title: '¿Reemplazar la jugada de ese bloque?',
+      description: `${label} ya tiene una jugada en la pizarra. Si sigues, se reemplaza por la de ahora.`,
+      confirmLabel: 'Reemplazar',
+      onConfirm: () => { void handleSave({ sourceId: blockId, label }); },
+    });
+  }
+
+  // ── Compartir por enlace (vista pública de solo lectura) ───────────────
+  const [sharingLink, setSharingLink] = useState(false);
+  async function handleShareLink() {
+    if (sharingLink || !roleCanEdit) return;
+    setSharingLink(true);
+    // La pestaña se abre YA (dentro del toque): abierta después del await, el
+    // navegador del celular la bloquea como ventana emergente.
+    const win = typeof window !== 'undefined' ? window.open('', '_blank') : null;
+    try {
+      const input = buildExportInput();
+      const payload = buildSharedPlayPayload(input);
+      const title = (input.title || '').trim();
+      const token = await createSharedPlay({ teamId, title, sport: sport ?? null, payload });
+      const url = sharedPlayUrl(window.location.origin, token);
+      const wa = whatsappTextUrl(sharedPlayMessage(title, url));
+      logEvent('share');
+      if (win) win.location.href = wa; else window.location.href = wa;
+      toast({ title: 'Enlace listo', description: 'Se abre en la web, sin descargar nada y sin nombres de los jugadores.' });
+    } catch (err: any) {
+      win?.close();
+      toast({ title: 'No se pudo compartir la jugada', description: err?.message, variant: 'destructive' });
+    } finally {
+      setSharingLink(false);
     }
   }
 
@@ -2651,6 +2780,11 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
       playerNames,
       playback: prefs.playback,
     };
+  }
+  /** Lo que recibe «Exportar»: lo de siempre + la marca (marca de agua / logo). */
+  async function buildExportInputWithBranding(): Promise<TacticalExportInput> {
+    const input = buildExportInput();
+    return { ...input, branding: await exportBranding() };
   }
 
   /** «Guardar en biblioteca» (T3): la jugada con los PUESTOS del cuadro 1,
@@ -2874,11 +3008,19 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
   // Ancho real de la cancha (px), medido. Las fichas, etiquetas y el aviso de
   // «Empieza aquí» escalan con él: con tamaño fijo en px, en una cancha chica
   // (celular horizontal) las fichas se montaban unas sobre otras.
+  // Tope alto (antes 580 px): en escritorio la cancha usa todo el alto
+  // disponible en vez de quedar chica en el centro con márgenes vacíos.
   const pitchW = pitchArea
-    ? Math.max(120, Math.floor(Math.min(zoomedView ? 760 : 580, pitchArea.w, pitchArea.h * 300 / ((view.y1 - view.y0) * 3.4))))
+    ? Math.max(120, Math.floor(Math.min(zoomedView ? 1400 : 1100, pitchArea.w, pitchArea.h * 300 / ((view.y1 - view.y0) * 3.4))))
     : null;
-  // 1 = tamaño de siempre (cancha >= 400 px); mínimo 0.62 para que el texto siga leyéndose.
-  const pinK = pitchW === null ? 1 : Math.min(1, Math.max(0.62, pitchW / 400));
+  // 1 = tamaño de siempre (cancha de 400 a 580 px); mínimo 0.62 para que el
+  // texto siga leyéndose; en canchas más grandes las fichas crecen con ella,
+  // topadas en 1.4 para no taparse entre sí.
+  const pinK = pitchW === null
+    ? 1
+    : pitchW <= 580
+      ? Math.min(1, Math.max(0.62, pitchW / 400))
+      : Math.min(1.4, pitchW / 580);
   const smallPitch = pitchW !== null && pitchW < 300;
 
   return (
@@ -2967,6 +3109,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
               <FormationGallery
                 sport={sport}
                 formations={sportCfg.formations}
+                initialPlayers={galleryPlayers}
                 currentKey={formationKey}
                 rivalCount={countRivals(arrows)}
                 onApplyOwn={applyFormation}
@@ -2984,7 +3127,8 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                 title="Jugadores del equipo: arrástralos a la cancha o pásalos a la banca"
               >
                 <Users className="h-3.5 w-3.5" />
-                Jugadores ({availableSubjects.length + benchKeys.size})
+                <span className={isMobile ? 'sr-only' : ''}>Jugadores ·</span>
+                <span data-testid="tb-roster-counts">{rosterCountsLabel(counts)}</span>
               </Button>
 
               <Button
@@ -3067,7 +3211,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                   </DropdownMenuSub>
 
                   <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Mis jugadas · {SITUATION_LABEL[situation]}</DropdownMenuLabel>
+                  <DropdownMenuLabel>Abrir · Mis jugadas de {SITUATION_LABEL[situation]}</DropdownMenuLabel>
                   <PresetTagFilterSub tags={presetTags(presets)} value={presetTag} onChange={setPresetTag} />
                   <DropdownMenuSub>
                     <DropdownMenuSubTrigger disabled={!presets || presets.length === 0}>
@@ -3083,9 +3227,6 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                   </DropdownMenuSub>
                   {loadedPresetId && (
                     <>
-                      <DropdownMenuItem onSelect={handleUpdatePreset} disabled={updatePreset.isPending}>
-                        <Bookmark className="h-4 w-4 mr-2" /> Actualizar «{loadedPresetName}»
-                      </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => handleLoadPreset(loadedPresetId)}>
                         <RotateCw className="h-4 w-4 mr-2" /> Volver a cargar «{loadedPresetName}»
                       </DropdownMenuItem>
@@ -3093,6 +3234,17 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                         <Trash2 className="h-4 w-4 mr-2" /> Eliminar «{loadedPresetName}»
                       </DropdownMenuItem>
                     </>
+                  )}
+
+                  {/* «Guardar» aparte de «Abrir» y de «Vista» (antes iba todo
+                      seguido y no se distinguía qué guardaba y qué solo cambiaba
+                      cómo se ve la cancha). */}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="flex items-center gap-1.5" data-testid="tb-more-guardar">Guardar</DropdownMenuLabel>
+                  {loadedPresetId && (
+                    <DropdownMenuItem onSelect={handleUpdatePreset} disabled={updatePreset.isPending}>
+                      <Bookmark className="h-4 w-4 mr-2" /> Actualizar «{loadedPresetName}»
+                    </DropdownMenuItem>
                   )}
                   <DropdownMenuItem onSelect={() => setSavingName('')}>
                     <Plus className="h-4 w-4 mr-2" /> {loadedPresetId ? 'Guardar como jugada nueva…' : 'Guardar en Mis jugadas…'}
@@ -3105,8 +3257,19 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                     </DropdownMenuItem>
                   )}
 
+                  {scratch && (
+                    <DropdownMenuItem onSelect={() => window.setTimeout(() => setAddToSessionOpen(true), 0)}>
+                      <CalendarPlus className="h-4 w-4 mr-2" /> Agregar a una sesión…
+                    </DropdownMenuItem>
+                  )}
+
                   <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Vista</DropdownMenuLabel>
+                  {/* «Vista» en su propio submenú: cambia cómo se ve, no guarda nada. */}
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger data-testid="tb-more-vista">
+                      <Eye className="h-4 w-4 mr-2" /> Vista de la cancha
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-60">
                   {/* M6d: plantillas de líneas, cámara, orientación, piso y colores. */}
                   <DropdownMenuItem onSelect={() => setTimeout(() => setCourtOpen(true), 0)} data-testid="tb-open-court">
                     <LayoutGrid className="h-4 w-4 mr-2" /> Campo…
@@ -3134,6 +3297,8 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       Zoom al área (arqueros)
                     </DropdownMenuCheckboxItem>
                   )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                 </DropdownMenuContent>
               </DropdownMenu>
 
@@ -3191,10 +3356,13 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
             )}
             {!loading && (
               <TacticalExportMenu
-                getInput={buildExportInput}
+                getInput={buildExportInputWithBranding}
                 frameCount={liveFrames.length}
+                hasContent={boardHasContent(liveFrames)}
+                onAddFrame={canEdit && !framePlaybackActive ? addFrame : undefined}
+                onShareLink={roleCanEdit ? () => void handleShareLink() : undefined}
                 onEvent={(e: TacticalExportEvent) => logEvent(e)}
-                disabled={playingSequence}
+                disabled={playingSequence || sharingLink}
                 compact
                 className="text-[11px] px-2 bg-transparent border-white/20 text-white hover:bg-white/10 hover:text-white"
               />
@@ -3244,10 +3412,33 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                 <Button size="sm" variant="ghost" className={`${isMobile ? 'hidden' : 'hidden sm:inline-flex'} h-8 text-[11px] px-2 text-white/60 hover:text-white hover:bg-white/10`} onClick={onClose}>
                   Cancelar
                 </Button>
+                {scratch ? (
+                  <DropdownMenu modal={false}>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="sm"
+                        className="h-8 gap-1 text-[11px] px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
+                        disabled={saveLineup.isPending || loading || playingSequence}
+                        data-testid="tb-scratch-save"
+                      >
+                        {saveLineup.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
+                        Guardar <ChevronDown className="h-3 w-3 opacity-80" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-60" onCloseAutoFocus={(e) => e.preventDefault()}>
+                      <DropdownMenuItem onSelect={() => setSavingName('')}>
+                        <Bookmark className="h-4 w-4 mr-2" /> Guardar en mis jugadas…
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onSelect={() => window.setTimeout(() => setAddToSessionOpen(true), 0)}>
+                        <CalendarPlus className="h-4 w-4 mr-2" /> Agregar a una sesión…
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
                 <Button
                   size="sm"
                   className="h-8 text-[11px] px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold"
-                  onClick={handleSave}
+                  onClick={() => void handleSave()}
                   // Durante "Reproducir jugada" los pines están a mitad de camino:
                   // guardar ahora persistiría posiciones intermedias.
                   disabled={saveLineup.isPending || loading || playingSequence}
@@ -3256,6 +3447,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                   {saveLineup.isPending ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" /> : null}
                   Guardar jugada
                 </Button>
+                )}
               </>
             )}
           </div>
@@ -3284,7 +3476,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
               <div ref={pitchAreaRef} className={`relative flex-1 min-h-0 flex items-center justify-center px-3 sm:px-6 ${landscapePhone ? 'py-1.5' : 'py-3'} overflow-hidden`}>
                 {/* Ancho = alto de pantalla menos el toolbar (~90px) convertido
                     a ancho según la proporción de la cancha (300/340), topado
-                    en 580px. El 100% final del min() ya cubre el caso de que
+                    en 1100px. El 100% final del min() ya cubre el caso de que
                     el panel de plantilla angoste el espacio disponible.
 
                     100vh, no 100dvh -- el mismo cambio que en LineupModal.tsx:
@@ -3312,7 +3504,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                     ['--pin-k' as string]: pinK,
                     width: pitchW !== null
                       ? `${pitchW}px`
-                      : `min(${zoomedView ? 760 : 580}px, calc((100vh - 90px) * 300 / ${(view.y1 - view.y0) * 3.4}), 100%)`,
+                      : `min(${zoomedView ? 1400 : 1100}px, calc((100vh - 90px) * 300 / ${(view.y1 - view.y0) * 3.4}), 100%)`,
                   }}
                 >
                   {/* T4: fondo del deporte del equipo. Fútbol 11 = FootballPitchBackground tal cual. */}
@@ -3441,6 +3633,17 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                           <PenLine className="h-4 w-4" />
                           Dibujar un ejercicio
                         </Button>
+                        {canAskAi && (
+                          <Button
+                            variant="outline"
+                            className={`w-full min-w-0 gap-1.5 px-2 font-semibold whitespace-normal bg-transparent border-amber-300/40 text-amber-200 hover:bg-amber-300/10 hover:text-amber-100 ${smallPitch ? 'h-auto min-h-9 py-1 text-xs' : 'h-11 gap-2 text-sm'}`}
+                            onClick={openAiFromHint}
+                            data-testid="hint-ask-ai"
+                          >
+                            <Sparkles className="h-4 w-4" />
+                            Pídele una jugada a la IA
+                          </Button>
+                        )}
                         <button
                           type="button"
                           className="text-[11px] text-white/65 underline underline-offset-2 hover:text-white"
@@ -3487,7 +3690,10 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                 <div
                   data-board-chrome=""
                   className="w-full md:w-[252px] shrink-0 border-t md:border-t-0 md:border-r border-white/10 bg-black/30 backdrop-blur-sm overflow-y-auto overscroll-contain px-3 py-3 space-y-3 order-last md:order-first"
-                  style={isPortraitPhone ? { height: `${SHEET_VH}vh`, paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' } : undefined}
+                  style={isPortraitPhone
+                    ? { height: sheetCollapsed ? 'auto' : `${SHEET_VH}vh`, paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }
+                    : undefined}
+                  data-sheet-collapsed={isPortraitPhone && sheetCollapsed ? 'true' : undefined}
                 >
                   {isMobile && (
                     // Celular: acciones de siempre fijas arriba + pestañas. Lo de
@@ -3498,8 +3704,10 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                           size="sm"
                           className={`h-9 flex-1 gap-1 text-[11px] px-2 ${drawMode ? 'bg-emerald-600 hover:bg-emerald-500 text-white' : 'bg-white/5 hover:bg-white/10 text-white border border-white/15'}`}
                           onClick={() => { setDrawMode((v) => !v); setMeasureMode(false); }}
+                          aria-pressed={drawMode}
+                          title={drawMode ? 'Toca para dejar de dibujar y mover fichas' : 'Toca para volver a dibujar'}
                         >
-                          <PenLine className="h-3.5 w-3.5" /> {drawMode ? 'Dibujando' : 'Activar dibujo'}
+                          <PenLine className="h-3.5 w-3.5" /> {drawMode ? 'Dibujando' : 'Mover fichas'}
                         </Button>
                         <Button size="sm" variant="outline" aria-label={playingSequence ? 'Detener reproducción' : 'Reproducir jugada'}
                           aria-pressed={playingSequence}
@@ -3523,6 +3731,17 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                           disabled={drawnCount === 0} onClick={requestClearDrawings}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
+                        {isPortraitPhone && (
+                          <Button size="sm" variant="outline"
+                            aria-label={sheetCollapsed ? 'Mostrar herramientas' : 'Plegar herramientas'}
+                            title={sheetCollapsed ? 'Mostrar herramientas' : 'Plegar herramientas (más cancha)'}
+                            aria-expanded={!sheetCollapsed}
+                            data-testid="tb-sheet-toggle"
+                            className="h-9 w-10 p-0 bg-transparent border-white/15 text-white/80 hover:bg-white/10 hover:text-white"
+                            onClick={() => setSheetCollapsed((v) => !v)}>
+                            {sheetCollapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                          </Button>
+                        )}
                       </div>
                       {/* Partes iguales y sin scroll: 6 pestañas entran en 360px. */}
                       <div className="flex gap-1 overflow-x-auto scrollbar-none" role="tablist" aria-label="Herramientas de la pizarra">
@@ -3532,7 +3751,12 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                             type="button"
                             role="tab"
                             aria-selected={mobileTab === t.key}
-                            onClick={() => setMobileTab(t.key)}
+                            onClick={() => {
+                              // Tocar la pestaña abierta con la hoja abierta la pliega; si no, la abre en esa pestaña.
+                              if (isPortraitPhone && mobileTab === t.key && !sheetCollapsed) { setSheetCollapsed(true); return; }
+                              setMobileTab(t.key);
+                              setSheetCollapsed(false);
+                            }}
                             className={`flex-1 min-w-fit shrink-0 whitespace-nowrap h-8 px-2 rounded-full text-[11px] font-semibold border ${
                               mobileTab === t.key ? 'bg-white text-zinc-900 border-white' : 'bg-white/5 border-white/15 text-white/70'
                             }`}
@@ -3550,7 +3774,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       variant="outline"
                       className="w-full h-8 gap-1.5 text-xs justify-start bg-transparent border-white/15 text-white/80 hover:bg-white/10 hover:text-white mb-1.5"
                       onClick={handlePlayMovement}
-                      title="Anima a cada jugador hasta la punta de su flecha/curva y lo devuelve -- se puede repetir"
+                      title="Anima a cada jugador hasta la punta de su flecha/curva y lo devuelve; se puede repetir"
                     >
                       {playingSequence ? <Square className="h-3.5 w-3.5 fill-current" /> : <Play className="h-3.5 w-3.5" />}
                       {playingSequence ? 'Detener' : 'Reproducir jugada'}
@@ -3822,7 +4046,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       <Eraser className="h-3.5 w-3.5 shrink-0" /> Borrar todo
                     </Button>
                   </div>
-                  <p className="text-[10px] text-white/70">
+                  <p className={`text-[10px] text-white/70 ${isPortraitPhone && sheetCollapsed ? 'hidden' : ''}`}>
                     {drawnCount} {drawnCount === 1 ? 'figura' : 'figuras'} · se guardan con la jugada.
                   </p>
 
@@ -3848,7 +4072,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       <span className="text-[10px] text-white/50">m</span>
                     </div>
                     <p className="hidden md:block text-[10px] text-white/70 mt-1 leading-snug">
-                      Toca 2 puntos en la cancha. Aproximado -- calculado a partir del largo que pongas arriba, no del tamaño real de tu cancha.
+                      Toca 2 puntos en la cancha. Es aproximado: se calcula con el largo que pongas arriba, no con el tamaño real de tu cancha.
                     </p>
                   </div>
                 </div>
@@ -3872,7 +4096,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       onClick={handleSuggestXI}
                       title={
                         Object.keys(placed).length > 0
-                          ? 'Vacía la cancha primero -- no reemplaza una alineación ya armada'
+                          ? 'Vacía la cancha primero: no reemplaza una alineación ya armada'
                           : suggestibleCount < MIN_SUGGEST_SAMPLE
                             ? `Necesitas al menos ${MIN_SUGGEST_SAMPLE} jugadores con partidos registrados`
                             : 'Ubica un XI de partida ordenado por minutos jugados en la temporada'
@@ -3881,7 +4105,7 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                       <Sparkles className="h-3.5 w-3.5" /> Sugerir XI
                     </Button>
                     <p className="text-[10px] text-white/70 mt-1 mb-2 leading-snug">
-                      Por minutos jugados -- formación genérica, no la posición real de cada uno.
+                      Por minutos jugados, en una formación genérica (no es la posición real de cada uno).
                     </p>
                   </div>
 
@@ -3955,7 +4179,10 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
                 getRequest={() => {
                   const list = committedFrames().map((f) => ({ ...f, players: f.players.filter((p) => subjectByKey.has(p.key)) }));
                   if (!list.some((f) => f.players.length > 0)) return null;
-                  return buildAnalyzeRequest({ teamId, sport, frames: list, labelOf: (k) => (placed[k] ?? metaRef.current[k])?.slot_label, intention: media.intention });
+                  // `formation`: contexto para la IA (el BFF también la deduce por posiciones).
+                  // Va por variable para compilar aunque esta rama todavía no tenga el parámetro.
+                  const aiArgs = { teamId, sport, frames: list, labelOf: (k: string) => (placed[k] ?? metaRef.current[k])?.slot_label, intention: media.intention, formation: formationKey };
+                  return buildAnalyzeRequest(aiArgs);
                 }}
                 sport={sport}
                 canApply={roleCanEdit}
@@ -4002,6 +4229,16 @@ export function TacticalBoard({ open, onClose, teamId, teamName, sourceType, sou
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+    {scratch && addToSessionOpen && (
+      <Suspense fallback={null}>
+        <PizarraAgregarASesionDialog
+          open={addToSessionOpen}
+          onOpenChange={setAddToSessionOpen}
+          teamId={teamId}
+          onPick={(blockId, label) => void addToSessionBlock(blockId, label)}
+        />
+      </Suspense>
+    )}
     {courtOpen && (
       <Suspense fallback={null}>
         <TacticalCourtDialog

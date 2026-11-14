@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   sortReviewQueue, waitingLabel, greenExclusion, bulkGreenSelection, rejectReasonError, rejectErrorMessage,
-  REJECT_REASONS, type QueueItem,
+  REJECT_REASONS, type QueueItem, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish,
 } from '@/lib/receiptReview';
 
 const base = (o: Partial<QueueItem> & { id: string }): QueueItem => ({
   status: 'awaiting_approval', amount: 180000, amount_paid: null, receipt_verdict: 'verde', ocr_amount: 180000,
-  receipt_url: 'r/1.jpg', created_at: '2026-10-01T00:00:00Z', submitted_at: '2026-10-08T10:00:00Z', ...o,
+  // Un archivo por cobro: el mismo receipt_url en dos cobros es UN comprobante de varios.
+  receipt_url: `r/${o.id}.jpg`, created_at: '2026-10-01T00:00:00Z', submitted_at: '2026-10-08T10:00:00Z', ...o,
 });
 
 describe('orden de la cola', () => {
@@ -85,5 +86,44 @@ describe('motivo del rechazo', () => {
     expect(rejectErrorMessage({ code: 'PGRST202', message: 'Could not find the function public.reject_payment_receipt' })).toMatch(/migración/);
     expect(rejectErrorMessage({ code: 'P0001', message: 'PAYMENT_NOT_IN_REVIEW' })).toMatch(/ya no tiene un comprobante/);
     expect(rejectErrorMessage({ code: '42501', message: 'PAYMENT_FORBIDDEN' })).toMatch(/dueño o un administrador/);
+  });
+});
+
+describe('un comprobante, varios cobros (Juliana: $450.000 por sept, oct y nov)', () => {
+  const foto = 'escuela/whatsapp/juliana.jpeg';
+  const sept = { ...base({ id: 'sept', amount: 150000, ocr_amount: 450000, receipt_url: foto }), period_year: 2026, period_month: 9 };
+  const oct = { ...base({ id: 'oct', amount: 150000, ocr_amount: null, receipt_verdict: null, receipt_url: foto }), period_year: 2026, period_month: 10 };
+  const nov = { ...base({ id: 'nov', amount: 150000, ocr_amount: null, receipt_verdict: null, receipt_url: foto }), period_year: 2026, period_month: 11 };
+  const otro = base({ id: 'otro', receipt_url: 'r/otro.jpg' });
+
+  it('agrupa por receipt_url y deja fuera los comprobantes de un solo cobro', () => {
+    const g = receiptGroups([sept, otro, nov, oct]);
+    expect([...g.keys()]).toEqual([foto]);
+    expect(g.get(foto)!.map((i) => i.id)).toEqual(['sept', 'nov', 'oct']);
+  });
+
+  it('en la cola, los meses sin monto leído quedan pegados al que trae la foto', () => {
+    const verde2 = base({ id: 'verde2', receipt_url: 'r/v2.jpg', submitted_at: '2026-10-08T12:00:00Z' });
+    const rojo = base({ id: 'rojo', receipt_verdict: 'rojo', receipt_url: 'r/rojo.jpg' });
+    const ordenada = sortReviewQueue([nov, rojo, verde2, sept, oct]);
+    expect(ordenada.map((i) => i.id)).toEqual(['sept', 'verde2', 'nov', 'oct', 'rojo']);
+    expect(keepReceiptGroupsTogether(ordenada).map((i) => i.id)).toEqual(['sept', 'nov', 'oct', 'verde2', 'rojo']);
+    expect(ordenada.map((i) => i.id)).toEqual(['sept', 'verde2', 'nov', 'oct', 'rojo']); // no muta
+  });
+
+  it('se aprueba primero el que trae el monto leído y luego por mes', () => {
+    expect(orderReceiptGroup([nov, oct, sept]).map((i) => i.id)).toEqual(['sept', 'oct', 'nov']);
+  });
+
+  it('«Aprobar todos los verdes» no aprueba un mes suelto de un comprobante de varios', () => {
+    const r = bulkGreenSelection([sept, oct, nov, otro]);
+    expect(r.eligible.map((i) => i.id)).toEqual(['otro']);
+    expect(r.excludedGreens.map((e) => [e.item.id, e.reason])).toEqual([['sept', 'el comprobante cubre varios cobros: apruébalo desde su fila']]);
+  });
+
+  it('une la lista en español', () => {
+    expect(joinSpanish([])).toBe('');
+    expect(joinSpanish(['Septiembre 2026'])).toBe('Septiembre 2026');
+    expect(joinSpanish(['Septiembre 2026', 'Octubre 2026', 'Noviembre 2026'])).toBe('Septiembre 2026, Octubre 2026 y Noviembre 2026');
   });
 });

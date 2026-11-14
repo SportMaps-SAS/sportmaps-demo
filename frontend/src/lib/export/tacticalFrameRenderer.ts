@@ -24,6 +24,7 @@ import type { TacticalPlaybackOptions } from '@/lib/school/tacticalBoardSettings
 import { hasPossession } from '@/lib/school/tacticalPossession';
 import { drawPlaybackTrails } from './tacticalTrailsCanvas';
 import { TRAIL_COLORS } from '@/lib/school/tacticalTrails';
+import { drawCanvasWatermark, loadLogo, wantsWatermark, type ExportBranding } from './tacticalWatermark';
 
 // ─── Dibujo de jugadores y balón (copia de TacticalStaticSvg) ──────────────
 
@@ -121,6 +122,8 @@ export interface TacticalRendererOptions {
   /** Ajustes de la pizarra (M6g): curva de velocidad y rastros. Sin ellos,
    *  la curva «suave» de siempre y sin rastros. */
   playback?: TacticalPlaybackOptions;
+  /** «Hecho con SportMaps · sportmaps.co» (salvo marca blanca) y logo del club, en cada cuadro. */
+  branding?: ExportBranding;
   /** Pausa en el primer cuadro antes de arrancar y en el último al terminar. */
   holdStartMs: number;
   holdEndMs: number;
@@ -196,6 +199,8 @@ export async function createTacticalFrameRenderer(opts: TacticalRendererOptions)
       if (signal?.aborted) throw abortError();
     }
   }
+  const logo = await loadLogo(opts.branding?.clubLogoUrl);
+  const watermark = wantsWatermark(opts.branding);
   const trailColors = teams ? { home: teams.home.colors.primary, away: teams.away.colors.primary } : TRAIL_COLORS;
   const total = framesDuration(frames);
   const length = opts.holdStartMs + total + opts.holdEndMs;
@@ -232,6 +237,7 @@ export async function createTacticalFrameRenderer(opts: TacticalRendererOptions)
     }
     ctx.globalAlpha = 1;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (watermark || logo) drawCanvasWatermark(ctx, width, height, { watermark, logo });
   };
 
   const dispose = () => {

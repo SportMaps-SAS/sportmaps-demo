@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -23,6 +24,9 @@ import { usesParentCalendarV2 } from '@/components/parent/v2/parentCalendarModel
 import { ACUDIENTE_V2 } from '@/lib/feature-flags';
 import { format, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameDay, isToday, addMonths, subMonths } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { useEntitlements } from '@/hooks/useEntitlements';
+import { FormatoVivoCampos } from '@/components/partidos/FormatoVivoCampos';
+import { FORMATO_VIVO_DEFECTO, payloadFormatoVivo, validarFormatoVivo, type FormatoVivoForm } from '@/components/partidos/partidoVivoAgenda';
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -65,6 +69,8 @@ interface CalendarEvent {
   school_id?: string | null;
   team_name?: string | null;
   creator_name?: string;
+  /** Partido (match_results) ligado a este evento, si lo hay (create_match). */
+  match_id?: string | null;
 }
 
 // ─── Sport icon mapping ───────────────────────────────────────────────────
@@ -221,6 +227,9 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
   const [startDateOpen, setStartDateOpen] = useState(false);
   const [endDateOpen, setEndDateOpen] = useState(false);
 
+  const liveMatchEnabled = useEntitlements().liveMatchEnabled;
+  const [formatoVivo, setFormatoVivo] = useState<FormatoVivoForm>(FORMATO_VIVO_DEFECTO);
+
   // Form state
   const [formData, setFormData] = useState({
     title: '',
@@ -235,6 +244,9 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
     event_label: '',
     // 'private' = solo yo · 'school' = toda la escuela · <uuid> = ese equipo
     target: 'private',
+    // Solo para un Partido de un equipo: crea el partido ligado (create_match).
+    rival: '',
+    is_home: 'true',
   });
 
   // ── Get sport-specific event types ────────────────────────────────────
@@ -335,7 +347,7 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
 
       let query = (supabase
         .from('calendar_events' as any)
-        .select('*, teams(name)') as any);
+        .select('*, teams(name), match_results(id)') as any);
       query = schoolId
         ? query.or(`school_id.eq.${schoolId},user_id.eq.${user.id}`)
         : query.eq('user_id', user.id);
@@ -361,6 +373,8 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
       return rows.map((e) => ({
         ...e,
         team_name: e.teams?.name ?? null,
+        // Embed inverso (match_results.calendar_event_id): arreglo o fila según PostgREST.
+        match_id: (Array.isArray(e.match_results) ? e.match_results[0]?.id : e.match_results?.id) ?? null,
         creator_name: nameMap[e.user_id] || undefined,
       })) as CalendarEvent[];
     },
@@ -376,6 +390,10 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
     return d.toISOString();
   };
 
+  // Partido para un equipo concreto (no «toda la escuela» ni «solo yo»).
+  const esPartidoDeEquipo = (fd: typeof formData) =>
+    fd.event_type === 'match' && isStaff && !!schoolId && !!fd.target && fd.target !== 'school' && fd.target !== 'private';
+
   // ── Create event mutation ─────────────────────────────────────────────
   const createMutation = useMutation({
     mutationFn: async (fd: typeof formData) => {
@@ -383,6 +401,47 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
       const startIso = buildIso(fd.startDate, fd.startTime);
       const endIso = buildIso(fd.endDate, fd.endTime);
       if (!startIso || !endIso) throw new Error('Fechas inválidas');
+
+      // F4 del spec de partidos: un Partido para un equipo es UN registro.
+      // create_match crea el partido y su evento de calendario ligado en la
+      // misma transacción; así aparece en Resultados y en Equipos › Partidos
+      // sin volver a escribirlo.
+      if (esPartidoDeEquipo(fd)) {
+        const errFormato = liveMatchEnabled ? validarFormatoVivo(formatoVivo) : null;
+        if (errFormato) throw new Error(errFormato);
+        const { data, error } = await (supabase as any).rpc('create_match', {
+          p: {
+            team_id: fd.target,
+            opponent: fd.rival.trim(),
+            match_date: format(fd.startDate as Date, 'yyyy-MM-dd'),
+            kickoff_at: startIso,
+            is_home: fd.is_home === 'true',
+            location: fd.location || '',
+            notes: fd.description || '',
+            match_type: fd.event_label || '',
+            create_calendar_event: true,
+            ...payloadFormatoVivo(liveMatchEnabled, formatoVivo),
+          },
+        });
+        if (error) throw new Error(error.code === '42501' ? 'No tienes permiso para crear partidos de este equipo' : 'No se pudo crear el partido');
+        // Lo que create_match no sabe (título propio, hora de fin, deporte y
+        // etiqueta) se ajusta en el mismo evento. Si falla, el partido y el
+        // evento ya quedaron bien: solo se pierde el detalle.
+        const eventId = (data as { calendar_event_id?: string } | null)?.calendar_event_id;
+        if (eventId) {
+          const { error: ajuste } = await (supabase
+            .from('calendar_events' as any)
+            .update({
+              title: fd.title.trim() || `Partido vs ${fd.rival.trim()}`,
+              end_time: endIso,
+              sport: coachSport || null,
+              event_label: fd.event_label || null,
+            })
+            .eq('id', eventId) as any);
+          if (ajuste) console.warn('[calendario] ajuste del evento del partido', ajuste);
+        }
+        return;
+      }
 
       const payload = {
         user_id: user.id,
@@ -405,7 +464,14 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['calendar-events'] });
-      toast({ title: '✅ Evento creado', description: `${formData.title} agregado al calendario` });
+      if (esPartidoDeEquipo(formData)) {
+        queryClient.invalidateQueries({ queryKey: ['coach-v2', 'partidos'] });
+        queryClient.invalidateQueries({ queryKey: ['coach-v2', 'partidos-proximos'] });
+        queryClient.invalidateQueries({ queryKey: ['match-results'] });
+        toast({ title: '✅ Partido creado', description: 'Quedó en el calendario y en Resultados. Ábrelo para convocar.' });
+      } else {
+        toast({ title: '✅ Evento creado', description: `${formData.title} agregado al calendario` });
+      }
       closeDialog();
     },
     onError: (err: any) => {
@@ -554,6 +620,8 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
       all_day: false,
       event_label: '',
       target: 'private',
+      rival: '',
+      is_home: 'true',
     });
 
   const closeDialog = () => {
@@ -589,12 +657,18 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
       all_day: event.all_day,
       event_label: event.event_label || '',
       target: event.team_id ? event.team_id : event.school_id ? 'school' : 'private',
+      rival: '',
+      is_home: 'true',
     });
     setDialogOpen(true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingEvent && esPartidoDeEquipo(formData) && formData.rival.trim().length < 2) {
+      toast({ title: 'Falta el rival', description: 'Escribe contra quién juegan.', variant: 'destructive' });
+      return;
+    }
     if (editingEvent) {
       updateMutation.mutate({ id: editingEvent.id, ...formData });
     } else {
@@ -877,6 +951,13 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
                             {event.creator_name}
                           </Badge>
                         )}
+                        {isStaff && event.match_id && (
+                          <div className="mt-3">
+                            <Button asChild size="sm" variant="outline" className="h-10 gap-1 rounded-xl">
+                              <Link to={`/partidos/${event.match_id}`}>Abrir partido <ChevronRight className="h-3.5 w-3.5" /></Link>
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -922,8 +1003,8 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
               <Input
                 value={formData.title}
                 onChange={e => setFormData({ ...formData, title: e.target.value })}
-                placeholder="Ej: Campeonato Nacional"
-                required
+                placeholder={!editingEvent && esPartidoDeEquipo(formData) ? 'Si lo dejas vacío: «Partido vs <rival>»' : 'Ej: Campeonato Nacional'}
+                required={editingEvent ? true : !esPartidoDeEquipo(formData)}
               />
             </div>
 
@@ -981,6 +1062,35 @@ function CalendarPageClassic({ soloLectura = false }: { soloLectura?: boolean } 
                 />
               </div>
             </div>
+
+            {/* Partido de un equipo: rival y local/visitante → create_match */}
+            {!editingEvent && esPartidoDeEquipo(formData) && (
+              <div className="grid grid-cols-2 gap-4 rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <div className="col-span-2 space-y-2 sm:col-span-1">
+                  <Label htmlFor="cal-rival">Rival *</Label>
+                  <Input
+                    id="cal-rival"
+                    value={formData.rival}
+                    onChange={e => setFormData({ ...formData, rival: e.target.value })}
+                    placeholder="Ej: Halcones FC"
+                  />
+                </div>
+                <div className="col-span-2 space-y-2 sm:col-span-1">
+                  <Label>¿Dónde juegan?</Label>
+                  <Select value={formData.is_home} onValueChange={v => setFormData({ ...formData, is_home: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="true">En casa (local)</SelectItem>
+                      <SelectItem value="false">De visita</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {liveMatchEnabled && <FormatoVivoCampos value={formatoVivo} onChange={setFormatoVivo} />}
+                <p className="col-span-2 text-xs text-muted-foreground">
+                  Se crea el partido: aparece en Resultados y en Equipos › Partidos, donde convocas, registras el resultado y evalúas.
+                </p>
+              </div>
+            )}
 
             {/* Date pickers */}
             <div className="grid grid-cols-2 gap-4">

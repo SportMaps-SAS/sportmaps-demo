@@ -12,16 +12,18 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 import { firstName, hijoSubtitle, initials, type Hijo } from './hijosUtils';
+import { fotoDeVerdad } from '../parentHomeLogic';
 import { ProgresoTab } from './ProgresoTab';
 import { AsistenciaTab } from './AsistenciaTab';
 import { InformesTab } from './InformesTab';
 import { FichaSaludTab } from './FichaSaludTab';
 
 export const HIJOS_TABS = [
-  { value: 'progreso', label: 'Progreso' },
-  { value: 'asistencia', label: 'Asistencia' },
-  { value: 'informes', label: 'Informes' },
-  { value: 'ficha', label: 'Ficha y salud' },
+  { value: 'progreso', label: 'Progreso', corto: 'Progreso' },
+  { value: 'asistencia', label: 'Asistencia', corto: 'Asistencia' },
+  { value: 'informes', label: 'Informes', corto: 'Informes' },
+  // A 390 px «Ficha y salud» se cortaba («Ficha y salu…»): en celular dice «Ficha».
+  { value: 'ficha', label: 'Ficha y salud', corto: 'Ficha' },
 ] as const;
 
 export type HijosTab = (typeof HIJOS_TABS)[number]['value'];
@@ -86,7 +88,9 @@ export function HijosV2({ hijos, onEdit, onUploadDocs, fichaExtra }: Props) {
 
       <div className="flex items-center gap-3">
         <Avatar className="h-14 w-14 shrink-0">
-          <AvatarImage src={hijo.avatar_url || ''} alt="" className="object-cover" />
+          {fotoDeVerdad(hijo.avatar_url) && (
+            <AvatarImage src={fotoDeVerdad(hijo.avatar_url)!} alt="" className="object-cover" />
+          )}
           <AvatarFallback className="bg-primary/10 text-base font-semibold text-primary">
             {initials(hijo.full_name)}
           </AvatarFallback>
@@ -100,8 +104,9 @@ export function HijosV2({ hijos, onEdit, onUploadDocs, fichaExtra }: Props) {
       <Tabs value={tab} onValueChange={(v) => update({ tab: v })}>
         <TabsList className="h-tabs w-full justify-start md:h-10 md:w-auto">
           {HIJOS_TABS.map((t) => (
-            <TabsTrigger key={t.value} value={t.value} className="min-h-9 flex-1 md:flex-none">
-              {t.label}
+            <TabsTrigger key={t.value} value={t.value} aria-label={t.label} className="min-h-9 flex-1 px-2 md:flex-none md:px-3">
+              <span className="md:hidden">{t.corto}</span>
+              <span className="hidden md:inline">{t.label}</span>
             </TabsTrigger>
           ))}
         </TabsList>

@@ -361,6 +361,9 @@ describe('texto del botón principal (§10.2)', () => {
     it('deshabilitado con motivo: nada marcado, errores, vista previa vieja', () => {
         expect(primaryButtonState({ ...base, mode: 'single', toCreate: 0, toPay: 0, adjustOnly: 0 })).toMatchObject({ disabled: true, reason: expect.stringMatching(/Marca/) });
         expect(primaryButtonState({ ...base, errors: 1, mode: 'single', toCreate: 1, toPay: 0, adjustOnly: 0 })).toMatchObject({ disabled: true, reason: expect.stringMatching(/rojo/) });
+        // La vista previa omitió el cobro (mes ya existente): el motivo lo dice en vez de «Marca un cobro…».
+        expect(primaryButtonState({ ...base, mode: 'single', toCreate: 0, toPay: 0, adjustOnly: 0, skippedReasons: ['ya tiene la mensualidad de ese mes'] }))
+            .toMatchObject({ disabled: true, reason: 'No hay nada que crear: ya tiene la mensualidad de ese mes.' });
         expect(primaryButtonState({ mode: 'multi', toCreate: 17, toPay: 0, adjustOnly: 0, previewFresh: false })).toMatchObject({ disabled: true, reason: expect.stringMatching(/vista previa/) });
         expect(primaryButtonState({ ...base, mode: 'single', toCreate: 1, toPay: 0, adjustOnly: 0, noAthlete: true })).toMatchObject({ disabled: true });
     });

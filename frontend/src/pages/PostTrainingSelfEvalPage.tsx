@@ -117,6 +117,9 @@ export default function PostTrainingSelfEvalPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const [searchParams] = useSearchParams();
   const childIdParam = searchParams.get('child_id');
+  // Deportista que responde por su ficha vinculada (Inicio V2 → «¿Qué tan duro fue?»).
+  // La RPC verifica que la ficha sea de esta cuenta; aquí solo se elige el sujeto.
+  const fichaParam = childIdParam ? null : searchParams.get('ficha');
   const navigate = useNavigate();
   const location = useLocation();
   const { user, profile } = useAuth();
@@ -129,7 +132,7 @@ export default function PostTrainingSelfEvalPage() {
 
   // ── Sesión + equipo + escuela + deporte ────────────────────────────────────
   const { data: ctx, isLoading, isError, refetch } = useQuery({
-    queryKey: ['post-training-context', sessionId, childIdParam],
+    queryKey: ['post-training-context', sessionId, childIdParam, fichaParam],
     enabled: !!sessionId,
     queryFn: async () => {
       const { data: session, error: sErr } = await supabase
@@ -150,7 +153,7 @@ export default function PostTrainingSelfEvalPage() {
       if (childId) {
         const { data: c } = await supabase.from('children').select('id, full_name').eq('id', childId).maybeSingle();
         childName = c?.full_name ?? null;
-      } else if (user?.id) {
+      } else if (user?.id && !fichaParam) {
         const { data: ownRecord } = await supabase
           .from('attendance_records')
           .select('id')
@@ -204,8 +207,8 @@ export default function PostTrainingSelfEvalPage() {
 
       return {
         session, teamName, sportCategoryId,
-        subjectType: childId ? ('child' as const) : ('profile' as const),
-        subjectId: childId || user?.id || null,
+        subjectType: childId ? ('child' as const) : fichaParam ? ('unregistered' as const) : ('profile' as const),
+        subjectId: childId || fichaParam || user?.id || null,
         childName,
         focusItems,
         totalPresentes, yaRespondieron,
@@ -216,6 +219,19 @@ export default function PostTrainingSelfEvalPage() {
   const submit = useMutation({
     mutationFn: async () => {
       if (!sessionId || !ctx?.subjectId) throw new Error('Falta información de la sesión.');
+      if (ctx.subjectType === 'unregistered') {
+        // p_unregistered_athlete_id (migración 20261026155123) aún no está en types.ts.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase as any).rpc('submit_post_training_self_eval', {
+          p_session_id: sessionId,
+          p_child_id: null,
+          p_user_id: null,
+          p_answers: buildPayload(answers),
+          p_unregistered_athlete_id: ctx.subjectId,
+        });
+        if (error) throw error;
+        return data as { saved: number; streak: number; month_avg_borg: number | null };
+      }
       const { data, error } = await supabase.rpc('submit_post_training_self_eval', {
         p_session_id: sessionId,
         p_child_id: ctx.subjectType === 'child' ? ctx.subjectId : null,
@@ -291,7 +307,7 @@ export default function PostTrainingSelfEvalPage() {
     );
   }
 
-  const nombreCompleto = ctx.childName ?? (ctx.subjectType === 'profile' ? profile?.full_name ?? null : null);
+  const nombreCompleto = ctx.childName ?? (ctx.subjectType !== 'child' ? profile?.full_name ?? null : null);
   const nombre = nombreCompleto?.trim().split(/\s+/)[0] || null;
   const fecha = sessionDateLabel(ctx.session.session_date);
 

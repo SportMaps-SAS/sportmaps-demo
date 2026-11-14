@@ -27,7 +27,7 @@ export const isRivalKey = (k: string) => k.startsWith(RIVAL_KEY_PREFIX);
 /**
  * Cupo de IA por COSTO REAL (spec §6, decisión 2026-10-14; BFF
  * services/tactical-ai-budget.ts). El coach ve «Te queda el 60 % de tu IA este
- * mes · unos 9 análisis de fútbol 11»; agotado, «Quiero más» abre WhatsApp con
+ * mes · unos 9 análisis de fútbol 11»; agotado, «Quiero +50 % de IA» abre WhatsApp con
  * el comercial (no hay compra en la app todavía: el precio se fija midiendo).
  */
 export interface AiBalance {
@@ -46,6 +46,69 @@ export interface AiBalance {
   cache_hits: number;
   /** Solo cuando está agotado: mensaje pre-llenado para el comercial. */
   request_more_message?: string;
+  /** Cupo ampliado temporal vigente (p. ej. ×3 durante una prueba). */
+  boost?: { multiplier: number; expires_at: string | null } | null;
+  /** Recarga que se ofrece, en la misma moneda que el medidor. */
+  recharge?: AiRechargeOffer;
+}
+
+// ─── Moneda del medidor y de las recargas ───────────────────────────────────
+//
+// Regla (2026-10-27): la recarga se ofrece en la MISMA unidad que el medidor.
+// Medidor en análisis → «+10 análisis»; medidor en % → «+50 % de IA».
+// Hoy el medidor dice «Te queda el 60 % de tu IA este mes» → %.
+// Espejo de bff/src/services/tactical-ai-budget.ts (el BFF manda `recharge`).
+
+export type AiMeterUnit = 'pct' | 'analyses';
+export const AI_METER_UNIT: AiMeterUnit = 'pct';
+export const AI_RECHARGE_STEP: Record<AiMeterUnit, number> = { pct: 50, analyses: 10 };
+export interface AiRechargeOffer { unit: AiMeterUnit; amount: number; label: string }
+
+/** «+50 % de IA» / «+10 análisis» (mismo formato que el medidor: «60 %»). */
+export function rechargeLabel(unit: AiMeterUnit, amount: number = AI_RECHARGE_STEP[unit]): string {
+  return unit === 'pct' ? `+${amount} % de IA` : `+${amount} análisis`;
+}
+
+/** La del BFF si vino; si no, la de la moneda del medidor. */
+export function rechargeOfferOf(b: AiBalance | null | undefined): AiRechargeOffer {
+  if (b?.recharge?.label) return b.recharge;
+  return { unit: AI_METER_UNIT, amount: AI_RECHARGE_STEP[AI_METER_UNIT], label: rechargeLabel(AI_METER_UNIT) };
+}
+
+/** Presupuesto BASE del coach por mes (tactical_ai_user_budget_micro_usd(): US$ 1). */
+export const AI_COACH_BASE_BUDGET_USD = 1;
+/** Costo medio por análisis (espejo de AVG_COST_USD_BY_SPORT del BFF), para recargas en análisis. */
+const AVG_COST_USD: Partial<Record<TacticalSport, number>> = {
+  futbol: 0.064, futbol7: 0.052, futbol5: 0.050, futsal: 0.056, voleibol: 0.043, baloncesto: 0.046, balonmano: 0.061,
+};
+
+/**
+ * USD que el super admin da (grant) para cumplir una recarga: % del presupuesto
+ * BASE del coach, o N análisis al costo medio del deporte. Hacia arriba al
+ * centavo: nunca se da menos de lo prometido. Espejo de rechargeUsd del BFF.
+ */
+export function rechargeUsdFor(
+  offer: Pick<AiRechargeOffer, 'unit' | 'amount'>, baseBudgetUsd = AI_COACH_BASE_BUDGET_USD, sport: TacticalSport = 'futbol',
+): number {
+  const raw = offer.unit === 'pct' ? (baseBudgetUsd * offer.amount) / 100 : offer.amount * (AVG_COST_USD[sport] ?? 0.064);
+  return Math.ceil(Math.round(raw * 1e6) / 1e4) / 100;
+}
+
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+/**
+ * «Cupo ampliado ×3 hasta el 4 de noviembre». El vencimiento es exclusivo
+ * (00:00 del día siguiente en Colombia), así que se muestra el día anterior.
+ */
+export function boostLabel(b: AiBalance | null | undefined): string | null {
+  const m = Number(b?.boost?.multiplier);
+  if (!b?.boost || !Number.isFinite(m) || m <= 1) return null;
+  const times = `×${String(Math.round(m * 100) / 100).replace('.', ',')}`;
+  const exp = b.boost.expires_at ? new Date(b.boost.expires_at) : null;
+  if (!exp || Number.isNaN(exp.getTime())) return `Cupo ampliado ${times}`;
+  // Hora Colombia (UTC−5, sin horario de verano), 1 ms antes del vencimiento.
+  const last = new Date(exp.getTime() - 5 * 3600 * 1000 - 1);
+  return `Cupo ampliado ${times} hasta el ${last.getUTCDate()} de ${MESES[last.getUTCMonth()]}`;
 }
 
 /** Nombre del deporte en la barra y en el mensaje («unos 9 análisis de fútbol 11»). */
@@ -68,6 +131,8 @@ export interface AiAnalysisResponse {
   balance: AiBalance | null;
   /** Clave interna del análisis (p1..pN) → clave real del tablero. */
   keys?: Record<string, string>;
+  /** Hash anónimo del análisis: con él se manda «Útil / No útil». */
+  analysis_ref?: string;
 }
 
 export interface AnalyzeRequest {
@@ -79,6 +144,9 @@ export interface AnalyzeRequest {
   /** M6c: nota de la jugada = intención del coach. El BFF la filtra (sin
    *  nombres del plantel) y la recorta antes de mandarla al modelo. */
   intencion?: string;
+  /** Formación elegida en la pizarra ('4-3-3', 'f7-2-3-1'…): la IA usa la
+   *  base táctica de esa formación. Sin esto el BFF la deduce de las posiciones. */
+  formacion?: string;
 }
 
 export type AnalyzeOutcome =
@@ -103,6 +171,8 @@ export function buildAnalyzeRequest(args: {
   labelOf: (key: string) => string | undefined;
   /** Nota de la jugada (M6c). */
   intention?: string;
+  /** Formación elegida en la pizarra (clave del catálogo). */
+  formation?: string | null;
 }): AnalyzeRequest {
   const frames = args.frames.slice(0, MAX_FRAMES).map((f) => ({
     id: f.id,
@@ -121,9 +191,11 @@ export function buildAnalyzeRequest(args: {
     if (l && !(p.key in labels)) labels[p.key] = l.slice(0, 40);
   }
   const intencion = (args.intention ?? '').trim().slice(0, 2000);
+  const formacion = args.formation && /^[a-z0-9][a-z0-9-]{0,39}$/.test(args.formation) ? args.formation : null;
   return {
     team_id: args.teamId, sport: args.sport, frames, labels, colors: { own: 'green', rival: rivalColorOf(frames) },
     ...(intencion ? { intencion } : {}),
+    ...(formacion ? { formacion } : {}),
   };
 }
 
@@ -153,6 +225,33 @@ export async function analyzePlay(req: AnalyzeRequest): Promise<AnalyzeOutcome> 
       };
     }
     return { kind: 'error', message: messageOf(err) };
+  }
+}
+
+// ─── «Útil / No útil» y «Guardar como nueva jugada» ─────────────────────────
+
+export type AiFeedbackVerdict = 'util' | 'no_util';
+export interface AiFeedback {
+  analysisRef: string;
+  sport: TacticalSport;
+  kind: 'contraataque' | 'variante';
+  index: number;
+  /** null = quitar el voto. */
+  verdict?: AiFeedbackVerdict | null;
+  saved?: boolean;
+}
+
+/** Registra la valoración. Nunca rompe la pizarra: false si no se pudo. */
+export async function sendSuggestionFeedback(f: AiFeedback): Promise<boolean> {
+  try {
+    await bffClient.post('/api/v1/school/tactical/ai-feedback', {
+      analysis_ref: f.analysisRef, sport: f.sport, kind: f.kind, index: f.index,
+      ...(f.verdict !== undefined ? { verdict: f.verdict } : {}),
+      ...(f.saved ? { saved: true } : {}),
+    });
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -232,7 +331,6 @@ export function quotaLabel(b: AiBalance | null, sport: TacticalSport): string | 
   return `${head} · ${n === 1 ? 'un análisis' : `unos ${n} análisis`} de ${label}`;
 }
 
-const usdText = (n: number) => `US$ ${(Number.isFinite(n) ? n : 0).toFixed(2).replace('.', ',')}`;
 
 /**
  * Mensaje de «Quiero más» si el BFF no lo mandó: deporte y consumo del mes,
@@ -240,8 +338,9 @@ const usdText = (n: number) => `US$ ${(Number.isFinite(n) ? n : 0).toFixed(2).re
  */
 export function fallbackMoreMessage(b: AiBalance | null, sport: TacticalSport): string {
   const label = AI_SPORT_LABEL[sport];
-  const consumo = b ? ` Este mes: ${b.analyses} análisis, ${usdText(b.used_usd)} de ${usdText(b.budget_usd)}.` : '';
-  return `Hola, uso la pizarra de SportMaps${label ? ` con ${label}` : ''} y se me acabó la IA del mes.${consumo} Quiero más cupo de IA.`;
+  // Misma moneda que el medidor (%): nada de US$ en lo que ve el coach.
+  const consumo = b ? ` Este mes: ${b.analyses} análisis, el ${Math.round(b.pct)} % de mi IA.` : '';
+  return `Hola, uso la pizarra de SportMaps${label ? ` con ${label}` : ''} y se me acabó la IA del mes.${consumo} Quiero una recarga de ${rechargeOfferOf(b).label}.`;
 }
 
 const rivalIndex = (k: string) => Number(k.slice(RIVAL_KEY_PREFIX.length)) || 0;

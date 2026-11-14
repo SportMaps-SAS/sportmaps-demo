@@ -105,6 +105,7 @@ test('admin no dueño configura cobros y entrega, y comparte la tienda', async (
     await ctx.close();
 });
 
+// eslint-disable-next-line no-empty-pattern -- Playwright exige desestructurar el 1.er argumento
 test('coach no ve los ajustes de la tienda', async ({}, info) => {
     test.skip(info.project.name !== 'desktop-chrome', 'escenario de escritorio');
     prepararEscuela();

@@ -21,6 +21,13 @@
  * Las rutas usan las etiquetas DEL MENÚ; si el título de la pantalla es
  * distinto se aclara entre paréntesis.
  * Donde un artículo de ayuda contradice al código, este mapa sigue al código.
+ *
+ * 2026-10-27: entrenador, acudiente y deportista pasaron a la V2 (pestañas
+ * abajo + «Más»), derivada de frontend/src/components/{coach,parent,athlete}/v2,
+ * lib/acudienteTabs.ts y components/v2/RutasSegunRol.tsx. La V1 queda en
+ * `vistaAnterior` (la V2 se apaga por flag). Excepción a la regla de arriba:
+ * «Pizarra» (primer ítem de Más > Entrenamiento y botón en Hoy) y el grupo
+ * «Comunicación» (antes «Se usan poco») entran en el paquete del mismo día.
  */
 
 export interface AppMapEntry {
@@ -39,6 +46,14 @@ export interface AppMapRole {
     /** El menú lateral tal como lo ve el usuario, una línea por grupo/ítem. */
     menu: string;
     tareas: AppMapEntry[];
+    /**
+     * Menú de la versión anterior (V1) para los roles con V2 (entrenador,
+     * acudiente, deportista). La V2 está prendida por defecto y se apaga por
+     * flag (VITE_ENTRENADOR_V2 / VITE_ACUDIENTE_V2 / VITE_DEPORTISTA_V2 = false):
+     * el BFF no sabe cuál ve el usuario, así que Mapi responde con la V2 y usa
+     * esto solo si el usuario dice que no ve esas pestañas.
+     */
+    vistaAnterior?: string;
     /** Cosas que suelen pedir y este rol NO puede hacer (y quién sí). */
     noPuede: string[];
 }
@@ -63,6 +78,15 @@ const CONFIG_PERSONAL: AppMapEntry[] = [
         palabrasClave: ['eliminar cuenta', 'borrar cuenta', 'darme de baja'],
     },
 ];
+
+/**
+ * Las mismas tareas de cuenta con la entrada de cada app: en la V2 la
+ * configuración vive en «Más» con otro nombre ("Mi cuenta" del acudiente,
+ * "Mis datos y configuración" del entrenador, "Configuración" del deportista).
+ */
+function configPersonal(entrada: string): AppMapEntry[] {
+    return CONFIG_PERSONAL.map((t) => ({ ...t, pasos: t.pasos.replace(/^Configuración/, entrada) }));
+}
 
 export const APP_MAP: Record<string, AppMapRole> = {
     // ─── Escuela (owner / school / school_admin) ────────────────────────────
@@ -259,7 +283,13 @@ export const APP_MAP: Record<string, AppMapRole> = {
                 modulo: 'sedes_sedes',
             },
             {
-                tarea: 'Instalaciones, reservas y clases de prueba',
+                // Fuente: students/ClasePruebaPanel.tsx, school/CanalesClasePrueba.tsx, payment/ClasesDePruebaDialog.tsx (2026-11-14).
+                tarea: 'Clases de prueba: registrar, ver quién vino, cobrar y pasar a deportista',
+                pasos: 'Deportistas > pestaña "Clase de prueba" (ahí caen también las que agenda el bot de WhatsApp) > "Registrar clase de prueba". Cada fila trae la fecha de la clase y "Asistió" / "No vino". "Completar datos" abre el alta normal y lo pasa a deportista. "Configurar" (solo administración): "Recibir clases de prueba", "Valor de la clase de prueba", canales "En la escuela" y "WhatsApp". Cobrarla: Finanzas > Pagos > "Clases de prueba" > "Registrar pago" > "Guardar pago". El ENTRENADOR la ve en su app en Sesiones > "Semana" y ahí marca "Asistió" / "No vino" y el "Grupo recomendado"; solo ve las de sus equipos: si no le aparece, revisa que esté en "Entrenadores Asignados" del equipo del cupo (Mis Equipos > lápiz "Editar Equipo").',
+                palabrasClave: ['clase de prueba', 'clases de prueba', 'prueba', 'cortesía', 'prospecto', 'entrenador no ve', 'profe no ve'],
+            },
+            {
+                tarea: 'Instalaciones, reservas y agenda de clases de prueba con un entrenador',
                 pasos: 'Sedes e Instalaciones > Instalaciones > pestañas "Instalaciones" ("Agregar Instalación"), "Reservas" (aprobar/reprogramar/cancelar) y "Clases de Prueba" ("Agendar Clase de Prueba").',
                 palabrasClave: ['cancha', 'reserva', 'clase de prueba', 'instalación'],
                 modulo: 'sedes_instalaciones',
@@ -293,188 +323,259 @@ export const APP_MAP: Record<string, AppMapRole> = {
         ],
     },
 
-    // ─── Entrenador de la escuela ───────────────────────────────────────────
+    // ─── Entrenador de la escuela (V2) ──────────────────────────────────────
+    // Fuente: frontend/src/components/coach/v2/* (CoachHomeV2, CoachTeamsV2 y
+    // equipos/*, CoachSessionsV2, CoachAttendanceV2, CoachEvaluateV2,
+    // coachMasModel.ts), lib/acudienteTabs.ts (PESTANAS_ENTRENADOR) y
+    // components/v2/RutasSegunRol.tsx. 2026-10-27: Mapi seguía dando rutas de la
+    // V1 («Asistencias > Supervisión», «Equipos Regulares»).
     coach: {
         rol: 'Entrenador',
         resumen:
-            'Entrenador de una escuela: ve solo los equipos que le asignaron. Si no ve ningún equipo, el administrador debe asignarlo desde "Editar Equipo".',
+            'Entrenador de una escuela: ve solo los equipos que le asignaron. Si no ve ningún equipo ("Todavía no tienes equipos."), el administrador debe asignarlo al equipo. La app del entrenador va por pestañas abajo (en el computador, las mismas en el menú de la izquierda); NO hay menú lateral con secciones.',
         menu: [
-            'Principal: Dashboard · Mis Equipos · Sesiones de Entrenamiento · Mis Planes (disponibilidad y citas; la escuela puede apagarlo) · Mi Dotación · Mis Deportistas · Calendario',
-            'Gestión: Gestión de Rutinas · Asistencias (Supervisión, Encuestas) · Resultados · Reportes · Informe Mensual',
-            'Comunicación: Mensajes · Anuncios · Configuración',
+            'Pestañas: Hoy · Equipos · Sesiones · Asistencia · Más',
+            'Hoy: "Lo que toca ahora" con su botón ("Tomar lista", "Evaluar al equipo" o "Preparar el entreno de mañana"), botón "Pizarra", "Plan de hoy", "Pendientes" (Evaluar · Publicar · Convocar · "Más tarde")',
+            'Equipos: "Mis equipos" > toca el equipo > pestañas "Deportistas" · "Partidos y convocatorias" · "Evaluar"',
+            'Sesiones: "Hoy" · "Semana" (aquí salen las clases de prueba asignadas) · "Plan del mes"',
+            'Asistencia: "Tomar lista" · "Historial"',
+            'Más: Mi trabajo (Agenda y citas, Calendario, Informe mensual, Informes del entreno) · Entrenamiento (Pizarra, Rutinas, Mi dotación, Salud del equipo) · Comunicación (Mensajes, Anuncios, Encuestas) · Ayuda (Escribirle a la escuela, Preguntarle a Mapi, Centro de ayuda) · Cuenta (Notificaciones, Mis datos y configuración, Mi perfil, Cambiar de escuela o rol, Cerrar sesión)',
         ].join('\n'),
+        vistaAnterior:
+            'Menú lateral: Dashboard · Mis Equipos · Sesiones de Entrenamiento · Mis Planes · Mi Dotación · Mis Deportistas · Calendario; Gestión: Gestión de Rutinas · Asistencias (Supervisión, Encuestas) · Resultados · Reportes · Informe Mensual; Comunicación: Mensajes · Anuncios · Configuración. Asistencia: Asistencias > Supervisión > el equipo en "Equipos Regulares" > "Guardar asistencia". Editar equipo: Mis Equipos > lápiz "Editar Equipo" > "Guardar Cambios". Evaluar: Sesiones de Entrenamiento > Roster > "Evaluar Lote". (La ve quien entra como entrenador con una cuenta de escuela.)',
         tareas: [
             {
-                tarea: 'Editar un equipo (cambiar el nombre)',
-                pasos: 'Mis Equipos > ícono lápiz "Editar Equipo" en la fila del equipo (en vista de tarjetas: "Gestionar / Editar") > cambia "Nombre del Equipo" > "Guardar Cambios".',
-                palabrasClave: ['editar equipo', 'renombrar', 'cambiar nombre del equipo'],
-                modulo: 'gestion_deportiva_equipos_planes',
-            },
-            {
-                tarea: 'Agregar o quitar deportistas de mi equipo',
-                pasos: 'Mis Equipos > ícono "Gestionar Deportistas" > ventana "Inscribir Deportistas" > busca > "Inscribir" o "Remover".',
-                palabrasClave: ['agregar al equipo', 'inscribir', 'quitar del equipo'],
-                modulo: 'gestion_deportiva_equipos_planes',
-            },
-            {
                 tarea: 'Tomar asistencia',
-                pasos: 'Asistencias > Supervisión (pantalla "Asistencias") > toca el equipo en "Equipos Regulares" > marca Presente / Ausente / Tarde / Excusado (o "✅ Todos presentes") > "Guardar asistencia" > opcional "Finalizar sesión". Para un día anterior usa "Día de la lista" (hasta 7 días atrás).',
-                palabrasClave: ['asistencia', 'lista', 'pasar lista', 'faltas'],
+                pasos: 'Pestaña Asistencia > "Tomar lista" > el equipo sale solo (para otro: "Cambiar") > todos arrancan en "Vino": toca al que no vino para pasarlo a Faltó → Excusa → Tarde > "Guardar lista" > "Cerrar y evaluar" (cierra la lista, a las familias de los que vinieron les llega la encuesta del entreno, y abre la evaluación; si no se cierra, se cierra sola a las 11:55 p. m.). Para ayer: selector "Hoy" / "Ayer" (solo si la escuela lo permite; más atrás no se puede). Sin señal, "Guardar en el teléfono": sube sola cuando vuelva.',
+                palabrasClave: ['asistencia', 'lista', 'pasar lista', 'faltas', 'tomar lista', 'supervisión'],
+                articulo: 'tomar-asistencia-coach',
+            },
+            {
+                tarea: 'Corregir una lista ya guardada',
+                pasos: 'Asistencia > "Historial" > "Corregir" en el entreno (se puede hasta el día siguiente; después la corrige la escuela). Una lista cerrada se abre con "Reabrir para corregir".',
+                palabrasClave: ['corregir asistencia', 'me equivoqué', 'cambiar asistencia', 'reabrir'],
                 articulo: 'tomar-asistencia-coach',
             },
             {
                 tarea: 'Asistencia escaneando el carnet (QR)',
-                pasos: 'Asistencias > Supervisión > "Escanear carnet" > apunta la cámara al QR del carnet. Solo marca Presente y solo para hoy.',
+                pasos: 'Asistencia > "Tomar lista" > "Escanear carnets en la entrada" > apunta la cámara al QR del carnet. Marca presente; escanear dos veces no duplica.',
                 palabrasClave: ['escanear', 'qr', 'carnet', 'check-in'],
                 articulo: 'tomar-asistencia-coach',
             },
             {
-                tarea: 'Crear una sesión de entrenamiento',
-                pasos: 'Sesiones de Entrenamiento (la pantalla dice "Métricas y Rendimiento") > elige tu equipo en "Selecciona tu equipo" > "Crear Sesión" > "Crear Sesión". Si el equipo tiene un mesociclo activo, la sesión se crea desde el día dentro del mesociclo ("Crear sesión").',
-                palabrasClave: ['sesión', 'entrenamiento', 'planificar clase'],
+                tarea: 'Planillas de asistencia en papel',
+                pasos: 'Asistencia > "Historial" > aviso "N planillas de papel por revisar" > "Revisar".',
+                palabrasClave: ['planilla', 'papel', 'foto de la lista'],
+            },
+            {
+                tarea: 'Evaluar el entreno (cómo le fue a cada uno)',
+                pasos: '"Cerrar y evaluar" en Asistencia después de guardar (o el pendiente "Evaluar" de Hoy, o Equipos > el equipo > "Evaluar" > "Evaluar"; si la lista sigue abierta, "Cerrar la lista y evaluar") > todos arrancan en "Normal": toca "Bien" o "Le costó" (o "A todos: Bien") > opcional "Nota para las familias (opcional)" > "Guardar evaluación". Las familias reciben «Así le fue hoy».',
+                palabrasClave: ['evaluar', 'evaluación', 'métricas', 'rendimiento', 'calificar', 'notas', 'evaluar lote'],
+                articulo: 'evaluaciones-jugadores',
+            },
+            {
+                tarea: 'Ver los deportistas de mi equipo / escribirle al acudiente / felicitar',
+                pasos: 'Equipos > toca el equipo > "Deportistas" > toca al deportista > "Escribir al acudiente" (WhatsApp), "Felicitar" (> "Enviar a la familia", uno por día) o "Ver ficha".',
+                palabrasClave: ['mis alumnos', 'deportistas', 'ficha', 'acudiente', 'felicitar', 'whatsapp del papá'],
+            },
+            {
+                tarea: 'Agregar, quitar o mover deportistas de un equipo',
+                pasos: 'En la app del entrenador los inscribe la escuela ("La escuela los inscribe"). Si la escuela te dio permiso de crear o editar deportistas: Equipos > equipo > deportista > "Ver ficha" > "Ver todo en Mis deportistas".',
+                palabrasClave: ['agregar al equipo', 'inscribir', 'quitar del equipo', 'mover de equipo', 'nuevo deportista'],
+            },
+            {
+                tarea: 'Editar un equipo (cambiar el nombre, horario o precio)',
+                pasos: 'Desde la app del entrenador no se edita el equipo: lo hace el administrador de la escuela. (Solo en la vista anterior: Mis Equipos > lápiz "Editar Equipo" > "Guardar Cambios".)',
+                palabrasClave: ['editar equipo', 'renombrar', 'cambiar nombre del equipo', 'horario del equipo'],
+            },
+            {
+                tarea: 'Programar un partido, convocar y registrar el resultado',
+                pasos: 'Equipos > el equipo > "Partidos y convocatorias" > "+ Partido" > datos > "Programar y convocar". Convocar: toca a quien no va > "Convocar a N" (o "Convocar y avisar a N familias"). Resultado: "Abrir partido: resultado, evaluación y reporte" (o el partido en "Falta el resultado") > marcador > "Guardar resultado". Lista completa: "Ver todos los partidos".',
+                palabrasClave: ['partido', 'convocar', 'convocatoria', 'resultado', 'marcador', 'goles', 'rival'],
+                articulo: 'partidos-entrenador',
+            },
+            {
+                tarea: 'Pizarra táctica / alineación',
+                pasos: 'Más > Entrenamiento > "Pizarra" (o el botón "Pizarra" en Hoy). Para un partido: Equipos > equipo > "Partidos y convocatorias" > "Armar la alineación en la pizarra".',
+                palabrasClave: ['pizarra', 'alineación', 'táctica', 'formación', 'jugada'],
+            },
+            {
+                tarea: 'Ver o planear una sesión de entrenamiento',
+                pasos: 'Pestaña Sesiones > "Hoy" · "Semana" · "Plan del mes". Planear: "Semana" > el día > "Planear" (abre la planificación completa "Métricas y Rendimiento") > elige el equipo > "Crear Sesión" (si hay mesociclo activo: "Agregar sesión" en el día). En la cancha: "Abrir en la cancha".',
+                palabrasClave: ['sesión', 'entrenamiento', 'planificar clase', 'planear', 'modo cancha'],
+                articulo: 'sesiones-entrenador-v2',
                 modulo: 'gestion_deportiva_entrenamiento_metricas',
             },
             {
-                tarea: 'Crear un mesociclo (periodización)',
-                pasos: 'Sesiones de Entrenamiento > elige el equipo > "Crear Mesociclo" > fechas y semanas > "Crear Mesociclo". Dentro: "Agregar día", "Duplicar semana anterior".',
-                palabrasClave: ['mesociclo', 'periodización', 'microciclo', 'planificación'],
-                modulo: 'gestion_deportiva_entrenamiento_metricas',
+                // Fuente: coach/v2/semana/ClasesPruebaDelDia.tsx y la RPC clases_prueba_semana (2026-11-14).
+                tarea: 'Clases de prueba que me asignaron (verlas, marcar si vino, recomendar grupo)',
+                pasos: 'Pestaña Sesiones > "Semana" > en el día de la clase sale una tarjeta amarilla con campana: "Clase de prueba · hora · equipo", el nombre y si pagó. Después de la clase, ahí mismo: "Asistió" o "No vino" y "Grupo recomendado" > "Elige el grupo" (la escuela lo ve en Deportistas > "Clase de prueba"). Solo salen las de TUS equipos: si no aparece, el cupo quedó en otro equipo o no estás asignado a ese equipo (lo corrige la administración). Si dice "Falta el comprobante: la clase todavía no está confirmada", aún no se marca. El teléfono de la familia no sale: lo tiene la escuela. En la vista anterior (menú lateral) no salen. NO es la lista de Asistencia: quien viene a prueba todavía no está en el equipo.',
+                palabrasClave: ['clase de prueba', 'clases de prueba', 'prueba', 'cortesía', 'prospecto', 'niño nuevo', 'grupo recomendado', 'asistió', 'no vino'],
+                articulo: 'sesiones-entrenador-v2',
             },
             {
-                tarea: 'Evaluar a los deportistas (métricas)',
-                pasos: 'Sesiones de Entrenamiento > elige el equipo > en "Roster": "Evaluar Lote" (todo el equipo) > "Guardar Registro", o "Evaluar" en un deportista. "Evolución" muestra su historial.',
-                palabrasClave: ['evaluar', 'evaluación', 'métricas', 'rendimiento', 'notas'],
+                tarea: 'Plan del mes / mesociclo (periodización)',
+                pasos: 'Sesiones > "Plan del mes" > "Crear el plan" (o "Editar el plan"). En la planificación completa: "Crear Mesociclo" / "Nuevo mesociclo", "Agregar sesión", "Duplicar semana anterior".',
+                palabrasClave: ['mesociclo', 'periodización', 'microciclo', 'planificación', 'plan del mes'],
+                articulo: 'sesiones-entrenador-v2',
                 modulo: 'gestion_deportiva_entrenamiento_metricas',
             },
             {
                 tarea: 'Escribir y publicar el Informe Mensual',
-                pasos: 'Gestión > Informe Mensual > elige mes > "Nota del equipo": elige el equipo, escribe "Cómo le fue al equipo" (mín. 20 caracteres) > "Guardar nota" > "Publicar N informes". El envío a familias lo hace la escuela, salvo que haya elegido "Cada entrenador, lo suyo".',
-                palabrasClave: ['informe mensual', 'nota del equipo', 'reporte a padres'],
+                pasos: 'Equipos > el equipo > "Evaluar" > tarjeta "Informe de {mes}" > "Escribir la nota del equipo" (o "Completar N") > "Publicar los N". También en Más > "Informe mensual". Si la escuela publica, tú solo escribes la nota del equipo.',
+                palabrasClave: ['informe mensual', 'nota del equipo', 'reporte a padres', 'publicar informe'],
                 articulo: 'informe-mensual-coach',
                 modulo: 'gestion_deportiva_informe_mensual',
             },
             {
-                tarea: 'Registrar un resultado de partido',
-                pasos: 'Gestión > Resultados > elige el equipo > "Registrar Resultado".',
-                palabrasClave: ['resultado', 'marcador', 'partido', 'goles'],
+                tarea: 'Informes del entreno (asistencia, nómina, goleadores)',
+                pasos: 'Más > "Informes del entreno" > pestañas Asistencia, Nómina, Resultados, Goleadores > "Exportar PDF". Informe grupal: Equipos > equipo > "Evaluar" > "Informe del entreno para todo el equipo".',
+                palabrasClave: ['reporte', 'goleadores', 'exportar', 'informe del entreno'],
+                articulo: 'reportes-coach',
             },
             {
                 tarea: 'Crear un evento en el calendario',
-                pasos: 'Calendario > "Nuevo Evento" > "Título", "Para quién" (tu equipo), "Tipo de Evento" > "Crear Evento".',
-                palabrasClave: ['calendario', 'evento', 'partido', 'horario'],
+                pasos: 'Más > "Calendario" > "Nuevo Evento" > "Título", "Para quién" (tu equipo), "Tipo de Evento" > "Crear Evento".',
+                palabrasClave: ['calendario', 'evento', 'horario'],
                 modulo: 'gestion_deportiva_calendario',
             },
             {
-                tarea: 'Reportes del equipo',
-                pasos: 'Gestión > Reportes (pantalla "Reportes del Equipo") > pestañas Asistencia, Nómina, Resultados, Goleadores > "Exportar PDF".',
-                palabrasClave: ['reporte', 'goleadores', 'exportar'],
+                tarea: 'Anuncios, mensajes y encuestas',
+                pasos: 'Más > Comunicación > "Anuncios" ("Nuevo Anuncio" > "Enviar Anuncio"), "Mensajes" o "Encuestas".',
+                palabrasClave: ['anuncio', 'aviso', 'comunicado', 'mensajes', 'encuesta'],
             },
             {
-                tarea: 'Enviar un anuncio',
-                pasos: 'Comunicación > Anuncios > "Nuevo Anuncio" > "Enviar Anuncio".',
-                palabrasClave: ['anuncio', 'aviso', 'comunicado'],
+                tarea: 'Rutinas, dotación y salud del equipo',
+                pasos: 'Más > Entrenamiento > "Rutinas" ("NUEVA RUTINA"), "Mi dotación" ("Tomar dotación"; en "Por aceptar": "Acepto" o "Diferencia"; "Devolver") o "Salud del equipo" (quién puede entrenar).',
+                palabrasClave: ['rutina', 'ejercicios', 'dotación', 'implementos', 'balones', 'uniforme', 'salud', 'lesión'],
             },
             {
-                tarea: 'Rutinas',
-                pasos: 'Gestión > Gestión de Rutinas > "NUEVA RUTINA". Pestañas Todas / Personalizadas / Catálogo / Asignadas.',
-                palabrasClave: ['rutina', 'ejercicios', 'gimnasio'],
-                modulo: 'gestion_deportiva_entrenamiento_rutinas',
+                tarea: 'Agenda y citas (disponibilidad)',
+                pasos: 'Más > Mi trabajo > "Agenda y citas" (si la escuela tiene el módulo). Las citas del día salen en Hoy ("Tu agenda").',
+                palabrasClave: ['agenda', 'citas', 'disponibilidad', 'mis planes'],
+                modulo: 'gestion_deportiva_disponibilidad_coach',
             },
-            {
-                tarea: 'Ver mis deportistas',
-                pasos: 'Mis Deportistas (la pantalla dice "Atletas") > "Ver Perfil" en el menú de la fila. Crear o editar deportistas solo si tu escuela te lo permitió.',
-                palabrasClave: ['mis alumnos', 'deportistas', 'perfil del atleta'],
-            },
-            {
-                tarea: 'Dotación (implementos)',
-                pasos: 'Mi Dotación > "Tomar dotación"; en "Por aceptar" > "Acepto" o "Diferencia"; para devolver: "Devolver".',
-                palabrasClave: ['dotación', 'implementos', 'balones', 'uniforme'],
-            },
+            ...configPersonal('Más > "Mis datos y configuración"'),
         ],
         noPuede: [
-            'Eliminar o archivar equipos: el administrador de la escuela.',
-            'Asignarse a un equipo: el administrador, desde "Editar Equipo" > "Entrenadores Asignados".',
-            'Registrar pagos, aprobar comprobantes, crear cobros o ver la cartera: la administración de la escuela (Finanzas > Pagos).',
+            'Crear, editar, archivar o eliminar equipos: el administrador de la escuela.',
+            'Asignarse a un equipo: el administrador, desde el equipo > "Entrenadores Asignados".',
+            'Inscribir o mover deportistas entre equipos: la escuela (salvo que te haya dado permiso en Mis deportistas).',
+            'Registrar pagos, aprobar comprobantes, crear cobros o ver valores de la cartera: la administración (el entrenador solo ve si el deportista está al día).',
             'Invitar entrenadores o administradores, ni gestionar el staff: la administración de la escuela.',
-            'Inactivar / dar de baja deportistas: la administración de la escuela.',
-            'Crear deportistas o subir hojas de matrícula: solo si la escuela lo habilitó para entrenadores.',
+            'Corregir listas de asistencia de más de un día atrás: la escuela.',
             'Crear encuestas de asistencia: la administración de la escuela.',
         ],
     },
 
-    // ─── Acudiente ──────────────────────────────────────────────────────────
+    // ─── Acudiente (V2) ─────────────────────────────────────────────────────
+    // Fuente: frontend/src/components/parent/v2/*, pages/MyChildrenPage.tsx +
+    // parent/v2/hijos/*, pages/ParentMorePage.tsx, AcuPagosV2 + MyPaymentsPage.
     parent: {
         rol: 'Acudiente (padre/madre)',
         resumen:
-            'Ve a sus hijos, paga mensualidades, sube comprobantes y recibe informes. Si la escuela no cobra por SportMaps, "Pagos" no aparece.',
+            'Ve a sus hijos, paga mensualidades, sube comprobantes y recibe informes. La app va por pestañas abajo (en el computador, las mismas en el menú de la izquierda); NO hay menú lateral con secciones. Si la escuela no cobra por SportMaps, Pagos no tiene cobros.',
         menu: [
-            'Principal: Dashboard · Mis Hijos · Calendario Familiar',
-            'Seguimiento: Progreso Deportivo · Asistencias · Pagos · Tienda · Mis compras (Tienda solo si la escuela del usuario tiene su tienda abierta; Mis compras también si ya compró antes)',
-            'Mi Actividad: Mensajes · Mis Inscripciones · Mis Eventos · Mis Citas · Carnets de mis hijos · Mis Constancias · Configuración',
+            'Pestañas: Inicio · Calendario · Hijos · Pagos · Más (Tienda y Mis compras solo si la escuela vende)',
+            'Inicio: saldo con "Pagar $X", próximo entreno, tarjeta de cada hijo con "Ver cómo va", "¿Ya tienes escuela?" (código), invitaciones pendientes',
+            'Calendario: "Próximos" · "Torneos" · "Mes"',
+            'Hijos: elige al hijo > "Progreso" · "Asistencia" · "Informes" · "Ficha y salud"; botón "Agregar hijo"',
+            'Pagos: "Por pagar" · "Pagados"; "Ya transferí: subir el comprobante"',
+            'Más: Mi familia (Inscripciones y planes, Mis eventos y torneos, Carnets, Constancias, Tienda del club, Mis compras, Salud de mis hijos, Mis citas) · Ayuda (Escribirle al club, Mensajes, Centro de ayuda) · Cuenta (Notificaciones, Mi cuenta, Cerrar sesión)',
         ].join('\n'),
+        vistaAnterior:
+            'Menú lateral: Principal (Dashboard, Mis Hijos, Calendario Familiar) · Seguimiento (Progreso Deportivo, Asistencias, Pagos) · Mi Actividad (Mensajes, Mis Inscripciones, Mis Eventos, Mis Citas, Carnets de mis hijos, Mis Constancias, Configuración). Pagos: pestaña "Pendientes" > "PAGAR".',
         tareas: [
             {
                 tarea: 'Pagar una mensualidad en línea',
-                pasos: 'Seguimiento > Pagos (pantalla "Mis Pagos") > pestaña "Pendientes" > "PAGAR" en el cobro > "Pagar online (Wompi)" (o MercadoPago si es lo que tiene la escuela) > "Pagar online $X".',
-                palabrasClave: ['pagar', 'pse', 'tarjeta', 'mensualidad', 'pago en línea'],
+                pasos: 'Pestaña Pagos > "Por pagar" (los cobros ya vienen marcados; desmarca el que quieras dejar) > "Pagar $X" (o "Pagar N cobros") > "Pagar online (Wompi)" (o MercadoPago, según la escuela) > "Pagar online $X". Atajo: Inicio > "Pagar $X".',
+                palabrasClave: ['pagar', 'pse', 'tarjeta', 'mensualidad', 'pago en línea', 'nequi'],
+                articulo: 'acudiente-pagos-comprobante',
             },
             {
                 tarea: 'Subir un comprobante de transferencia / Nequi',
-                pasos: 'Pagos > "PAGAR" en el cobro (o "ABONAR" si es un pago parcial) > "Transferencia / Nequi / Daviplata" > mira los datos de la cuenta > "Sube tu comprobante:" > "Pagar $X". La escuela lo valida después.',
-                palabrasClave: ['comprobante', 'transferencia', 'nequi', 'daviplata', 'subir pago', 'ya pagué'],
+                pasos: 'Pagos > "Ya transferí: subir el comprobante" > elige "Transferencia / Nequi / Daviplata" (revisa que no quede "Pagar online") > mira los datos de la cuenta > "Sube tu comprobante:" > "Pagar $X". Queda "En revisión" hasta que la escuela lo valide.',
+                palabrasClave: ['comprobante', 'transferencia', 'nequi', 'daviplata', 'subir pago', 'ya pagué', 'ya transferí'],
+                articulo: 'acudiente-pagos-comprobante',
             },
             {
-                tarea: 'Ver historial, recibos y facturas',
-                pasos: 'Pagos > pestañas "Todas" / "Aprobadas" > botones "RECIBO" o "FACTURA" en el pago. Estado de cuenta: botón "Estado de cuenta — {nombre}".',
+                tarea: 'Abonar (pago parcial) o adelantar un pago',
+                pasos: 'Solo si la escuela acepta abonos: sube el comprobante por el valor que pagaste (queda como abono), o Pagos > "¿Quieres adelantar un pago? Pagar otro concepto" > el hijo > "Otro Concepto / Abono libre".',
+                palabrasClave: ['abono', 'abonar', 'pago parcial', 'adelantar'],
+            },
+            {
+                tarea: 'Ver recibos, facturas y estado de cuenta',
+                pasos: 'Pagos > "Pagados" > "Recibo" o "Factura" en el pago. Abajo: "Estado de cuenta de {hijo}" > "Imprimir".',
                 palabrasClave: ['recibo', 'factura', 'historial', 'estado de cuenta', 'cuánto debo'],
+                articulo: 'acudiente-pagos-comprobante',
+            },
+            {
+                tarea: 'La escuela pidió aclarar un pago',
+                pasos: 'Pagos > "Por pagar" > el cobro con "Necesita aclaración" > "Responder a la escuela". Si dice "Rechazado: vuelve a subir el comprobante", súbelo otra vez.',
+                palabrasClave: ['aclaración', 'rechazado', 'glosa', 'en revisión'],
             },
             {
                 tarea: 'Aceptar la invitación de la escuela (vincular a mi hijo)',
-                pasos: 'En el Dashboard, aviso "¡Tienes una invitación pendiente!" > "Aceptar Invitación". Si la escuela ya inscribió a tu hijo, no lo registres a mano: acepta la invitación.',
+                pasos: 'Inicio > aviso "¡Tienes una invitación pendiente!" > "Aceptar Invitación" (desde Hijos: "Ir a aceptar la invitación"). Si la escuela ya cargó a tu hijo, no lo registres a mano.',
                 palabrasClave: ['invitación', 'vincular', 'no veo a mi hijo'],
                 articulo: 'inscripcion-padre-paso-a-paso',
             },
             {
-                tarea: 'Registrar un hijo a mano',
-                pasos: 'Mis Hijos (pantalla "Familia SportMaps") > "Registrar Hijo" > llena los pasos ("Siguiente") > "Añadir Hijo".',
-                palabrasClave: ['agregar hijo', 'registrar hijo', 'añadir hijo'],
+                tarea: 'Unirme a mi escuela con el código',
+                pasos: 'Inicio (o Hijos) > "¿Ya tienes escuela?" > escribe el código (ej. CAM-ABUP) > "Buscar mi escuela" > "Sí, es mi escuela" > "Para mi hijo(a)" o "Para mí" > datos > "Enviar solicitud". La escuela asigna la categoría.',
+                palabrasClave: ['código', 'unirme', 'código de la escuela', 'no tengo escuela'],
+                articulo: 'unirse-escuela-con-codigo',
             },
             {
-                tarea: 'Editar los datos de mi hijo o subir documentos',
-                pasos: 'Mis Hijos > tarjeta del hijo > ícono lápiz ("Editar Información del Hijo") o "Subir documentos".',
-                palabrasClave: ['editar hijo', 'documento', 'datos de mi hijo'],
+                tarea: 'Registrar un hijo a mano',
+                pasos: 'Hijos > "Agregar hijo" (si no tienes ninguno: "Registrar a mi hijo") > datos > "Siguiente" > "Añadir Hijo".',
+                palabrasClave: ['agregar hijo', 'registrar hijo', 'añadir hijo'],
+                articulo: 'inscripcion-padre-paso-a-paso',
+            },
+            {
+                tarea: 'Corregir los datos de mi hijo o subir documentos',
+                pasos: 'Hijos > el hijo > "Ficha y salud" > "Corregir un dato" > "Guardar Cambios". Documentos: en la misma pestaña, "Subir" (o "Ver" / "Cambiar").',
+                palabrasClave: ['editar hijo', 'documento', 'datos de mi hijo', 'eps', 'alergias'],
+                articulo: 'acudiente-ficha-del-hijo',
             },
             {
                 tarea: 'Ver el informe mensual',
-                pasos: 'Mis Hijos > tarjeta del hijo > "Informes" > elige el mes > "Descargar PDF".',
-                palabrasClave: ['informe', 'boletín', 'nota del entrenador', 'reporte mensual'],
-            },
-            {
-                tarea: 'Ver el carnet de mi hijo',
-                pasos: 'Mi Actividad > Carnets de mis hijos (pantalla "Mis carnets") > toca el carnet > "Descargar PNG".',
-                palabrasClave: ['carnet', 'credencial', 'qr'],
+                pasos: 'Hijos > el hijo > "Informes" > "Abrir" > "Descargar PDF". Ahí también están los informes de partidos.',
+                palabrasClave: ['informe', 'boletín', 'nota del entrenador', 'reporte mensual', 'informe del partido'],
+                articulo: 'acudiente-ficha-del-hijo',
             },
             {
                 tarea: 'Ver asistencia y progreso',
-                pasos: 'Seguimiento > Asistencias ("Registro de Asistencia") o Seguimiento > Progreso Deportivo. También desde Mis Hijos > "Asistencia" / "Progreso".',
+                pasos: 'Hijos > el hijo > "Asistencia" o "Progreso" (o Inicio > "Ver cómo va").',
                 palabrasClave: ['asistencia', 'faltas', 'progreso', 'evaluaciones'],
+                articulo: 'acudiente-ficha-del-hijo',
             },
             {
-                tarea: 'Ver horarios y eventos',
-                pasos: 'Principal > Calendario Familiar.',
-                palabrasClave: ['horario', 'calendario', 'cuándo entrena', 'partido'],
+                tarea: 'Ver el carnet de mi hijo',
+                pasos: 'Más > "Carnets" (o Hijos > "Ficha y salud" > "Mostrar carnet") > toca el carnet.',
+                palabrasClave: ['carnet', 'credencial', 'qr'],
+            },
+            {
+                tarea: 'Ver horarios, partidos y torneos',
+                pasos: 'Pestaña Calendario > "Próximos" (día por día), "Torneos" ("Inscribir a {hijo}") o "Mes".',
+                palabrasClave: ['horario', 'calendario', 'cuándo entrena', 'partido', 'torneo'],
             },
             {
                 tarea: 'Pedir una constancia',
-                pasos: 'Mi Actividad > Mis Constancias > "Solicitar constancia" > "Solicitar". La escuela la aprueba.',
+                pasos: 'Más > "Constancias" > "Pedir una constancia" > ¿Para quién? y ¿Qué constancia? > "Pedirla". La escuela la aprueba.',
                 palabrasClave: ['constancia', 'certificado'],
             },
             {
                 tarea: 'Pausa por vacaciones o lesión',
-                pasos: 'Mis Hijos > tarjeta del hijo > "Solicitar pausa (vacaciones / lesión)" (si la escuela lo tiene activo).',
+                pasos: 'Hijos > el hijo > "Ficha y salud" > "Solicitar pausa (vacaciones / lesión)" > motivo y meses > "Enviar solicitud" (si la escuela lo tiene activo).',
                 palabrasClave: ['pausa', 'vacaciones', 'lesión', 'congelar'],
             },
-            ...CONFIG_PERSONAL,
+            {
+                tarea: 'Inscripciones, eventos, salud, citas y mensajes',
+                pasos: 'Más > "Inscripciones y planes", "Mis eventos y torneos", "Salud de mis hijos", "Mis citas" o "Mensajes". WhatsApp del club: Más > "Escribirle al club".',
+                palabrasClave: ['inscripciones', 'eventos', 'salud', 'citas', 'mensajes', 'whatsapp'],
+            },
+            ...configPersonal('Más > "Mi cuenta"'),
         ],
         noPuede: [
             'Cambiar el equipo, el horario o el plan del hijo: lo hace la escuela.',
@@ -485,56 +586,76 @@ export const APP_MAP: Record<string, AppMapRole> = {
         ],
     },
 
-    // ─── Atleta ─────────────────────────────────────────────────────────────
+    // ─── Deportista (V2) ────────────────────────────────────────────────────
+    // Fuente: frontend/src/components/athlete/v2/* (AthleteHomeV2,
+    // AthleteTrainingV2, AthleteProgressV2, AthleteCardV2, AthletePaymentsV2,
+    // AthleteMorePage).
     athlete: {
         rol: 'Atleta',
-        resumen: 'Deportista con cuenta propia (adulto o menor con acceso).',
+        resumen: 'Deportista con cuenta propia (adulto o menor con acceso). La app va por pestañas abajo; NO hay menú lateral con secciones. Si es menor, los pagos los maneja el acudiente ("Tus pagos los maneja tu acudiente").',
         menu: [
-            'Principal: Dashboard · Mi Calendario · Mis Pagos',
-            'Mi Rendimiento: Estadísticas · Objetivos · Entrenamientos',
-            'Actividad Deportiva: Mis Inscripciones · Mis Eventos',
-            'Bienestar: Explorar Bienestar · Mis Citas',
-            'Tienda: Tienda · Mis compras (Tienda solo si la escuela del usuario tiene su tienda abierta; Mis compras también si ya compró antes)',
-            'Documentos: Mis Carnets',
-            'Cuenta: Configuración',
+            'Pestañas: Hoy · Entrenos · Progreso · Carnet · Más (Tienda y Mis compras solo si la escuela vende)',
+            'Hoy: saldo con "Pagar $X", próximo entreno con "Mostrar mi carnet", convocatorias ("Voy" / "No puedo ir"), torneos abiertos ("Inscribirme")',
+            'Entrenos: "Próximos" · "Plan del mes" · "Para la casa"; "Ver todos mis entrenamientos"; "Mis torneos y eventos"',
+            'Progreso: "Cómo me fue" · "En qué mejoro" · "Informes" · "Felicitaciones"',
+            'Más: Mi plata (Pagos) · Mi actividad (Inscripciones y planes, Calendario del mes, Torneos y eventos, Mis objetivos, Mis documentos) · Bienestar (Mi salud, Mis citas, Mis medidas) · Tienda (Tienda del club, Mis compras) · Ayuda (Escribirle al club, Centro de ayuda) · Cuenta (Notificaciones, Mis datos, Configuración, Cerrar sesión)',
         ].join('\n'),
+        vistaAnterior:
+            'Menú lateral: Principal (Dashboard, Mi Calendario, Mis Pagos) · Mi Rendimiento (Estadísticas, Objetivos, Entrenamientos) · Actividad Deportiva (Mis Inscripciones, Mis Eventos) · Bienestar · Documentos (Mis Carnets) · Cuenta (Configuración).',
         tareas: [
             {
                 tarea: 'Pagar un cobro o subir comprobante',
-                pasos: 'Mis Pagos > toca el cobro ("Toca para pagar este cobro") > "Pagar online (Wompi)" o "Transferencia / Nequi / Daviplata" con "Sube tu comprobante:". Si no aparece el cobro: "Nuevo Pago" > "Generar pago".',
-                palabrasClave: ['pagar', 'comprobante', 'mensualidad'],
+                pasos: 'Hoy > "Pagar $X", o Más > "Pagos" > "Por pagar" > "Pagar $X" > "Pagar online (Wompi)" o "Transferencia / Nequi / Daviplata" con "Sube tu comprobante:". Si ya transferiste: "Ya transferí: subir el comprobante".',
+                palabrasClave: ['pagar', 'comprobante', 'mensualidad', 'transferencia'],
             },
             {
-                tarea: 'Ver mi estado de cuenta',
-                pasos: 'Mis Pagos > "Mi estado de cuenta".',
-                palabrasClave: ['estado de cuenta', 'cuánto debo'],
+                tarea: 'Ver mi estado de cuenta o mis recibos',
+                pasos: 'Más > "Pagos" > "Pagados" ("Recibo" / "Factura"); abajo "Mi estado de cuenta" y "Descargar mi historial".',
+                palabrasClave: ['estado de cuenta', 'cuánto debo', 'recibo', 'factura'],
             },
             {
                 tarea: 'Ver mi carnet',
-                pasos: 'Documentos > Mis Carnets > toca el carnet > "Descargar PNG".',
+                pasos: 'Pestaña Carnet > toca el código para agrandarlo; "Guardar imagen" o "Compartir". También Hoy > "Mostrar mi carnet".',
                 palabrasClave: ['carnet', 'qr'],
             },
             {
+                tarea: 'Responder una convocatoria',
+                pasos: 'Hoy > tarjeta de la convocatoria > "Voy" o "No puedo ir" ("Cambiar" para corregir). Si eres menor, responde tu acudiente.',
+                palabrasClave: ['convocatoria', 'partido', 'voy', 'no puedo ir'],
+            },
+            {
+                tarea: 'Ver mi progreso e informes',
+                pasos: 'Pestaña Progreso > "Cómo me fue", "En qué mejoro" o "Informes" ("Descargar el informe (PDF)"). Todo: "Ver todas mis estadísticas".',
+                palabrasClave: ['progreso', 'informe', 'estadísticas', 'evaluación'],
+            },
+            {
                 tarea: 'Objetivos personales',
-                pasos: 'Mi Rendimiento > Objetivos > "Nuevo Objetivo" > "Crear objetivo".',
+                pasos: 'Más > "Mis objetivos" > "Nuevo Objetivo" > "Crear objetivo".',
                 palabrasClave: ['objetivo', 'meta'],
             },
             {
                 tarea: 'Registrar una actividad libre',
-                pasos: 'Mi Rendimiento > Entrenamientos > "Actividad libre" > "Guardar".',
+                pasos: 'Entrenos > "Ver todos mis entrenamientos" > "Actividad libre" > datos > "Guardar".',
                 palabrasClave: ['actividad', 'entrené', 'registrar entrenamiento'],
             },
             {
-                tarea: 'Inscribirme a un evento',
-                pasos: 'Desde la página del evento > inscribirse; luego se ve en Actividad Deportiva > Mis Eventos.',
+                tarea: 'Inscribirme a un torneo o evento',
+                pasos: 'Hoy > torneos abiertos > "Inscribirme", o desde la página del evento. Mis inscritos: Entrenos > "Mis torneos y eventos" (o Más > "Torneos y eventos").',
                 palabrasClave: ['evento', 'torneo', 'inscripción'],
                 articulo: 'atleta-inscribirse-evento',
             },
-            ...CONFIG_PERSONAL,
+            {
+                tarea: 'Unirme a mi escuela con el código',
+                pasos: 'Hoy > "¿Ya tienes escuela?" > código > "Buscar mi escuela" > "Sí, es mi escuela" > "Para mí" > "Enviar solicitud".',
+                palabrasClave: ['código', 'unirme', 'no tengo escuela'],
+                articulo: 'unirse-escuela-con-codigo',
+            },
+            ...configPersonal('Más > "Configuración"'),
         ],
         noPuede: [
             'Cambiarse de equipo o de plan: la escuela.',
             'Aprobar sus pagos o cambiar el valor de la mensualidad: la escuela.',
+            'Subir sus documentos todavía (dice "Pronto"); si es menor, los sube el acudiente.',
             'Ver el plan de SportMaps de la escuela (Facturación): solo la administración.',
         ],
     },
@@ -818,7 +939,13 @@ function renderRol(r: AppMapRole, consulta?: string): string {
         ].filter(Boolean).join('\n');
     }
     const noPuede = r.noPuede.map((n) => `- ${n}`).join('\n');
-    return [`### ${r.rol}`, r.resumen, 'MENÚ LATERAL:', r.menu, 'CÓMO HACER:', tareas, 'NO PUEDE (y quién sí):', noPuede].join('\n');
+    const anterior = r.vistaAnterior
+        ? ['VISTA ANTERIOR (úsala SOLO si el usuario dice que no ve esas pestañas):', r.vistaAnterior]
+        : [];
+    return [
+        `### ${r.rol}`, r.resumen, r.vistaAnterior ? 'MENÚ (pestañas de la app):' : 'MENÚ LATERAL:', r.menu,
+        'CÓMO HACER:', tareas, ...anterior, 'NO PUEDE (y quién sí):', noPuede,
+    ].join('\n');
 }
 
 /**

@@ -1,0 +1,339 @@
+1
+00:00:00,009 --> 00:00:06,968
+La app del entrenador está pensada para usarla en la cancha: botones grandes y una sola cosa por pantalla.
+
+2
+00:00:06,968 --> 00:00:12,614
+Lo de cada día está en estas cinco pestañas: Hoy, Equipos, Sesiones, Asistencia y Más.
+
+3
+00:00:12,614 --> 00:00:19,203
+La primera vez que entras te pide tu perfil profesional: se llena una sola vez y tarda un minuto. Luego,
+
+4
+00:00:19,203 --> 00:00:22,434
+Hoy te dice si entrenas hoy, o qué entrenas mañana.
+
+5
+00:00:22,434 --> 00:00:28,052
+Debajo está siempre el botón Pizarra, para dibujar una jugada ya, sin llenar nada.
+
+6
+00:00:28,052 --> 00:00:34,197
+Los días libres ves Tu semana: cuántos entrenos van y cuántos faltan por evaluar, y tu última jugada.
+
+7
+00:00:34,197 --> 00:00:38,578
+Lo pendiente sale en amarillo, con un botón para resolverlo en un toque.
+
+8
+00:00:38,578 --> 00:00:44,145
+En Equipos ves los tuyos, con cuántos deportistas tienen y cuándo es el próximo entreno.
+
+9
+00:00:44,145 --> 00:00:50,074
+Al tocar uno se abre con tres pestañas: Deportistas, Partidos y convocatorias, y Evaluar.
+
+10
+00:00:50,074 --> 00:00:56,869
+La lista trae a cada uno con su acudiente, y si está al día o vencido en pagos. Tú solo ves el estado:
+
+11
+00:00:56,869 --> 00:00:59,134
+los valores los maneja la escuela.
+
+12
+00:00:59,134 --> 00:01:06,780
+Al tocar un deportista salen tres acciones: Escribir al acudiente, que abre WhatsApp; Felicitar; y Ver ficha.
+
+13
+00:01:06,780 --> 00:01:14,789
+Felicitar trae frases listas, o escribes la tuya. Le llega a la familia y, si tiene cuenta, al deportista.
+
+14
+00:01:14,789 --> 00:01:17,434
+Tienes unos segundos para deshacer.
+
+15
+00:01:17,434 --> 00:01:22,901
+Ver ficha muestra acudiente, salud y pagos. Y la pestaña Evaluar trae el informe del mes,
+
+16
+00:01:22,901 --> 00:01:27,753
+los entrenos recientes con lista, y el informe del entreno para todo el equipo.
+
+17
+00:01:29,611 --> 00:01:36,835
+Todo el partido vive en una sola pantalla. En Equipos, abre tu equipo y toca Partidos y convocatorias.
+
+18
+00:01:36,835 --> 00:01:39,597
+Arriba está el botón verde más Partido.
+
+19
+00:01:39,597 --> 00:01:47,512
+Para programar: contra quién, la fecha, si juegan en casa o de visita, la cancha, el tipo, y una nota para las familias,
+
+20
+00:01:47,512 --> 00:01:50,019
+como el uniforme o la hora de llegada.
+
+21
+00:01:50,019 --> 00:01:57,846
+Si la fecha es futura, toca Programar y convocar. El partido queda también en el calendario, y las familias lo ven.
+
+22
+00:01:57,846 --> 00:02:04,474
+Al abrir un partido ves arriba los cinco pasos: Programar, Convocar, Resultado, Evaluar y Reporte.
+
+23
+00:02:04,474 --> 00:02:09,140
+Los que ya hiciste quedan con un chulo, y puedes volver a cualquiera.
+
+24
+00:02:09,140 --> 00:02:15,641
+En Convocar arrancas con todos los del equipo: toca a quien no va para quitarlo. Las familias reciben el aviso,
+
+25
+00:02:15,641 --> 00:02:19,741
+y aquí ves cuántos van, cuántos no van y cuántos faltan por responder.
+
+26
+00:02:19,741 --> 00:02:27,343
+En Resultado, el marcador tiene más y menos para cada lado. Toca a un deportista para anotarle gol, asistencia,
+
+27
+00:02:27,343 --> 00:02:30,356
+amarilla o roja: queda guardado al instante.
+
+28
+00:02:30,356 --> 00:02:35,354
+En Evaluar solo salen los convocados. Pon sus minutos, titular o suplente,
+
+29
+00:02:35,354 --> 00:02:40,758
+califica de uno a cinco los criterios de tu escuela, y deja un comentario corto.
+
+30
+00:02:40,758 --> 00:02:45,065
+En Reporte cuentas cómo fue: resumen, desarrollo y aspectos a mejorar.
+
+31
+00:02:45,065 --> 00:02:49,926
+Con Publicar a las familias se lo mandas a las del equipo. Para que les llegue,
+
+32
+00:02:49,926 --> 00:02:54,787
+la administración tiene que compartir los reportes de partido con las familias.
+
+33
+00:02:54,787 --> 00:03:00,937
+Si un partido ya pasó y nadie anotó el marcador, sale en la lista Falta el resultado: tócalo para cerrarlo.
+
+34
+00:03:00,937 --> 00:03:04,386
+Y la pizarra te deja armar la alineación con los convocados.
+
+35
+00:03:06,206 --> 00:03:15,090
+Sesiones tiene tres vistas: Hoy, con la sesión del día; Semana; y Plan del mes. Arriba a la derecha, el botón Pizarra.
+
+36
+00:03:15,090 --> 00:03:22,090
+En Semana, cada día dice qué equipo entrena y si ya tiene sesión. Planear te lleva a la planificación completa,
+
+37
+00:03:22,090 --> 00:03:24,297
+con el equipo y el día ya elegidos.
+
+38
+00:03:24,297 --> 00:03:30,682
+Al tocar un día con sesión ves sus bloques, y dos botones: Ver sesión, y Abrir en la cancha.
+
+39
+00:03:30,682 --> 00:03:36,405
+Abrir en la cancha la pone en letra grande, un bloque a la vez, con Anterior y Siguiente.
+
+40
+00:03:36,405 --> 00:03:39,170
+La pantalla no se apaga mientras estás ahí.
+
+41
+00:03:39,170 --> 00:03:44,984
+En Plan del mes eliges el equipo, y ves el objetivo del mes, las cuatro semanas con su carga,
+
+42
+00:03:44,984 --> 00:03:46,984
+y el balance de entrenos hechos.
+
+43
+00:03:46,984 --> 00:03:53,697
+Crear o editar sesiones y el plan se hace en la planificación completa, más cómoda en el computador: mesociclos,
+
+44
+00:03:53,697 --> 00:03:58,552
+semanas, y los bloques de cada sesión, que también puedes traer de la biblioteca.
+
+45
+00:03:58,552 --> 00:04:05,680
+El botón Pizarra abre la pizarra libre. Eliges el equipo, y aparece la cancha con Empieza aquí: poner jugadores,
+
+46
+00:04:05,680 --> 00:04:10,262
+dibujar un ejercicio, o pedirle una jugada a la inteligencia artificial.
+
+47
+00:04:10,262 --> 00:04:17,455
+Cuando termines, Guardar te deja dejarla en tus jugadas, o agregarla a una sesión. Y Exportar la saca como imagen,
+
+48
+00:04:17,455 --> 00:04:21,998
+ficha en PDF, o enlace por WhatsApp, sin los nombres de tus deportistas.
+
+49
+00:04:23,839 --> 00:04:32,705
+Asistencia tiene dos pestañas: Tomar lista e Historial. Elige el equipo. Si tienes uno solo, entra directo.
+
+50
+00:04:32,705 --> 00:04:40,239
+Elige el día: Hoy, Ayer, u Otro día. La lista arranca con todos en Vino: solo tocas al que no vino.
+
+51
+00:04:40,239 --> 00:04:47,874
+Cada toque cambia el estado: Vino, Faltó, Excusa, Tarde. Arriba se va contando cuántos vinieron.
+
+52
+00:04:47,874 --> 00:04:53,162
+Toca Guardar lista. Durante unos segundos puedes deshacer. Si no hay internet,
+
+53
+00:04:53,162 --> 00:04:57,839
+la lista se guarda en el teléfono y sube sola cuando vuelva la señal.
+
+54
+00:04:57,839 --> 00:05:06,256
+Cerrar y evaluar deja la lista fija, y te lleva directo a evaluar al equipo. Para evaluar el entreno,
+
+55
+00:05:06,256 --> 00:05:08,090
+ciérrala el mismo día.
+
+56
+00:05:08,090 --> 00:05:15,404
+Solo salen los que vinieron, y todos arrancan en Normal: toca al que le fue Bien o al que Le costó, o usa A todos: Bien.
+
+57
+00:05:15,404 --> 00:05:23,497
+Escribe una nota opcional para las familias, y toca Guardar evaluación. Cuando dice Guardado, las familias reciben:
+
+58
+00:05:23,497 --> 00:05:24,553
+Así le fue hoy.
+
+59
+00:05:24,553 --> 00:05:29,457
+En Historial está el porcentaje del mes, y cada entreno con cuántos vinieron.
+
+60
+00:05:29,457 --> 00:05:34,234
+Los que todavía puedes cambiar tienen Corregir; los más viejos, un candado.
+
+61
+00:05:34,234 --> 00:05:39,941
+Y Escanear carnets en la entrada abre la cámara: cada deportista muestra el código de su carnet,
+
+62
+00:05:39,941 --> 00:05:43,330
+y queda presente al toque. Escanear dos veces no duplica.
+
+63
+00:05:45,172 --> 00:05:50,238
+En Más, Calendario, ves los eventos de tus equipos y de la escuela.
+
+64
+00:05:50,238 --> 00:06:03,368
+Toca Nuevo Evento. Escribe el título, y elige para quién es: un equipo, toda la escuela, o solo para ti.
+
+65
+00:06:03,368 --> 00:06:08,828
+Luego el tipo, la fecha y las horas, la ubicación, y una descripción.
+
+66
+00:06:08,828 --> 00:06:15,161
+Si el tipo es Partido Oficial y es para un equipo, la app pide el rival y si juegan en casa o de visita,
+
+67
+00:06:15,161 --> 00:06:21,676
+y crea el partido completo: aparece en Equipos, Partidos, donde convocas, registras el resultado y evalúas.
+
+68
+00:06:21,676 --> 00:06:29,283
+Al crearlo, queda en el calendario y en Resultados. Toca el día en la cuadrícula: en el detalle aparece Abrir partido,
+
+69
+00:06:29,283 --> 00:06:31,024
+que te lleva a su pantalla.
+
+70
+00:06:31,024 --> 00:06:37,457
+Si el partido se aplaza, cambia la fecha en el paso Programar del partido: el evento del calendario se mueve solo.
+
+71
+00:06:39,139 --> 00:06:46,781
+Si en tu escuela la asistencia a veces se llena en papel, puedes tomarle una foto a la hoja. En Asistencia, Historial,
+
+72
+00:06:46,781 --> 00:06:48,659
+toca Subir planilla en papel.
+
+73
+00:06:48,659 --> 00:06:56,461
+Para subirlas, tu escuela tiene que darte el permiso. Si no lo tiene activo, al tocar Subir planilla te lo avisa.
+
+74
+00:06:56,461 --> 00:07:06,504
+La administración lo prende en Pagos, Config, Permisos: Coaches pueden subir planillas de asistencia,
+
+75
+00:07:06,504 --> 00:07:08,791
+y toca Guardar Cambios.
+
+76
+00:07:08,791 --> 00:07:13,863
+Con el permiso, tomas la foto de la hoja completa, de frente y con buena luz.
+
+77
+00:07:13,863 --> 00:07:21,108
+El sistema lee los nombres y los cruza con la lista del grupo. Nada se guarda solo: alguien revisa y confirma.
+
+78
+00:07:21,108 --> 00:07:28,432
+En la hoja, marca solo a los que vinieron, y deja en blanco a los que faltaron. Una casilla vacía no cuenta como falta.
+
+79
+00:07:28,432 --> 00:07:33,541
+Lo que el sistema no distingue sale como dudosa, para que lo confirmes con la foto.
+
+80
+00:07:33,541 --> 00:07:38,904
+Las hojas de matrícula funcionan igual, si tu escuela lo permite: tú solo tomas la foto,
+
+81
+00:07:38,904 --> 00:07:42,012
+y la escuela revisa los datos y crea al deportista.
+
+82
+00:07:42,012 --> 00:07:49,392
+Lo que usas de vez en cuando está en Más: agenda y citas, calendario, informe mensual, informes del entreno,
+
+83
+00:07:49,392 --> 00:07:50,622
+pizarra y rutinas.
+
+84
+00:07:50,622 --> 00:07:55,917
+También tu dotación, la salud del equipo, mensajes, anuncios y encuestas, y la ayuda.
+
+85
+00:07:55,917 --> 00:08:01,710
+Preguntarle a Mapi te responde al momento, o te pasa con una persona del equipo de SportMaps.

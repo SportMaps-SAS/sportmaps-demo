@@ -11,7 +11,7 @@
 
 export interface EntradaNav { title: string; href?: string; submenu?: EntradaNav[] }
 
-export type GrupoMas = 'Mi trabajo' | 'Entrenamiento' | 'Mis servicios' | 'Se usan poco' | 'Ayuda' | 'Cuenta' | 'Otros';
+export type GrupoMas = 'Mi trabajo' | 'Entrenamiento' | 'Mis servicios' | 'Comunicación' | 'Ayuda' | 'Cuenta' | 'Otros';
 
 export interface FilaMas {
   label: string;
@@ -63,6 +63,7 @@ export const MENU_COACH_CLASICO: { title: string; href: string; moduleKey?: stri
   { title: 'Reportes', href: '/coach-reports' },
   { title: 'Planillas por revisar', href: '/school/attendance-sheets' },
   { title: 'Informe Mensual', href: '/informe-mensual' },
+  { title: 'Mis Evaluaciones', href: '/mis-evaluaciones' },
   { title: 'Mensajes', href: '/messages' },
   { title: 'Anuncios', href: '/announcements' },
   { title: 'Configuración', href: '/settings' },
@@ -76,24 +77,44 @@ export function menuClasicoFiltrado(isModuleEnabled: (key: string) => boolean): 
 /** Rutas de la barra inferior del coach en producción (MobileBottomNav.tsx, caso 'coach'). */
 export const BARRA_COACH_PRODUCCION = ['/dashboard', '/coach-attendance', '/teams', '/messages', '/profile'];
 
+/**
+ * Pizarra libre: dibujar una jugada sin formulario ni sesión (la pantalla
+ * independiente que deja el trabajo de la pizarra). Va SIEMPRE y PRIMERA en
+ * «Entrenamiento».
+ */
+export const RUTA_PIZARRA = '/pizarra';
+
+/**
+ * Rutas que en «Más» quedan dentro de OTRA fila (no se pierden: se llega a lo
+ * mismo). «Mi perfil» repetía los datos de «Configuración» (que ya trae
+ * Perfil, Notificaciones, Seguridad y Privacidad), así que es una sola fila.
+ */
+export const RUTAS_UNIDAS: Record<string, string> = {
+  '/profile': '/settings',
+};
+
 /** Dónde queda cada entrada del menú del coach en «Más», con palabras de la cancha. */
 export const ENTRADAS_MAS: Record<string, { grupo: GrupoMas; label: string; nota?: string }> = {
-  '/coach-plans': { grupo: 'Mi trabajo', label: 'Agenda y citas', nota: 'Tu disponibilidad y tus citas' },
-  '/calendar': { grupo: 'Mi trabajo', label: 'Calendario', nota: 'Entrenos, partidos, torneos' },
-  '/informe-mensual': { grupo: 'Mi trabajo', label: 'Informe mensual' },
-  '/coach-reports': { grupo: 'Mi trabajo', label: 'Informes del entreno' },
+  '/coach-plans': { grupo: 'Mi trabajo', label: 'Agenda y citas', nota: 'Citas 1 a 1' },
+  '/calendar': { grupo: 'Mi trabajo', label: 'Calendario', nota: 'Entrenos, partidos y eventos' },
+  '/informe-mensual': { grupo: 'Mi trabajo', label: 'Informe mensual', nota: 'El de cada deportista' },
+  '/coach-reports': { grupo: 'Mi trabajo', label: 'Informes del entreno', nota: 'Cómo le fue al equipo' },
+  '/mis-evaluaciones': { grupo: 'Mi trabajo', label: 'Mis evaluaciones', nota: 'Cómo te calificó la escuela' },
+  [RUTA_PIZARRA]: { grupo: 'Entrenamiento', label: 'Pizarra', nota: 'Dibuja una jugada' },
   '/school/routines': { grupo: 'Entrenamiento', label: 'Rutinas', nota: 'Biblioteca de la escuela' },
   '/coach/dotacion': { grupo: 'Entrenamiento', label: 'Mi dotación', nota: 'Lo que tienes a cargo' },
   '/disponibilidad-medica': { grupo: 'Entrenamiento', label: 'Salud del equipo', nota: 'Quién puede entrenar' },
-  '/messages': { grupo: 'Se usan poco', label: 'Mensajes' },
-  '/announcements': { grupo: 'Se usan poco', label: 'Anuncios' },
-  '/dashboard/polls': { grupo: 'Se usan poco', label: 'Encuestas' },
+  '/messages': { grupo: 'Comunicación', label: 'Mensajes' },
+  '/announcements': { grupo: 'Comunicación', label: 'Anuncios' },
+  '/dashboard/polls': { grupo: 'Comunicación', label: 'Encuestas' },
   '/notifications': { grupo: 'Cuenta', label: 'Notificaciones' },
-  '/settings': { grupo: 'Cuenta', label: 'Mis datos y configuración' },
-  '/profile': { grupo: 'Cuenta', label: 'Mi perfil' },
+  '/settings': { grupo: 'Cuenta', label: 'Mi perfil y configuración', nota: 'Datos, contraseña y avisos' },
 };
 
-export const ORDEN_GRUPOS: GrupoMas[] = ['Mi trabajo', 'Entrenamiento', 'Mis servicios', 'Se usan poco', 'Otros', 'Ayuda', 'Cuenta'];
+/** Filas que salen aunque el menú no las traiga. */
+const SIEMPRE_EN_MAS = new Set([...BARRA_COACH_PRODUCCION, '/notifications', '/settings', RUTA_PIZARRA]);
+
+export const ORDEN_GRUPOS: GrupoMas[] = ['Mi trabajo', 'Entrenamiento', 'Mis servicios', 'Comunicación', 'Otros', 'Ayuda', 'Cuenta'];
 
 export function aplanar(items: EntradaNav[]): { title: string; href: string }[] {
   const out: { title: string; href: string }[] = [];
@@ -128,12 +149,11 @@ export function armarMas(o: OpcionesMas): { grupo: GrupoMas; filas: FilaMas[] }[
   const delMenu = aplanar(o.menu.flatMap((g) => g.items));
   const enMenu = new Set(delMenu.map((i) => i.href));
   for (const [href, e] of Object.entries(ENTRADAS_MAS)) {
-    // Las de la barra de producción (/messages, /profile) y las de cuenta siempre están.
-    const siempre = BARRA_COACH_PRODUCCION.includes(href) || href === '/notifications';
-    if (enMenu.has(href) || siempre) add(e.grupo, { label: e.label, nota: e.nota, to: href });
+    // Las de la barra de producción (/messages, /profile), la pizarra y las de cuenta siempre están.
+    if (enMenu.has(href) || SIEMPRE_EN_MAS.has(href)) add(e.grupo, { label: e.label, nota: e.nota, to: href });
   }
   for (const i of delMenu) {
-    if (i.href === RUTA_MAS || RUTAS_EN_BARRA_COACH[i.href] || ENTRADAS_MAS[i.href]) continue;
+    if (i.href === RUTA_MAS || RUTAS_EN_BARRA_COACH[i.href] || ENTRADAS_MAS[i.href] || RUTAS_UNIDAS[i.href]) continue;
     add('Otros', { label: i.title, to: i.href });
   }
 

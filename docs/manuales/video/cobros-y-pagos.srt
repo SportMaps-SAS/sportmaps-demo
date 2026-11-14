@@ -1,0 +1,39 @@
+1
+00:00:00,011 --> 00:00:06,587
+Cuando una familia te paga por fuera de la app, en efectivo o por transferencia, lo registras en Cobros y pagos.
+
+2
+00:00:07,056 --> 00:00:09,576
+Ábrelo desde Gestión de Pagos.
+
+3
+00:00:10,040 --> 00:00:15,872
+Elige al atleta. Lo puedes buscar por su nombre, el del acudiente o el teléfono.
+
+4
+00:00:16,738 --> 00:00:21,898
+Abajo aparecen sus cobros pendientes. Marca los que cubre este pago.
+
+5
+00:00:27,019 --> 00:00:36,523
+En cada cobro marcado ves cuánto se paga. Si fue un abono, escribe un valor menor. Y con Descuento, aplicas un descuento con su motivo.
+
+6
+00:00:37,010 --> 00:00:42,746
+A la derecha, en Ya lo pagaron, elige efectivo o transferencia, y la fecha en que te pagaron.
+
+7
+00:00:43,247 --> 00:00:47,543
+La vista previa te dice exactamente qué va a pasar, antes de confirmar.
+
+8
+00:00:48,028 --> 00:00:51,460
+Si todo está bien, confirma con Registrar pago.
+
+9
+00:00:51,930 --> 00:00:59,682
+Listo. Te muestra el resumen de la operación. Los cobros quedan pagados, y la familia recibe la confirmación.
+
+10
+00:01:00,505 --> 00:01:05,209
+Y si necesitas cobrarle lo mismo a todo un equipo, usa el modo Varios atletas.

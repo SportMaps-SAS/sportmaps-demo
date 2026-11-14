@@ -22,7 +22,7 @@ vi.mock('../config/supabase', () => ({
         },
     },
 }));
-vi.mock('../routes/access-adms', () => ({ invalidateMappingCache: vi.fn() }));
+vi.mock('../routes/access-adms', () => ({ invalidateMappingCache: vi.fn(), reprocessPinEventsForHourBank: vi.fn(async () => ({ reprocessed: 0 })) }));
 
 import {
     validateZkPin, prepareZkPinForSignup, assertZkPinAvailable, assignZkPin, ZkPinError,

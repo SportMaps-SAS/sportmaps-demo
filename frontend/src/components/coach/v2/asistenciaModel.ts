@@ -89,6 +89,17 @@ export function resumir(estado: Record<string, EstadoLista>, ids: string[]): Res
   return { vinieron: ids.length - faltaron - excusas, faltaron, excusas, tarde, total: ids.length };
 }
 
+/**
+ * «Lista guardada: vinieron 2, faltaron 1, con excusa 1.» B11: antes sumaba las
+ * excusas a las faltas («faltaron 2»).
+ */
+export function textoListaGuardada(r: Pick<Resumen, 'vinieron' | 'faltaron' | 'excusas'>): string {
+  const partes = [`vinieron ${r.vinieron}`];
+  if (r.faltaron > 0 || r.excusas === 0) partes.push(`faltaron ${r.faltaron}`);
+  if (r.excusas > 0) partes.push(`con excusa ${r.excusas}`);
+  return `Lista guardada: ${partes.join(', ')}.`;
+}
+
 export function textoAyuda(r: Resumen, primerConAviso?: string | null): string {
   const noVinieron = r.faltaron + r.excusas;
   if (r.total === 0) return '';
@@ -148,16 +159,53 @@ export function sumarDias(iso: string, n: number): string {
 }
 
 /**
- * «Se puede corregir hasta el día siguiente»: hoy y ayer, siempre que la escuela
- * deje al menos un día de ventana (school_settings.coach_attendance_retro_days;
- * el BFF lo vuelve a validar). Con ventana 0, solo hoy.
+ * Ventana de corrección del entrenador = la de la escuela
+ * (school_settings.coach_attendance_retro_days, default 7; el BFF valida lo
+ * mismo en resolverFechaDeTrabajo). B9: antes la V2 ofrecía solo hoy y ayer
+ * aunque la escuela dejara 7 días.
  */
+const retroValido = (retroDias: number) => (Number.isFinite(retroDias) && retroDias > 0 ? Math.floor(retroDias) : 0);
+
+/** Primer día que el entrenador todavía puede tomar o corregir. */
+export function fechaMinimaCorregible(hoy: string, retroDias: number): string {
+  return sumarDias(hoy, -retroValido(retroDias));
+}
+
+/** Todos los días corregibles, de hoy hacia atrás (hoy, ayer, …, hoy − retroDias). */
 export function fechasCorregibles(hoy: string, retroDias: number): string[] {
-  return retroDias >= 1 ? [hoy, sumarDias(hoy, -1)] : [hoy];
+  const n = retroValido(retroDias);
+  return Array.from({ length: n + 1 }, (_, i) => sumarDias(hoy, -i));
 }
 
 export function sePuedeCorregir(fecha: string, hoy: string, retroDias: number): boolean {
-  return fechasCorregibles(hoy, retroDias).includes(fecha);
+  return fecha <= hoy && fecha >= fechaMinimaCorregible(hoy, retroDias);
+}
+
+/**
+ * Botones del selector de día: «Hoy», «Ayer» y, si la ventana va más atrás,
+ * «Otro día» (abre un calendario limitado a la ventana).
+ */
+export type OpcionDia = 'hoy' | 'ayer' | 'otro';
+
+export function opcionesDeDia(retroDias: number): OpcionDia[] {
+  const n = retroValido(retroDias);
+  if (n === 0) return ['hoy'];
+  if (n === 1) return ['hoy', 'ayer'];
+  return ['hoy', 'ayer', 'otro'];
+}
+
+export function opcionDeFecha(fecha: string, hoy: string): OpcionDia {
+  if (fecha === hoy) return 'hoy';
+  if (fecha === sumarDias(hoy, -1)) return 'ayer';
+  return 'otro';
+}
+
+/** Texto del historial sobre hasta cuándo se corrige. */
+export function textoVentanaCorreccion(retroDias: number): string {
+  const n = retroValido(retroDias);
+  if (n === 0) return 'Solo se puede tomar la lista del día. Después, la corrige la escuela.';
+  if (n === 1) return 'Se puede corregir hasta el día siguiente. Después, la corrige la escuela.';
+  return `Se puede corregir hasta ${n} días después. Después, la corrige la escuela.`;
 }
 
 /** «jueves 8 de octubre» */

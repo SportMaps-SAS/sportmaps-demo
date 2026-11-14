@@ -58,7 +58,10 @@ export function useStorage() {
         .from(bucket)
         .upload(filePath, file, {
           cacheControl: '3600',
-          upsert: true,
+          // upsert:false a propósito: el nombre ya es único, y el upsert de
+          // Storage (INSERT … ON CONFLICT) exige además una policy SELECT
+          // sobre la ruta. 20261028110434 quitó las SELECT de bucket completo.
+          upsert: false,
           contentType: file.type || undefined,
         });
 

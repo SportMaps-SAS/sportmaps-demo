@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest';
 import {
     ConsultaVirtual, conCortafuegos, envolverCliente, enCortafuegos, instalarGuardiaFetch, urlConEfecto,
-    valorDeColumna, type ContextoCortafuegos,
+    valorDeColumna, aliasesDelSelect, type ContextoCortafuegos,
 } from './cortafuegos-simulacion';
 
 function ctx(memoria: Record<string, any[]> = {}, rpc: ContextoCortafuegos['rpc'] = {}): ContextoCortafuegos {
@@ -72,6 +72,28 @@ describe('ConsultaVirtual', () => {
     it('valorDeColumna entiende -> y ->>', () => {
         expect(valorDeColumna({ payload: { a: { b: 3 } } }, 'payload->a->>b')).toBe('3');
         expect(valorDeColumna({ payload: { a: 1 } }, 'payload->a')).toBe(1);
+    });
+
+    it('los alias del select (`x:payload->>x`, `x:col->a->>b`, `col->>x`) salen como columnas, como en PostgREST', async () => {
+        expect(aliasesDelSelect('direction, step:payload->>step, s:source_detail->servicio_interes->>id, payload->>caption, nombre:name, hijos(id, nombre)'))
+            .toEqual([
+                { alias: 'step', expr: 'payload->>step' },
+                { alias: 's', expr: 'source_detail->servicio_interes->>id' },
+                { alias: 'caption', expr: 'payload->>caption' },
+                { alias: 'nombre', expr: 'name' },
+            ]);
+        expect(aliasesDelSelect('*')).toEqual([]);
+        // Lo que lee `mensajesParaVenta` (whatsapp-venta-contexto.db): la marca de la venta en simulación.
+        const c = ctx({ whatsapp_messages: [
+            { id: '1', conversation_id: 'a', direction: 'outbound', created_at: '2026-11-08T10:00:00.000Z',
+                payload: { venta_servicio_id: 'srv-1', step: 'venta_servicio_pago', n: 5, anidado: { id: 'x' } } },
+        ] });
+        const r: any = await new ConsultaVirtual(c, 'whatsapp_messages')
+            .select('direction, venta_servicio_id:payload->>venta_servicio_id, step:payload->>step, n:payload->>n, campana_id:payload->>campana_id, id_anidado:payload->anidado->>id')
+            .eq('conversation_id', 'a');
+        expect(r.data[0]).toMatchObject({ direction: 'outbound', venta_servicio_id: 'srv-1', step: 'venta_servicio_pago', n: '5', campana_id: null, id_anidado: 'x' });
+        // La memoria no se toca (el alias va solo en la copia que sale).
+        expect(c.memoria.whatsapp_messages[0]).not.toHaveProperty('step');
     });
 });
 

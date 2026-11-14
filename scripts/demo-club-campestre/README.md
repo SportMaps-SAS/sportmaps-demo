@@ -60,11 +60,33 @@ cada corrida**, así que si alguien la cambia, volver a correr `seed.mjs` la res
 | Portería | Puesto Portería Principal | `porteria@demo.sportmaps.co` | `/school/access-control` |
 | Entrenador Tenis | Felipe Torres | `entrenador.tenis@demo.sportmaps.co` | Tenis — Juvenil Competitivo |
 | Entrenadora Natación | Laura Gómez | `entrenadora.natacion@demo.sportmaps.co` | Natación — Infantil |
+| **Entrenador Fútbol** | Andrés Ríos | `entrenador.futbol@demo.sportmaps.co` | Fútbol — Sub-15 y Fútbol — Sub-12 (agregado 2026-10-26, ver abajo) |
 | **Padre estrella** | Mauricio Herrera | `mherrera@demo.sportmaps.co` | Sofía + Tomás |
 | Atleta adulta | Valentina Cruz | `vcruz@demo.sportmaps.co` | Golf + Gimnasio, al día |
 | Atleta en mora | Daniel Ospina | `dospina@demo.sportmaps.co` | Pádel, 2 meses de mora |
 | Externa (torneo) | Alejandra Ruiz | `aruiz.externa@demo.sportmaps.co` | Solo el torneo |
 | Familias de relleno | Rojas, Moreno, Castaño, Jaramillo, Quintero | `familia.<apellido>@demo.sportmaps.co` | Sus hijos |
+
+## Entrenador de fútbol (2026-10-26)
+
+Las funciones de partido con goles, asistencias y tarjetas por jugadora solo salen en equipos de
+fútbol, y los entrenadores del seed eran de tenis y natación. Se agregó **Andrés Ríos**
+(`coach_futbol` en `catalog.mjs`) sin volver a correr el seed completo:
+
+```bash
+node scripts/demo-club-campestre/add-coach.mjs              # coach_futbol (por defecto)
+node scripts/demo-club-campestre/add-coach.mjs coach_futbol --dry-run
+```
+
+`add-coach.mjs` reproduce solo los pasos del seed para ese entrenador (cuenta de auth con
+`Demo2026!` + `profiles` + `school_members` coach + `school_staff` con `coach_auth_id` +
+`teams.coach_id` + `team_coaches` + `offering_coaches`), con los mismos ids deterministas y UPSERT:
+es idempotente y nunca borra. Verifica antes que la escuela sea `is_demo=true`.
+
+Ojo: `teams.coach_id` de Sub-15 y Sub-12 apuntaba a **Camilo Herrera** (`f0000000-…-000000000001`,
+una ficha de `school_staff` sin cuenta); ahora apunta a Andrés. Camilo sigue en `team_coaches`.
+La primera vez que Andrés entra, la app le pide el perfil profesional (ya quedó completo).
+Se usó para probar y documentar el Entrenador V2: `docs/manuales/v2/`.
 
 ## Los tres casos que sostienen la demo
 

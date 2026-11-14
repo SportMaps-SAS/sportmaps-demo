@@ -23,8 +23,9 @@ const CROP_DEFS = {
   'inscritos-vacio.png':  { src: 'a-05-inscritos-vacio.png',  x: 385, y: 100, w: 890, h: 340 },
   'inscritos-gratis.png': { src: 'a-10-inscritos-lista.png',  x: 385, y: 100, w: 890, h: 480 },
   'inscritos-costo.png':  { src: 'b-07-inscritos-lista.png',  x: 385, y: 100, w: 890, h: 480 },
-  'categorias-gratis.png':{ src: 'a-04-categorias.png',       x: 385, y: 100, w: 890, h: 730 },
-  'categorias-costo.png': { src: 'c-07-categorias-fases.png', x: 385, y: 100, w: 890, h: 690 },
+  // Estas dos salen de capture4.mjs (viewport 1600×1000, 2026-10-27).
+  'categorias-gratis.png':{ src: 'a-04-categorias.png',       x: 490, y: 108, w: 876, h: 720 },
+  'categorias-costo.png': { src: 'c-07-categorias-fases.png', x: 490, y: 108, w: 876, h: 750 },
   'aviso-costo.png':      { src: 'b-06-inscrito-con-cobro.png', x: 998, y: 873, w: 384, h: 109 },
   'aviso-gratis.png':     { src: 'a-07-inscrito-aviso.png',   x: 998, y: 873, w: 384, h: 109 },
   'aviso-ya.png':         { src: 'a-08-ya-inscrito.png',      x: 998, y: 900, w: 384, h: 82 },
@@ -106,10 +107,10 @@ function pages(isInternal) {
   );
   pgs.push(
     step(5, 'Agregar la categoría y publicar',
-      p('En <b>Categorías y Precios</b> pulsa <b>Agregar</b>, escribe el nombre (por ejemplo «Sub 12») y guarda. Un torneo gratis no necesita precio; uno con costo ya trae su fase de precio. Luego pulsa <b>Publicar</b>.'),
-      img('categorias-gratis.png', 'Torneo gratis en borrador: una categoría y el botón Publicar. La franja amarilla avisa qué falta.', 440)) +
-    p('Con costo, la pestaña muestra además la <b>fase de precio</b> (nombre, fecha límite, valor):', 'no-shot') +
-    img('categorias-costo.png', 'Torneo con costo: categoría y fase de precio «Inscripción» de $50.000 vigente hasta el cierre.', 400)
+      p('En <b>Categorías y Precios</b> pulsa <b>Agregar</b>. Cada campo dice qué va: <b>Grupo</b> (deja «General»), <b>Categoría</b> (por ejemplo «Sub 12»), <b>Rama</b> y, si quieres, la <b>edad mínima y máxima</b>. Pulsa <b>Guardar categorías y precios</b> y después <b>Publicar</b>. Si el torneo es gratis, la pestaña te lo recuerda: no necesita precio.'),
+      img('categorias-gratis.png', 'Torneo gratis en borrador: una categoría con sus campos y el botón Publicar arriba. La franja amarilla avisa qué falta.', 405)) +
+    p('Con costo, la pestaña muestra además la <b>fase de precio</b>: nombre, <b>válida hasta</b> y <b>valor por atleta</b> (al escribirlo ves el valor en pesos). Guarda antes de publicar.', 'no-shot') +
+    img('categorias-costo.png', 'Torneo con costo: categoría Sub 12 y fase «Inscripción» de $50.000 vigente hasta el 14 de noviembre.', 405)
   );
 
   // ── Cap. 3 (catálogo) ──

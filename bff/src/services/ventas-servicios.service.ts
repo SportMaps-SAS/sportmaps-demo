@@ -16,12 +16,14 @@
  *     ('migracion_pendiente') y el bot sigue como hoy.
  */
 import { supabase } from '../config/supabase';
+import { MOTIVOS_DE_SERVICIO } from './motivos-de-cobro';
 
-export type TipoServicio = 'torneo' | 'viaje' | 'clase_extra' | 'vacacional' | 'otro';
+/** Subconjunto tipado del catálogo único de motivos (motivos-de-cobro.ts) = CHECK `school_tournament_items_kind_chk`. */
+export type TipoServicio = (typeof MOTIVOS_DE_SERVICIO)[number];
 /** Igual a payments.payment_category del cobro que se crea. */
 export type CategoriaServicio = TipoServicio;
 
-export const TIPOS_SERVICIO: readonly TipoServicio[] = ['torneo', 'viaje', 'clase_extra', 'vacacional', 'otro'];
+export const TIPOS_SERVICIO: readonly TipoServicio[] = MOTIVOS_DE_SERVICIO;
 
 export interface ServicioEnVenta {
     id: string;

@@ -206,7 +206,7 @@ const COLUMNAS_LEAD = 'id, full_name, guardian_name, phone, birth_date, notes, s
 export async function listarCortesias(schoolId: string, f: FiltroCortesias = {}, ahora = Date.now()): Promise<ListadoCortesias> {
     const hoy = hoyBogota(ahora);
     let q = supabase.from('school_signup_leads')
-        .select(`${COLUMNAS_LEAD}, school_trial_slots!inner(id, label, slot_date, start_time, end_time, location)`)
+        .select(`${COLUMNAS_LEAD}, school_trial_slots!school_signup_leads_trial_slot_id_fkey!inner(id, label, slot_date, start_time, end_time, location)`)
         .eq('school_id', schoolId)
         .not('trial_slot_id', 'is', null)
         .neq('status', 'discarded');
@@ -227,7 +227,7 @@ export async function listarCortesias(schoolId: string, f: FiltroCortesias = {},
         supabase.from('whatsapp_conversations')
             .select('id, contact_wa_id')
             .eq('school_id', schoolId)
-            .order('last_message_at', { ascending: false })
+            .order('last_message_at', { ascending: false, nullsFirst: false })
             .limit(1000),
     ]);
     if (conSlot.error) throw new Error(conSlot.error.message);
@@ -326,9 +326,13 @@ function frontend(): string {
     return (process.env.FRONTEND_URL || 'https://app.sportmaps.co').replace(/\/$/, '');
 }
 
-/** Todo lo que dice el aviso. Pura: se prueba sin base. */
-export function contenidoAviso(a: AvisoCortesia, contacto: string | null = null): ContenidoAviso {
-    const titulo = TITULO[a.tipo];
+/**
+ * Todo lo que dice el aviso. Pura: se prueba sin base. `nombreClase`: el de la
+ * escuela (B3, «clase de prueba»); por defecto, los títulos de siempre.
+ */
+export function contenidoAviso(a: AvisoCortesia, contacto: string | null = null, nombreClase = 'clase de cortesía'): ContenidoAviso {
+    const titulo = nombreClase === 'clase de cortesía' ? TITULO[a.tipo]
+        : TITULO[a.tipo].replace(/clase de cortesía/g, nombreClase).replace(/Clase de cortesía/g, nombreClase[0].toUpperCase() + nombreClase.slice(1));
     const nombre = a.nombre?.trim() || contacto?.trim() || 'Un prospecto';
     const edad = typeof a.edad === 'number' ? a.edad : null;
     const quien = paraQuien(edad, a.acudiente);
@@ -381,14 +385,16 @@ export async function avisarCortesia(a: AvisoCortesia): Promise<{ inApp: number;
     try {
         const { data: conv } = await supabase.from('whatsapp_conversations')
             .select('contact_name').eq('id', a.conversationId).maybeSingle();
-        const c = contenidoAviso(a, (conv as any)?.contact_name ?? null);
+        const { textosClaseDeEscuela } = await import('./textos-clase-prueba');
+        const c = contenidoAviso(a, (conv as any)?.contact_name ?? null, (await textosClaseDeEscuela(a.schoolId)).nombre);
         const clave = claveAviso(a);
         const ids = await destinatariosIds(a.schoolId);
         // Canal de plataforma (WhatsApp personal de la dueña con opt-in). Flag apagado = nada.
         avisarCortesiaPorPlataforma({ schoolId: a.schoolId, clave, titulo: c.titulo, cuerpo: c.cuerpo });
 
         await Promise.allSettled(ids.map(async (uid) => {
-            const { error } = await supabase.from('notifications').insert({
+            // upsert + ignoreDuplicates = ON CONFLICT DO NOTHING: el dedupe por id no deja un ERROR en el log de Postgres.
+            const { data: entro, error } = await supabase.from('notifications').upsert({
                 id: uuidDeClave(`${clave}:${uid}`),
                 user_id: uid,
                 school_id: a.schoolId,
@@ -401,9 +407,9 @@ export async function avisarCortesia(a: AvisoCortesia): Promise<{ inApp: number;
                     tipo: 'whatsapp_clase_cortesia', evento: a.tipo, school_id: a.schoolId,
                     conversation_id: a.conversationId, lead_id: a.leadId ?? null, wa_me: c.waMe,
                 },
-            });
-            // 23505 = otro BFF ya avisó a este usuario por este evento: no se repite el push.
-            if (error && (error as any).code === '23505') return;
+            }, { onConflict: 'id', ignoreDuplicates: true }).select('id');
+            // Sin fila = otro BFF ya avisó a este usuario por este evento: no se repite el push.
+            if (!error && !(entro ?? []).length) return;
             if (error) console.warn('[cortesia-aviso] in-app no entró; se empuja igual', { err: error.message });
             else salida.inApp++;
             const r = await sendToUser(uid, {

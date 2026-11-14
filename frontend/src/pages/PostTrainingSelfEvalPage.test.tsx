@@ -43,9 +43,9 @@ const baseCtx = {
   yaRespondieron: 1,
 };
 
-function renderPage() {
+function renderPage(url = '/post-entreno/s1?child_id=h-tomas') {
   return render(
-    <MemoryRouter initialEntries={['/post-entreno/s1?child_id=h-tomas']}>
+    <MemoryRouter initialEntries={[url]}>
       <Routes>
         <Route path="/post-entreno/:sessionId" element={<PostTrainingSelfEvalPage />} />
       </Routes>
@@ -116,6 +116,26 @@ describe('PostTrainingSelfEvalPage (V2)', () => {
       p_child_id: null,
       p_user_id: 'u-atleta',
       p_answers: { rpe_borg: 0, task_comprehension: 4, self_effort_pct: 60, satisfaction: 1 },
+    });
+    expect(await screen.findByText('¡Listo! Tu profe ya lo ve.')).toBeInTheDocument();
+  });
+
+  it('el deportista que responde por su ficha vinculada manda p_unregistered_athlete_id', async () => {
+    m.ctx = { ...baseCtx, subjectType: 'unregistered', subjectId: 'ficha-1', childName: null };
+    renderPage('/post-entreno/s1?ficha=ficha-1');
+    expect(screen.getByRole('heading', { name: '¿Cómo te fue en el entreno, Mauricio?' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Empezar' }));
+    fireEvent.click(screen.getByRole('radio', { name: /^5\s*Duro/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Los entendí y los hice bien' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Me esforcé mucho/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Feliz y conforme con lo que hice' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Terminar' }));
+    expect(m.rpc).toHaveBeenCalledWith('submit_post_training_self_eval', {
+      p_session_id: 's1',
+      p_child_id: null,
+      p_user_id: null,
+      p_answers: { rpe_borg: 5, task_comprehension: 1, self_effort_pct: 90, satisfaction: 3 },
+      p_unregistered_athlete_id: 'ficha-1',
     });
     expect(await screen.findByText('¡Listo! Tu profe ya lo ve.')).toBeInTheDocument();
   });

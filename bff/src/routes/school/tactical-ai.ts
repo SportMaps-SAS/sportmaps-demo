@@ -4,6 +4,8 @@
  *   POST /api/v1/school/tactical/analyze      analiza la jugada (cupo + caché)
  *   GET  /api/v1/school/tactical/ai-balance   «Te queda el 60 % de tu IA este mes»
  *                                             (?sport= para el «Quiero más»)
+ *   POST /api/v1/school/tactical/ai-feedback  «Útil / No útil» de una sugerencia y
+ *                                             si terminó en «Guardar como nueva jugada»
  *
  * Cupo por costo real por usuario y techo por escuela (§6, decisión
  * 2026-10-14, migración 20261014155445). Agotado → 402 needs_more con el
@@ -21,6 +23,8 @@ import { supabase } from '../../config/supabase';
 import { requireAuth, requireRole, AuthenticatedRequest } from '../../middlewares/authMiddleware';
 import { isAiSport, parseAnalyzeInput } from './tacticalAiShapes';
 import { analyzeTacticalPlay, getAiBalance, requestMoreMessage } from '../../services/tactical-ai.service';
+import { parseFeedbackInput, recordSuggestionFeedback } from '../../services/tactical-ai-feedback';
+import { userClient } from '../../utils/userClient';
 
 const router = Router();
 
@@ -93,6 +97,27 @@ router.get(
       return res.json({ ...balance, request_more_message });
     } catch (err: any) {
       req.log?.error({ err }, 'school/tactical/ai-balance unhandled error');
+      return res.status(500).json({ error: 'Error interno del servidor.' });
+    }
+  },
+);
+
+// POST /api/v1/school/tactical/ai-feedback
+// Body: { analysis_ref, sport, kind: 'contraataque'|'variante', index, verdict?: 'util'|'no_util'|null, saved?: true }
+router.post(
+  '/tactical/ai-feedback',
+  requireAuth,
+  requireRole(...TACTICAL_EDIT_ROLES),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { errors, input } = parseFeedbackInput(req.body);
+      if (!input) return res.status(422).json({ error: 'Valoración inválida.', details: errors });
+      const out = await recordSuggestionFeedback({
+        service: supabase, asUser: userClient(req), schoolId: req.schoolId, userId: req.user.id, input, log: req.log as any,
+      });
+      return res.status(out.status).json(out.body);
+    } catch (err: any) {
+      req.log?.error({ err }, 'school/tactical/ai-feedback unhandled error');
       return res.status(500).json({ error: 'Error interno del servidor.' });
     }
   },

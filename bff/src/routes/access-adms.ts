@@ -681,7 +681,16 @@ async function trackHourBankVisit(
   if (!settings.enabled) return;
 
   const { data: periodId } = await supabase.rpc('get_or_open_hour_bank_period', { p_enrollment_id: enrollmentId });
-  if (!periodId) return; // esta inscripción no tiene un plan de horas (offering_plans.included_minutes_per_period NULL)
+  if (!periodId) {
+    // Esta inscripción no tiene un plan de horas (offering_plans.included_minutes_per_period
+    // NULL). Si TIENE plan, es un plan sin horas en una escuela con banco: antes
+    // pasaba en silencio (Airi, Dreamers, 2026-10-21: inscrita en PGP4x1 sin
+    // horas, entró y no se descontó nada sin que nadie se enterara).
+    if (direction === 'entry') {
+      await notifyOwnerPlanWithoutHoursOnce(schoolId, enrollmentId, athleteName, occurredAt);
+    }
+    return;
+  }
 
   const { data: openVisit } = await supabase
     .from('hour_bank_visits')
@@ -758,6 +767,150 @@ async function trackHourBankVisit(
     }
     // La visita queda 'open' — el cierre con billing pasa en la próxima entrada
     // fuera de la ventana de gracia, o en el cron de auto-cierre (F5).
+  }
+}
+
+// Un aviso al owner por inscripción y por día (mismo patrón que
+// notifyOwnerDayNotAllowedOnce): entró con un plan que no tiene horas.
+async function notifyOwnerPlanWithoutHoursOnce(
+  schoolId: string,
+  enrollmentId: string,
+  athleteName: string,
+  occurredAt: string
+): Promise<void> {
+  const { data: enr } = await supabase
+    .from('enrollments')
+    .select('offering_plan_id, offering_plans(name, included_minutes_per_period)')
+    .eq('id', enrollmentId)
+    .maybeSingle();
+  const plan = (enr as any)?.offering_plans;
+  if (!enr?.offering_plan_id || !plan || plan.included_minutes_per_period != null) return;
+
+  const { data: school } = await supabase.from('schools').select('owner_id').eq('id', schoolId).maybeSingle();
+  if (!school?.owner_id) return;
+
+  const date = new Date(occurredAt).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+  const { data: existing } = await supabase
+    .from('notifications')
+    .select('id')
+    .eq('school_id', schoolId)
+    .eq('user_id', school.owner_id)
+    .eq('type', 'hour_bank_plan_without_hours')
+    .contains('data', { enrollment_id: enrollmentId, date })
+    .limit(1);
+  if (existing && existing.length > 0) return;
+
+  await supabase.from('notifications').insert({
+    user_id:   school.owner_id,
+    school_id: schoolId,
+    type:      'hour_bank_plan_without_hours',
+    category:  'access',
+    title:     '⏱️ Plan sin horas configuradas',
+    message:   `${athleteName} entró, pero su plan ${plan.name} no tiene horas configuradas: esta visita no descuenta del banco de horas. Configura las horas del plan o cambia su plan.`,
+    link:      '/school/access-control',
+    data:      { enrollment_id: enrollmentId, date },
+  });
+}
+
+// ─── Reproceso al asociar un PIN ──────────────────────────────────────────────
+// Las marcaciones de un PIN que aún no estaba asociado quedan como unknown_user y
+// el banco de horas nunca las ve. Caso real (Silvana, Dreamers, 2026-10-21):
+// entró 15:51, el PIN se asoció 16:38, salió 20:06 → la salida quedó asociada
+// pero sin entrada, y la visita se perdió. Al asociar, se reprocesan por el MISMO
+// camino que en vivo (trackHourBankVisit), acotado para no tocar nada facturado:
+//   · desde que existe la inscripción y dentro del periodo vigente
+//     (trackHourBankVisit factura contra el periodo de HOY);
+//   · antes de la primera visita que ya tenga la inscripción en ese rango;
+//   · solo eventos que no cerraron ni abrieron ningún segmento.
+// Si la persona tiene una visita abierta (está adentro) no se reprocesa nada:
+// mezclar marcaciones viejas con la visita en curso la rompería. Al final corre
+// el auto-cierre para que ninguna visita pasada quede 'open' (una abierta haría
+// ignorar la próxima entrada real). Nunca lanza: asociar el PIN no debe fallar
+// por esto.
+export async function reprocessPinEventsForHourBank(
+  schoolId: string,
+  pin: number
+): Promise<{ reprocessed: number; reason?: string }> {
+  try {
+    const settings = await getHourBankSettings(schoolId);
+    if (!settings.enabled) return { reprocessed: 0, reason: 'banco_de_horas_inactivo' };
+
+    // 'exit' nunca niega: devuelve identidad, inscripción activa y nombre.
+    const who = await validateAccess(schoolId, String(pin), 'exit');
+    if (!who.enrollmentId) return { reprocessed: 0, reason: 'sin_inscripcion_activa' };
+    const enrollmentId = who.enrollmentId;
+
+    const { data: periodId } = await supabase.rpc('get_or_open_hour_bank_period', { p_enrollment_id: enrollmentId });
+    if (!periodId) return { reprocessed: 0, reason: 'sin_plan_de_horas' };
+
+    const [{ data: enr }, { data: period }, { data: visits }] = await Promise.all([
+      supabase.from('enrollments').select('created_at').eq('id', enrollmentId).maybeSingle(),
+      supabase.from('hour_bank_periods').select('period_start').eq('id', periodId).maybeSingle(),
+      supabase.from('hour_bank_visits').select('started_at, status').eq('enrollment_id', enrollmentId),
+    ]);
+    if (!enr || !period) return { reprocessed: 0, reason: 'sin_datos' };
+    if ((visits ?? []).some((v: any) => v.status === 'open')) return { reprocessed: 0, reason: 'visita_abierta' };
+
+    const periodStartMs = new Date(`${period.period_start}T00:00:00-05:00`).getTime();
+    const fromMs = Math.max(periodStartMs, new Date(enr.created_at).getTime());
+    const firstVisitAfterMs = (visits ?? [])
+      .map((v: any) => new Date(v.started_at).getTime())
+      .filter((t) => t >= fromMs)
+      .sort((a, b) => a - b)[0];
+    const from  = new Date(fromMs).toISOString();
+    const until = new Date(firstVisitAfterMs ?? Date.now()).toISOString();
+
+    const { data: events } = await supabase
+      .from('access_events')
+      .select('id, direction, occurred_at, child_id, user_id, unregistered_athlete_id')
+      .eq('school_id', schoolId)
+      .eq('zk_user_id', pin)
+      .gte('occurred_at', from)
+      .lt('occurred_at', until)
+      .order('occurred_at', { ascending: true });
+    if (!events || events.length === 0) return { reprocessed: 0 };
+
+    const ids = events.map((e: any) => e.id);
+    const { data: used } = await supabase
+      .from('hour_bank_visit_segments')
+      .select('entry_event_id, exit_event_id')
+      .or(`entry_event_id.in.(${ids.join(',')}),exit_event_id.in.(${ids.join(',')})`);
+    const usedIds = new Set<string>();
+    for (const s of used ?? []) {
+      if ((s as any).entry_event_id) usedIds.add((s as any).entry_event_id);
+      if ((s as any).exit_event_id) usedIds.add((s as any).exit_event_id);
+    }
+    const pending = events.filter((e: any) => !usedIds.has(e.id));
+    if (pending.length === 0) return { reprocessed: 0 };
+
+    // Las marcaciones sin identidad pasan a nombre de la persona (el reporte de
+    // ingresos la muestra); access_granted/denial_reason quedan como se decidieron.
+    const unknownIds = pending
+      .filter((e: any) => !e.child_id && !e.user_id && !e.unregistered_athlete_id)
+      .map((e: any) => e.id);
+    if (unknownIds.length > 0) {
+      await supabase
+        .from('access_events')
+        .update({
+          user_id:                 who.userId ?? null,
+          unregistered_athlete_id: who.unregisteredAthleteId ?? null,
+          child_id:                who.childId ?? null,
+        })
+        .in('id', unknownIds);
+    }
+
+    for (const e of pending as any[]) {
+      await trackHourBankVisit(schoolId, enrollmentId, e.direction, e.occurred_at, e.id, who.userName ?? 'Atleta');
+    }
+
+    const { error: closeError } = await supabase.rpc('auto_close_stale_hour_bank_visits');
+    if (closeError) console.error('[ADMS] reproceso de PIN: auto-cierre falló:', closeError.message);
+
+    console.log(`[ADMS] reproceso de PIN ${pin}: ${pending.length} marcación(es) reprocesadas para el banco de horas`);
+    return { reprocessed: pending.length };
+  } catch (err) {
+    console.error(`[ADMS] reproceso de PIN ${pin}: error`, err);
+    return { reprocessed: 0, reason: 'error' };
   }
 }
 

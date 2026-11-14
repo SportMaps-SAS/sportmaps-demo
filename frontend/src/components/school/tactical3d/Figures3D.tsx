@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import * as THREE from 'three';
 import {
-  ballFor, figureScale, isCompactAspect, toMeters, visibleLabels,
+  ballFor, figureBoost, figureScale, labelScreenSize, shortTag, toMeters, visibleLabels,
   type Court3D, type LabelRect, type PlayerVisual,
 } from '@/lib/school/tactical3d';
 import { ballTexture, labelTexture } from './textures';
@@ -20,8 +20,8 @@ import { setFigureOpacity, useFigureGeometries, type FigureGeometries, type Live
 
 
 /** Alto del cartel en pantalla: fracción del alto de la vista (sprites sin
- *  atenuación por distancia: se leen igual de cerca y de lejos). */
-const LABEL_SCREEN = 0.034;
+ *  atenuación por distancia: se leen igual de cerca y de lejos). Más chico en
+ *  el celular vertical: labelScreenSize. */
 
 /** Una figura. `userData.fade` = materiales a los que se les baja la opacidad. */
 export function PlayerFigure({
@@ -35,34 +35,40 @@ export function PlayerFigure({
   groupRef?: (g: THREE.Group | null) => void;
   name?: string;
 }) {
-  // Celular vertical: solo el dorsal (si no hay, la etiqueta), para que los
-  // carteles no se monten unos sobre otros.
-  const compact = useThree((st) => isCompactAspect(st.size.width / Math.max(1, st.size.height)));
+  // Cartel corto (dorsal o iniciales) en todos; la etiqueta completa solo en el
+  // jugador tocado: desde arriba los carteles largos se montaban unos sobre otros.
+  const aspect = useThree((st) => st.size.width / Math.max(1, st.size.height));
+  const boost = figureBoost(aspect);
+  const labelScreen = labelScreenSize(aspect);
+  const tag = shortTag(visual);
   const r = useResources(() => {
-    const text = compact && visual.number ? '' : visual.label;
-    const lbl = visual.number || text ? labelTexture(visual.number, text, visual.color, visual.numberColor) : null;
+    const lbl = selected && visual.label
+      ? labelTexture(visual.number, visual.label, visual.color, visual.numberColor)
+      : tag ? labelTexture(tag, '', visual.color, visual.numberColor) : null;
     return {
       jersey: track(new THREE.MeshStandardMaterial({ color: visual.color, roughness: 0.6, transparent: true })),
       shorts: track(new THREE.MeshStandardMaterial({ color: visual.shorts ?? '#0f172a', roughness: 0.7, transparent: true })),
       skin: track(new THREE.MeshStandardMaterial({ color: '#e0b48f', roughness: 0.8, transparent: true })),
-      shadow: track(new THREE.MeshBasicMaterial({ color: '#000000', transparent: true, opacity: 0.3, depthWrite: false })),
+      shadow: track(new THREE.MeshBasicMaterial({ color: '#000000', transparent: true, opacity: boost > 1 ? 0.5 : 0.3, depthWrite: false })),
       ring: track(new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, side: THREE.DoubleSide, depthWrite: false })),
       ...(lbl ? {
         labelTex: track(lbl.texture),
         label: track(new THREE.SpriteMaterial({ map: lbl.texture, sizeAttenuation: false, depthTest: false, transparent: true })),
       } : {}),
     };
-  }, [visual.color, visual.number, visual.label, visual.shorts, visual.numberColor, compact]);
+  }, [visual.color, visual.number, visual.label, visual.shorts, visual.numberColor, selected, tag, boost]);
 
   const labelImg = r.labelTex?.image as HTMLCanvasElement | undefined;
-  const aspect = labelImg ? labelImg.width / labelImg.height : 1;
+  const labelAspect = labelImg ? labelImg.width / labelImg.height : 1;
+  const s = scale * boost;
   const local = useRef<THREE.Group | null>(null);
   useEffect(() => {
     const g = local.current;
     if (!g) return;
     g.userData.fade = [r.jersey, r.shorts, r.skin, r.label].filter(Boolean);
     g.userData.shadow = r.shadow;
-  }, [r]);
+    g.userData.shadowBase = boost > 1 ? 0.5 : 0.3;
+  }, [r, boost]);
 
   const click = (e: ThreeEvent<MouseEvent>) => {
     if (!onSelect || e.delta > 8) return;
@@ -72,7 +78,7 @@ export function PlayerFigure({
 
   return (
     <group ref={(g) => { local.current = g; groupRef?.(g); }} name={name} onClick={onSelect ? click : undefined}>
-      <group scale={scale}>
+      <group scale={s}>
         <mesh geometry={geos.shadow} material={r.shadow} rotation-x={-Math.PI / 2} position-y={0.015} renderOrder={1} />
         {selected && <mesh geometry={geos.ring} material={r.ring} rotation-x={-Math.PI / 2} position-y={0.02} renderOrder={2} />}
         <mesh geometry={geos.leg} material={r.skin} position={[-0.1, 0.26, 0]} />
@@ -84,8 +90,8 @@ export function PlayerFigure({
       {r.label && (
         <sprite
           material={r.label}
-          position-y={2.05 * scale}
-          scale={[LABEL_SCREEN * aspect, LABEL_SCREEN, 1]}
+          position-y={2.05 * s}
+          scale={[labelScreen * labelAspect, labelScreen, 1]}
           center={new THREE.Vector2(0.5, 0)}
           renderOrder={10}
           userData={{ label: true }}

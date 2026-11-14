@@ -152,7 +152,7 @@ describe('desconocido (prospecto) pregunta por la clase de cortesía', () => {
         expect(h.chatWithTools).not.toHaveBeenCalled();
         expect(borradores()).toHaveLength(1);
         const b = borradores()[0].row;
-        expect(b.proposed_text).toContain('asistente automático');
+        expect(b.proposed_text).toContain('asistente virtual');
         expect(b.proposed_text).toContain('*Sub-15* — sábado 12 de enero');
         expect(b.tool_context).toMatchObject({
             step: 'desconocido_tema_escolar', flujo: 'clase_cortesia', paso_cortesia: 'elegir_franja',

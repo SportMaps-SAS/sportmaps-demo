@@ -375,7 +375,7 @@ RLS habilitada en ~50 tablas. Las policies **delegan toda decisión a funciones 
   > Dreamers) cuyo registro de conexiones vive en memoria de **una sola instancia** — con más de una
   > instancia de Render el aviso `wake` solo llegaría a los bridges conectados a la que atiende el request.
   > Es un requisito a resolver antes de escalar horizontalmente (hoy es una instancia por ambiente).
-- **Supabase Cloud = DB + Edge Functions.** 8 funciones Deno (analyze-receipt, payment-reminders-cron, run-recurring-charges, send-email, send-push-notification, wompi-sign, wompi-webhook, platform-admin-hook). Migraciones aplicadas **manualmente** (no hay job de deploy de DB en CI; único guard: `scripts/migrations.mjs check` sobre el ledger versionado `supabase/migrations_ledger.json` — ver [docs/migrations-workflow.md](migrations-workflow.md)).
+- **Supabase Cloud = DB + Edge Functions.** 7 funciones Deno en el repo (analyze-receipt, payment-reminders-cron, run-recurring-charges, send-email, send-push-notification, wompi-sign, platform-admin-hook). `wompi-webhook` se retiró el 2026-10-27: el webhook de Wompi lo recibe el BFF (`bff/src/routes/wompi.ts`). `send-push-notification` sigue desplegada y en uso (trigger legacy) hasta que el despachador del BFF entregue de verdad; ver docs/migraciones-pendientes-2026-10-27/LEEME.md. Migraciones aplicadas **manualmente** (no hay job de deploy de DB en CI; único guard: `scripts/migrations.mjs check` sobre el ledger versionado `supabase/migrations_ledger.json` — ver [docs/migrations-workflow.md](migrations-workflow.md)).
 
 ### 5.2 Build frontend
 

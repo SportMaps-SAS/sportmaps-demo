@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Minus, Plus, Info } from 'lucide-react';
+import { Minus, Plus, Info, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -48,6 +48,15 @@ export function tarifaDeHorasUsadas(s?: ChargeSuggestions | null): EnrollmentOpt
     return lista.find((e) => e.is_primary && e.hourly_rate != null) ?? lista.find((e) => e.hourly_rate != null) ?? null;
 }
 
+/** Horas que le quedan en el banco este mes (todas sus inscripciones con banco); null si no se sabe. */
+export function horasDisponiblesEnBanco(s?: ChargeSuggestions | null): number | null {
+    const saldos = inscripcionesConHoras(s)
+        .map((e) => e.available_minutes)
+        .filter((m): m is number => typeof m === 'number');
+    if (saldos.length === 0) return null;
+    return Math.max(0, saldos.reduce((a, b) => a + b, 0)) / 60;
+}
+
 /** «Ya las usó»: solo se cobra; no hay horas que sumar ni inscripción a la que sumarlas. Arranca en 1 hora con su valor. */
 export function borradorDeHorasUsadas(s?: ChargeSuggestions | null, horas = 1): Partial<NewLineDraft> {
     const plan = tarifaDeHorasUsadas(s);
@@ -81,6 +90,7 @@ export function HorasAdicionalesLine({ line: l, suggestions, onPatch }: Props) {
     const tarifa = enr?.hourly_rate ?? null;
     const planUsadas = tarifaDeHorasUsadas(suggestions);
     const tarifaUsadas = planUsadas?.hourly_rate ?? null;
+    const horasQueQuedan = horasDisponiblesEnBanco(suggestions);
 
     // Sin banco de horas no hay nada que sumar: la línea pasa sola a «Ya las usó» (cobro libre) y limpia
     // cualquier resto de una venta (inscripción o horas del atleta anterior).
@@ -149,6 +159,18 @@ export function HorasAdicionalesLine({ line: l, suggestions, onPatch }: Props) {
 
             {usadas && (
                 <>
+                    {horasQueQuedan != null && horasQueQuedan > 0 && (
+                        <p
+                            className="text-xs rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200 px-2.5 py-1.5 flex items-start gap-1.5"
+                            data-testid="cyp-horas-usadas-saldo"
+                        >
+                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span>
+                                Este atleta todavía tiene <b>{formatHoras(horasQueQuedan)} h</b> disponibles en su banco este mes.
+                                «Ya las usó» es para cobrar horas <b>por encima</b> del plan y no descuenta del banco: si son horas de su plan, no las cobres.
+                            </span>
+                        </p>
+                    )}
                     {excedentes.length > 0 && (
                         <Select
                             value={l.overage_charge_id ?? undefined}

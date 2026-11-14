@@ -8,7 +8,7 @@
 // Usuarios, Logs) a cualquier admin de club (ROADMAP UX-8).
 //
 // Reglas:
-//   1. Los roles de plataforma (y personal_trainer) del PERFIL siempre ganan.
+//   1. Los roles de plataforma (y personal_trainer / facility_manager) del PERFIL siempre ganan.
 //   2. Una membresía 'admin' se presenta como 'school_admin' (menú de club).
 //   3. Cualquier otro rol de membresía se respeta tal cual.
 //   4. Sin membresía, vale el rol del perfil.
@@ -18,7 +18,12 @@ export function roleForNavigation(
   membershipRole: string | null | undefined,
 ): string | undefined {
   const esPlataforma = profileRole === 'admin' || profileRole === 'super_admin';
-  if (esPlataforma || profileRole === 'personal_trainer') return profileRole ?? undefined;
+  // facility_manager (dueño de espacios, school_type 'venue'): su membresía es
+  // 'owner' de la escuela-venue, que daría el menú de academia. El rol del
+  // PERFIL manda para que vea el menú corto de canchas.
+  if (esPlataforma || profileRole === 'personal_trainer' || profileRole === 'facility_manager') {
+    return profileRole ?? undefined;
+  }
   if (membershipRole === 'admin') return 'school_admin';
   return membershipRole || profileRole || undefined;
 }

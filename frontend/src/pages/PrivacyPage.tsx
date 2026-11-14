@@ -17,7 +17,7 @@ export default function PrivacyPage() {
             </div>
             <h1 className="text-3xl font-bold tracking-tight">Politica de Privacidad y Aviso de Privacidad</h1>
           </div>
-          <p className="text-muted-foreground text-sm">Tratamiento de Datos Personales · Ultima actualizacion: 4 de octubre de 2026 · Version 2.2 · Ley 1581 de 2012 (Colombia)</p>
+          <p className="text-muted-foreground text-sm">Tratamiento de Datos Personales · Ultima actualizacion: 29 de octubre de 2026 · Version 2.3 · Ley 1581 de 2012 (Colombia)</p>
         </div>
       </div>
 
@@ -326,7 +326,7 @@ export default function PrivacyPage() {
                 <li><strong className="text-foreground">Render:</strong> alojamiento de nuestros servicios de backend.</li>
                 <li><strong className="text-foreground">Google Firebase:</strong> notificaciones push a la aplicación móvil.</li>
                 <li><strong className="text-foreground">Meta Platforms:</strong> mensajería a través de la WhatsApp Business Platform, cuando la escuela habilita ese canal.</li>
-                <li><strong className="text-foreground">Google (Gemini), Groq y OpenAI:</strong> proveedores de inteligencia artificial para la lectura automática de comprobantes de pago y hojas de matrícula, y para Mapi, el asistente automático con IA de los canales de atención. Usamos varios proveedores con conmutación automática para garantizar la disponibilidad del servicio. El detalle de qué datos reciben está en la Sección 8.2.</li>
+                <li><strong className="text-foreground">Anthropic (Claude), Google (Gemini), Groq y OpenAI:</strong> proveedores de inteligencia artificial para la lectura automática de comprobantes de pago y hojas de matrícula, y para Mapi, el asistente automático con IA de los canales de atención. Usamos varios proveedores con conmutación automática para garantizar la disponibilidad del servicio. El detalle de qué datos reciben está en la Sección 8.2.</li>
               </ul>
             </div>
 
@@ -393,8 +393,10 @@ export default function PrivacyPage() {
               Fuente de verdad técnica: bff/src/services/llm.service.ts (chat),
               ocr.service.ts (comprobantes) y enrollment-ocr.service.ts (matrículas).
               Si cambia un proveedor allá, cambia este texto.
-              Lo de "no entrenar" se afirma SOLO de Groq y OpenAI porque sus términos
-              de API lo garantizan (verificado 2026-10-04). De Google NO se afirma: sus
+              Lo de "no entrenar" se afirma SOLO de Anthropic, Groq y OpenAI porque sus
+              términos de API lo garantizan (Groq y OpenAI verificados 2026-10-04;
+              Anthropic agregado en la v2.3, 2026-10-29: es el proveedor principal del
+              bot desde octubre y la v2.2 no lo nombraba — auditoría D-01). De Google NO se afirma: sus
               términos solo lo garantizan en la modalidad PAGA de la API de Gemini y,
               al redactar esto, no estaba confirmado que la cuenta de SportMaps lo sea. */}
           <h3 className="text-base font-semibold text-foreground mt-6 mb-2">8.2. Mapi, el Asistente Automático con Inteligencia Artificial</h3>
@@ -449,17 +451,19 @@ export default function PrivacyPage() {
 
             <p className="font-medium text-foreground">Proveedores de IA y procesamiento fuera de Colombia</p>
             <p>
-              Usamos <strong className="text-foreground">Google (Gemini)</strong>, <strong className="text-foreground">Groq</strong> y{' '}
-              <strong className="text-foreground">OpenAI</strong>, con conmutación automática: si uno no está disponible, la
-              solicitud pasa al siguiente. Estos proveedores actúan como <strong className="text-foreground">Encargados del
+              Usamos <strong className="text-foreground">Anthropic (Claude)</strong>, <strong className="text-foreground">Google (Gemini)</strong>,{' '}
+              <strong className="text-foreground">Groq</strong> y <strong className="text-foreground">OpenAI</strong>, con conmutación automática: si uno no
+              está disponible, la solicitud pasa al siguiente. Mapi también responde a personas que todavía no
+              tienen cuenta y escriben al WhatsApp de una escuela para pedir información; en su primer mensaje
+              se presenta como asistente automático y enlaza esta Política. Estos proveedores actúan como <strong className="text-foreground">Encargados del
               Tratamiento</strong> y procesan los datos en servidores ubicados <strong className="text-foreground">fuera de
               Colombia</strong>, principalmente en los Estados Unidos. Esto constituye una transmisión internacional
               de datos, regulada en la Sección 14.
             </p>
             <p>
-              Groq y OpenAI establecen en los términos de sus servicios de API que no usan los datos que reciben
-              para entrenar ni mejorar sus modelos, salvo que el cliente lo autorice; SportMaps no ha dado esa
-              autorización. Cada proveedor puede conservar temporalmente las solicitudes según sus propios
+              Anthropic, Groq y OpenAI establecen en los términos de sus servicios de API que no usan los datos
+              que reciben para entrenar ni mejorar sus modelos, salvo que el cliente lo autorice; SportMaps no ha
+              dado esa autorización. Cada proveedor puede conservar temporalmente las solicitudes según sus propios
               términos para detectar abusos y garantizar la operación del servicio (Groq y OpenAI declaran hasta
               30 días).
             </p>
@@ -619,7 +623,7 @@ export default function PrivacyPage() {
         <section>
           <h2 className="text-lg font-semibold text-foreground mb-3">14. Transferencia y Transmisión Internacional de Datos</h2>
           <p>
-            Los proveedores de infraestructura y de procesamiento de SportMaps (Supabase, Vercel, Render, Resend, Sentry, Google, Meta Platforms, OpenAI y Groq) tienen servidores ubicados fuera del territorio colombiano. Los datos se tratan en los <strong className="text-foreground">Estados Unidos</strong> y en la <strong className="text-foreground">Unión Europea</strong>. Al aceptar esta Política, el Usuario autoriza expresamente la <strong className="text-foreground">transferencia y/o transmisión internacional</strong> de sus datos personales a estos proveedores, para las finalidades descritas en la Sección 8.
+            Los proveedores de infraestructura y de procesamiento de SportMaps (Supabase, Vercel, Render, Resend, Sentry, Anthropic, Google, Meta Platforms, OpenAI y Groq) tienen servidores ubicados fuera del territorio colombiano. Los datos se tratan en los <strong className="text-foreground">Estados Unidos</strong> y en la <strong className="text-foreground">Unión Europea</strong>. Al aceptar esta Política, el Usuario autoriza expresamente la <strong className="text-foreground">transferencia y/o transmisión internacional</strong> de sus datos personales a estos proveedores, para las finalidades descritas en la Sección 8.
           </p>
           <p className="mt-2">
             De conformidad con el artículo 26 del Decreto 1377 de 2013, SportMaps garantiza que los países de destino cuentan con niveles adecuados de protección de datos o, en su defecto, suscribe acuerdos contractuales que aseguran estándares equivalentes a los exigidos por la legislación colombiana. Cuando el país de destino no figura entre los declarados con nivel adecuado de protección por la Superintendencia de Industria y Comercio, la transferencia se ampara en la autorización expresa e informada del titular y en los términos contractuales aceptados con cada encargado, que restringen el uso de los datos a la prestación del servicio contratado. Lo que cada proveedor de inteligencia artificial garantiza sobre el entrenamiento de modelos y la conservación de los datos se detalla en la Sección 8.2.
@@ -663,7 +667,7 @@ export default function PrivacyPage() {
 
         <div className="border-t pt-6 text-center text-xs text-muted-foreground">
           © {new Date().getFullYear()} SportMaps Technology S.A.S. · Política de Privacidad conforme a la Ley 1581 de 2012 · Colombia<br />
-          Versión 2.2 · 4 de octubre de 2026
+          Versión 2.3 · 29 de octubre de 2026
         </div>
       </div>
     </div>

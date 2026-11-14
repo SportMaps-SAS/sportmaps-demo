@@ -1,0 +1,47 @@
+1
+00:00:00,004 --> 00:00:06,389
+Como entrenador, en Mis Equipos ves solo las categorías que tienes a cargo, con cuántos deportistas lleva cada una.
+
+2
+00:00:06,848 --> 00:00:11,768
+Para sumar deportistas, toca el botón Gestionar Deportistas de la categoría.
+
+3
+00:00:12,258 --> 00:00:18,305
+Arriba están los inscritos, luego los pendientes de pago, y abajo los deportistas que puedes inscribir.
+
+4
+00:00:18,770 --> 00:00:22,538
+Con el buscador encuentras a cualquiera por su nombre o su apellido.
+
+5
+00:00:22,996 --> 00:00:28,348
+Toca Inscribir. Queda registrado de una vez: no hay que guardar nada al final.
+
+6
+00:00:28,802 --> 00:00:39,074
+Fíjate que a la derecha dice Inscrito, sin botón. De entrada, sacar a un deportista lo hace la administración, porque cancelar su inscripción anula sus cobros pendientes.
+
+7
+00:00:39,533 --> 00:00:44,501
+Pero la escuela te puede dar ese permiso. Así lo prende un administrador.
+
+8
+00:00:44,955 --> 00:00:52,419
+En Pagos, pestaña Config, la tarjeta Permisos tiene el interruptor: Coaches pueden remover deportistas de sus equipos.
+
+9
+00:00:52,876 --> 00:00:58,803
+Lo prende, y guarda con Guardar Cambios. Vale para todos los entrenadores de la escuela.
+
+10
+00:00:59,270 --> 00:01:04,430
+De vuelta como entrenador, la misma ventana ahora trae el botón Remover en cada inscrito.
+
+11
+00:01:09,879 --> 00:01:19,815
+Al tocarlo, la inscripción se cancela al instante, sin pedir confirmación, y el deportista vuelve a los disponibles. Por eso, revisa bien el nombre antes.
+
+12
+00:01:20,276 --> 00:01:27,548
+El permiso cubre solo las categorías que entrenas. Las inscripciones a planes de pago siguen siendo de la administración.

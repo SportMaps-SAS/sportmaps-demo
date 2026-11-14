@@ -13,7 +13,7 @@ import { Permission } from '@/lib/permissions';
 type UserRole =
     | 'athlete' | 'parent' | 'coach' | 'school' | 'school_admin'
     | 'super_admin' | 'wellness_professional' | 'store_owner'
-    | 'admin' | 'organizer' | 'reporter' | 'personal_trainer' | 'accountant';
+    | 'admin' | 'organizer' | 'reporter' | 'personal_trainer' | 'accountant' | 'facility_manager';
 
 export interface RoutePermission {
     /** Roles que pueden acceder. Si vacío, cualquier autenticado puede acceder. */
@@ -41,6 +41,7 @@ export const PUBLIC_ROUTES: Record<string, RoutePermission> = {
     '/payment-result': { public: true, description: 'Resultado de pago (webhook)' },
     '/pagos/confirmacion': { public: true, description: 'Confirmación de pago' },
     '/p/:token': { public: true, description: 'Enlace sin login de un cobro (botón de cobranza por WhatsApp)' },
+    '/jugada/:token': { public: true, description: 'Jugada de la pizarra compartida por enlace (solo lectura, sin nombres de deportistas)' },
     '/unauthorized': { public: true, description: 'Página de acceso denegado' },
     '/events': { public: true, description: 'Mapa de eventos públicos' },
     '/event/:slug': { public: true, description: 'Página pública de evento' },
@@ -94,7 +95,10 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
     '/coach-attendance': { allowedRoles: ['coach'], requiredPermission: 'calendar:edit', description: 'Asistencias (coach)' },
     '/coach-attendance/scan': { allowedRoles: ['coach'], requiredPermission: 'calendar:edit', description: 'Check-in por QR de carnet (coach)' },
     '/coach-plans': { allowedRoles: ['coach'], description: 'Planes del coach' },
-    '/results': { allowedRoles: ['coach'], description: 'Resultados' },
+    '/pizarra': { allowedRoles: ['coach', 'school', 'school_admin', 'admin', 'super_admin'], description: 'Pizarra táctica libre (sin sesión): Mis jugadas o agregar a una sesión' },
+    '/results': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Resultados (partidos de la escuela)' },
+    '/partido-en-vivo/:matchId': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Partido en vivo: pantalla de cancha (flag live_match_enabled)' },
+    '/partidos/:matchId': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Pantalla del partido: programar, convocar, resultado, evaluar y reporte' },
     '/training-plans': { allowedRoles: ['coach', 'school', 'admin', 'school_admin', 'super_admin'], description: 'Métricas y rendimiento' },
     '/coach-reports': { allowedRoles: ['coach'], requiredPermission: 'reports:create', description: 'Reportes (coach)' },
     '/evaluations': { allowedRoles: ['coach'], description: 'Evaluaciones' },
@@ -106,8 +110,8 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
 
     // ── School / Admin ──
     '/school/enroll/:eventId': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Inscripción a evento' },
-    '/school/delegations': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Delegaciones de escuela' },
-    '/school/delegations/:id': { allowedRoles: ['school', 'admin', 'school_admin'], description: 'Detalle de delegación' },
+    '/school/delegations': { allowedRoles: ['school', 'admin', 'school_admin', 'organizer'], description: 'Delegaciones de escuela' },
+    '/school/delegations/:id': { allowedRoles: ['school', 'admin', 'school_admin', 'organizer'], description: 'Detalle de delegación' },
     '/school/routines': { allowedRoles: ['school', 'school_admin', 'admin', 'super_admin', 'coach'], description: 'Biblioteca de rutinas del gimnasio' },
     '/students': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'coach'], requiredPermission: 'students:view', description: 'Gestión de deportistas' },
     '/invitations': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'coach'], description: 'Gestión de invitaciones' },
@@ -117,6 +121,7 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
     '/attendance-supervision': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Supervisión de asistencias' },
     '/attendance-history': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Histórico de asistencias' },
     '/seguimiento-deportivo': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Seguimiento deportivo (actividad de entrenadores)' },
+    '/mis-evaluaciones': { allowedRoles: ['coach'], description: 'Evaluaciones publicadas del entrenador' },
     '/results-overview': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Resumen de resultados' },
     '/finances': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], requiredPermission: 'finances:view', description: 'Finanzas' },
     '/accounting': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'accountant'], requiredPermission: 'finances:view', description: 'Contabilidad' },
@@ -130,7 +135,12 @@ export const ROLE_ROUTES: Record<string, RoutePermission> = {
     '/whatsapp': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Canal de WhatsApp' },
     '/message-templates': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Plantillas de mensaje' },
     '/school-reports': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], requiredPermission: 'reports:view', description: 'Reportes escolares' },
-    '/facilities': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Instalaciones' },
+    '/facilities': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin', 'facility_manager'], description: 'Instalaciones' },
+    // ── Dueño de espacios (facility_manager, school_type 'venue') ──
+    '/venue/onboarding': { allowedRoles: ['facility_manager'], description: 'Onboarding del dueño de espacios' },
+    '/venue/dashboard': { allowedRoles: ['facility_manager'], description: 'Inicio del dueño de espacios' },
+    '/venue/reservas': { allowedRoles: ['facility_manager'], description: 'Reservas de las instalaciones' },
+    '/venue/cobros': { allowedRoles: ['facility_manager'], description: 'Forma de cobro del dueño de espacios' },
     '/branches': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], description: 'Gestión de sedes' },
     '/school-config': { allowedRoles: ['school', 'admin', 'school_admin', 'super_admin'], requiredPermission: 'settings:edit', description: 'Configuración de escuela' },
     '/pickup': { allowedRoles: ['school', 'admin'], description: 'Monitor de salida segura' },

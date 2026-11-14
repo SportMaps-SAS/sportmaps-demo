@@ -13,7 +13,7 @@
  */
 import { useMemo, useState } from 'react';
 import { saveAs } from 'file-saver';
-import { ChevronDown, Download, FileText, Film, Image as ImageIcon, Loader2, Share2 } from 'lucide-react';
+import { ChevronDown, Download, FileText, Film, Image as ImageIcon, Link2, Loader2, Plus, Share2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -28,6 +28,7 @@ import { toast } from '@/hooks/use-toast';
 import type { TacticalExportInput } from '@/lib/export/tacticalExport';
 // Liviano (sin React ni jsPDF): solo decide si sale video o GIF para rotular el ítem.
 import { animationLabel, pickAnimationKind, type TacticalAnimationKind } from '@/lib/export/tacticalAnimationFormat';
+import { exportAvailability } from '@/lib/school/tacticalBoardUx';
 
 export type TacticalExportEvent = 'export_png' | 'export_pdf' | 'export_video' | 'share';
 
@@ -44,6 +45,12 @@ export interface TacticalExportMenuProps {
   className?: string;
   /** En el toolbar de la pizarra: mismo alto que los demás botones (h-8). */
   compact?: boolean;
+  /** ¿Hay algo en la cancha? Sin nada, PNG, PDF y video quedan apagados con el motivo. */
+  hasContent?: boolean;
+  /** «+ Cuadro» de la pizarra: con un solo cuadro, el ítem de video lleva ahí. */
+  onAddFrame?: () => void;
+  /** «Compartir enlace»: guarda la jugada y manda por WhatsApp un link de solo lectura. */
+  onShareLink?: () => void;
 }
 
 type Busy = null | 'png' | 'pdf' | 'video' | 'share';
@@ -54,9 +61,12 @@ function errorMessage(e: unknown): string {
   return e instanceof Error && e.message ? e.message : 'Inténtalo de nuevo.';
 }
 
-export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, className, animationKind, compact }: TacticalExportMenuProps) {
+export function TacticalExportMenu({
+  getInput, frameCount, onEvent, disabled, className, animationKind, compact, hasContent = true, onAddFrame, onShareLink,
+}: TacticalExportMenuProps) {
   const [busy, setBusy] = useState<Busy>(null);
-  const videoReady = frameCount >= 2;
+  const avail = exportAvailability({ hasContent, frameCount, canAddFrame: !!onAddFrame });
+  const videoReady = avail.video.enabled;
   const kind = useMemo<TacticalAnimationKind>(() => animationKind ?? pickAnimationKind(), [animationKind]);
   const animLabel = animationLabel(kind);
   const animNoun = kind === 'video' ? 'el video' : 'la animación';
@@ -64,7 +74,7 @@ export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, cl
   const downloadPng = async (input?: TacticalExportInput) => {
     const mod = await loadExport();
     const data = input ?? (await getInput());
-    const blob = await mod.exportPng({ players: data.players, arrows: data.arrows, title: data.title, teamName: data.teamName, sport: data.sport, teams: data.teams });
+    const blob = await mod.exportPng({ players: data.players, arrows: data.arrows, title: data.title, teamName: data.teamName, sport: data.sport, teams: data.teams, branding: data.branding });
     saveAs(blob, mod.exportFileName(data.title, 'png'));
   };
 
@@ -138,6 +148,7 @@ export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, cl
         playerNames: data.playerNames,
         sport: data.sport,
         playback: data.playback,
+        branding: data.branding,
         onProgress: (p) => {
           const pct = Math.round(p * 10) * 10;
           if (pct !== last) {
@@ -185,7 +196,7 @@ export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, cl
       t.update({ id: t.id, title: 'Preparando para compartir…' });
       const mod = await loadExport();
       const data = await getInput();
-      const blob = await mod.exportPng({ players: data.players, arrows: data.arrows, title: data.title, teamName: data.teamName, sport: data.sport, teams: data.teams });
+      const blob = await mod.exportPng({ players: data.players, arrows: data.arrows, title: data.title, teamName: data.teamName, sport: data.sport, teams: data.teams, branding: data.branding });
       const text = data.title ? `Jugada: ${data.title}` : 'Te comparto la jugada';
       const res = await mod.shareFile(blob, mod.exportFileName(data.title, 'png'), text);
       if (res.method === 'cancelled') return 'Compartir cancelado';
@@ -225,11 +236,13 @@ export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, cl
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        <DropdownMenuItem className={itemClass} onSelect={() => void onPng()}>
-          <ImageIcon className="h-4 w-4" /> Imagen (PNG)
+        <DropdownMenuItem className={itemClass} disabled={!avail.png.enabled} onSelect={() => void onPng()}>
+          <ImageIcon className="h-4 w-4" />
+          <ItemText label="Imagen (PNG)" reason={avail.png.reason} />
         </DropdownMenuItem>
-        <DropdownMenuItem className={itemClass} onSelect={() => void onPdf()}>
-          <FileText className="h-4 w-4" /> Ficha del ejercicio (PDF)
+        <DropdownMenuItem className={itemClass} disabled={!avail.pdf.enabled} onSelect={() => void onPdf()}>
+          <FileText className="h-4 w-4" />
+          <ItemText label="Ficha del ejercicio (PDF)" reason={avail.pdf.reason} />
         </DropdownMenuItem>
         {videoReady ? (
           <DropdownMenuItem className={itemClass} onSelect={() => void onVideo()}>
@@ -242,21 +255,43 @@ export function TacticalExportMenu({ getInput, frameCount, onEvent, disabled, cl
               <div>
                 <DropdownMenuItem className={itemClass} disabled>
                   <Film className="h-4 w-4" />
-                  <span className="flex flex-col">
-                    <span>{animLabel}</span>
-                    <span className="text-xs text-muted-foreground">Necesita 2 cuadros o más</span>
-                  </span>
+                  <ItemText label={animLabel} reason={avail.video.reason} />
                 </DropdownMenuItem>
               </div>
             </TooltipTrigger>
-            <TooltipContent side="left">Agrega un segundo cuadro para animar la jugada.</TooltipContent>
+            <TooltipContent side="left">
+              {hasContent ? 'Agrega un segundo cuadro para animar la jugada.' : 'Pon jugadores o dibuja algo en la cancha primero.'}
+            </TooltipContent>
           </Tooltip>
         )}
+        {avail.video.offerAddFrame && onAddFrame && (
+          <DropdownMenuItem className={`${itemClass} pl-9 text-emerald-700 dark:text-emerald-400`} onSelect={() => onAddFrame()} data-testid="export-add-frame">
+            <Plus className="h-4 w-4" /> Agregar un cuadro (+ Cuadro)
+          </DropdownMenuItem>
+        )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem className={itemClass} onSelect={() => void onShare()}>
-          <Share2 className="h-4 w-4" /> Compartir por WhatsApp
+        {onShareLink && (
+          <DropdownMenuItem className={itemClass} disabled={!hasContent} onSelect={() => onShareLink()} data-testid="export-share-link">
+            <Link2 className="h-4 w-4" />
+            <ItemText label="Compartir enlace por WhatsApp" reason={hasContent ? 'Abre la jugada en la web, sin descargar nada' : avail.png.reason} />
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem className={itemClass} disabled={!avail.png.enabled} onSelect={() => void onShare()}>
+          <Share2 className="h-4 w-4" />
+          <ItemText label={onShareLink ? 'Compartir imagen por WhatsApp' : 'Compartir por WhatsApp'} reason={avail.png.reason} />
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** Texto del ítem con el motivo debajo cuando está apagado. */
+function ItemText({ label, reason }: { label: string; reason: string | null }) {
+  if (!reason) return <span>{label}</span>;
+  return (
+    <span className="flex flex-col">
+      <span>{label}</span>
+      <span className="text-xs text-muted-foreground">{reason}</span>
+    </span>
   );
 }

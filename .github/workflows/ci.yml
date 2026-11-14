@@ -31,10 +31,10 @@ jobs:
 
     steps:
       - name: 📥 Checkout código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: ⚙️ Node.js ${{ env.NODE_VERSION }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -94,8 +94,8 @@ jobs:
         working-directory: ${{ env.WORKING_DIR }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
@@ -110,7 +110,7 @@ jobs:
           VITE_SUPABASE_PUBLISHABLE_KEY: 'mock-key-for-tests'
 
       - name: 📈 Subir coverage a Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         if: always()
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -130,8 +130,8 @@ jobs:
       run:
         working-directory: ./bff
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -156,25 +156,45 @@ jobs:
     name: 🎭 E2E Tests (Golden Path)
     runs-on: ubuntu-latest
     needs: [quality, unit-tests]
-    if: github.event_name == 'pull_request'
+    # Los PRs de Dependabot NO reciben los secretos del repo: sin STAGING_URL ni
+    # credenciales, Playwright corría contra nada y se quedaba 1 h 24 min fallando
+    # con «Failed to fetch» (2026-10-26, PR #35). Para ellos se salta.
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
+    # Sin tope, GitHub deja un job colgado hasta 6 h gastando minutos de Actions.
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: 🔐 ¿Hay ambiente de staging?
+        id: staging
+        run: |
+          if [ -z "${{ vars.STAGING_URL || secrets.STAGING_URL }}" ]; then
+            echo "Sin STAGING_URL: el E2E se salta (correría contra nada)."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.staging.outputs.ok == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.staging.outputs.ok == 'true'
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
       - name: 📦 Instalar dependencias
+        if: steps.staging.outputs.ok == 'true'
         run: npm ci
         working-directory: ${{ env.WORKING_DIR }}
 
       - name: 🎭 Instalar Playwright browsers
+        if: steps.staging.outputs.ok == 'true'
         run: npx playwright install --with-deps chromium
         working-directory: ${{ env.WORKING_DIR }}
 
       - name: 🎭 Ejecutar E2E — Golden Path
+        if: steps.staging.outputs.ok == 'true'
         run: npx playwright test --project=chromium
         working-directory: ${{ env.WORKING_DIR }}
         env:
@@ -183,8 +203,8 @@ jobs:
           PLAYWRIGHT_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
 
       - name: 📸 Subir screenshots de errores
-        uses: actions/upload-artifact@v4
-        if: failure()
+        uses: actions/upload-artifact@v7
+        if: failure() && steps.staging.outputs.ok == 'true'
         with:
           name: playwright-screenshots
           path: frontend/test-results/

@@ -59,6 +59,7 @@ import { dayToLocalDate, todayColombia } from '@/lib/dateUtils';
 import { isTrainingReadOnlyRole } from '@/lib/school/trainingRoles';
 import type { TacticalSport } from '@/lib/school/tacticalSports';
 import { datesBetween, pickDefaultMesocycle, placeLooseSessions, suggestNextStart } from '@/lib/school/mesocyclePlanning';
+import { semanaDeHoy, semanaInicialAbierta, type SemanaRango } from './mesocycleWeeks';
 
 /** 'YYYY-MM-DD' → texto en es-CO SIN correrse un día (ver dayToLocalDate). */
 const fmtDay = (iso: string, opts: Intl.DateTimeFormatOptions) => dayToLocalDate(iso).toLocaleDateString('es-CO', opts);
@@ -136,6 +137,11 @@ interface MesocycleSectionProps {
    * escuela: dueño/administración miran, entrenadores editan.
    */
   readOnly?: boolean;
+  /**
+   * Día que se quiere ver (YYYY-MM-DD), p. ej. `?fecha=` desde «Planear» en
+   * Sesiones: arranca abierta la semana que lo contiene.
+   */
+  fechaFoco?: string | null;
 }
 
 export function MesocycleSection({
@@ -150,6 +156,7 @@ export function MesocycleSection({
   onEditSession,
   onViewSession,
   readOnly: readOnlyProp,
+  fechaFoco,
 }: MesocycleSectionProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -302,16 +309,17 @@ export function MesocycleSection({
     [sessions, microcycles],
   );
 
-  // Semana "actual": la que contiene hoy; si el mesociclo es futuro, la
-  // primera; si ya pasó, la última. Es la única que arranca abierta.
-  const currentWeekId = useMemo(() => {
-    const list = (microcycles || []) as any[];
-    if (list.length === 0) return null;
-    const today = todayColombia();
-    const containing = list.find((mc) => mc.starts_on <= today && today <= mc.ends_on);
-    if (containing) return containing.id as string;
-    return (today < list[0].starts_on ? list[0].id : list[list.length - 1].id) as string;
-  }, [microcycles]);
+  // Semana que arranca abierta: la del día pedido (fechaFoco), si no la que
+  // contiene hoy; si el mesociclo es futuro, la primera; si ya pasó, la última.
+  // La insignia «Esta semana» va SOLO en la que contiene hoy (B7).
+  const currentWeekId = useMemo(
+    () => semanaInicialAbierta((microcycles || []) as SemanaRango[], todayColombia(), fechaFoco),
+    [microcycles, fechaFoco],
+  );
+  const todayWeekId = useMemo(
+    () => semanaDeHoy((microcycles || []) as SemanaRango[], todayColombia()),
+    [microcycles],
+  );
 
   const createMesocycle = useMutation({
     mutationFn: async (input: MesocycleFormSubmit) => {
@@ -652,7 +660,7 @@ export function MesocycleSection({
               {' – '}
               {fmtDay(mc.ends_on, SHORT)}
             </span>
-            {mc.id === currentWeekId && (
+            {mc.id === todayWeekId && (
               <Badge className="text-[10px] h-5 shrink-0">Esta semana</Badge>
             )}
             <span className="text-xs text-muted-foreground font-normal">

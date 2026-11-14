@@ -109,13 +109,44 @@ export async function identificarStaffPorTelefono(integrationId: string, contact
 // ─────────────────────────────────────────────────────────────────────────────
 export interface EquipoEscuela { id: string; name: string; schedule: FranjaHorario[] | null }
 
-export async function cargarEquipos(schoolId: string): Promise<EquipoEscuela[]> {
-    const { data } = await supabase.from('teams').select('id, name, schedule, is_active')
+/** Equipo vigente: `teams.active` (boolean) y `teams.status` ('active'/'inactive'). OJO: `teams` NO tiene `is_active`
+ *  (pedirla hacía fallar la consulta con 42703 y todo terminaba en «No tienes equipos asignados», B2 2026-10-26). */
+export const equipoVigente = (t: { active?: boolean | null; status?: string | null; name?: string | null }) =>
+    t.active !== false && t.status !== 'inactive' && !/duplicado|no usar/i.test(t.name ?? '');
+
+/** Igual que `cargarEquipos` pero LANZA si la consulta falla (para distinguir «error» de «sin equipos»). */
+export async function cargarEquiposOFallar(schoolId: string): Promise<EquipoEscuela[]> {
+    const { data, error } = await supabase.from('teams').select('id, name, schedule, active, status')
         .eq('school_id', schoolId);
+    if (error) {
+        // No tragarse el error: un 42703 aquí se ve igual que «no hay equipos».
+        console.error('[asistencia-staff] cargarEquipos falló', { schoolId, code: error.code, message: error.message });
+        throw new Error(`No se pudieron cargar los equipos: ${error.message}`);
+    }
     return (data ?? [])
-        .filter((t: any) => t.is_active !== false && !/duplicado|no usar/i.test(t.name ?? ''))
+        .filter((t: any) => equipoVigente(t))
         .map((t: any) => ({ id: t.id, name: t.name, schedule: Array.isArray(t.schedule) ? t.schedule : null }));
 }
+
+/** Equipos vigentes de la escuela. Si la consulta falla queda en el log y devuelve []. */
+export async function cargarEquipos(schoolId: string): Promise<EquipoEscuela[]> {
+    try { return await cargarEquiposOFallar(schoolId); } catch { return []; }
+}
+
+/** ¿La escuela dejó que sus coaches suban fotos de planillas? (`school_settings.coach_can_upload_attendance_sheets`, default false). */
+export function puedeSubirPlanilla(role: string | null | undefined, flag: boolean | null | undefined): boolean {
+    if (role === 'coach') return flag === true;
+    return ['owner', 'admin', 'super_admin', 'school_admin', 'school'].includes(role ?? '');
+}
+
+export async function coachPuedeSubirPlanillas(schoolId: string): Promise<boolean> {
+    const { data, error } = await supabase.from('school_settings')
+        .select('coach_can_upload_attendance_sheets').eq('school_id', schoolId).maybeSingle();
+    if (error) console.error('[asistencia-staff] no pude leer coach_can_upload_attendance_sheets', { schoolId, message: error.message });
+    return (data as any)?.coach_can_upload_attendance_sheets === true;
+}
+
+export const TEXTO_SIN_PERMISO_PLANILLA = 'Tu escuela no tiene habilitado que los entrenadores suban planillas de asistencia. Pídeselo a la escuela.';
 
 /** Rosters (inscripciones activas) de los equipos pedidos, 1 consulta de inscripciones + 3 de nombres. */
 export async function cargarRosters(schoolId: string, equipos: EquipoEscuela[]): Promise<RosterEquipo[]> {
@@ -157,13 +188,18 @@ export async function cargarRosters(schoolId: string, equipos: EquipoEscuela[]):
 /** Admin/owner: todos los equipos. Coach: los suyos (team_coaches o teams.coach_id). */
 export async function equiposPermitidos(schoolId: string, staff: StaffIdentificado, equipos: EquipoEscuela[]): Promise<EquipoEscuela[]> {
     if (staff.role !== 'coach') return equipos;
-    const { data: st } = await supabase.from('school_staff').select('id')
-        .eq('coach_auth_id', staff.profileId).eq('school_id', schoolId).maybeSingle();
-    if (!st?.id) return [];
-    const [{ data: tc }, { data: legacy }] = await Promise.all([
-        supabase.from('team_coaches').select('team_id').eq('coach_id', st.id),
-        supabase.from('teams').select('id').eq('school_id', schoolId).eq('coach_id', st.id),
+    // team_coaches.coach_id y teams.coach_id apuntan a school_staff.id (no al profile). Puede haber más de una
+    // fila de school_staff del mismo coach en la escuela: se aceptan todas (maybeSingle fallaba en silencio).
+    const { data: st, error: stErr } = await supabase.from('school_staff').select('id')
+        .eq('coach_auth_id', staff.profileId).eq('school_id', schoolId);
+    if (stErr) console.error('[asistencia-staff] school_staff del coach', { schoolId, message: stErr.message });
+    const staffIds = ((st ?? []) as any[]).map((r) => r.id).filter(Boolean) as string[];
+    if (!staffIds.length) return [];
+    const [{ data: tc, error: tcErr }, { data: legacy, error: lgErr }] = await Promise.all([
+        supabase.from('team_coaches').select('team_id').in('coach_id', staffIds),
+        supabase.from('teams').select('id').eq('school_id', schoolId).in('coach_id', staffIds),
     ]);
+    if (tcErr || lgErr) console.error('[asistencia-staff] asignación del coach', { schoolId, tc: tcErr?.message, legacy: lgErr?.message });
     const ok = new Set<string>([...(tc ?? []).map((r: any) => r.team_id), ...(legacy ?? []).map((r: any) => r.id)]);
     return equipos.filter((e) => ok.has(e.id));
 }
@@ -291,6 +327,19 @@ export async function recibirPlanillaDeStaff(p: RecibirPlanillaParams): Promise<
     if ('error' in img) return { estado: 'error', texto: 'No pude abrir la foto. Mándala de nuevo, de frente y con buena luz.' };
     if (img.buffer.length > MAX_BYTES) return { estado: 'error', texto: 'La foto pesa demasiado. Tómala de nuevo o recórtala.' };
 
+    // Permiso y equipos ANTES de subir la foto y de pagar el OCR (B2: el OCR se cobraba y luego fallaba).
+    // Desde la app la ruta ya validó el permiso; por WhatsApp se valida aquí.
+    if (p.staff.role === 'coach' && (p.source ?? 'whatsapp') !== 'app' && !(await coachPuedeSubirPlanillas(schoolId))) {
+        return { estado: 'error', texto: TEXTO_SIN_PERMISO_PLANILLA };
+    }
+    let permitidos: EquipoEscuela[];
+    try {
+        permitidos = await equiposPermitidos(schoolId, p.staff, await cargarEquiposOFallar(schoolId));
+    } catch {
+        return { estado: 'error', texto: 'No pude cargar tus equipos en este momento. Intenta de nuevo en unos minutos.' };
+    }
+    if (!permitidos.length) return { estado: 'error', texto: 'No tienes equipos asignados para pasar lista.' };
+
     const ext = img.mime === 'application/pdf' ? 'pdf' : (img.mime.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
     const photoPath = `${schoolId}/attendance/${crypto.randomUUID()}.${ext}`;
     const { error: upErr } = await supabase.storage.from(BUCKET_PLANILLAS).upload(photoPath, img.buffer, { contentType: img.mime, upsert: false });
@@ -321,10 +370,7 @@ export async function recibirPlanillaDeStaff(p: RecibirPlanillaParams): Promise<
         return { estado: 'error', texto: 'No pude leer filas en la foto. Toma la hoja completa, de frente, sin dobleces y con buena luz.' };
     }
 
-    // Equipo: rosters de los equipos que puede tocar quien la mandó.
-    const todos = await cargarEquipos(schoolId);
-    const permitidos = await equiposPermitidos(schoolId, p.staff, todos);
-    if (!permitidos.length) { await quitarFoto(); return { estado: 'error', texto: 'No tienes equipos asignados para pasar lista.' }; }
+    // Equipo: rosters de los equipos que puede tocar quien la mandó (ya validados arriba).
     const rosters = await cargarRosters(schoolId, permitidos);
     const horarios: HorarioEquipo[] = permitidos.map((e) => ({ team_id: e.id, team_name: e.name, schedule: e.schedule }));
     const nombresOCR = ocr.rows.filter((r) => !r.struck).map((r) => r.name);

@@ -104,6 +104,17 @@ describe('runHourBankBalanceNotices', () => {
         expect(enviarCorreo.mock.calls[0][0].to).toBe('familia@correo.com');
     });
 
+    it('quedan 2 clases (bloque del plan, 3 h): reclama «c2» y lo dice en horas, clases y %', async () => {
+        preparar({ hour_bank_periods: [{ id: 'P1', enrollment_id: 'E1', included_minutes: 2160, consumed_minutes: 2160 - 360, period_end: '2026-10-31', balance_notices: { '50': 'a', '20': 'b' } }] });
+        const r = await runHourBankBalanceNotices(MEDIODIA);
+        expect(r.avisos).toBe(1);
+        const upd = updates.find((u) => u.tabla === 'hour_bank_periods')!;
+        expect(upd.filtros.some((f) => f[0] === 'is' && f[1] === 'balance_notices->>c2' && f[2] === null)).toBe(true);
+        const n = inserts.find((i) => i.tabla === 'notifications')!;
+        expect(n.valores.title).toBe('A Camila le quedan 2 clases este mes');
+        expect(n.valores.message).toContain('6 h de las 36 h de este mes (17 %)');
+    });
+
     it('si otra instancia ya reclamó el escalón, no avisa dos veces', async () => {
         reclamoExitoso = false;
         const r = await runHourBankBalanceNotices(MEDIODIA);

@@ -162,7 +162,13 @@ export interface AnalyzeInput {
   colors: { own: string; rival: string };
   /** M6c: nota de la jugada, cruda (se filtra en anonymizePlay). */
   intencion?: string;
+  /** Clave de la formación elegida en la pizarra ('4-3-3', 'f7-2-3-1'…). Solo
+   *  vocabulario de catálogo; la base táctica decide si la conoce. */
+  formacion?: string;
 }
+
+/** Claves del catálogo de formaciones: minúsculas, dígitos y guiones. */
+export const FORMATION_KEY_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 const isPlainObject = (v: unknown): v is Record<string, any> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -201,6 +207,8 @@ export function parseAnalyzeInput(body: unknown): { errors: string[]; input: Ana
     else if (body.intencion.length > MAX_INTENTION_INPUT) errors.push(`intencion demasiado larga: máximo ${MAX_INTENTION_INPUT} caracteres.`);
     else intencion = body.intencion;
   }
+  // Formación: opcional y nunca bloquea el análisis (una clave rara se ignora).
+  const formacion = typeof body.formacion === 'string' && FORMATION_KEY_RE.test(body.formacion) ? body.formacion : undefined;
   const hasPlayers = Array.isArray(body.frames) && body.frames.some((f: any) => Array.isArray(f?.players) && f.players.length > 0);
   if (Array.isArray(body.frames) && !hasPlayers && errors.length === 0) {
     errors.push('Pon al menos un jugador en la cancha para analizar la jugada.');
@@ -208,7 +216,10 @@ export function parseAnalyzeInput(body: unknown): { errors: string[]; input: Ana
   if (errors.length) return { errors, input: null };
   return {
     errors,
-    input: { teamId, sport: body.sport as AiSport, frames: sanitizeFrames(body.frames), labels, colors, ...(intencion ? { intencion } : {}) },
+    input: {
+      teamId, sport: body.sport as AiSport, frames: sanitizeFrames(body.frames), labels, colors,
+      ...(intencion ? { intencion } : {}), ...(formacion ? { formacion } : {}),
+    },
   };
 }
 
@@ -324,6 +335,8 @@ export interface AnonPlay {
   cuadros: AnonFrame[];
   /** M6c: intención del coach filtrada (solo si hay: sin nota el hash no cambia). */
   intencion?: string;
+  /** Formación elegida en la pizarra (clave de catálogo, solo si llegó). */
+  formacion?: string;
 }
 
 /** Figuras que describen MOVIMIENTO y se mandan al modelo. El material, el
@@ -331,7 +344,7 @@ export interface AnonPlay {
 const PROMPT_SHAPE_TYPES = new Set(['arrow', 'curve', 'zone', 'ball_path']);
 
 export function anonymizePlay(
-  input: Pick<AnalyzeInput, 'sport' | 'frames' | 'labels' | 'colors' | 'intencion'>,
+  input: Pick<AnalyzeInput, 'sport' | 'frames' | 'labels' | 'colors' | 'intencion' | 'formacion'>,
   rosterTokens: Set<string> = new Set(),
 ): { play: AnonPlay; keyMap: Map<string, string> } {
   // Orden determinista de los propios: primer cuadro en que aparecen y, dentro
@@ -399,6 +412,7 @@ export function anonymizePlay(
       deporte: input.sport, colores: { propio: input.colors.own, rival: input.colors.rival }, puestos,
       arquero_rival: arqueroRival, cuadros,
       ...(intencion ? { intencion } : {}),
+      ...(input.formacion && FORMATION_KEY_RE.test(input.formacion) ? { formacion: input.formacion } : {}),
     },
     keyMap,
   };
@@ -406,8 +420,11 @@ export function anonymizePlay(
 
 /** sha256 de la jugada anónima + deporte + versión del prompt (cambiar el prompt
  *  invalida la caché). El objeto se arma en orden fijo: JSON.stringify basta. */
-export function boardHash(play: AnonPlay): string {
-  return createHash('sha256').update(`${PROMPT_VERSION}|${play.deporte}|${JSON.stringify(play)}`).digest('hex');
+export function boardHash(play: AnonPlay, salt = ''): string {
+  // salt: versión de la base táctica (services/tactical-ai-knowledge): cambiar
+  // la base invalida la caché de ese deporte. Sin salt, el hash de siempre.
+  const head = salt ? `${PROMPT_VERSION}|${salt}` : PROMPT_VERSION;
+  return createHash('sha256').update(`${head}|${play.deporte}|${JSON.stringify(play)}`).digest('hex');
 }
 
 /** Ninguna cadena que parezca identificar a alguien puede salir en el prompt. */

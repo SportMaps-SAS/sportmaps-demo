@@ -46,6 +46,12 @@ export interface Transaction {
   last_failure_reason?: string | null;
   last_failure_at?: string | null;
   requires_review?: boolean | null;
+  /** Último ajuste de la escuela sobre el cobro (payment_corrections). */
+  ajuste_kind?: 'anulado_no_asistio' | 'valor_cambio_plan' | null;
+  ajuste_antes?: number | null;
+  ajuste_motivo?: string | null;
+  /** ISO del ajuste: un mes anulado se le muestra a la familia un tiempo y luego se oculta. */
+  ajuste_at?: string | null;
 }
 
 /** Estados con botón de pago directo (los mismos que abre `?pay=`). `partial` = abono por el saldo. */
@@ -56,8 +62,17 @@ export const IN_REVIEW_STATES = ['awaiting_approval'];
 export const CLARIFY_STATES = ['glosado'];
 /** Ya pagado (`paid` llega remapeado a `approved`). */
 export const PAID_STATES = ['approved'];
-/** Anulados: no son deuda ni pago, no se muestran. */
+/** Anulados: no son deuda ni pago, no se muestran (salvo el aviso de abajo). */
 export const HIDDEN_STATES = ['cancelled'];
+/** Días que se le sigue mostrando a la familia un mes anulado por «no asistió». */
+export const DIAS_AVISO_ANULADO = 45;
+
+/** Mes que la escuela anuló porque el deportista no asistió, anulado hace poco. */
+export function esAnuladoReciente(t: Transaction, now = new Date()): boolean {
+  if (t.status !== 'cancelled' || t.ajuste_kind !== 'anulado_no_asistio' || !t.ajuste_at) return false;
+  const dias = (now.getTime() - new Date(t.ajuste_at).getTime()) / 86_400_000;
+  return dias >= 0 && dias <= DIAS_AVISO_ANULADO;
+}
 
 export interface PagosGroups {
   payable: Transaction[];
@@ -66,11 +81,13 @@ export interface PagosGroups {
   paid: Transaction[];
 }
 
-export function groupTransactions(list: Transaction[]): PagosGroups {
+export function groupTransactions(list: Transaction[], now = new Date()): PagosGroups {
   const payable: Transaction[] = [];
   const waiting: Transaction[] = [];
   const paid: Transaction[] = [];
   for (const t of list) {
+    // La familia ve un tiempo que ese mes ya no se le cobra (se lo avisó la escuela).
+    if (esAnuladoReciente(t, now)) { waiting.push(t); continue; }
     if (HIDDEN_STATES.includes(t.status)) continue;
     if (PAID_STATES.includes(t.status)) paid.push(t);
     else if (PAYABLE_STATES.includes(t.status)) payable.push(t);
@@ -144,6 +161,12 @@ export function payableDetail(t: Transaction, now = new Date()): string {
 
 /** Etiqueta de un cobro sin casilla. */
 export function waitingLabel(t: Transaction): { label: string; detail: string } {
+  if (t.status === 'cancelled' && t.ajuste_kind === 'anulado_no_asistio') {
+    return {
+      label: 'No se cobra',
+      detail: `La escuela anuló este mes: no asistió.${t.ajuste_motivo ? ` ${t.ajuste_motivo}` : ''}`,
+    };
+  }
   if (t.status === 'awaiting_approval') {
     return { label: 'En revisión', detail: 'Enviaste el comprobante. La escuela lo está revisando.' };
   }
@@ -151,6 +174,13 @@ export function waitingLabel(t: Transaction): { label: string; detail: string } 
     return { label: 'Necesita aclaración', detail: 'La escuela necesita que aclares el comprobante.' };
   }
   return { label: 'En proceso', detail: 'La escuela está procesando este cobro.' };
+}
+
+/** Nota bajo un cobro cuyo valor cambió la escuela por un cambio de plan. */
+export function ajusteNota(t: Transaction): string | null {
+  if (t.ajuste_kind !== 'valor_cambio_plan' || t.ajuste_antes == null) return null;
+  if (t.status === 'cancelled') return null;
+  return `Ajustado por cambio de plan (antes ${formatCurrency(Number(t.ajuste_antes))})`;
 }
 
 const METHOD_LABELS: Record<string, string> = {
@@ -174,4 +204,31 @@ export function methodLabel(t: Transaction): string | null {
 export function paidDetail(t: Transaction, now = new Date()): string {
   const valor = formatCurrency(Number(t.amount_paid || t.amount || 0));
   return [valor, methodLabel(t), dayLabel(t.transaction_date, false, now)].filter(Boolean).join(' · ');
+}
+
+const sinTildes = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * De quién es un cobro SIN `child_id` (B8). Antes salía siempre «Tú (como
+ * atleta)», también para acudientes que no entrenan: el Tenis de Tomás quedaba
+ * rotulado como del papá.
+ *   1. Si el concepto nombra a UNO solo de los hijos («… — Tenis (Tomás)»), es de ese hijo.
+ *   2. «Tú (como atleta)» solo si el acudiente tiene inscripción propia.
+ *   3. Si no, «Sin deportista asignado» (la escuela debe corregirlo).
+ * Solo es el rótulo: el cobro no cambia de dueño.
+ */
+export function rotuloCobroSinHijo(
+  cobro: { concept?: string | null; parent_id?: string | null },
+  userId: string | null | undefined,
+  hijos: { full_name: string | null }[],
+  tieneInscripcionPropia: boolean,
+): string {
+  const concepto = sinTildes(cobro.concept ?? '');
+  if (concepto) {
+    const nombres = [...new Set(hijos.map((h) => (h.full_name ?? '').trim().split(/\s+/)[0]).filter(Boolean))];
+    const nombrados = nombres.filter((n) => new RegExp(`(^|[^a-z])${sinTildes(n)}([^a-z]|$)`).test(concepto));
+    if (nombrados.length === 1) return nombrados[0];
+  }
+  if (userId && cobro.parent_id === userId && tieneInscripcionPropia) return 'Tú (como atleta)';
+  return 'Sin deportista asignado';
 }

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -52,6 +52,8 @@ interface SchoolInfo {
   school: { id: string; name: string };
   trial_classes_available: boolean;
   trial_categories: TrialCategory[];
+  // Ausente en un BFF viejo (despliegue en curso): se trata como encendido.
+  trial_link_enabled?: boolean;
 }
 
 interface Slot {
@@ -77,7 +79,7 @@ interface NoAccountBooking {
 
 type Step =
   | 'welcome' | 'identify' | 'new_details' | 'password' | 'plan_pick_child' | 'plan_sessions' | 'plan_success'
-  | 'code' | 'enrolled_choice' | 'book_without_account' | 'category' | 'slots' | 'contact_details' | 'trial_success' | 'not_available';
+  | 'code' | 'enrolled_choice' | 'book_without_account' | 'category' | 'slots' | 'contact_details' | 'trial_success' | 'not_available' | 'link_disabled';
 
 async function api(path: string, opts: RequestInit = {}) {
   const res = await fetch(`${BFF_URL}/api/v1/public/booking${path}`, {
@@ -97,6 +99,13 @@ function fmtTime(t: string) {
 
 function fmtDate(d: string) {
   return new Date(d + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'short' });
+}
+
+// Reintento del saldo de horas: nunca con link_disabled; resto, 1 reintento
+// (igual que el default del QueryClient).
+function retryHourBankBalance(failureCount: number, err: any): boolean {
+  if (err?.body?.reason === 'link_disabled') return false;
+  return failureCount < 1;
 }
 
 function ErrorBanner({ message }: { message: string }) {
@@ -220,6 +229,23 @@ export default function PublicTrialClassBookingPage() {
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Solo para el aviso link_disabled: ¿hay sesión de Supabase activa?
+  const [hasSession, setHasSession] = useState(false);
+
+  useEffect(() => {
+    if (step !== 'link_disabled') return;
+    supabase.auth.getSession().then(({ data }) => setHasSession(!!data.session));
+  }, [step]);
+  // La ficha es de un menor: el backend no deja crear cuenta desde aquí
+  // (409 minor_requires_guardian_invite). Se reinicia al cambiar el token o
+  // al volver a los pasos de identificación.
+  const [registerBlockedForMinor, setRegisterBlockedForMinor] = useState(false);
+  useEffect(() => {
+    setRegisterBlockedForMinor(false);
+  }, [bookingToken]);
+  useEffect(() => {
+    if (step === 'welcome' || step === 'identify' || step === 'code') setRegisterBlockedForMinor(false);
+  }, [step]);
   const [successInfo, setSuccessInfo] = useState<{ price: number; is_first: boolean } | null>(null);
 
   useEffect(() => {
@@ -229,6 +255,7 @@ export default function PublicTrialClassBookingPage() {
         const data = await api(`/schools/${slug}`);
         setSchoolInfo(data);
         bffClient.setSchoolId(data.school.id);
+        if (data.trial_link_enabled === false) setStepRaw('link_disabled');
       } catch {
         setNotFound(true);
       } finally {
@@ -359,7 +386,21 @@ export default function PublicTrialClassBookingPage() {
     });
   };
 
-  const canGoBack = stepHistory.length > 0 && step !== 'trial_success' && step !== 'plan_success';
+  const canGoBack = stepHistory.length > 0
+    && step !== 'trial_success' && step !== 'plan_success' && step !== 'link_disabled';
+
+  // Errores de la API pública del link: si la escuela apagó el link (422
+  // reason 'link_disabled') se pasa al aviso y se limpia el historial; el
+  // resto se muestra como banner de error.
+  const handleApiError = useCallback((err: any) => {
+    if (err?.body?.reason === 'link_disabled') {
+      setStepHistory([]);
+      setErrorMsg(null);
+      setStepRaw('link_disabled');
+      return;
+    }
+    setErrorMsg(err?.body?.error || err?.message);
+  }, []);
 
   // ── Paso 0: bienvenida — nuevo o antiguo (mismo filtro que /agendar/:slug) ──
   const handleWelcomeChoice = (hint: 'returning' | 'new') => {
@@ -397,7 +438,7 @@ export default function PublicTrialClassBookingPage() {
         }
       }
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setBusy(false);
     }
@@ -423,7 +464,7 @@ export default function PublicTrialClassBookingPage() {
       }
       goTo('category');
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setBusy(false);
     }
@@ -449,7 +490,12 @@ export default function PublicTrialClassBookingPage() {
       });
       window.location.href = data.magic_link;
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      if (err?.body?.reason === 'minor_requires_guardian_invite') {
+        setErrorMsg(null);
+        setRegisterBlockedForMinor(true);
+      } else {
+        handleApiError(err);
+      }
     } finally {
       setBusy(false);
     }
@@ -457,9 +503,9 @@ export default function PublicTrialClassBookingPage() {
 
   // ── "Agendar sin crear cuenta" — reusa el mismo motor de disponibilidad/
   // reserva que "Mis Inscripciones" (listAvailableSessions/bookSession en el
-  // BFF), resuelto por bookingToken. Solo modo "por bloque" (sin sesión
-  // personalizada) para mantener este camino simple — quien quiera duración
-  // a medida ya tiene la opción de crear la cuenta.
+  // BFF), resuelto por bookingToken. Trae las sesiones disponibles y la
+  // grilla de horas para la modalidad personalizada, además del modo "por
+  // bloque".
   const fetchNoAccountSessions = async () => {
     if (!bookingToken) return;
     setLoadingNoAccountSessions(true);
@@ -469,7 +515,7 @@ export default function PublicTrialClassBookingPage() {
       setNoAccountSessions(data.sessions ?? []);
       setNoAccountFlexibleGrid(data.flexible_hour_grid ?? []);
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setLoadingNoAccountSessions(false);
     }
@@ -493,7 +539,7 @@ export default function PublicTrialClassBookingPage() {
       setConfirmingNoAccountSession(null);
       fetchNoAccountBookings();
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setBookingNoAccount(false);
     }
@@ -506,7 +552,7 @@ export default function PublicTrialClassBookingPage() {
       const data = await api(`/my-bookings-for-enrollment?token=${encodeURIComponent(bookingToken)}`);
       setNoAccountBookings(data ?? []);
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setLoadingNoAccountBookings(false);
     }
@@ -524,7 +570,7 @@ export default function PublicTrialClassBookingPage() {
       setCancellingNoAccountBooking(null);
       await fetchNoAccountBookings();
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setCancellingNoAccountInFlight(false);
     }
@@ -540,8 +586,8 @@ export default function PublicTrialClassBookingPage() {
 
   // Mismo criterio de agrupación que "Mis Inscripciones" — por hora Y tipo,
   // así dos coaches con la misma disponibilidad no salen como filas
-  // idénticas (CompactSessionSlot deja elegir entre ellos). Siempre "por
-  // bloque" (colapsado a bloques fijos) — sin sesión personalizada acá.
+  // idénticas (CompactSessionSlot deja elegir entre ellos). Agrupa las
+  // sesiones por fecha; en modo "por bloque" las colapsa a bloques fijos.
   const noAccountSessionsByDate = useMemo(() => {
     const groups: Record<string, BookableSession[]> = {};
     for (const s of noAccountSessions) {
@@ -599,8 +645,15 @@ export default function PublicTrialClassBookingPage() {
 
   const fetchNoAccountHourBankBalance = useCallback(async (): Promise<HourBankBalance> => {
     if (!bookingToken || !noAccountHourBankEnrollmentId) return { has_hours_plan: false };
-    return api(`/hour-bank-balance-for-enrollment?token=${encodeURIComponent(bookingToken)}&enrollment_id=${noAccountHourBankEnrollmentId}`);
-  }, [bookingToken, noAccountHourBankEnrollmentId]);
+    // El paso a link_disabled queda en el fetcher; es seguro porque
+    // retryHourBankBalance evita reintentar ese error (sin segunda llamada).
+    try {
+      return await api(`/hour-bank-balance-for-enrollment?token=${encodeURIComponent(bookingToken)}&enrollment_id=${noAccountHourBankEnrollmentId}`);
+    } catch (err: any) {
+      if (err?.body?.reason === 'link_disabled') handleApiError(err);
+      throw err;
+    }
+  }, [bookingToken, noAccountHourBankEnrollmentId, handleApiError]);
 
   // ── Camino "ya registrado": login inline + sus clases de plan ───────────
   const handleLogin = async () => {
@@ -678,7 +731,7 @@ export default function PublicTrialClassBookingPage() {
       setSlots(data);
       goTo('slots');
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setLoadingSlots(false);
     }
@@ -715,7 +768,7 @@ export default function PublicTrialClassBookingPage() {
       setSuccessInfo({ price: data.price, is_first: data.is_first });
       goTo('trial_success');
     } catch (err: any) {
-      setErrorMsg(err.body?.error || err.message);
+      handleApiError(err);
     } finally {
       setBusy(false);
     }
@@ -1134,6 +1187,12 @@ export default function PublicTrialClassBookingPage() {
               <p className="text-center text-xs text-muted-foreground font-semibold px-4">
                 Ya tienes matrícula en esta escuela. ¿Qué quieres hacer?
               </p>
+              {registerBlockedForMinor && (
+                <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 text-xs text-foreground/80 font-medium">
+                  Esta ficha es de un menor de edad. Para crear la cuenta, pídele a la escuela que invite a su acudiente. Mientras tanto, puedes agendar sin crear cuenta.
+                </div>
+              )}
+              {!registerBlockedForMinor && (
               <button
                 type="button"
                 disabled={busy}
@@ -1148,6 +1207,7 @@ export default function PublicTrialClassBookingPage() {
                   <p className="text-xs text-muted-foreground">Accede directo a tu plan real — agenda por bloque, personalizada, o cancela una clase.</p>
                 </div>
               </button>
+              )}
               <button
                 type="button"
                 disabled={busy}
@@ -1188,7 +1248,7 @@ export default function PublicTrialClassBookingPage() {
               </div>
 
               {noAccountHourBankEnrollmentId && (
-                <HourBankBalanceCard enrollmentId={noAccountHourBankEnrollmentId} fetcher={fetchNoAccountHourBankBalance} />
+                <HourBankBalanceCard enrollmentId={noAccountHourBankEnrollmentId} fetcher={fetchNoAccountHourBankBalance} retry={retryHourBankBalance} />
               )}
 
               {noAccountTopAction === 'cancel' ? (
@@ -1562,6 +1622,20 @@ export default function PublicTrialClassBookingPage() {
               )}
               <Button onClick={handleConfirmTrial} disabled={!whatsapp.trim() || (isMinor && !childName.trim()) || busy} className="w-full">
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Confirmar clase de prueba'}
+              </Button>
+            </div>
+          )}
+
+          {step === 'link_disabled' && (
+            <div className="text-center space-y-4 animate-in fade-in duration-300">
+              <AlertCircle className="h-12 w-12 text-muted-foreground mx-auto" />
+              <p className="text-sm font-semibold">
+                Esta escuela no tiene activo el agendamiento por este link. Escríbele a la escuela.
+              </p>
+              <Button asChild variant="outline" className="w-full">
+                {hasSession
+                  ? <Link to="/enrollments">Ir a Mis Inscripciones</Link>
+                  : <Link to="/login">Iniciar sesión</Link>}
               </Button>
             </div>
           )}

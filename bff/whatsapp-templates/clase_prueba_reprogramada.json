@@ -1,0 +1,18 @@
+{
+  "name": "clase_prueba_reprogramada",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, la clase de prueba de {{2}} del {{3}} a las {{4}} no se va a realizar por {{5}}. Toca «Elegir otro horario» para escoger una nueva fecha, sin costo adicional.",
+      "example": { "body_text": [["Carolina", "Mariana", "sábado 31 de octubre", "8:00 a. m.", "lluvia"]] }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Elegir otro horario" }
+      ]
+    }
+  ]
+}

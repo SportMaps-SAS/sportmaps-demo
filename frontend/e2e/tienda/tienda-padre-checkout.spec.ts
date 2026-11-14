@@ -28,6 +28,7 @@ test.beforeAll(async () => {
 // ventana se vacíe para no medir el limitador en vez de la tienda.
 let ultimoFin = 0;
 const esMovil = (titulo: string) => titulo.startsWith('móvil');
+// eslint-disable-next-line no-empty-pattern -- Playwright exige desestructurar el 1.er argumento
 test.beforeEach(async ({}, info) => {
     // Escritorio en desktop-chrome; el escenario móvil solo en pixel-7.
     test.skip((info.project.name === 'pixel-7') !== esMovil(info.title), 'escenario de otro dispositivo');
@@ -35,6 +36,7 @@ test.beforeEach(async ({}, info) => {
     if (espera > 0) await new Promise((r) => setTimeout(r, espera));
     prepararTiendaGemelo();
 });
+// eslint-disable-next-line no-empty-pattern -- Playwright exige desestructurar el 1.er argumento
 test.afterEach(({}, info) => { if (info.status !== 'skipped') ultimoFin = Date.now(); });
 
 function card(page: Page, nombre: string) {

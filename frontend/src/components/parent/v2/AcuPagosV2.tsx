@@ -17,7 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { FailedAttemptChip } from '@/components/payment/FailedAttemptChip';
 import { cn, formatCurrency } from '@/lib/utils';
 import {
-  groupTransactions, dueAmount, sumDue, rowTitle, payableDetail, waitingLabel, paidDetail,
+  groupTransactions, dueAmount, sumDue, rowTitle, payableDetail, waitingLabel, paidDetail, ajusteNota,
   type Transaction,
 } from './pagosModel';
 
@@ -159,6 +159,7 @@ export function AcuPagosV2({
                     <span className={cn('text-xs', ['rejected', 'failed'].includes(t.status) ? 'text-destructive' : 'text-muted-foreground')}>
                       {payableDetail(t)}
                     </span>
+                    {ajusteNota(t) && <span className="text-xs text-muted-foreground">{ajusteNota(t)}</span>}
                   </span>
                   <span className="whitespace-nowrap text-base font-bold">{formatCurrency(dueAmount(t))}</span>
                 </button>
@@ -180,6 +181,7 @@ export function AcuPagosV2({
                 <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <span className="text-sm font-semibold">{rowTitle(t)}</span>
                   <span className="text-xs text-muted-foreground">{detail}</span>
+                  {ajusteNota(t) && <span className="text-xs text-muted-foreground">{ajusteNota(t)}</span>}
                   {clarify && (
                     <Button variant="link" className="min-h-touch h-auto justify-start p-0 text-sm" onClick={() => onClarify(t)}>
                       Responder a la escuela
@@ -191,7 +193,9 @@ export function AcuPagosV2({
                     'whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold',
                     t.status === 'glosado'
                       ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300'
-                      : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
+                      : t.status === 'cancelled'
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
+                        : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
                   )}
                 >
                   {label}

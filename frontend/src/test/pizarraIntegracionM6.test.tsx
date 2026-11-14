@@ -100,9 +100,9 @@ describe('M6g + M6e: la curva y la posesión llegan al 3D', () => {
 describe('M6f + M6e: rótulos de las cámaras por deporte', () => {
   it('netball usa el aro (como básquet) y rugby los palos', () => {
     expect(cameraKindLabel('detras', 'netball')).toBe('Detrás del aro');
-    expect(cameraKindLabel('rival', 'netball')).toBe('Aro rival');
+    expect(cameraKindLabel('rival', 'netball')).toBe('Bajo el aro rival');
     expect(cameraKindLabel('detras', 'rugby')).toBe('Detrás de los palos');
-    expect(cameraKindLabel('rival', 'futbol_americano')).toBe('Palos rivales');
+    expect(cameraKindLabel('rival', 'futbol_americano')).toBe('Bajo los palos rivales');
     expect(cameraKindLabel('detras', 'ultimate')).toBe('Fondo propio');
   });
 });

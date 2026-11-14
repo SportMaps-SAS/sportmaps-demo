@@ -31,6 +31,11 @@ export interface PdfBranding {
     schoolName: string | null;
     /** true si algún addon de marca propia (pwa_branding o whitelabel) está activo. */
     hasWhitelabel: boolean;
+    /**
+     * Fondo con el que el generador de íconos eligió mostrar el logo (`pwa_icon_bg`, mirando el logo:
+     * negro para un escudo sobre negro). Sirve de fondo del encabezado de un PDF. null si no hay.
+     */
+    iconBg?: string | null;
 }
 
 const HEX_RE = /^#[0-9A-Fa-f]{6}$/;
@@ -63,5 +68,6 @@ export function usePdfBranding(): PdfBranding {
         },
         schoolName: schoolName ?? null,
         hasWhitelabel: true,
+        iconBg: safeHex((dbSettings as { pwa_icon_bg?: string } | undefined)?.pwa_icon_bg, '') || null,
     };
 }

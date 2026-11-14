@@ -56,6 +56,44 @@ npm run migrations:sync    # lo registra en el ledger
 **Commitea siempre el `.sql` y `supabase/migrations_ledger.json` juntos, en el mismo
 commit.**
 
+### Funciones: GRANT explícito, porque nacen sin EXECUTE
+
+Desde `20261029101115` toda función que crea `postgres` nace **sin `EXECUTE` para
+nadie** salvo el dueño y `service_role` (default privileges: ni `PUBLIC`, ni `anon`, ni
+`authenticated`). Si olvidas el `GRANT`, la pantalla que la llama da **42501 / 403**.
+Reglas:
+
+- **RPC que llama el frontend** → `GRANT EXECUTE … TO authenticated`, explícito.
+- **`anon`** → solo si hay un flujo público demostrado (pantalla sin sesión).
+- **Helper que usa una POLICY** (aparece en un `USING` o un `WITH CHECK`) → **SÍ**
+  `GRANT EXECUTE … TO authenticated`, y también `TO anon` si la policy alcanza a `anon`
+  sobre una tabla que `anon` lee. Las policies se evalúan con el rol de quien consulta:
+  sin ese GRANT, **toda** consulta a la tabla da 42501.
+- **Helper que solo llama otra función `SECURITY DEFINER`** → `REVOKE ALL … FROM PUBLIC,
+  anon, authenticated` y sin `GRANT`: lo ejecuta el dueño de la función que lo llama.
+- **Alcance adentro:** si recibe un id de escuela o de usuario, valida que el caller
+  tenga relación con **ese** id (`user_*_school_ids()`, `is_school_admin(id)`…), no
+  «que sea admin de alguna escuela».
+
+```sql
+CREATE OR REPLACE FUNCTION public.mi_rpc(p_school_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+BEGIN
+    IF NOT (p_school_id = ANY (public.user_admin_school_ids())) THEN
+        RAISE EXCEPTION 'Sin permisos sobre esta escuela' USING ERRCODE = '42501';
+    END IF;
+    -- …
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.mi_rpc(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.mi_rpc(uuid) TO authenticated;
+```
+
 ---
 
 ## 3. El acuerdo: cómo se evita el trabajo duplicado

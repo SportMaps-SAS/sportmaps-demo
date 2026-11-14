@@ -8,7 +8,7 @@
  * Las notificaciones viejas pueden traer voseo guardado en la base: se
  * muestran tal cual llegaron.
  */
-import { AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, Gift, RefreshCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
@@ -20,6 +20,8 @@ export interface NotificacionV2 {
   created_at: string;
   read: boolean;
   link?: string | null;
+  /** Tipo de la notificación (`referral_won` = referido ganado). */
+  type?: string | null;
 }
 
 export interface NotificacionesV2Props {
@@ -123,11 +125,17 @@ export function NotificacionesV2({
                     aria-hidden="true"
                   />
                   <span className="min-w-0 flex-1">
+                    {n.type === 'referral_won' && (
+                      <span className="mb-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                        <Gift className="h-3 w-3" aria-hidden="true" />
+                        Referido ganado
+                      </span>
+                    )}
                     <span className={cn('block text-base', n.read ? 'font-medium' : 'font-semibold')}>
                       {n.title}
                       {!n.read && <span className="sr-only"> (sin leer)</span>}
                     </span>
-                    <span className="mt-0.5 block text-sm text-muted-foreground line-clamp-3">{n.message}</span>
+                    <span className={cn('mt-0.5 block text-sm text-muted-foreground', n.type !== 'referral_won' && 'line-clamp-3')}>{n.message}</span>
                     <span className="mt-1 block text-xs text-muted-foreground">{timeAgo(n.created_at)}</span>
                   </span>
                 </span>

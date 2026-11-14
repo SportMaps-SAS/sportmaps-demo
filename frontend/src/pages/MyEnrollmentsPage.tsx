@@ -39,6 +39,7 @@ import {
 } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useEnrollments } from '@/hooks/useEnrollments';
+import { BloqueFamiliaAdulto } from '@/components/familia/FamiliaBloques';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { getSportVisual } from '@/lib/sportVisuals';
@@ -132,7 +133,7 @@ function bookingName(b: any): string {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function MyEnrollmentsPage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { currentUserRole } = useSchoolContext();
   const isParent = currentUserRole === 'parent';
   const [selectedChildId, setSelectedChildId] = useState<string | undefined>(undefined);
@@ -444,6 +445,15 @@ export default function MyEnrollmentsPage() {
                 Agendar clase de prueba
               </Button>
             </section>
+          )}
+
+          {/* Deportista adulto: pausar / retirar el plan y subir soportes (el acudiente lo hace desde «Hijos»). */}
+          {!isParent && (
+            <BloqueFamiliaAdulto
+              usuarioId={user?.id}
+              nombre={profile?.full_name || 'Mi plan'}
+              inscripciones={(activeEnrollments ?? []) as any[]}
+            />
           )}
         </>
       )}

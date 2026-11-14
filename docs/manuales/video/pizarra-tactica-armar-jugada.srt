@@ -1,0 +1,55 @@
+1
+00:00:00,004 --> 00:00:08,549
+La pizarra táctica vive en cada sesión. En Métricas y Rendimiento eliges el equipo, y cada bloque de la sesión trae su botón Tablero táctico.
+
+2
+00:00:09,708 --> 00:00:16,620
+El tablero abre a pantalla completa: arriba las herramientas, en el centro la cancha, y abajo la línea de tiempo.
+
+3
+00:00:17,089 --> 00:00:23,209
+En Formación eliges un sistema de la galería. En fútbol hay treinta y ocho, con buscador.
+
+4
+00:00:24,631 --> 00:00:29,167
+Al tocar la tarjeta, tus deportistas se acomodan solos en cada puesto.
+
+5
+00:00:30,816 --> 00:00:40,008
+En la pestaña Rival, la misma galería pone al contrario en espejo, en la mitad de arriba, con fichas rojas. Elegir otra formación lo reemplaza.
+
+6
+00:00:43,130 --> 00:00:51,578
+Con la equis devuelves a un jugador a la plantilla. El panel Jugadores separa disponibles y banca, y desde ahí lo arrastras a cualquier puesto.
+
+7
+00:01:02,279 --> 00:01:12,935
+En Dibujar están el lápiz, el texto, las líneas, el balón en juego y las zonas. Activas Modo dibujo y, con Numerar, cada flecha lleva el orden del movimiento.
+
+8
+00:01:17,464 --> 00:01:25,240
+El tipo de línea dice qué pasa: un pase, discontinuo. Una conducción, ondulada, con el balón en los pies.
+
+9
+00:01:33,716 --> 00:01:44,155
+Una carrera sin balón, continua. Y el disparo, doble y grueso. La leyenda aparece sola en la cancha, y cada figura se ajusta arrastrando sus puntos blancos.
+
+10
+00:01:52,445 --> 00:02:01,420
+Con Zona marcas un espacio, por ejemplo, dónde presionar. Hay rectángulo, elipse y polígono, con relleno translúcido y nueve colores.
+
+11
+00:02:07,369 --> 00:02:12,673
+Reproducir jugada mueve a cada jugador hasta la punta de su flecha, y el balón recorre su línea.
+
+12
+00:02:15,792 --> 00:02:24,624
+En Material pones conos, platos, arcos, vallas y más. Toca uno ya puesto para cambiarle el tamaño, girarlo o duplicarlo.
+
+13
+00:02:27,783 --> 00:02:38,415
+En Más, Campo, eliges líneas de ayuda, como los cinco carriles o los tercios, la cámara y el piso de la cancha. Se guarda con la jugada, y sale igual al exportar.
+
+14
+00:02:45,157 --> 00:02:53,701
+Cuando esté lista, Guardar jugada la deja en este bloque de la sesión. En el siguiente video: animarla, verla en 3D y compartirla.

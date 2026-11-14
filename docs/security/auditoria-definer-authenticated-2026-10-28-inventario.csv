@@ -1,0 +1,417 @@
+categoria,funcion,firma,anon_exec,policies
+OK,_order_belongs_to_user,"p_order_id uuid",true,1
+OK,_order_has_vendor_item,"p_order_id uuid",true,1
+OK,_payments_cobro_cliente_normalizar,"p payments",false,0
+OK,accept_clinical_invite,"p_token text, p_child_id uuid, p_types text[]",false,0
+OK,accept_invitation,"p_invite_id uuid",true,0
+OK,accept_invitation_pro,"p_invite_id uuid",false,0
+MEDIO,access_demo_link,"p_token text",true,0
+OK,activate_exercise_pack,"p_school_id uuid, p_pack_id uuid",false,0
+OK,add_custom_domain,"p_school_id uuid, p_domain text",false,0
+OK,admin_activity_summary,"p_from timestamp with time zone, p_to timestamp with time zone",false,0
+MEDIO,admin_create_staff_direct,"p_email text, p_role text, p_branch_id uuid",false,0
+OK,admin_expire_trial_now,"p_school_id uuid",false,0
+OK,admin_extend_trial,"p_school_id uuid, p_months integer",false,0
+OK,admin_get_hours_plan_enabled,"p_school_id uuid",false,0
+OK,admin_get_school_merchandise_enabled,"p_school_id uuid",false,0
+OK,admin_get_school_tournament_charges_enabled,"p_school_id uuid",false,0
+OK,admin_global_counts,"",false,0
+OK,admin_list_analytics_events,"p_event_type text, p_user_id uuid, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer, p_offset integer",false,0
+OK,admin_list_audit_logs,"p_school_id uuid, p_table text, p_action text, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer, p_offset integer",false,0
+OK,admin_list_billing_events,"p_school_id uuid, p_status text, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer, p_offset integer",false,0
+OK,admin_list_enrollment_integrity_findings,"p_status text, p_limit integer, p_offset integer",true,0
+OK,admin_list_event_telemetry,"p_event_type text, p_event_id uuid, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer, p_offset integer",false,0
+OK,admin_list_payments,"p_school_id uuid, p_status text, p_method text, p_from timestamp with time zone, p_to timestamp with time zone, p_limit integer, p_offset integer",false,0
+OK,admin_list_schools_for_filter,"",false,0
+OK,admin_list_schools_global,"p_search text, p_verified boolean, p_limit integer, p_offset integer",false,0
+OK,admin_list_trials,"p_filtro text, p_account_type text, p_limit integer, p_offset integer",false,0
+OK,admin_list_users,"p_search text, p_role text, p_limit integer, p_offset integer",false,0
+OK,admin_reactivate_school,"p_school_id uuid, p_plan_code text",false,0
+OK,admin_resolve_enrollment_integrity_finding,"p_finding_id uuid, p_status text, p_note text",true,0
+OK,admin_run_enrollment_integrity_check,"",true,0
+OK,admin_set_account_type,"p_school_id uuid, p_account_type text",false,0
+OK,admin_set_billing_enabled,"p_school_id uuid, p_enabled boolean",false,0
+OK,admin_set_blocking_exempt,"p_school_id uuid, p_exempt boolean, p_reason text",false,0
+OK,admin_set_hours_plan_enabled,"p_school_id uuid, p_enabled boolean",false,0
+OK,admin_set_payer_billing_details,"p_school_id uuid, p_user_id uuid, p_document_type text, p_document_number text, p_billing_address text, p_billing_state_dane text, p_billing_city_dane text",false,0
+OK,admin_set_saas_billing_enabled,"p_school_id uuid, p_enabled boolean",true,0
+OK,admin_set_school_addon,"p_school_id uuid, p_addon_key text, p_enabled boolean, p_monthly_price_cents integer",false,0
+OK,admin_set_school_billing_agreement,"p_school_id uuid, p_due_offset_days smallint, p_schedule jsonb, p_one_time jsonb",false,0
+OK,admin_set_school_custom_price,"p_school_id uuid, p_custom_price_cents integer, p_billing_cycle text, p_period_start date, p_billing_emails text[]",false,0
+OK,admin_set_school_merchandise_enabled,"p_school_id uuid, p_enabled boolean",false,0
+OK,admin_set_school_module,"p_school_id uuid, p_module_key text, p_enabled boolean",false,0
+OK,admin_set_school_plan,"p_school_id uuid, p_plan_code text, p_status text",false,0
+OK,admin_set_school_tournament_charges_enabled,"p_school_id uuid, p_enabled boolean",false,0
+OK,admin_set_school_type,"p_school_id uuid, p_school_type text",false,0
+OK,admin_set_trial,"p_school_id uuid, p_months integer, p_ends_at timestamp with time zone",false,0
+OK,admin_unpay_invoiced_payment,"p_payment_id uuid, p_new_status text, p_reason text",false,0
+OK,answer_question,"p_question_id uuid, p_text text, p_actor uuid",false,0
+OK,approve_enrollment_pause,"p_request_id uuid, p_review_note text",false,0
+OK,approve_order_receipt,"p_order_id uuid, p_actor uuid",false,0
+OK,assign_registrants_to_teams,"p_event_id uuid, p_category_id uuid, p_assignments jsonb",false,0
+OK,athlete_weekly_load,"p_microcycle_id uuid",false,0
+OK,attach_school_video_asset,"p_video_id uuid, p_provider_asset_id text",false,0
+OK,autopay_visible_subscription_ids,"",false,1
+OK,bank_email_inbox_configure,"p_school_id uuid, p_mailboxes text[]",false,0
+OK,bank_email_notice_resolve,"p_notice_id uuid, p_accion text, p_payment_id uuid",false,0
+OK,begin_school_video_upload,"p_school_id uuid, p_provider text, p_title text, p_size_bytes bigint, p_max_duration_s integer, p_team_id uuid, p_source text, p_recorded_at date",false,0
+OK,buscar_menor_por_documento_publico,"p_doc_number text, p_school_id uuid",true,0
+OK,calendar_family_school_ids,"",false,2
+OK,calendar_family_team_ids,"",false,2
+MEDIO,calendar_team_in_school,"p_team uuid, p_school uuid",false,2
+OK,callup_status,"p_lineup_id uuid",false,0
+OK,can_admin_see_member_profile,"p_profile_id uuid",true,1
+OK,can_manage_event,"p_event_id uuid, p_uid uuid",true,7
+OK,can_manage_finances,"p_owner_type text, p_owner_id uuid",false,19
+OK,can_manage_reports,"p_school_id uuid",true,6
+OK,can_manage_store,"p_vendor_profile_id uuid",true,14
+OK,can_review_product,"p_product_id uuid, p_user_id uuid",false,0
+OK,can_view_enrollment,"p_enrollment_id uuid",false,1
+OK,cancel_enrollment_pause_request,"p_request_id uuid",false,0
+OK,cancel_my_appointment,"p_appointment_id uuid, p_reason text",false,0
+OK,cancel_my_order,"p_order_id uuid, p_reason text, p_actor uuid",false,0
+OK,cancel_school_join_request,"p_request_id uuid",false,0
+OK,cerrar_cupo_clase_prueba,"p_slot_id uuid",false,0
+OK,cerrar_prospecto_clase_prueba,"p_lead_id uuid, p_estado text, p_child_id uuid, p_user_id uuid, p_unregistered_id uuid",false,0
+OK,check_is_branch_admin,"check_branch_id uuid",true,0
+OK,check_is_school_admin,"check_school_id uuid",true,1
+OK,check_is_school_admin_safe,"p_school_id uuid",true,0
+OK,check_is_school_member,"check_school_id uuid",true,0
+OK,check_is_school_member_safe,"lookup_school_id uuid",true,0
+CRIT,claim_child_for_parent,"p_child_id uuid, p_full_name text, p_phone text",true,0
+OK,claim_children_by_document,"p_doc_number text, p_child_ids uuid[], p_full_name text, p_phone text",true,0
+OK,claim_member_for_plan,"p_child_id uuid, p_plan_id uuid, p_role text, p_full_name text, p_phone text",true,0
+OK,claim_orphan_children,"p_school_id uuid",true,0
+OK,claim_tournament_invitation,"p_token uuid",false,0
+OK,clinical_viewer_patient_ids,"",false,0
+CRIT,close_cash_session,"p_session_id uuid, p_closing_cash numeric, p_notes text",false,0
+OK,close_month,"p_school_id uuid, p_year integer, p_month integer, p_branch_id uuid",false,0
+OK,coach_can_see_report,"p_report_id uuid",true,1
+OK,coach_contact_masked_school,"p_school_id uuid",false,0
+OK,coach_school_ids,"",true,1
+OK,coach_team_ids,"",true,1
+OK,complete_onboarding,"",true,0
+OK,complete_role_selection,"p_role text",false,0
+OK,confirm_cash_pickup,"p_order_id uuid, p_pickup_code text, p_actor uuid",false,0
+OK,confirm_school_join_request_enrollment,"p_request_id uuid",false,0
+OK,create_cart_order,"p_items jsonb, p_fulfillment text, p_pickup_branch uuid, p_address jsonb, p_buyer jsonb, p_payment_method text, p_coupon_code text, p_buyer_id uuid, p_idempotency_key uuid",false,0
+OK,create_clinical_invite,"p_patient_id uuid",false,0
+MEDIO,create_demo_link,"p_school_name text, p_archetype text, p_prospect_name text, p_prospect_phone text, p_prospect_email text, p_primary_color text, p_logo_url text, p_sent_via text, p_notes text",false,0
+OK,create_invitation,"p_email text, p_role text, p_child_name text, p_team_id uuid, p_monthly_fee numeric, p_parent_phone text, p_branch_id uuid, p_offering_plan_id uuid, p_unregistered_athlete_id uuid",false,0
+OK,create_match,"p jsonb",false,0
+OK,create_mesocycle_with_weeks,"p_school_id uuid, p_team_id uuid, p_starts_on date, p_ends_on date, p_general_objective text, p_game_model text, p_n_sessions_planned integer, p_session_duration_minutes integer, p_evaluation_mode text",false,0
+OK,create_review,"p_product_id uuid, p_review jsonb, p_actor uuid",false,0
+OK,create_school_join_qr,"p_school_id text, p_name text, p_target_type text, p_target_id text, p_branch_id text, p_intro_text text, p_cta_text text, p_accept_payments boolean, p_require_first_payment boolean, p_expires_at timestamp with time zone, p_slug text, p_fixed_amount numeric",false,0
+OK,create_school_referral,"p_referred_email text, p_message text",false,0
+OK,create_school_trial_slot,"p_school_id uuid, p_label text, p_slot_date date, p_start_time time without time zone, p_end_time time without time zone, p_location text, p_max_capacity integer, p_team_id uuid",false,0
+OK,create_tactical_shared_play,"p_team_id uuid, p_title text, p_sport text, p_payload jsonb",false,0
+OK,create_tournament_invitation,"p_event_id uuid, p_email text, p_school_name text",false,0
+OK,current_staff_ids,"",true,0
+OK,current_staff_team_ids,"",true,3
+OK,deactivate_exercise_pack,"p_school_id uuid, p_pack_id uuid",false,0
+OK,delete_mesocycle_cascade,"p_mesocycle_id uuid",false,0
+OK,disable_vendor_profile,"",false,0
+OK,duplicate_microcycle_days,"p_source_microcycle_id uuid, p_target_microcycle_id uuid",false,0
+OK,enable_school_store,"p_school_id uuid",false,0
+OK,enable_vendor_profile,"p_vendor_type vendor_type, p_can_sell_products boolean, p_can_sell_services boolean, p_display_name text, p_description text, p_city text, p_phone text",false,0
+OK,equipment_accept,"p_assignment_id uuid",true,0
+OK,equipment_approve_delivery,"p_assignment_id uuid",true,0
+OK,equipment_approve_return,"p_return_id uuid, p_final_condition text",true,0
+OK,equipment_assign,"p_item_id uuid, p_assigned_to uuid, p_quantity integer, p_branch_id uuid, p_return_due_at date, p_note text, p_photo_url text",true,0
+OK,equipment_assignment_detail,"p_assignment_id uuid",true,0
+OK,equipment_available_for_self_checkout,"p_school_id uuid",true,0
+OK,equipment_close_with_shortage,"p_assignment_id uuid, p_note text",true,0
+OK,equipment_dispute_return,"p_return_id uuid, p_note text",true,0
+OK,equipment_list_coaches,"p_school_id uuid",true,0
+OK,equipment_list_items,"p_school_id uuid, p_branch_id uuid, p_status text, p_search text, p_limit integer, p_offset integer",true,0
+OK,equipment_my_assignments,"",true,0
+OK,equipment_pending_approvals,"p_school_id uuid",true,0
+OK,equipment_reject_delivery,"p_assignment_id uuid, p_note text",true,0
+OK,equipment_report_difference,"p_assignment_id uuid, p_reported_quantity integer, p_note text",true,0
+OK,equipment_request_return,"p_assignment_id uuid, p_quantity integer, p_condition text, p_photo_url text, p_note text",true,0
+OK,equipment_resolve_dispute,"p_assignment_id uuid, p_action text, p_new_quantity integer, p_note text",true,0
+OK,equipment_save_settings,"p_school_id uuid, p_self_checkout_enabled boolean, p_require_photo_admin_mode boolean, p_default_return_days integer",true,0
+OK,equipment_self_checkout,"p_item_id uuid, p_quantity integer, p_photo_url text, p_branch_id uuid, p_note text",true,0
+OK,equipment_set_acta_pdf_url,"p_assignment_id uuid, p_pdf_url text",true,0
+OK,equipment_soft_delete_item,"p_item_id uuid",true,0
+OK,equipment_upsert_item,"p_school_id uuid, p_name text, p_quantity_total integer, p_id uuid, p_branch_id uuid, p_size text, p_condition text, p_photo_url text, p_self_checkout_override text",true,0
+OK,es_miembro_o_inscrito_de_escuela,"p_school uuid",false,2
+OK,es_staff_de_escuela,"p_profile uuid, p_school uuid",false,2
+OK,factura_pagador_guardar_mio,"p_preferencia text, p_tipo text, p_numero text, p_nombre text, p_correo text, p_direccion text, p_ciudad text, p_depto text",false,0
+OK,factura_pagador_visible_para_admin,"p_profile_id uuid",false,1
+OK,finance_income_by_origin,"p_owner_type text, p_owner_id uuid, p_from date, p_to date, p_branch_id uuid, p_group text",false,0
+OK,finance_income_lines,"p_owner_type text, p_owner_id uuid, p_from date, p_to date, p_branch_id uuid, p_include_undated boolean",false,0
+OK,finance_income_summary,"p_owner_type text, p_owner_id uuid, p_from date, p_to date, p_branch_id uuid, p_group text",false,0
+OK,finance_permission,"p_owner_type text, p_owner_id uuid, p_action text",false,12
+OK,finance_read_school_ids,"",false,3
+ALTO,find_athletes_by_document,"p_doc_number text, p_school_id uuid",false,0
+OK,fn_cancel_pt_session,"p_plan_id uuid, p_caller_id uuid",false,0
+OK,fn_complete_session_plan,"p_plan_id uuid, p_trainer_id uuid, p_results jsonb",false,0
+OK,fn_create_plan_from_routine,"p_routine_id uuid, p_client_id uuid, p_client_type text, p_session_date date, p_trainer_id uuid, p_school_id uuid, p_enrollment_id uuid, p_assignment_source text",false,0
+OK,fn_delete_self_assigned_session,"p_plan_id uuid, p_caller_id uuid",false,0
+OK,fn_is_admin_of_school,"lookup_school_id uuid",true,0
+OK,fn_unassign_gym_session,"p_plan_id uuid, p_caller_id uuid",false,0
+OK,generate_qr_monthly_charge,"p_slug text, p_child_id uuid",false,0
+OK,generate_report_drafts,"p_school_id uuid, p_year smallint, p_month smallint",true,0
+SERVICE,generate_school_subscription_invoice,"p_school_id uuid",false,0
+OK,get_athlete_account_statement,"p_school_id uuid, p_child_id uuid, p_user_id uuid, p_unregistered_athlete_id uuid, p_months integer",false,0
+OK,get_athlete_dashboard_stats,"",true,0
+OK,get_athlete_enrollments,"",false,0
+OK,get_athlete_exercise_stats,"p_athlete_id uuid, p_days integer",false,0
+OK,get_athlete_exercise_stats,"p_athlete_id uuid, p_days integer, p_school_id uuid",false,0
+OK,get_athlete_payment_timeline,"p_school_id uuid, p_year integer, p_month integer, p_child_id uuid, p_user_id uuid, p_unregistered_athlete_id uuid",false,0
+OK,get_athlete_payments,"p_limit integer, p_page integer, p_status text",false,0
+OK,get_athlete_payments_v2,"p_limit integer, p_page integer, p_status text",false,0
+OK,get_athletes_without_payment,"p_school_id uuid",false,0
+OK,get_available_slots,"p_vendor_profile_id uuid, p_service_listing_id uuid, p_date date",false,0
+OK,get_child_exercise_stats,"p_child_id uuid, p_days integer, p_school_id uuid",false,0
+OK,get_child_exercise_stats,"p_child_id uuid, p_days integer",false,0
+OK,get_clinical_invite,"p_token text",false,0
+OK,get_distance_km,"lat1 numeric, lng1 numeric, lat2 numeric, lng2 numeric",true,0
+OK,get_invitation_details,"p_invite_id uuid",true,0
+OK,get_join_qr_public,"p_slug text",true,0
+OK,get_my_administered_school_ids,"",true,0
+OK,get_my_appointments,"",false,0
+OK,get_my_favorites,"",false,0
+OK,get_my_health_summary,"",false,0
+OK,get_my_invitations,"",false,0
+OK,get_my_schools,"",false,0
+OK,get_my_settings,"",false,0
+OK,get_onboarding_status,"",true,0
+OK,get_payment_aging_report,"p_school_id uuid, p_branch_id uuid",false,0
+OK,get_personal_trainer_school_id,"p_user_id uuid",false,19
+OK,get_plan_join_info,"p_plan_id uuid",true,0
+OK,get_post_training_pending_roster,"p_session_id uuid",false,0
+OK,get_public_program_slots,"p_school_id uuid, p_program_id uuid, p_team_id uuid, p_branch_id uuid",true,0
+OK,get_public_program_slots,"p_school_id uuid, p_team_id uuid, p_branch_id uuid",true,0
+OK,get_qr_pay_targets,"p_slug text",true,0
+OK,get_school_athlete_availability,"p_school_id uuid",false,0
+OK,get_school_athletes,"p_school_id uuid, p_team_id uuid",false,0
+OK,get_school_branding_by_invitation,"p_token text",true,0
+OK,get_school_by_slug,"p_slug text",true,0
+OK,get_school_dashboard_stats,"p_user_id uuid, p_branch_id uuid",false,0
+OK,get_school_id_by_custom_domain,"p_domain text",true,0
+OK,get_school_id_by_slug,"p_slug text",true,0
+OK,get_school_join_code,"p_school_id uuid",false,0
+OK,get_school_lead_landing_public,"p_slug text",true,0
+OK,get_school_payment_history_grid,"p_school_id uuid, p_branch_id uuid, p_months integer",false,0
+OK,get_school_payment_info,"p_school_id uuid",true,0
+OK,get_school_referrals,"",false,0
+OK,get_school_services,"p_school_id uuid",false,0
+OK,get_school_year_closes_report,"p_school_id uuid, p_year integer, p_branch_id uuid",false,0
+OK,get_shipping_quote_mock,"p_origin_city text, p_destination_city text, p_weight_grams integer, p_vendor_profile_id uuid",true,0
+OK,get_sibling_family,"p_school_id uuid, p_child_id uuid",false,0
+OK,get_single_branch_id,"p_school_id uuid",true,0
+OK,get_tactical_shared_play,"p_token text",true,0
+OK,get_team_join_info,"p_team_id uuid",true,0
+OK,get_tournament_invitation_public,"p_token uuid",true,0
+MEDIO,get_trainer_athlete_ids,"p_school_id uuid",false,17
+OK,give_kudos,"p_school_id uuid, p_child_id uuid, p_athlete_user_id uuid, p_message text, p_unregistered_athlete_id uuid",false,0
+OK,glosa_dashboard,"p_school_id uuid, p_from date, p_to date",true,0
+OK,grant_clinical_consents,"p_patient_id uuid, p_types text[]",false,0
+OK,grant_tactical_ai_credits,"p_school_id uuid, p_amount_usd numeric, p_user_id uuid, p_note text",false,0
+OK,guardar_config_clase_prueba,"p_school_id uuid, p_enabled boolean, p_presencial_enabled boolean, p_whatsapp_enabled boolean, p_cupos_desde_entrenamientos boolean, p_indicaciones text",false,0
+MEDIO,has_entitlement,"p_school_id uuid, p_key text",true,0
+OK,has_role,"req_role text",true,0
+OK,hold_athlete_report,"p_report_id uuid, p_reason text",true,0
+OK,import_exercise_pack,"p_school_id uuid, p_payload jsonb",false,0
+OK,insert_exercise_into_session_block,"p_exercise_id uuid, p_session_id uuid, p_block_id uuid, p_team_id uuid",false,0
+OK,inventory_adjust,"p_variant_id uuid, p_product_id uuid, p_new_stock integer, p_reason_code text, p_note text, p_actor uuid",false,0
+OK,invite_parent_to_school,"p_parent_email text, p_child_name text, p_team_id uuid, p_monthly_fee numeric, p_parent_phone text, p_branch_id uuid, p_offering_plan_id uuid",false,0
+OK,is_admin,"",true,0
+MEDIO,is_coach_parent_messaging_blocked,"p_sender uuid, p_recipient uuid",true,1
+OK,is_event_school_admin,"p_event_id uuid",false,4
+MEDIO,is_gov_entity,"p_school_id uuid",true,0
+OK,is_linked_unregistered_athlete,"p_unregistered_id uuid",false,0
+MEDIO,is_non_saas_entity,"p_school_id uuid",true,0
+OK,is_own_team_coach,"p_team_coach_id uuid",true,1
+OK,is_parent_of_child,"child_uuid uuid",true,17
+OK,is_platform_admin,"",true,72
+OK,is_school_admin,"p_school_id uuid",true,108
+OK,is_school_admin_of,"p_school_id uuid, p_uid uuid",false,2
+OK,is_school_coach,"p_school_id uuid",true,9
+OK,is_school_general_admin,"check_school_id uuid",true,0
+MEDIO,is_school_member,"_user_id uuid, _school_id uuid",true,1
+OK,is_school_open_now,"p_school_id uuid",true,0
+OK,is_school_owner,"lookup_school_id uuid",true,0
+OK,is_scoped_coach_school,"p_school_id uuid",true,2
+OK,is_store_vendor,"p_vendor_profile_id uuid",true,4
+OK,is_super_admin,"",true,102
+OK,is_support_agent,"",false,3
+OK,issue_athlete_certificate,"p_certificate_id uuid",false,0
+OK,issue_athlete_id_card,"p_school_id uuid, p_child_id uuid, p_profile_id uuid, p_template_id uuid, p_valid_until date, p_photo_url text, p_unregistered_athlete_id uuid",false,0
+OK,link_day_to_match,"p_day uuid, p_match uuid",false,0
+OK,link_my_guest_orders,"",false,0
+OK,link_siblings,"p_school_id uuid, p_child_ids uuid[]",false,0
+OK,list_athlete_certificates,"p_school_id uuid, p_status text, p_kind text, p_search text, p_limit integer, p_offset integer",false,0
+OK,list_athlete_id_cards,"p_school_id uuid, p_status text, p_search text, p_limit integer, p_offset integer",false,0
+OK,list_child_match_reports,"p_child uuid",false,0
+OK,list_kudos,"p_child_id uuid, p_athlete_user_id uuid, p_limit integer, p_unregistered_athlete_id uuid",false,0
+OK,list_open_trial_slots_public,"p_slug text",true,0
+OK,list_school_athletes_for_card_issue,"p_school_id uuid, p_search text, p_limit integer",false,0
+OK,list_school_athletes_for_card_issue_v2,"p_school_id uuid, p_search text, p_team_id uuid, p_branch_id uuid, p_card_filter text, p_limit integer, p_offset integer",false,0
+OK,list_school_join_qrs,"p_school_id uuid, p_active boolean, p_search text",false,0
+OK,list_school_join_requests,"p_school_id uuid, p_include_resolved boolean",false,0
+OK,list_school_leads,"p_school_id uuid, p_status text",false,0
+OK,list_school_plans,"p_school_id uuid",true,0
+OK,list_school_trial_slots,"p_school_id uuid",false,0
+OK,listar_clase_prueba,"p_school_id uuid",false,0
+OK,log_clinical_access,"p_patient_id uuid, p_action text",false,0
+OK,log_exercise_done,"p_assignment_id uuid, p_done_on date, p_pain smallint, p_comment text",false,0
+OK,log_tactical_board_event,"p_school_id uuid, p_event text, p_team_id uuid, p_source_type text, p_sport text",false,0
+MEDIO,mark_custom_domain_verified,"p_id uuid",false,0
+OK,mark_overdue_payments,"p_school_id uuid",false,0
+OK,mark_report_viewed,"p_report_id uuid",false,0
+MEDIO,match_evaluation_visible_to_family,"p_match uuid",false,2
+OK,migrate_device_favorites,"p_device_id text",false,0
+OK,migrate_local_favorites,"p_school_ids uuid[]",false,0
+OK,my_athlete_certificates,"",false,0
+OK,my_athlete_id_cards,"",false,0
+OK,my_callups,"",false,0
+OK,my_linked_unregistered_ids,"",false,5
+OK,my_school_join_status,"",false,0
+OK,my_school_store,"p_school_id uuid",false,0
+OK,next_unpaid_period,"p_child_id uuid",false,0
+ALTO,notify_user,"p_user_id uuid, p_title text, p_message text, p_type text, p_link text",false,0
+OK,obtener_config_clase_prueba,"p_school_id uuid",false,0
+OK,open_month,"p_school_id uuid, p_year integer, p_month integer, p_branch_id uuid",false,0
+MEDIO,order_belongs_to_store,"p_order_id uuid, p_vendor_profile_id uuid",false,1
+OK,order_receipt_object_access,"p_name text, p_write boolean",false,2
+OK,order_transition,"p_order_id uuid, p_to text, p_note text, p_tracking jsonb, p_actor uuid",false,0
+OK,order_visible_to_me,"p_order_id uuid",false,1
+OK,owns_support_ticket,"p_ticket_id uuid",false,1
+OK,pause_config_for_enrollment,"p_enrollment_id uuid",false,0
+OK,pause_enrollment_directly,"p_enrollment_id uuid, p_reason text, p_month_from date, p_month_to date, p_note text",false,0
+OK,pay_supplier_bill,"p_bill_id uuid, p_amount numeric, p_paid_date date, p_payment_method pay_method, p_reference text",false,0
+OK,payments_montos_mensualidad_validos,"p_school_id uuid, p_child_id uuid, p_user_id uuid",false,0
+OK,period_payment_status,"p_child_id uuid, p_period_year smallint, p_period_month smallint",false,0
+OK,post_payroll_run,"p_run_id uuid, p_paid_date date",false,0
+OK,preview_close_month,"p_school_id uuid, p_year integer, p_month integer, p_branch_id uuid",false,0
+OK,preview_enrollment_pause,"p_enrollment_id uuid, p_month_from date, p_month_to date",false,0
+OK,preview_open_month,"p_school_id uuid, p_year integer, p_month integer, p_branch_id uuid",false,0
+OK,preview_school_join_code,"p_code text",false,0
+OK,publish_athlete_report,"p_report_id uuid, p_snapshot jsonb, p_override_note boolean, p_reason text",true,0
+OK,publish_match_evaluation,"p_match uuid, p_publish boolean",false,0
+OK,publish_match_report,"p_match uuid, p_publish boolean",false,0
+OK,publish_team_reports,"p_school_id uuid, p_team_id uuid, p_year smallint, p_month smallint, p_snapshots jsonb, p_override_note boolean, p_reason text",true,0
+OK,puede_registrar_captura_biomecanica,"p_school uuid, p_session_plan uuid",false,2
+OK,quote_cart,"p_items jsonb, p_fulfillment text, p_address jsonb, p_coupon_code text",true,0
+OK,record_clinical_consent_presencial,"p_patient_id uuid, p_types text[], p_signed_by_name text, p_relationship text, p_evidence_path text",false,0
+OK,regenerate_my_pickup_code,"p_order_id uuid, p_actor uuid",false,0
+OK,regenerate_report_snapshot,"p_report_id uuid, p_snapshot jsonb, p_reason text",true,0
+OK,register_for_internal_tournament,"p_event_id uuid, p_category_id uuid, p_child_id uuid",false,0
+OK,register_manual_payments,"p_school_id uuid, p_payment_ids uuid[], p_method text, p_payment_date date, p_reference_base text, p_receipt_url text, p_receipt_fields jsonb",false,0
+OK,register_user_device,"p_device_id text, p_platform text, p_push_token text, p_push_provider text, p_app_version text, p_os_version text, p_device_model text, p_locale text, p_timezone text, p_user_agent text",false,0
+OK,registrar_clase_prueba_rapida,"p_school_id uuid, p_acudiente text, p_telefono text, p_nombres text[], p_es_adulto boolean",false,0
+OK,reject_enrollment_pause,"p_request_id uuid, p_review_note text",false,0
+OK,reject_order_receipt,"p_order_id uuid, p_reason text, p_actor uuid",false,0
+OK,reject_payment_receipt,"p_payment_id uuid, p_reason_code text, p_reason_text text",false,0
+OK,reopen_month,"p_school_id uuid, p_year integer, p_month integer, p_reason text, p_branch_id uuid",false,0
+OK,reply_match_report,"p_match uuid, p_body text",false,0
+OK,report_coverage,"p_school_id uuid, p_year smallint, p_month smallint",true,0
+OK,request_athlete_certificate,"p_school_id uuid, p_template_id uuid, p_child_id uuid, p_profile_id uuid",false,0
+OK,request_enrollment_pause,"p_enrollment_id uuid, p_reason text, p_month_from date, p_month_to date, p_reason_note text",false,0
+OK,request_refund,"p_order_id uuid, p_transaction_id uuid, p_payment_id uuid, p_reason text",false,0
+OK,request_service_appointment,"p_service_listing_id uuid, p_date date, p_time text, p_child_id uuid, p_notes text",false,0
+OK,reschedule_pending_reports,"p_school_id uuid, p_year smallint, p_month smallint",true,0
+OK,resolve_school_join_request,"p_request_id uuid, p_action text, p_team_id uuid, p_branch_id uuid, p_child_id uuid, p_reason text",false,0
+OK,respond_callup,"p_lineup_id uuid, p_child_id uuid, p_athlete_user_id uuid, p_response text, p_unregistered_athlete_id uuid",false,0
+OK,respond_review,"p_review_id uuid, p_text text, p_actor uuid",false,0
+OK,resume_enrollment,"p_enrollment_id uuid, p_note text",false,0
+OK,revoke_athlete_certificate,"p_certificate_id uuid, p_reason text",false,0
+OK,revoke_athlete_id_card,"p_card_id uuid, p_reason text",false,0
+OK,revoke_clinical_consent,"p_consent_id uuid, p_reason text",false,0
+OK,revoke_tactical_shared_play,"p_token text",false,0
+OK,revoke_user_device,"p_device_id text, p_reason text",false,0
+OK,rotate_school_join_code,"p_school_id uuid",false,0
+OK,rpc_process_upgrade_request,"p_request_id uuid, p_notes text, p_amount_cents integer, p_contact_method text",true,0
+OK,run_payroll,"p_owner_type text, p_owner_id uuid, p_year integer, p_month integer",false,0
+SERVICE,run_saas_billing_cycle,"",false,0
+OK,save_dashboard_preferences,"p_preferences jsonb",false,0
+OK,save_match_admin_comment,"p_match uuid, p_comment text",false,0
+OK,save_match_report,"p_match uuid, p jsonb",false,0
+OK,save_match_roster,"p_match uuid, p_players jsonb",false,0
+OK,save_notification_preferences,"p_preferences jsonb",false,0
+OK,save_privacy_preferences,"p_preferences jsonb",false,0
+OK,save_profile_settings,"p_full_name text, p_phone text, p_bio text, p_date_of_birth date, p_sports_interests text[]",false,0
+OK,save_profile_settings,"p_full_name text, p_phone text, p_bio text",false,0
+MEDIO,save_school_branding,"p_school_id uuid, p_branding jsonb",false,0
+MEDIO,save_school_info,"p_school_id uuid, p_name text, p_description text",false,0
+MEDIO,save_school_info,"p_school_id uuid, p_name text, p_description text, p_city text, p_address text, p_phone text, p_email text, p_website text",false,0
+OK,school_add_sport_category,"p_school_id uuid, p_sport text, p_nombre text, p_min integer, p_max integer, p_origen text",false,0
+MEDIO,school_has_addon,"p_school_id uuid, p_key text",false,0
+MEDIO,school_has_branding_feature,"p_school_id uuid",false,0
+MEDIO,school_has_custom_domain_feature,"p_school_id uuid",false,0
+MEDIO,school_has_native_app,"p_school_id uuid",true,0
+MEDIO,school_is_operational,"p_school_id uuid",true,42
+OK,school_member_profile_ids,"",true,1
+OK,school_memberships_listado,"p_school_id uuid",false,0
+OK,school_payment_kpis,"p_school_id uuid, p_branch_id uuid",false,0
+OK,school_register_athlete_for_tournament,"p_event_id uuid, p_category_id uuid, p_child_id uuid, p_athlete_user_id uuid",false,0
+OK,school_set_membership,"p_school_id uuid, p_status text, p_user_id uuid, p_child_id uuid, p_unregistered_athlete_id uuid, p_valid_from date, p_valid_until date, p_source text, p_external_ref text, p_notes text",false,0
+MEDIO,school_shows_own_brand,"p_school_id uuid",true,0
+OK,school_sport_categories,"p_school_id uuid, p_sport text",false,0
+OK,schools_near_location,"p_lat numeric, p_lng numeric, p_radius_km numeric",true,0
+OK,search_explore_map,"p_category text, p_query text, p_city text, p_sport text, p_service_type text, p_bounds_sw_lat numeric, p_bounds_sw_lng numeric, p_bounds_ne_lat numeric, p_bounds_ne_lng numeric",true,0
+OK,search_marketplace,"p_query text, p_category text, p_type text, p_city text, p_price_max numeric, p_service_type text, p_page integer, p_limit integer, p_order_by text",true,0
+OK,search_schools,"p_query text, p_city text, p_sport text, p_category text, p_price_max numeric, p_rating_min numeric, p_age numeric, p_verified boolean, p_open_now boolean, p_lat numeric, p_lng numeric, p_distance_km numeric, p_page integer, p_limit integer, p_order_by text",true,0
+OK,seed_school_match_criteria,"p_school uuid",false,0
+CRIT,send_notification,"p_title text, p_message text, p_type text, p_link text, p_user_id uuid",false,0
+OK,set_athlete_report_note,"p_report_id uuid, p_note text",true,0
+OK,set_certificate_pdf_url,"p_certificate_id uuid, p_pdf_url text",false,0
+OK,set_school_athlete_status,"p_school_id uuid, p_athlete_type text, p_athlete_id uuid, p_active boolean",false,0
+OK,set_school_video_settings,"p_school_id uuid, p_enabled boolean, p_quota_seconds integer, p_quota_bytes bigint, p_max_upload_bytes bigint, p_max_duration_s integer",false,0
+OK,set_store_payment_settings,"p_vendor_profile_id uuid, p_settings jsonb, p_actor uuid",false,0
+OK,soft_delete_school_video,"p_video_id uuid",false,0
+OK,staff_school_ids,"",true,4
+OK,store_admin_settings,"p_vendor_profile_id uuid, p_actor uuid",false,0
+OK,store_can_manage_product,"p_product_id uuid",false,7
+OK,store_enabled,"",true,12
+OK,store_income_has_store,"p_school_id uuid",false,0
+OK,store_income_lines,"p_school_id uuid, p_from date, p_to date, p_branch_id uuid",false,0
+OK,store_income_summary,"p_school_id uuid, p_from date, p_to date, p_branch_id uuid, p_group text",false,0
+OK,store_payment_methods,"p_vendor_profile_id uuid",true,0
+OK,store_pilot_allowlist,"",true,0
+OK,store_seller_allowed,"p_vendor_profile_id uuid",true,1
+OK,store_transfer_accounts,"p_order_id uuid, p_actor uuid",false,0
+OK,submit_athlete_installment,"p_athlete_payment_id uuid, p_amount_cents integer, p_receipt_url text, p_receipt_date date, p_payment_method text, p_notes text",false,0
+CRIT,submit_enrollment,"p_school_id uuid, p_team_id uuid, p_offering_plan_id uuid, p_price numeric, p_child_id uuid, p_child_name text, p_child_dob date, p_child_doc_type text, p_child_doc_number text, p_child_medical text, p_child_emergency text, p_self_enrollment boolean, p_payment_method text, p_payment_notes text",false,0
+CRIT,submit_enrollment_v2,"p_school_id uuid, p_team_id uuid, p_offering_plan_id uuid, p_child_full_name text, p_child_dob date, p_child_doc_type text, p_child_doc_number text, p_child_medical text, p_child_emergency text, p_payment_method text, p_notes text",false,0
+OK,submit_facility_booking,"p_school_id uuid, p_facility_id uuid, p_reservation_date date, p_start_time time without time zone, p_end_time time without time zone, p_participants integer, p_notes text, p_payment_method text",false,0
+OK,submit_facility_booking_v2,"p_school_id uuid, p_facility_id uuid, p_reservation_date date, p_start_time time without time zone, p_end_time time without time zone, p_booker_type text, p_resv_type text, p_external_org_name text, p_participants integer, p_notes text, p_deposit_amount numeric, p_deposit_method text, p_deposit_receipt text",false,0
+OK,submit_match_evaluation,"p_match uuid, p_entries jsonb",false,0
+OK,submit_order_receipt,"p_order_id uuid, p_receipt_path text, p_actor uuid",false,0
+OK,submit_post_training_coach_rating,"p_session_id uuid, p_ratings jsonb, p_coach_notes text",false,0
+OK,submit_post_training_self_eval,"p_session_id uuid, p_child_id uuid, p_user_id uuid, p_answers jsonb",false,0
+OK,submit_qr_signup,"p_slug text, p_team_id uuid, p_branch_id uuid, p_child_full_name text, p_child_dob date, p_child_doc_type text, p_child_doc_number text, p_child_gender text, p_phone text, p_monthly_fee numeric, p_existing_child_id uuid, p_plan_id uuid",false,0
+OK,submit_qr_signup,"p_slug text, p_team_id uuid, p_branch_id uuid, p_child_full_name text, p_child_dob date, p_child_doc_type text, p_child_doc_number text, p_child_gender text, p_phone text, p_monthly_fee numeric, p_existing_child_id uuid, p_plan_id uuid, p_unregistered_athlete_id uuid",true,0
+OK,submit_school_join_request,"p_code text, p_for_whom text, p_name text, p_birth_date date, p_category text",false,0
+OK,submit_school_lead,"p_slug text, p_full_name text, p_phone text, p_email text, p_gender text, p_birth_date date, p_guardian_name text, p_how_heard text, p_notes text, p_source_detail jsonb, p_website text, p_trial_slot_id uuid",true,0
+OK,support_open_ticket,"p_subject text, p_category text",false,0
+OK,support_post_message,"p_ticket_id uuid, p_body text, p_internal boolean",false,0
+OK,team_payment_status,"p_team_id uuid",false,0
+OK,toggle_favorite,"p_school_id uuid",false,0
+OK,unblock_payment,"p_kind text, p_id uuid",false,0
+OK,unlink_sibling,"p_school_id uuid, p_child_id uuid",false,0
+OK,unlog_exercise_done,"p_assignment_id uuid, p_done_on date",false,0
+OK,update_match,"p_match uuid, p jsonb",false,0
+OK,update_school_branding,"p_school_id uuid, p_logo_url text, p_primary_color text, p_secondary_color text, p_show_watermark boolean, p_ip_address inet, p_user_agent text",false,0
+OK,update_school_lead_status,"p_lead_id uuid, p_status text",false,0
+OK,update_school_public_profile,"p_school_id uuid, p_name text, p_description text, p_city text, p_address text, p_phone text, p_email text, p_website text, p_logo_url text, p_cover_image_url text, p_sports text[], p_public_page_layout text",false,0
+OK,update_supplier_bill,"p_bill_id uuid, p_supplier_id uuid, p_invoice_no text, p_amount numeric, p_issue_date date, p_due_date date, p_category_id uuid, p_notes text",false,0
+OK,user_admin_school_ids,"",true,40
+OK,user_coached_team_ids,"",false,1
+OK,user_school_ids,"",true,20
+OK,user_school_role,"p_school_id uuid",true,0
+OK,user_staff_school_ids,"",true,92
+OK,user_tactical_edit_school_ids,"",true,22
+OK,validate_athlete_age,"p_birth_year integer, p_category_id uuid",true,0
+OK,validate_child_for_team_join,"p_team_id uuid, p_doc_number text",true,0
+OK,validate_doc_for_plan_join,"p_plan_id uuid, p_doc_number text",true,0
+OK,vendor_payout_summary,"",false,0
+OK,verificar_organizador,"p_profile_id uuid, p_verificado boolean",false,0
+OK,verify_athlete_certificate_public,"p_folio text, p_qr_token uuid",true,0
+OK,verify_athlete_id_card_public,"p_qr_token uuid",true,0
+OK,void_expense,"p_expense_id uuid, p_reason text",false,0
+OK,void_supplier_bill,"p_bill_id uuid, p_reason text",false,0
+OK,wa_consumo_del_mes,"p_integration_id uuid, p_desde timestamp with time zone",false,0

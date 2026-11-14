@@ -20,6 +20,7 @@ import { BFFError } from '@/lib/api/bffClient';
 import { TacticalAiOverlay, TacticalAiPanel, type AiPreview } from '@/components/school/TacticalAiPanel';
 import {
   quotaLabel, fallbackMoreMessage, requestMoreHref, buildAnalyzeRequest, humanizeResult, humanizeText, suggestionToBoardFrames,
+  rechargeLabel, rechargeOfferOf, boostLabel, AI_METER_UNIT,
   type AiResult, type AiSuggestion,
 } from '@/lib/school/tacticalAi';
 import { resolveViewerSource, suggestionViewer3D } from '@/lib/school/tactical3dSuggestion';
@@ -113,6 +114,13 @@ describe('TacticalAiPanel', () => {
     expect(sent.labels[K1]).toBe('Central');
   });
 
+  it('buildAnalyzeRequest manda la formación elegida (clave de catálogo) y descarta basura', () => {
+    const base = { teamId: 't-1', sport: 'futbol' as const, frames: playFrames, labelOf: () => 'Central' };
+    expect(buildAnalyzeRequest({ ...base, formation: '4-2-3-1' }).formacion).toBe('4-2-3-1');
+    expect(buildAnalyzeRequest({ ...base, formation: 'Mi formación <b>' }).formacion).toBeUndefined();
+    expect(buildAnalyzeRequest(base).formacion).toBeUndefined();
+  });
+
   it('«Ver contraataque» manda la sugerencia a la capa y la capa dibuja a los rivales', async () => {
     const { onPreview } = setup();
     fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
@@ -148,6 +156,58 @@ describe('TacticalAiPanel', () => {
     expect(new Set(frames.map((f: TacticalFrame) => f.id)).size).toBe(3);
   });
 
+  it('«Útil / No útil» en cada sugerencia: manda la valoración con el analysis_ref; otro toque la quita', async () => {
+    const REF = 'b'.repeat(64);
+    api.post.mockResolvedValueOnce({ result, cached: false, balance: balance(54, 8), analysis_ref: REF });
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
+    const util = await screen.findByRole('button', { name: 'Útil: Pase largo al centro' });
+    fireEvent.click(util);
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/v1/school/tactical/ai-feedback', {
+      analysis_ref: REF, sport: 'futbol', kind: 'contraataque', index: 1, verdict: 'util',
+    }));
+    expect(util).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(util);
+    await waitFor(() => expect(api.post).toHaveBeenLastCalledWith('/api/v1/school/tactical/ai-feedback', expect.objectContaining({ verdict: null })));
+    fireEvent.click(screen.getByRole('button', { name: 'No útil: Lateral con cobertura' }));
+    await waitFor(() => expect(api.post).toHaveBeenLastCalledWith('/api/v1/school/tactical/ai-feedback', expect.objectContaining({ kind: 'variante', index: 0, verdict: 'no_util' })));
+  });
+
+  it('«Guardar como nueva jugada» queda registrado como sugerencia usada', async () => {
+    const REF = 'c'.repeat(64);
+    api.post.mockResolvedValueOnce({ result, cached: false, balance: balance(54, 8), analysis_ref: REF });
+    const { onApply } = setup();
+    fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
+    fireEvent.click((await screen.findAllByRole('button', { name: /Guardar como nueva jugada/ }))[2]);
+    expect(onApply).toHaveBeenCalled();
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/api/v1/school/tactical/ai-feedback', {
+      analysis_ref: REF, sport: 'futbol', kind: 'variante', index: 0, saved: true,
+    }));
+  });
+
+  it('si el envío de la valoración falla, el voto vuelve atrás', async () => {
+    api.post.mockResolvedValueOnce({ result, cached: false, balance: balance(54, 8), analysis_ref: 'd'.repeat(64) });
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
+    const util = await screen.findByRole('button', { name: 'Útil: Salida rápida por la banda derecha' });
+    api.post.mockRejectedValueOnce(new BFFError(500, 'x'));
+    fireEvent.click(util);
+    await waitFor(() => expect(util).toHaveAttribute('aria-pressed', 'false'));
+  });
+
+  it('sin analysis_ref (BFF viejo) no ofrece valorar', async () => {
+    setup();
+    fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
+    await screen.findByText(result.lectura);
+    expect(screen.queryByRole('button', { name: /^Útil/ })).toBeNull();
+  });
+
+  it('cupo ampliado: la barra dice hasta cuándo', async () => {
+    api.get.mockResolvedValue(balance(60, 9, { boost: { multiplier: 3, expires_at: '2026-11-05T05:00:00+00:00' } }));
+    setup();
+    expect(await screen.findByTestId('ai-boost')).toHaveTextContent('Cupo ampliado ×3 hasta el 4 de noviembre');
+  });
+
   it('sin permiso táctico no ofrece guardar', async () => {
     setup({ canApply: false });
     fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
@@ -161,8 +221,8 @@ describe('TacticalAiPanel', () => {
     expect(await screen.findByText('Te queda el 54 % de tu IA este mes · unos 8 análisis de fútbol 11')).toBeInTheDocument();
   });
 
-  it('agotado (402): «Usaste tu IA de este mes» y «Quiero más» abre el WhatsApp de ventas con el mensaje del BFF', async () => {
-    const msg = 'Hola, soy Profe Andrés de Club Demo. Usé mi IA de la pizarra de octubre 2026: 15 análisis, US$ 0,98 de US$ 1,00. Quiero más cupo de IA.';
+  it('agotado (402): «Usaste tu IA de este mes» y «Quiero +50 % de IA» abre el WhatsApp de ventas con el mensaje del BFF', async () => {
+    const msg = 'Hola, soy Profe Andrés de Club Demo. Usé el 98 % de mi IA de la pizarra de octubre 2026, 15 análisis. Quiero una recarga de +50 % de IA.';
     api.post.mockRejectedValue(new BFFError(402, 'needs', {
       error: 'Usaste tu IA de este mes.', needs_more: true, limited_by: 'user', balance: balance(2, 0), request_more_message: msg,
     }));
@@ -170,7 +230,8 @@ describe('TacticalAiPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Analizar jugada/ }));
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(await screen.findByText('Usaste tu IA de este mes.')).toBeInTheDocument();
-    const more = screen.getByRole('link', { name: /Quiero más/ });
+    // Recarga en la misma moneda que el medidor (%).
+    const more = screen.getByRole('link', { name: 'Quiero +50 % de IA' });
     expect(more).toHaveAttribute('href', `https://wa.me/573202683539?text=${encodeURIComponent(msg)}`);
     expect(more).toHaveAttribute('target', '_blank');
     // El flujo de compra en la app (no construido) ya no aparece.
@@ -183,11 +244,13 @@ describe('TacticalAiPanel', () => {
     setup();
     expect(await screen.findByTestId('ai-exhausted')).toBeInTheDocument();
     expect(screen.getByTestId('ai-balance')).toHaveTextContent('Usaste tu IA de este mes');
-    const href = screen.getByRole('link', { name: /Quiero más/ }).getAttribute('href')!;
+    const href = screen.getByRole('link', { name: /Quiero \+50 % de IA/ }).getAttribute('href')!;
     expect(href.startsWith('https://wa.me/573202683539?text=')).toBe(true);
     const text = decodeURIComponent(href.split('?text=')[1]);
     expect(text).toContain('fútbol 11');
-    expect(text).toContain('US$ 1,00 de US$ 1,00');
+    expect(text).toContain('el 100 % de mi IA');
+    expect(text).toContain('+50 % de IA');
+    expect(text).not.toContain('US$');
     expect(text).not.toMatch(/athlete:|child:|1111-4111/);
   });
 
@@ -266,7 +329,21 @@ describe('tacticalAi (lógica)', () => {
   });
   it('requestMoreHref: wa.me del comercial; usa el mensaje del BFF y si no, uno sin atletas', () => {
     expect(requestMoreHref(null, 'futbol', 'hola')).toBe('https://wa.me/573202683539?text=hola');
-    expect(fallbackMoreMessage(balance(0) as any, 'futsal')).toBe('Hola, uso la pizarra de SportMaps con futsal y se me acabó la IA del mes. Este mes: 6 análisis, US$ 1,00 de US$ 1,00. Quiero más cupo de IA.');
+    expect(fallbackMoreMessage(balance(0) as any, 'futsal')).toBe('Hola, uso la pizarra de SportMaps con futsal y se me acabó la IA del mes. Este mes: 6 análisis, el 100 % de mi IA. Quiero una recarga de +50 % de IA.');
+  });
+  it('recargas en la moneda del medidor: % → «+50 % de IA»; análisis → «+10 análisis»', () => {
+    expect(AI_METER_UNIT).toBe('pct');
+    expect(rechargeLabel('pct')).toBe('+50 % de IA');
+    expect(rechargeLabel('analyses')).toBe('+10 análisis');
+    expect(rechargeOfferOf(null).label).toBe('+50 % de IA');
+    // Si el BFF manda la recarga (p. ej. el medidor pasa a análisis), manda la del BFF.
+    expect(rechargeOfferOf(balance(0, 0, { recharge: { unit: 'analyses', amount: 10, label: '+10 análisis' } }) as any).label).toBe('+10 análisis');
+  });
+  it('boostLabel: «Cupo ampliado ×3 hasta el 4 de noviembre» (vencimiento exclusivo, hora Colombia)', () => {
+    expect(boostLabel(balance(60) as any)).toBeNull();
+    expect(boostLabel(balance(60, 9, { boost: { multiplier: 3, expires_at: '2026-11-05T05:00:00+00:00' } }) as any))
+      .toBe('Cupo ampliado ×3 hasta el 4 de noviembre');
+    expect(boostLabel(balance(60, 9, { boost: { multiplier: 1.5, expires_at: null } }) as any)).toBe('Cupo ampliado ×1,5');
   });
   it('«Ver en 3D» en cada tarjeta: abre el visor (sin WebGL2 cae a 2D) y registra ver/guardar/analizar', async () => {
     const onEvent = vi.fn();

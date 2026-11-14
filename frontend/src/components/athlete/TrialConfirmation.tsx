@@ -57,7 +57,8 @@ export function TrialConfirmation({
         .from('bookings')
         .insert({
           athlete_id: user.id,
-          team_id: teamId,
+          // bookings no tiene team_id (el equipo sale del cupo): mandarlo
+          // hacía fallar el insert con «column not found».
           availability_slot_id: slotId,
           booking_type: 'trial',
           status: 'trial_confirmed',

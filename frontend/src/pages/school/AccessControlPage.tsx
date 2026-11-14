@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { bffClient } from '@/lib/api/bffClient';
 import { HourBankSchoolSection } from '@/components/access/HourBankSchoolSection';
+import { DeviceUsersDialog } from '@/components/access/DeviceUsersDialog';
+import { useEntitlements } from '@/hooks/useEntitlements';
 import { dayToLocalDate } from '@/lib/dateUtils';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -242,6 +244,9 @@ export default function AccessControlPage() {
   // Configurar dispositivos
   const [manageOpen, setManageOpen] = useState(false);
   const [overdueOpen, setOverdueOpen] = useState(false);
+  // «IDs del lector»: solo en escuelas con school_settings.access_roster_enabled.
+  const { accessRosterEnabled } = useEntitlements();
+  const [rosterOpen, setRosterOpen] = useState(false);
   const [overdue, setOverdue] = useState<{
     payment_id: string; name: string; due_date: string; amount: string | number;
     zk_pin: number; blocked: boolean;
@@ -568,6 +573,17 @@ export default function AccessControlPage() {
             <ShieldX className="h-3.5 w-3.5" />
             Vencidos {overdue.length > 0 && `(${overdue.length})`}
           </Button>
+          {accessRosterEnabled && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => setRosterOpen(true)}
+            >
+              <Fingerprint className="h-3.5 w-3.5" />
+              IDs del lector
+            </Button>
+          )}
         </div>
       </div>
 
@@ -890,6 +906,8 @@ export default function AccessControlPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {accessRosterEnabled && <DeviceUsersDialog open={rosterOpen} onClose={() => setRosterOpen(false)} />}
 
       {/* Diálogo: gestionar dispositivos (lista) */}
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>

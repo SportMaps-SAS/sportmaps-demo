@@ -37,7 +37,9 @@ router.post('/profile', requireAuth, requireRole('organizer'), async (req: Authe
         const orgData = {
             ...parsed.data,
             profile_id: userId,
-            is_verified: false, // Default
+            // is_verified NO va aquí: la columna nace en false (default) y en un
+            // re-envío del onboarding el upsert des-verificaba al organizador.
+            // Solo la cambia la plataforma (RPC verificar_organizador).
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };

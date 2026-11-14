@@ -307,6 +307,7 @@ async function chatClaude(
     messages: LlmMessage[],
     tools: LlmTool[],
     toolChoice: LlmToolChoice = 'auto',
+    modelo?: string,
 ): Promise<LlmResult> {
     const client = clienteClaude();
     // Mismo criterio que OpenAI-compatible: el resultado de una tool va como
@@ -326,10 +327,10 @@ ${m.content}`
     if (!msgs.length) msgs.push({ role: 'user', content: '(sin texto)' });
 
     const body: any = {
-        model: modeloClaude(process.env.WHATSAPP_CLAUDE_MODEL),
+        model: modeloClaude(modelo || process.env.WHATSAPP_CLAUDE_MODEL),
         max_tokens: 2048,
         // Respuestas cortas de WhatsApp: esfuerzo bajo = menos latencia y costo.
-        ...conEsfuerzoBajo(modeloClaude(process.env.WHATSAPP_CLAUDE_MODEL)),
+        ...conEsfuerzoBajo(modeloClaude(modelo || process.env.WHATSAPP_CLAUDE_MODEL)),
         // Caché de prompt: herramientas + sistema son casi siempre iguales y el
         // bot llama al modelo 2+ veces por turno (herramienta → respuesta). Lo
         // cacheado se cobra ~10 % en las lecturas siguientes (2026-10-07).
@@ -388,6 +389,8 @@ export async function chatWithTools(params: {
     provider?: LlmProvider;
     /** Escuela / conversación / función para el registro de consumo (llm_usage). */
     uso?: ContextoUsoLlm;
+    /** Modelo de Claude para esta llamada (p. ej. Haiku); los demás proveedores lo ignoran. */
+    modeloClaude?: string;
 }): Promise<LlmResult> {
     const primary: LlmProvider =
         params.provider || (process.env.WHATSAPP_LLM_PROVIDER as LlmProvider) || 'gemini';
@@ -399,7 +402,7 @@ export async function chatWithTools(params: {
         : correr(p));
     const correr = (p: LlmProvider) =>
         p === 'claude'
-            ? chatClaude(params.system, params.messages, tools, toolChoice)
+            ? chatClaude(params.system, params.messages, tools, toolChoice, params.modeloClaude)
             : p === 'gemini'
                 ? chatGemini(params.system, params.messages, tools, toolChoice)
                 : chatOpenAICompatible(p as 'deepseek' | 'groq', params.system, params.messages, tools, toolChoice);
@@ -443,6 +446,16 @@ export async function chatWithTools(params: {
             } catch (err: any) {
                 lastErr = err;
                 const msg = String(err?.message ?? '');
+                // Claude se negó: es la respuesta, no una caída. Reintentar con
+                // Gemini o Groq era darle al jailbreak un modelo menos estricto
+                // (auditoría 2026-10-28, P-05). Quien llama ya tiene su respaldo
+                // determinista para el error total.
+                if (msg === 'claude_refusal') {
+                    fallas.push({ proveedor: p, error: msg, ms: Date.now() - inicio });
+                    const rechazo = new Error('el modelo se negó a responder (claude_refusal)') as LlmErrorTotal;
+                    rechazo.fallas = fallas;
+                    throw rechazo;
+                }
                 const saturado = /\b429\b|rate.?limit|too many requests|quota|resource_exhausted/i.test(msg);
 
                 if (!saturado || intento === 2) {

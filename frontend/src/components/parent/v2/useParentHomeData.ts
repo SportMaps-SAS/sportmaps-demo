@@ -16,9 +16,9 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import { calcEarlyPaymentDiscount } from '@/lib/earlyPaymentDiscount';
+import { calcEarlyPaymentDiscount, modoProntoPago } from '@/lib/earlyPaymentDiscount';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
-import { ESTADOS_QUE_SE_DEBEN, leerFranjas, type Cobro, type Hijo } from './parentHomeLogic';
+import { ESTADOS_QUE_SE_DEBEN, fotoDeVerdad, leerFranjas, type Cobro, type Hijo } from './parentHomeLogic';
 
 export interface ParentHomeData {
   hijos: Hijo[];
@@ -67,15 +67,16 @@ async function aplicarProntoPago(cobros: Cobro[]): Promise<void> {
   const escuelas = [...new Set(cobros.map((c) => c.school_id).filter(Boolean))] as string[];
   if (escuelas.length === 0) return;
   const { data } = (await desde('school_settings')
-    .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage')
+    .select('school_id, early_payment_discount_enabled, early_payment_discount_days, early_payment_discount_percentage, early_payment_discount_mode')
     .in('school_id', escuelas)) as Resultado<{
       school_id: string; early_payment_discount_enabled: boolean | null;
-      early_payment_discount_days: number | null; early_payment_discount_percentage: number | null;
+      early_payment_discount_days: number | null; early_payment_discount_percentage: number | null; early_payment_discount_mode?: string | null;
     }[]>;
   const config = new Map((data ?? []).map((s) => [s.school_id, {
     enabled: !!s.early_payment_discount_enabled,
     days: s.early_payment_discount_days || 5,
     percentage: s.early_payment_discount_percentage || 0,
+    mode: modoProntoPago(s.early_payment_discount_mode),
   }]));
   const sinPagar = cobros.filter((c) => ['pending', 'overdue', 'partial'].includes(c.status));
   for (const c of cobros) {
@@ -161,7 +162,7 @@ export async function cargarInicioAcudiente(userId: string): Promise<ParentHomeD
     return {
       id: c.id,
       nombre: c.full_name ?? '',
-      avatarUrl: c.avatar_url ?? null,
+      avatarUrl: fotoDeVerdad(c.avatar_url),
       equipo: team?.name ?? null,
       profe: coach?.full_name ?? null,
       lugar: team?.location ?? null,

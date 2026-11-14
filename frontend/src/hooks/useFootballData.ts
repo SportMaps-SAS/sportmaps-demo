@@ -205,6 +205,9 @@ export function useCreateTeamMatch() {
   return useMutation({
     mutationFn: async (payload: {
       team_id: string;
+      // NOT NULL desde 20260926131340; el trigger trg_match_results_fill_school
+      // lo reescribe desde team_id, pero el tipo generado no ve triggers.
+      school_id: string;
       opponent: string;
       home_score: number | null;
       away_score: number | null;
