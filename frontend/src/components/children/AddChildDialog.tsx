@@ -45,6 +45,7 @@ import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { Calendar as CalendarIcon } from 'lucide-react';
 import { normalizeText } from '@/lib/normalizeText';
+import { nombresParecidos } from '@/lib/nombreParecido';
 
 const childSchema = z.object({
   // Step 1: Información Básica
@@ -138,6 +139,9 @@ export function AddChildDialog({ open, onOpenChange, onSuccess, nombresTomados =
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
+  // Nombre (normalizado) por el que ya se avisó «se parece a uno que ya tienes». Con ese
+  // mismo nombre el segundo intento pasa: puede ser otro hijo de verdad.
+  const [parecidoAvisado, setParecidoAvisado] = useState<string | null>(null);
 
   // Devuelve true y marca el campo si ese atleta ya existe en la cuenta o ya
   // viene en una invitación sin aceptar. Crearlo de nuevo produce dos personas
@@ -145,7 +149,17 @@ export function AddChildDialog({ open, onOpenChange, onSuccess, nombresTomados =
   const nombreYaTomado = (): boolean => {
     const candidato = normalizarNombre(form.getValues('full_name') || '');
     if (!candidato) return false;
-    if (!nombresTomados.some(n => normalizarNombre(n) === candidato)) return false;
+    if (!nombresTomados.some(n => normalizarNombre(n) === candidato)) {
+      // Errata de tipeo (Rodriguez / Rodruguez): no se bloquea, se avisa una vez.
+      const parecido = nombresTomados.find(n => nombresParecidos(n, candidato));
+      if (!parecido || parecidoAvisado === candidato) return false;
+      setParecidoAvisado(candidato);
+      form.setError('full_name', {
+        type: 'manual',
+        message: `Se parece a «${parecido}», que ya está en tu cuenta o en una invitación sin aceptar. Si es el mismo atleta, no lo crees de nuevo (se cobraría dos veces). Si es otro hijo, deja el nombre como está y toca «Siguiente» otra vez.`,
+      });
+      return true;
+    }
 
     form.setError('full_name', {
       type: 'manual',

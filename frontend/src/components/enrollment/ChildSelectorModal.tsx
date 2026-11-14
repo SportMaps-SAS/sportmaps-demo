@@ -19,6 +19,7 @@ import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { normalizeText } from '@/lib/normalizeText';
+import { nombresParecidos } from '@/lib/nombreParecido';
 
 interface ChildSelectorModalProps {
     open: boolean;
@@ -91,6 +92,8 @@ export function ChildSelectorModal({
     const [selectedChildId, setSelectedChildId] = useState<string | null>(null);
     const [showNewChildForm, setShowNewChildForm] = useState(false);
     const [newChildName, setNewChildName] = useState('');
+    // El acudiente confirmó que el nombre parecido es OTRO hijo (no una errata).
+    const [otroHijoConfirmado, setOtroHijoConfirmado] = useState(false);
     const [newChildDob, setNewChildDob] = useState('');
 
     // Fetch children using React Query
@@ -157,6 +160,10 @@ export function ChildSelectorModal({
     }
 
     const nombreTomado = buscarNombreTomado(newChildName);
+    // Errata de tipeo (Rodriguez / Rodruguez): no bloquea, pide confirmar que es otro hijo.
+    const nombreParecido = nombreTomado
+        ? undefined
+        : nombresTomados.find((n) => nombresParecidos(n.nombre, newChildName));
 
     // Auto-select if only one child
     if (!selectedChildId && children.length === 1) {
@@ -231,6 +238,7 @@ export function ChildSelectorModal({
 
     function handleCreateChild(e: React.FormEvent) {
         e.preventDefault();
+        if (nombreTomado || (nombreParecido && !otroHijoConfirmado)) return;
         createChildMutation.mutate();
     }
 
@@ -363,7 +371,7 @@ export function ChildSelectorModal({
                                         required
                                         placeholder="Ej. Sofía García"
                                         value={newChildName}
-                                        onChange={(e) => setNewChildName(e.target.value)}
+                                        onChange={(e) => { setNewChildName(e.target.value); setOtroHijoConfirmado(false); }}
                                         disabled={createChildMutation.isPending}
                                         aria-invalid={!!nombreTomado}
                                     />
@@ -372,6 +380,23 @@ export function ChildSelectorModal({
                                             <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                                             <span>{mensajeDuplicado(nombreTomado)}</span>
                                         </p>
+                                    )}
+                                    {nombreParecido && (
+                                        <label className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400">
+                                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                                            <span>
+                                                Se parece a <strong>{nombreParecido.nombre}</strong>, que ya está en tu cuenta o en una invitación. Si es el mismo atleta, no lo crees de nuevo: se cobraría dos veces.
+                                                <span className="mt-1 flex items-center gap-1.5 font-medium">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={otroHijoConfirmado}
+                                                        onChange={(e) => setOtroHijoConfirmado(e.target.checked)}
+                                                        disabled={createChildMutation.isPending}
+                                                    />
+                                                    Es otro hijo/a distinto
+                                                </span>
+                                            </span>
+                                        </label>
                                     )}
                                 </div>
                                 <div className="space-y-1.5">
@@ -403,7 +428,7 @@ export function ChildSelectorModal({
                                     <Button
                                         type="submit"
                                         size="sm"
-                                        disabled={createChildMutation.isPending || !!nombreTomado}
+                                        disabled={createChildMutation.isPending || !!nombreTomado || (!!nombreParecido && !otroHijoConfirmado)}
                                         className="flex-1"
                                     >
                                         {createChildMutation.isPending ? (
