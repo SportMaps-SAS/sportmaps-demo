@@ -95,6 +95,7 @@ import {
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
     decidirMontoDeVenta, cobroPrevioDelServicio, cobroDeServicioPorId, leadDeVenta, asegurarLeadDeVenta, motivoDelItem,
     hayPrecioDeAfiliado, abonoMinimo, type MontoDeVenta, type LeadDeVenta,
+    textoDeCantidad, type MotivoConCantidad,
 } from '../services/wa-cobro-desde-comprobante.service';
 import {
     cobroAbiertoDelAtleta, reconocerAtletaDelClub, corregirServicioPorMonto, duenoDelCobro, type CobroAbierto,
@@ -1404,7 +1405,34 @@ async function atenderMotivoDeFamilia(a: ArgsB4, b4: ContextoB4, forzado: Motivo
 }
 
 /** Resultado de buscar el motivo por el monto (familia). */
-interface MotivoDeFamilia { atendida: boolean; precios: PrecioDeMotivo[]; tipo: MotivoPorMonto['tipo'] }
+interface MotivoDeFamilia {
+    atendida: boolean; precios: PrecioDeMotivo[]; tipo: MotivoPorMonto['tipo'];
+    /** El monto es N × un artículo (solo o con la matrícula): no se crea solo, va a la escuela con la propuesta. */
+    conCantidad?: MotivoConCantidad;
+}
+
+/** «parece matrícula ($310.000) + 2 × Camiseta ($30.000 c/u)»: la propuesta que lee la escuela en la bandeja. */
+const propuestaConCantidad = (m: MotivoConCantidad, pago: string | null | undefined, monto: number | null) =>
+    `Propuesta → pagó: ${pago ?? 'no se leyó'}${monto ? ` · ${pesos(monto)}` : ''} · parece ${textoDeCantidad(m)}; `
+    + 'si es así, crear esos cobros y aplicar este comprobante';
+
+/**
+ * El monto es N × un mismo artículo (solo o con la matrícula). No se crea nada: un comprobante
+ * no admite dos cobros del mismo artículo. A la bandeja con la propuesta escrita.
+ */
+async function conCantidadALaEscuela(a: ArgsB4, m: MotivoConCantidad): Promise<void> {
+    const monto = montoDelOcr(a.ocr);
+    await a.responder(
+        `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} 📄 Se lo paso a la escuela para que lo revise y te confirme por aquí.`,
+        'comprobante_a_la_escuela');
+    await cerrar(a.fila.id, 'ignored', {
+        result_type: 'escalated', matched_parent_id: a.parentId,
+        error_message: motivoConPropuesta(
+            `monto_con_cantidad: ${monto ? pesos(monto) : 'el monto'} no es un precio de la escuela, pero cuadra con varias unidades de un artículo`,
+            propuestaConCantidad(m, a.ocr.originName, monto)),
+        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+    });
+}
 
 /**
  * Motivo por monto para una familia (interruptor prendido, sin esperado): `uno`
@@ -1420,6 +1448,7 @@ async function motivoPorMontoDeFamilia(a: ArgsB4, o: { motivos?: Motivo[] } = {}
         motivos: o.motivos, telefono: a.fila.wa_phone_number,
     });
     const m = motivoPorMonto(monto, precios, { cuotas: dueno.cuotas });
+    if (m.tipo === 'con_cantidad') return { atendida: false, precios, tipo: m.tipo, conCantidad: m };
     if (m.tipo !== 'uno' && m.tipo !== 'varios') return { atendida: false, precios, tipo: m.tipo };
     const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
     if (dueno.tipo === 'varios') {
@@ -1568,8 +1597,25 @@ async function prospectoALaEscuela(p: ArgsProspecto, a: ArgsB4, codigo: string, 
  */
 async function prospectoSinConcepto(
     p: ArgsProspecto, a: ArgsB4, lead: { id: string; nombre: string | null },
+    /** El monto es N × un artículo (solo o con la matrícula): no se pregunta, va a la escuela con esa propuesta. */
+    conCantidad?: MotivoConCantidad,
 ): Promise<void> {
     const monto = montoDelOcr(p.ocr);
+    if (conCantidad) {
+        await p.responder(
+            `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} 📄 Se lo paso a la escuela para que lo revise y te confirme por aquí.`,
+            'comprobante_a_la_escuela');
+        await cerrar(p.fila.id, 'ignored', {
+            result_type: 'escalated',
+            error_message: motivoConPropuesta(
+                `prospecto_con_cantidad: ${lead.nombre ?? 'prospecto'} mandó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
+                + ` a ${p.ocr.destination ?? 'un destino sin leer'}; cuadra con varias unidades de un artículo`,
+                propuestaConCantidad(conCantidad, p.ocr.originName, monto)),
+            pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+        });
+        await pasarAPersona(p, 'comprobante_prospecto_con_cantidad');
+        return;
+    }
     const primerNombre = (lead.nombre ?? '').trim().split(/\s+/)[0] || null;
     await p.responder(
         `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''}${primerNombre ? ` de ${primerNombre}` : ''} 📄 ` +
@@ -1647,7 +1693,7 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
     if (destino !== 'exacta') return false;
     const m = motivoPorMonto(monto, precios);
     if (m.tipo !== 'uno' && m.tipo !== 'varios') {
-        await prospectoSinConcepto(p, a, lead);
+        await prospectoSinConcepto(p, a, lead, m.tipo === 'con_cantidad' ? m : undefined);
         return true;
     }
     const elegidos = m.tipo === 'uno' ? [m.precio] : m.precios;
@@ -2624,7 +2670,10 @@ async function continuarComoComprobante(
         await cerrar(fila.id, 'ignored', {
             result_type: 'escalated',
             matched_parent_id: parentId,
-            error_message: motivoConPropuesta(`${porTexto.codigo}: ${porTexto.resumen}`, esperado?.texto),
+            error_message: motivoConPropuesta(`${porTexto.codigo}: ${porTexto.resumen}`,
+                // El monto es N × un artículo (solo o con la matrícula): la escuela lo lee en la nota.
+                [esperado?.texto, porMontoB4?.conCantidad ? propuestaConCantidad(porMontoB4.conCantidad, ocr.originName, montoLeido) : null]
+                    .filter(Boolean).join(' · ') || null),
             ...(huellas ? { pregunta_ocr: huellas } : {}),
         });
         log?.info?.({ queueId: fila.id, codigo: porTexto.codigo, paymentId: porTexto.pagoId }, '[wa-queue] a la escuela por monto/texto');
@@ -2673,6 +2722,12 @@ async function continuarComoComprobante(
         if (b4.activo) {
             const r = await motivoPorMontoDeFamilia(argsB4);
             if (r.atendida) return;
+            // N × un artículo (solo o con la matrícula): no se crea ni se pregunta; a la escuela con la propuesta.
+            if (r.conCantidad) {
+                await conCantidadALaEscuela(argsB4, r.conCantidad);
+                log?.info?.({ queueId: fila.id }, '[wa-queue] monto con cantidad de un artículo: a la escuela con la propuesta');
+                return;
+            }
             const opciones = r.tipo === 'ninguno' || r.tipo === 'ambiguo' ? opcionesDeMotivo(r.precios, montoLeido) : [];
             if (opciones.length && await preguntarConcepto({
                 fila, parentId, llaves: opts.llaves, ocr, sha: shaArchivo, storagePath, responder, propuesta: null, opciones,

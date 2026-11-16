@@ -98,7 +98,13 @@ vi.mock('./whatsapp.service', () => ({
     resolveIntegration: vi.fn(),
     markAsRead: vi.fn(),
 }));
-vi.mock('./whatsapp-optin.service', () => ({ estaDadoDeBaja: vi.fn(async () => false), AVISO_DADO_DE_BAJA: '' }));
+vi.mock('./whatsapp-optin.service', () => ({
+    estaDadoDeBaja: vi.fn(async () => false), AVISO_DADO_DE_BAJA: '',
+    levantarBajaDePromos: vi.fn(async () => false),
+    registrarBajaDePromos: vi.fn(async () => true),
+    leerOptinsDeContactos: vi.fn(async () => new Map()),
+    sinPromociones: () => false,
+}));
 vi.mock('./push.service', () => ({ sendToUser: vi.fn() }));
 vi.mock('./whatsapp-medios-de-pago.service', () => ({
     mediosDePago: vi.fn(async () => ({ cuentas: [

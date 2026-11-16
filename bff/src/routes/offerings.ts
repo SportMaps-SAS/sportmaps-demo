@@ -595,6 +595,33 @@ const ApplyOneTimeFeesSchema = z.object({
     { message: 'Indica la inscripción, el seguro o ambos', path: ['registration_fee'] }
 );
 
+/**
+ * La regla única de «aplicar a varios planes» (la usan esta ruta y WhatsApp ›
+ * Precios): UN solo UPDATE acotado a la escuela; un campo `undefined` no se toca.
+ * Devuelve cuántos planes quedaron actualizados. Lanza si la base falla.
+ */
+export async function aplicarPagosUnicosAPlanes(
+    schoolId: string,
+    planIds: string[],
+    fees: { registration_fee?: number | null; insurance_fee?: number | null },
+): Promise<number> {
+    // 0 y NULL significan lo mismo para emit_enrollment_fees (COALESCE(x,0) > 0);
+    // se guarda NULL para que «vacío = no se cobra» se lea igual en la base.
+    const patch: Record<string, number | null> = {};
+    if (fees.registration_fee !== undefined) patch.registration_fee = fees.registration_fee || null;
+    if (fees.insurance_fee !== undefined) patch.insurance_fee = fees.insurance_fee || null;
+
+    const { data, error } = await supabase
+        .from('offering_plans')
+        .update(patch)
+        .in('id', [...new Set(planIds)])
+        .eq('school_id', schoolId)
+        .select('id');
+
+    if (error) throw error;
+    return (data ?? []).length;
+}
+
 router.post('/one-time-fees/apply',
     requireAuth,
     requireRole('owner', 'admin', 'school_admin'),
@@ -606,22 +633,8 @@ router.post('/one-time-fees/apply',
             }
             const { schoolId } = req;
             const { plan_ids, registration_fee, insurance_fee } = parsed.data;
-
-            // 0 y NULL significan lo mismo para emit_enrollment_fees (COALESCE(x,0) > 0);
-            // se guarda NULL para que «vacío = no se cobra» se lea igual en la base.
-            const patch: Record<string, number | null> = {};
-            if (registration_fee !== undefined) patch.registration_fee = registration_fee || null;
-            if (insurance_fee !== undefined) patch.insurance_fee = insurance_fee || null;
-
-            const { data, error } = await supabase
-                .from('offering_plans')
-                .update(patch)
-                .in('id', [...new Set(plan_ids)])
-                .eq('school_id', schoolId)
-                .select('id');
-
-            if (error) throw error;
-            res.json({ updated: (data ?? []).length });
+            const updated = await aplicarPagosUnicosAPlanes(schoolId as string, plan_ids, { registration_fee, insurance_fee });
+            res.json({ updated });
         } catch (err) {
             (req as any).log?.error({ err }, 'Error applying one-time fees');
             res.status(500).json({ error: 'Error al aplicar inscripción y seguro' });

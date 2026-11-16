@@ -52,7 +52,9 @@ import { conEnlacesDePago, conTipoDeCobro, lineaPagar, botonPagarUnico, TEXTO_BO
 import { resumenDeDeuda } from './tipo-de-cobro';
 import { esSalienteAutomatico } from './whatsapp-buzon';
 import { avisarEscalamientoPorCorreo } from './avisos-correo.service';
-import { estaDadoDeBaja, AVISO_DADO_DE_BAJA } from './whatsapp-optin.service';
+import {
+    estaDadoDeBaja, AVISO_DADO_DE_BAJA, levantarBajaDePromos, registrarBajaDePromos, leerOptinsDeContactos,
+} from './whatsapp-optin.service';
 import { esActivacionDeAvisos } from './whatsapp-activar-avisos';
 import { estadoDeHorario, mensajeDeEscalamiento } from './whatsapp-horario.service';
 import { sendToUser } from './push.service';
@@ -88,6 +90,10 @@ import {
     PASO_CONSENT_SEGUIMIENTO, HORAS_FRENO_CONSENT_SEGUIMIENTO, BOTONES_CONSENT_SEGUIMIENTO, ENTEXTO_CONSENT_SEGUIMIENTO,
     BOTON_CONSENT_SEGUIMIENTO, consentSeguimientoHabilitado, esBotonConsentSeguimiento, textoConsentSeguimiento,
     textoRespuestaConsentSeguimiento,
+    PASO_CONSENT_NOVEDADES, PASOS_QUE_YA_PREGUNTARON_NOVEDADES, BOTON_CONSENT_NOVEDADES, BOTONES_CONSENT_NOVEDADES,
+    ENTEXTO_CONSENT_NOVEDADES, consentNovedadesEncendido, esBotonConsentNovedades, textoConsentNovedades,
+    textoRespuestaConsentNovedades, turnoPermiteConsentNovedades, yaDecidioNovedades, respuestaEscritaDeNovedades,
+    preguntaDeNovedadesAbierta, hayFlujoAbiertoEn,
 } from './whatsapp-consentimiento-seguimiento';
 import { registrarLeadDeProspecto } from './whatsapp-prospecto-lead.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
@@ -3284,12 +3290,133 @@ async function responderConsentimientoDeSeguimiento(
                 });
             }
         }
+        // «No, gracias» (D4, 2026-11-15): SOLO baja de promociones, nunca la baja total. Se le sigue respondiendo.
+        if (!acepto && !enSimulacion()) {
+            await registrarBajaDePromos(integration, contactWaId, await ultimoEntranteWaId(conversationId));
+        }
         const estado = await leerEstadoDeEmbudoDeSupabase(conversationId);
         await deliver(integration, conversationId, contactWaId, textoRespuestaConsentSeguimiento(acepto),
             { step: PASO_CONSENT_SEGUIMIENTO, respuesta: acepto ? 'si' : 'no', ...payloadDeEstado(estado) });
         return true;
     } catch (err: any) {
         console.warn('[whatsapp-bot] respuesta de consentimiento de seguimiento falló', err?.message || err);
+        return false;
+    }
+}
+
+// ─── Novedades y promociones para prospectos (2026-11-15, whatsapp-autoservicio D4) ─────────────
+// Las reglas y los textos viven en whatsapp-consentimiento-seguimiento.ts; acá, lo que toca la base.
+
+/** «Nunca repetida»: el freno del paso se mira sobre 10 años de mensajes y borradores. */
+const HORAS_CONSENT_NOVEDADES = 10 * 365 * 24;
+/** El bot tuvo que contestar hace nada: la pregunta es el cierre de ESA respuesta. */
+const MS_RESPUESTA_RECIENTE_NOVEDADES = 5 * 60_000;
+/** Conversaciones que ya se preguntaron o ya decidieron (ahorra consultas en cada turno). */
+const novedadesResueltas = new Set<string>();
+/** Solo para pruebas. */
+export function _olvidarConsentNovedades(): void { novedadesResueltas.clear(); }
+
+/** ¿Ya salió (o quedó en borrador) alguna pregunta de consentimiento en esta conversación? Ante un error, sí. */
+async function yaSePreguntoNovedades(conversationId: string): Promise<boolean> {
+    try {
+        const { count: enviados, error } = await supabase.from('whatsapp_messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId).eq('direction', 'outbound')
+            .in('payload->>step', PASOS_QUE_YA_PREGUNTARON_NOVEDADES);
+        if (error || (enviados ?? 0) > 0) return true;
+        const { count: borradores, error: errB } = await supabase.from('whatsapp_message_drafts')
+            .select('id', { count: 'exact', head: true })
+            .eq('conversation_id', conversationId)
+            .in('tool_context->>step', PASOS_QUE_YA_PREGUNTARON_NOVEDADES);
+        return Boolean(errB) || (borradores ?? 0) > 0;
+    } catch {
+        return true;
+    }
+}
+
+/**
+ * Al cierre de un turno de un número SIN ficha en el que el bot contestó una consulta: UNA pregunta de
+ * novedades y promociones, una sola vez por conversación. No sale si la función está apagada
+ * (WA_CONSENT_NOVEDADES_PROSPECTOS=false), si el turno no fue una consulta contestada, si la conversación
+ * tiene ficha (familia), si la persona ya decidió (consentimiento, baja total o baja de promociones), si
+ * ya se le preguntó alguna vez, si la escuela está escribiendo, si quedó algo abierto (embudo, flujo,
+ * pregunta de un comprobante, archivo en la cola) o si ya es de la escuela. Ante cualquier duda o error,
+ * no pregunta. `deliver` exige además la ventana de 24 h abierta. true = preguntó. Nunca lanza.
+ */
+export async function ofrecerConsentNovedadesTrasTurno(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string, resultado: string,
+): Promise<boolean> {
+    try {
+        if (!consentNovedadesEncendido() || !turnoPermiteConsentNovedades(resultado)) return false;
+        if (enSimulacion() || novedadesResueltas.has(conversationId)) return false;
+        const { data: conv, error: errConv } = await supabase.from('whatsapp_conversations')
+            .select('parent_id, identified').eq('id', conversationId).maybeSingle();
+        if (errConv || !conv || (conv as any).parent_id || (conv as any).identified) return false;
+        // Tolera la base sin `promos_out_at` (42703); con otro error lanza y no se pregunta.
+        const [optin] = await leerOptinsDeContactos(integration.id, [contactWaId]);
+        if (yaDecidioNovedades(optin) || await yaSePreguntoNovedades(conversationId)) {
+            novedadesResueltas.add(conversationId);
+            return false;
+        }
+        const recientes = await mensajesRecientes(conversationId);
+        if (!botHabloHacePoco(recientes, MS_RESPUESTA_RECIENTE_NOVEDADES)) return false;
+        if (humanoReciente(recientes, SILENCIO_HUMANO_MIN) || (discretoEnBot() && escuelaActivaEn(recientes))) return false;
+        if (hayFlujoAbiertoEn(recientes) || await leerEstadoDeEmbudoDeSupabase(conversationId)) return false;
+        if (await hayPreguntaDeCobroAbierta(integration, contactWaId) || await comprobanteEnColaDe(integration, contactWaId)) return false;
+        if (await yaEsDeLaEscuela(integration, conversationId, contactWaId)) return false;
+        if (!(await reservarPasoUnaVez(conversationId, PASO_CONSENT_NOVEDADES, HORAS_CONSENT_NOVEDADES))) return false;
+        await deliver(integration, conversationId, contactWaId,
+            textoConsentNovedades(await nombreDeEscuela(integration.school_id)),
+            { step: PASO_CONSENT_NOVEDADES },
+            { botones: BOTONES_CONSENT_NOVEDADES, enTexto: ENTEXTO_CONSENT_NOVEDADES });
+        novedadesResueltas.add(conversationId);
+        return true;
+    } catch (err: any) {
+        console.warn('[whatsapp-bot] consentimiento de novedades: no se preguntó', { conversationId, err: err?.message || err });
+        return false;
+    }
+}
+
+/**
+ * [Sí, cuéntenme] / [No, gracias] de esa pregunta, tocados o escritos (escritos solo si la pregunta es lo
+ * último que dijo el bot). «Sí»: consentimiento (`wa_register_optin`, fuente `bot_prospecto`, prueba = el
+ * mensaje de la respuesta) y se levanta la baja de promociones si la tenía. «No»: SOLO baja de promociones;
+ * nunca la baja total. true = lo atendió. Nunca lanza.
+ */
+async function responderConsentNovedades(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, origen: 'texto' | 'audio',
+): Promise<boolean> {
+    try {
+        let acepto: boolean;
+        if (esBotonConsentNovedades(botonId)) {
+            acepto = botonId === BOTON_CONSENT_NOVEDADES.SI;
+        } else {
+            if (botonId || origen !== 'texto') return false;
+            const escrita = respuestaEscritaDeNovedades(text);
+            if (!escrita || !preguntaDeNovedadesAbierta(await mensajesRecientes(conversationId))) return false;
+            acepto = escrita === 'si';
+        }
+        if (!enSimulacion()) {
+            const waMessageId = await ultimoEntranteWaId(conversationId);
+            if (acepto) {
+                await registrarOptInProspecto({
+                    integrationId: integration.id, schoolId: integration.school_id, contactWaId,
+                    waMessageId: waMessageId ?? `novedades-${crypto.randomUUID()}`,
+                });
+                // Dijo que no y ahora toca «Sí»: el sí manda. Solo si tenía la baja (sin la columna, nada que levantar).
+                const [optin] = await leerOptinsDeContactos(integration.id, [contactWaId]).catch(() => []);
+                if (optin?.promos_out_at) await levantarBajaDePromos(integration.id, contactWaId);
+            } else {
+                await registrarBajaDePromos(integration, contactWaId, waMessageId);
+            }
+        }
+        novedadesResueltas.add(conversationId);
+        await deliver(integration, conversationId, contactWaId, textoRespuestaConsentNovedades(acepto),
+            { step: PASO_CONSENT_NOVEDADES, respuesta: acepto ? 'si' : 'no' });
+        return true;
+    } catch (err: any) {
+        console.warn('[whatsapp-bot] respuesta de consentimiento de novedades falló', err?.message || err);
         return false;
     }
 }
@@ -3996,6 +4123,8 @@ export async function atenderDesconocido(
         if (r !== 'silencio' && r !== 'frenado' && r !== 'escuela_atendiendo') {
             await preguntarReferidoTrasTurno({ integration, conversationId, contactWaId }, ioOleada1()).catch(() => false);
         }
+        // Novedades y promociones (2026-11-15): UNA pregunta, una vez, al cierre de una consulta ya contestada.
+        await ofrecerConsentNovedadesTrasTurno(integration, conversationId, contactWaId, String(r));
         if (r !== 'silencio' && r !== 'frenado') return r;
         // Quien pasó por el embudo del interesado nunca queda sin nada: si lo de
         // arriba se calló (freno, modelo caído, «ya te mandé el comprobante»), se le
@@ -4032,6 +4161,11 @@ async function atenderDesconocidoEnEscuela(
 
     // 0-ter. [Sí, acepto] / [No, gracias] de la pregunta de seguimiento (Monster 2026-11-12): antes que cualquier flujo.
     if (botonId && await responderConsentimientoDeSeguimiento(integration, conversationId, contactWaId, botonId)) {
+        return 'consentimiento_seguimiento';
+    }
+    // 0-quater. [Sí, cuéntenme] / [No, gracias] de la pregunta de novedades y promociones (2026-11-15), o «sí» / «no»
+    //           escritos cuando esa pregunta es lo último que dijo el bot.
+    if (await responderConsentNovedades(integration, conversationId, contactWaId, text, botonId, origen)) {
         return 'consentimiento_seguimiento';
     }
 
@@ -5276,6 +5410,9 @@ const AFIRMATIVAS = new Set([
 ]);
 const NEGATIVAS = new Set(['no', 'no gracias', 'no quiero', 'ahora no', 'prefiero que no']);
 const REACTIVAR = new Set(['activar', 'reactivar', 'si activar']);
+/** Confirmación de ACTIVAR para quien solo tenía la baja de promociones. */
+const TEXTO_PROMOS_REACTIVADAS = '✅ Listo, volverás a recibir las novedades y promociones de la escuela por WhatsApp. '
+    + '(Si algún día no las quieres, tocas «No recibir más».)';
 const BAJA_SI = new Set(['si darme de baja', 'darme de baja', 'si', 'si quiero']);
 const BAJA_NO = new Set(['no mantenerlos', 'mantenerlos', 'no', 'no gracias', 'no quiero']);
 
@@ -5324,12 +5461,22 @@ async function leerRespuestaDeConsentimiento(
 
     const { data: optin } = await supabase
         .from('whatsapp_optins')
-        .select('opted_in_at, opted_out_at')
+        .select('opted_in_at, opted_out_at, promos_out_at')
         .eq('integration_id', integration.id)
         .eq('contact_wa_id', contactWaId)
         .maybeSingle();
     const yaConsintio = !!(optin as any)?.opted_in_at && !(optin as any)?.opted_out_at;
     const estaDeBaja = !!(optin as any)?.opted_out_at;
+
+    // ACTIVAR de quien tocó «No recibir más» en una campaña: se levanta la baja de
+    // promociones. Si además tenía la baja total, sigue el flujo de abajo.
+    if ((optin as any)?.promos_out_at && REACTIVAR.has(norm)) {
+        await levantarBajaDePromos(integration.id, contactWaId);
+        if (!estaDeBaja) {
+            await deliver(integration, conversationId, contactWaId, TEXTO_PROMOS_REACTIVADAS, { step: 'promos_reactivadas' });
+            return true;
+        }
+    }
 
     if (estaDeBaja) {
         // P8: la repregunta tras un STOP pegado al «sí».
@@ -5511,9 +5658,16 @@ async function reactivarAvisosDelDesconocido(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
 ): Promise<boolean> {
     try {
-        const { data: optin } = await supabase.from('whatsapp_optins').select('opted_out_at')
+        const { data: optin } = await supabase.from('whatsapp_optins').select('opted_out_at, promos_out_at')
             .eq('integration_id', integration.id).eq('contact_wa_id', contactWaId).maybeSingle();
-        if (!(optin as any)?.opted_out_at) return false;
+        const bajaTotal = Boolean((optin as any)?.opted_out_at);
+        if (!bajaTotal && !(optin as any)?.promos_out_at) return false;
+        // ACTIVAR levanta también la baja de promociones (botón «No recibir más» de una campaña).
+        await levantarBajaDePromos(integration.id, contactWaId);
+        if (!bajaTotal) {
+            await deliver(integration, conversationId, contactWaId, TEXTO_PROMOS_REACTIVADAS, { step: 'promos_reactivadas' });
+            return true;
+        }
         const { data: ultimo } = await supabase.from('whatsapp_messages').select('wa_message_id')
             .eq('conversation_id', conversationId).eq('direction', 'inbound')
             .order('created_at', { ascending: false }).limit(1).maybeSingle();

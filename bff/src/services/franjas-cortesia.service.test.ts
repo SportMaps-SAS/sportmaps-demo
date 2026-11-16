@@ -125,6 +125,35 @@ describe('compararConExistentes (idempotencia)', () => {
         ], ventana);
         expect(r.cerrar.map((e) => e.id)).toEqual(['vieja']);
         expect(r.conservadasConReserva.map((e) => e.id)).toEqual(['reservada']);
+        expect(r.conReservaSinHorario.map((e) => e.id)).toEqual(['reservada']);
+    });
+
+    it('con reservas en un horario que ya no existe: se reporta también la que ya se cerró en otra corrida, en orden', () => {
+        const r = compararConExistentes(plan, [
+            // Ya cerrada por el horario y todavía con gente: se sigue reportando, no se vuelve a cerrar.
+            existente({ id: 'ya-cerrada', slot_date: '2026-10-17', start_time: '07:00:00', reserved_count: 2, is_open: false, cerrada_por: 'horario' }),
+            existente({ id: 'abierta', slot_date: '2026-10-10', start_time: '07:00:00', reserved_count: 1 }),
+            // La cerró la escuela a mano: no es del generador, no se reporta.
+            existente({ id: 'escuela', slot_date: '2026-10-11', start_time: '07:00:00', reserved_count: 3, is_open: false, cerrada_por: 'escuela' }),
+            // Cerrada por el horario pero ya sin reservas: nada que avisar.
+            existente({ id: 'vacia', slot_date: '2026-10-12', start_time: '07:00:00', is_open: false, cerrada_por: 'horario' }),
+            // Fuera de la ventana y manual: nunca.
+            existente({ id: 'lejos', slot_date: '2026-11-30', start_time: '07:00:00', reserved_count: 1 }),
+            existente({ id: 'manual', slot_date: '2026-10-13', start_time: '07:00:00', reserved_count: 1, generated_from_schedule: false }),
+            // Sigue en el horario: con reservas o sin ellas, no se toca.
+            existente({ id: 'vigente', reserved_count: 4 }),
+        ], ventana);
+        expect(r.conservadasConReserva.map((e) => e.id)).toEqual(['abierta']);
+        expect(r.conReservaSinHorario.map((e) => e.id)).toEqual(['abierta', 'ya-cerrada']);
+        expect(r.cerrar).toEqual([]);
+    });
+
+    it('si el horario vuelve, la que se cerró con reservas se reabre y deja de reportarse', () => {
+        const r = compararConExistentes(plan, [
+            existente({ id: 'vuelve', reserved_count: 2, is_open: false, cerrada_por: 'horario' }),
+        ], ventana);
+        expect(r.reabrir.map((e) => e.id)).toEqual(['vuelve']);
+        expect(r.conReservaSinHorario).toEqual([]);
     });
 });
 

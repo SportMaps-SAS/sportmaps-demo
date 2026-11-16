@@ -117,7 +117,53 @@ export type MotivoPorMonto =
     | { tipo: 'ambiguo'; precios: PrecioDeMotivo[] }
     /** El monto es una cuota de la familia: sigue el camino de hoy (la mensualidad). */
     | { tipo: 'es_cuota' }
+    /**
+     * El monto es N × un mismo artículo (N de 2 a 4), solo o con la matrícula. NO se crea solo:
+     * la base no admite dos cobros del mismo artículo con un comprobante (UNIQUE
+     * `(queue_id, fuente, fuente_id)`). Va a la escuela con la propuesta escrita.
+     */
+    | { tipo: 'con_cantidad'; base: PrecioDeMotivo | null; articulo: PrecioDeMotivo; cantidad: number }
     | { tipo: 'ninguno' };
+
+/** El caso `con_cantidad` de `motivoPorMonto`. */
+export type MotivoConCantidad = Extract<MotivoPorMonto, { tipo: 'con_cantidad' }>;
+
+/** Cuántas veces se busca un mismo artículo en un comprobante. */
+const CANTIDAD_MIN = 2;
+const CANTIDAD_MAX = 4;
+
+const enPesos = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+
+/**
+ * La propuesta para la nota que ve la escuela: «matrícula ($310.000) + 2 × Camiseta de
+ * entrenamiento ($30.000 c/u)». Pura.
+ */
+export function textoDeCantidad(m: Pick<MotivoConCantidad, 'base' | 'articulo' | 'cantidad'>): string {
+    const articulo = `${m.cantidad} × ${m.articulo.etiqueta} (${enPesos(m.articulo.monto)} c/u)`;
+    if (!m.base) return articulo;
+    const base = m.base.motivo === 'inscripcion' ? 'matrícula' : m.base.etiqueta;
+    return `${base} (${enPesos(m.base.monto)}) + ${articulo}`;
+}
+
+/**
+ * ¿El monto es N × un mismo artículo (2 a 4), solo o sumado a la matrícula? Solo si hay UNA
+ * forma de explicarlo (dos artículos del mismo precio no dicen cuál es). Pura.
+ */
+function cantidadDeArticulo(monto: number, lista: PrecioDeMotivo[]): MotivoConCantidad | null {
+    const articulos = lista.filter((p) => p.motivo === 'articulos' && !p.esAbono);
+    const bases: (PrecioDeMotivo | null)[] = [null, ...lista.filter((p) => p.motivo === 'inscripcion' && !p.esAbono)];
+    const formas: MotivoConCantidad[] = [];
+    for (const base of bases) {
+        for (const articulo of articulos) {
+            for (let cantidad = CANTIDAD_MIN; cantidad <= CANTIDAD_MAX; cantidad++) {
+                if (igual((base?.monto ?? 0) + cantidad * articulo.monto, monto)) {
+                    formas.push({ tipo: 'con_cantidad', base, articulo, cantidad });
+                }
+            }
+        }
+    }
+    return formas.length === 1 ? formas[0] : null;
+}
 
 /** Misma fuente e id = opciones del mismo ítem (p. ej. las semanas del vacacional). Pura. */
 const mismoServicio = (a: PrecioDeMotivo, b: PrecioDeMotivo) =>
@@ -174,7 +220,8 @@ export function motivoPorMonto(
     }
     if (sumas.length === 1) return { tipo: 'varios', precios: sumas[0] };
     if (sumas.length > 1) return { tipo: 'ambiguo', precios: sinRepetir(sumas.flat()) };
-    return { tipo: 'ninguno' };
+    // Solo lo que hasta acá no se explicaba: lo que ya se resolvía (uno, varios, ambiguo) no cambia.
+    return cantidadDeArticulo(monto, lista) ?? { tipo: 'ninguno' };
 }
 
 /** Dónde cayó la plata, con la precisión que pide «agendar al recibir». */

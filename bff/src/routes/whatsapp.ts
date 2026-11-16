@@ -57,6 +57,7 @@ import {
 } from '../services/whatsapp-asistencia-staff.service';
 import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
 import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
+import { motivoConCodigo } from '../services/whatsapp-errores-meta';
 import { atenderAdjuntoEntrante } from '../services/whatsapp-bot-oleada1';
 import { esAliasDeUsuario, nombreConUsuario } from '../services/whatsapp-usuario-meta';
 
@@ -228,7 +229,8 @@ async function procesarEstados(req: Request, body: any): Promise<void> {
             parche.pricing_category = e.pricingCategory;
             parche.pricing_raw = e.pricingRaw;
         }
-        if (e.errorDetail) parche.error_detail = e.errorDetail;
+        // `(#código) título`: con el número de Meta, el reporte de campaña puede traducir el fallo.
+        if (e.errorDetail) parche.error_detail = motivoConCodigo(e.errorCode, e.errorDetail);
         if (Object.keys(parche).length === 0) continue;
 
         const { error } = await supabase

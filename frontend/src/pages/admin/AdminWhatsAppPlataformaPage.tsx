@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { toast } from '@/hooks/use-toast';
 import { RefreshCw, MessageSquare, Send, Search, Unplug } from 'lucide-react';
 import { ConectarNumero, ALTA_CONFIGURADA, type ResultadoDelAlta } from '@/components/whatsapp/ConectarNumero';
+import { FrenoDeCampanasPlataforma } from '@/components/whatsapp/FrenoDeCampanasPlataforma';
 
 const API = '/api/v1/admin/whatsapp-plataforma';
 
@@ -296,6 +297,9 @@ export default function AdminWhatsAppPlataformaPage() {
                     <p className="text-xs text-muted-foreground">La prueba es texto libre: solo llega si ese celular le escribió al número de SportMaps en las últimas 24 h.</p>
                 </CardContent>
             </Card>
+
+            {/* Campañas de las escuelas: SportMaps solo frena (global o por escuela) */}
+            <FrenoDeCampanasPlataforma />
 
             {/* Historial */}
             <Card>

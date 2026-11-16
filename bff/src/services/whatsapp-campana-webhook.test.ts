@@ -71,7 +71,11 @@ vi.mock('./whatsapp.service', () => ({
     markAsRead: vi.fn(),
     downloadMedia: vi.fn(),
 }));
-vi.mock('./whatsapp-optin.service', () => ({ estaDadoDeBaja: vi.fn(async () => false), AVISO_DADO_DE_BAJA: '' }));
+// El resto del módulo es el real: `registrarBajaDePromos` llega a la RPC de la base en memoria.
+vi.mock('./whatsapp-optin.service', async () => {
+    const real = await vi.importActual<typeof import('./whatsapp-optin.service')>('./whatsapp-optin.service');
+    return { ...real, estaDadoDeBaja: vi.fn(async () => false), AVISO_DADO_DE_BAJA: '' };
+});
 vi.mock('./push.service', () => ({ sendToUser: vi.fn() }));
 vi.mock('./whatsapp-queue.service', () => ({ encolarAdjunto: vi.fn() }));
 vi.mock('./whatsapp-coexistence.service', () => ({
@@ -105,13 +109,17 @@ beforeEach(() => {
 });
 
 describe('webhook — respuesta a una campaña', () => {
-    it('«No recibir más» de la plantilla: opt-out y confirmación, sin pasar por debeAtender (bot apagado incluido)', async () => {
+    it('«No recibir más» de la plantilla: baja de promociones y confirmación, sin pasar por debeAtender (bot apagado incluido)', async () => {
         await handleBotTurn(req, INTEGRATION, 'conv-1', mensaje({ botonId: `smc:${CAMP}:baja`, textBody: 'No recibir más' }));
         expect(atencion.debeAtender).not.toHaveBeenCalled();
-        expect(db.rpc.find((l) => l.fn === 'wa_register_optin')?.args).toMatchObject({ p_opt_out: true, p_contact_wa_id: TEL });
+        // Baja de promociones (no la baja total): sus avisos de pago le siguen llegando.
+        expect(db.rpc.find((l) => l.fn === 'wa_registrar_baja_promos')?.args).toEqual({
+            p_integration_id: INTEGRATION.id, p_school_id: ESC, p_contact_wa_id: TEL, p_ref: 'w1',
+        });
+        expect(db.rpc.some((l) => l.fn === 'wa_register_optin')).toBe(false);
         expect(db.t.whatsapp_campana_envios[0].estado).toBe('baja');
         expect(enviados.texto).toHaveLength(1);
-        expect(enviados.texto[0]).toMatch(/Monster´s Volley Club/);
+        expect(enviados.texto[0]).toMatch(/no volverás a recibir promociones de Monster´s Volley Club/);
     });
 
     it('botón de otro flujo (sm_cc_*): el camino de hoy, sin leer campañas', async () => {

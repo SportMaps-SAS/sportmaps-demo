@@ -67,6 +67,8 @@ import whatsappPlataformaRouter from './routes/whatsapp-plataforma.routes';
 import whatsappBuzonRouter from './routes/whatsapp-buzon.routes';
 // Campañas de marketing por escuela (plan B5 T5). Detrás de whatsapp_campanas_ajustes.
 import whatsappCampanasRouter from './routes/whatsapp-campanas.routes';
+// Precios que el bot reconoce y responde, por escuela (GET/PUT /:schoolId/precios…).
+import whatsappPreciosEscuelaRouter from './routes/whatsapp-precios-escuela.routes';
 // Anuncios de Meta con clic a WhatsApp: embudo por anuncio y destino (docs/specs/whatsapp-anuncios-atribucion.md).
 import whatsappAnunciosRouter from './routes/whatsapp-anuncios.routes';
 // Coherencia del texto del asistente contra el catálogo (docs/specs/whatsapp-ventas-de-servicio-blindaje.md, frente B).
@@ -113,6 +115,7 @@ import equipmentActaRouter from './routes/equipment.route';
 import joinQrRouter from './routes/join-qr';
 import { assertMpEnvCoherente } from './services/mercadopago.service';
 import { probeAiProviders, logAiProvidersAtStartup } from './services/ai-providers.health';
+import { iniciarFestivosDeLaBase } from './services/festivos-fuente.service';
 import admsRouter from './routes/access-adms';
 import accessApiRouter from './routes/access-api';
 import accessAdminRouter from './routes/access-admin.routes';
@@ -383,7 +386,7 @@ app.use('/api/v1/webhooks/resend-inbound', resendInboundRouter);
 // alguien agrega un comodín ahí, este seguiría respondiendo. En la MISMA línea
 // y no en un app.use aparte: con dos, cada petición del panel pasaría dos veces
 // por generalLimiter y gastaría doble cupo.
-app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappCampanasRouter, whatsappAnunciosRouter, whatsappCoherenciaRouter, whatsappSeguimientoRouter, whatsappAdminRouter);
+app.use('/api/v1/whatsapp', generalLimiter, whatsappMetricasRouter, whatsappImportarChatRouter, whatsappCortesiasRouter, whatsappPlataformaRouter, whatsappBuzonRouter, whatsappCampanasRouter, whatsappPreciosEscuelaRouter, whatsappAnunciosRouter, whatsappCoherenciaRouter, whatsappSeguimientoRouter, whatsappAdminRouter);
 
 // Link público de agendamiento de instalaciones — sin requireAuth, rate-limit propio
 const publicBookingLimiter = rateLimit({
@@ -625,6 +628,9 @@ const httpServer = app.listen(PORT, () => {
     // Qué proveedores de IA quedaron vivos. No aborta el arranque: un OCR mal
     // configurado no debe tumbar el resto del BFF, pero tiene que verse en el log.
     logAiProvidersAtStartup();
+
+    // Festivos: la tabla co_holidays es la fuente; se lee al arrancar y una vez al día.
+    iniciarFestivosDeLaBase();
 
     // Iniciar trabajos de mantenimiento programados. Solo en Render: un BFF
     // local comparte la base de producción y tomaba la cola de WhatsApp.

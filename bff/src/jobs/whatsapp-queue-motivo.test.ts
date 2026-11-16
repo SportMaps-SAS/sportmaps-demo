@@ -575,10 +575,45 @@ describe('prospecto SIN motivo esperado: el lead por teléfono y el monto', () =
         expect(enviados()[0]).toContain('¿Me cuentas para qué es?');
         expect(enviados()[0]).not.toContain('¿De qué deportista es este pago?');
     });
+
+    it('matrícula + 2 × uniformes ($430.000): no crea nada ni pregunta; a la escuela con la propuesta escrita', async () => {
+        state.planes = [PLAN];
+        state.articulos = [UNIFORMES];
+        extractReceiptMock.mockResolvedValue(comprobante(430000));
+        await runWhatsAppQueue();
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(enviados()).toHaveLength(1);
+        expect(enviados()[0]).toContain('Se lo paso a la escuela');
+        expect(enviados()[0]).not.toContain('¿Me cuentas para qué es?');
+        expect(cierre()).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(cierre().error_message).toContain('prospecto_con_cantidad');
+        expect(cierre().error_message).toContain('parece matrícula ($310.000) + 2 × Uniformes ($60.000 c/u)');
+        expect(bot.abrirConsultaParaLaEscuela).toHaveBeenCalled();
+    });
+
+    it('matrícula + 1 uniforme ($370.000) se sigue creando solo, como hoy', async () => {
+        state.planes = [PLAN];
+        state.articulos = [UNIFORMES];
+        extractReceiptMock.mockResolvedValue(comprobante(370000));
+        await runWhatsAppQueue();
+        expect(crearLlamadas().map((a) => [a.p_categoria, a.p_monto])).toEqual([['inscripcion', 310000], ['articulos', 60000]]);
+    });
 });
 
 describe('familia: cobro desde el comprobante por el monto (sin cobro creado)', () => {
     beforeEach(() => familiaMonster());
+
+    it('$120.000 = 2 × uniformes → no crea nada ni pregunta; a la escuela con la propuesta en la nota', async () => {
+        extractReceiptMock.mockResolvedValue(comprobante(120000));
+        await runWhatsAppQueue();
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(sendInteractiveButtonsMock).not.toHaveBeenCalled();
+        expect(enviados()).toHaveLength(1);
+        expect(enviados()[0]).toBe('Recibí tu comprobante de *$120.000* 📄 Se lo paso a la escuela para que lo revise y te confirme por aquí.');
+        expect(cierre()).toMatchObject({ status: 'ignored', result_type: 'escalated', matched_parent_id: 'parent-1' });
+        expect(cierre().error_message).toContain('monto_con_cantidad');
+        expect(cierre().error_message).toContain('parece 2 × Uniformes ($60.000 c/u)');
+    });
 
     it('$310.000 = matrícula del plan → crea la inscripción de Laura y la aplica', async () => {
         extractReceiptMock.mockResolvedValue(comprobante(310000));

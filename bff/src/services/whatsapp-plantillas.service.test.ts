@@ -300,6 +300,31 @@ describe('utilidades', () => {
         expect(svc.dentroDeHorarioDeCobranza(new Date('2026-10-13T15:00:00Z'))).toBe(true);  // mar siguiente 10:00
     });
 
+    // Reloj simulado en la semana del festivo del 16-nov-2026 (Independencia de Cartagena, trasladado al lunes).
+    // Es el mismo horario que frena las campañas (`runCampanas`) y el de `wa_horario_de_campanas` en la base.
+    it.each([
+        ['domingo 15-nov 10:00', '2026-11-15T15:00:00Z', false],
+        ['lunes festivo 16-nov 10:00', '2026-11-16T15:00:00Z', false],
+        ['martes 17-nov 06:59', '2026-11-17T11:59:00Z', false],
+        ['martes 17-nov 07:00', '2026-11-17T12:00:00Z', true],
+        ['martes 17-nov 18:59', '2026-11-17T23:59:00Z', true],
+        ['martes 17-nov 19:00', '2026-11-18T00:00:00Z', false],
+        ['sábado 21-nov 07:59', '2026-11-21T12:59:00Z', false],
+        ['sábado 21-nov 08:00', '2026-11-21T13:00:00Z', true],
+        ['sábado 21-nov 15:01', '2026-11-21T20:01:00Z', false],
+    ])('horario Ley 2300 con el reloj en %s (COT) → %s', (_cuando, utc, esperado) => {
+        // Por parámetro…
+        expect(svc.dentroDeHorarioDeCobranza(new Date(utc))).toBe(esperado);
+        // …y con el reloj del sistema (el valor por defecto que usa el cron).
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(new Date(utc));
+            expect(svc.dentroDeHorarioDeCobranza()).toBe(esperado);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('armarPayloadPlantilla sin token no agrega el botón', () => {
         const p = armarPayloadPlantilla({ toWaId: '57300', plantilla: 'x', idioma: 'es_CO', variables: ['a'], tokenBoton: null });
         expect(p.template.components).toHaveLength(1);

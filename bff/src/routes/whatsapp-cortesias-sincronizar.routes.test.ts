@@ -98,10 +98,25 @@ describe('POST sincronizar-franjas', () => {
         expect(r.status).toBe(200);
         expect(await r.json()).toEqual({
             ok: true, reprogramadas: { excepciones: 1, porTexto: 1 },
-            franjas: { creadas: 2, cerradas: 1, conservadasConReserva: 0, errores: 0 },
+            franjas: { creadas: 2, cerradas: 1, conservadasConReserva: 0, errores: 0, sinHorarioConReserva: [] },
         });
         expect(estado.avisos).toEqual([{ schoolId: ESCUELA, teamId: EQUIPO }]);
         expect(estado.sincronizadas).toEqual([{ schoolId: ESCUELA, op: { aplicar: true, soloEquipo: EQUIPO } }]);
+    });
+
+    it('devuelve las franjas con reservas cuyo horario ya no existe', async () => {
+        const sinHorario = [{
+            id: 'f1', team_id: EQUIPO, grupo: 'Proyección', fecha: '2026-11-22', hora: '07:00', reservas: 2,
+            personas: [{ nombre: 'Ana', estado: 'agendada' }],
+        }];
+        const { sincronizarFranjasDeEscuela } = await import('../services/franjas-cortesia.service');
+        vi.mocked(sincronizarFranjasDeEscuela).mockResolvedValueOnce({
+            creadas: 1, cerradas: 0, conservadasConReserva: [{ id: 'f1' }], conReservaSinHorario: sinHorario, errores: [],
+        } as any);
+        const r = await post(ESCUELA, { teamId: EQUIPO });
+        expect((await r.json()).franjas).toEqual({
+            creadas: 1, cerradas: 0, conservadasConReserva: 1, errores: 0, sinHorarioConReserva: sinHorario,
+        });
     });
 
     it('acepta el body de «Mi semana» ({ teamId })', async () => {

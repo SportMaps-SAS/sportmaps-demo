@@ -160,7 +160,7 @@ export function fichaDeServicioParaIa(item: ItemConFicha, o: OpcionesCatalogoIa)
         if (precio.deAfiliado) {
             lineas.push(`Valor para esta persona (afiliada al club): ${cop(precio.hoy)}, sin importar la fecha.`);
         } else {
-            lineas.push(`Valor hoy (${diaConSemana(o.hoy)}): ${cop(precio.hoy)}`);
+            lineas.push(`Valor hoy (${diaConSemana(o.hoy)}): ${cop(precio.hoy)}${precio.antes ? ` (antes ${cop(precio.antes)})` : ''}`);
             const tramos = textoDeTramos(item);
             if (tramos) lineas.push(`Precio por fecha: ${tramos}`);
         }

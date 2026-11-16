@@ -191,8 +191,13 @@ export function lineasDeValorDeVenta(p: PrecioDeServicio): string[] {
     if (p.opciones.length) {
         lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*`));
     } else if (p.hoy !== null) {
-        if (p.deAfiliado) lineas.push(`Tu valor como afiliado del club: *${cop(p.hoy)}*.`);
-        else lineas.push(`Valor hoy: *${cop(p.hoy)}*${p.siguiente ? ` (${textoDelTramo(p.siguiente)})` : ''}.`);
+        // «antes $X»: solo con descuento temporal (`precioAntesDelTramo`); el dato sale del catálogo.
+        const antes = p.antes ? `antes ${cop(p.antes)}` : '';
+        if (p.deAfiliado) lineas.push(`Tu valor como afiliado del club: *${cop(p.hoy)}*${antes ? ` (${antes})` : ''}.`);
+        else {
+            const partes = [antes, p.siguiente ? textoDelTramo(p.siguiente) : ''].filter(Boolean);
+            lineas.push(`Valor hoy: *${cop(p.hoy)}*${partes.length ? ` (${partes.join('; ')})` : ''}.`);
+        }
     }
     if (p.abono !== null) {
         lineas.push(`Puedes separar el cupo con un abono mínimo de *${cop(p.abono)}*${p.abonoPct ? ` (${p.abonoPct} %)` : ''}.`);

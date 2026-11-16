@@ -10,6 +10,7 @@ const st = vi.hoisted(() => ({
   conColumna: true,
   updates: [] as unknown[],
   toast: vi.fn(),
+  post: vi.fn(),
 }));
 
 vi.mock('@/integrations/supabase/client', () => {
@@ -39,10 +40,15 @@ vi.mock('@/integrations/supabase/client', () => {
   return { supabase: { from: (t: string) => builder(t) } };
 });
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: st.toast }) }));
+vi.mock('@/lib/api/bffClient', () => ({ bffClient: { post: (...a: unknown[]) => st.post(...a) } }));
 
-import { HorariosDeEntrenamiento } from './HorariosDeEntrenamiento';
+import { HorariosDeEntrenamiento, textoSinHorario } from './HorariosDeEntrenamiento';
 
-beforeEach(() => { st.conColumna = true; st.updates = []; st.toast.mockClear(); });
+beforeEach(() => {
+  st.conColumna = true; st.updates = []; st.toast.mockClear();
+  st.post.mockReset();
+  st.post.mockResolvedValue({ ok: true, franjas: { creadas: 0, cerradas: 0, errores: 0, sinHorarioConReserva: [] } });
+});
 
 describe('HorariosDeEntrenamiento · recibe clases de prueba', () => {
   it('con la columna: el interruptor aparece prendido y apagarlo se guarda', async () => {
@@ -65,5 +71,68 @@ describe('HorariosDeEntrenamiento · recibe clases de prueba', () => {
     fireEvent.click(screen.getByRole('button', { name: /Guardar/ }));
     await waitFor(() => expect(st.updates).toHaveLength(1));
     expect(st.updates[0]).not.toHaveProperty('recibe_clase_prueba');
+  });
+});
+
+describe('HorariosDeEntrenamiento · cupos de clase de prueba al guardar', () => {
+  const guardar = async () => {
+    render(<HorariosDeEntrenamiento schoolId="s1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Guardar/ }));
+    await waitFor(() => expect(st.toast).toHaveBeenCalled());
+    return st.toast.mock.calls[0][0] as { title: string; description: string; variant?: string };
+  };
+
+  it('después de guardar pide sincronizar los cupos de ESE grupo y lo dice en una línea', async () => {
+    const aviso = await guardar();
+    expect(st.updates).toHaveLength(1);
+    expect(st.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/cortesias/sincronizar-franjas', { teamId: 't1' });
+    expect(aviso.title).toBe('U9 y U11 Mixto actualizado');
+    expect(aviso.description).toMatch(/los cupos de clase de prueba ya quedaron con el horario nuevo/);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('si la sincronización falla, el horario queda guardado y se avisa que los cupos se actualizan en la madrugada', async () => {
+    st.post.mockRejectedValue(new Error('504'));
+    const aviso = await guardar();
+    expect(st.updates).toHaveLength(1);
+    expect(aviso.variant).toBeUndefined();
+    expect(aviso.title).toBe('U9 y U11 Mixto actualizado');
+    expect(aviso.description).toMatch(/se actualizan en la madrugada/);
+  });
+
+  it('si el generador reporta errores, también se avisa que quedan para la madrugada', async () => {
+    st.post.mockResolvedValue({ ok: true, franjas: { creadas: 0, cerradas: 0, errores: 1, sinHorarioConReserva: [] } });
+    expect((await guardar()).description).toMatch(/se actualizan en la madrugada/);
+  });
+
+  it('la escuela no saca los cupos de sus entrenamientos: el aviso de siempre, sin hablar de cupos', async () => {
+    st.post.mockResolvedValue({ ok: true, franjas: null, motivo: 'franjas_desde_entrenamientos_apagadas' });
+    expect((await guardar()).description).toBe('El bot ya responde con este horario.');
+  });
+
+  it('con reservas en un horario que ya no existe: lo dice claro y enlaza a las clases agendadas', async () => {
+    st.post.mockResolvedValue({
+      ok: true,
+      franjas: {
+        creadas: 3, cerradas: 2, errores: 0,
+        sinHorarioConReserva: [
+          { id: 'f1', grupo: 'U9 y U11 Mixto', fecha: '2026-11-22', hora: '07:00', reservas: 2,
+            personas: [{ nombre: 'Ana Pérez', estado: 'agendada' }, { nombre: 'Luis Gómez', estado: 'separada' }] },
+          { id: 'f2', grupo: 'U9 y U11 Mixto', fecha: '2026-11-28', hora: '15:30', reservas: 1, personas: [] },
+        ],
+      },
+    });
+    await guardar();
+    const alerta = await screen.findByRole('alert');
+    expect(alerta).toHaveTextContent(
+      'Hay 2 personas con clase de prueba el domingo 22 de noviembre a las 7:00 a. m. en U9 y U11 Mixto (Ana Pérez, Luis Gómez); ese horario ya no existe. Avísales la hora nueva.');
+    expect(alerta).toHaveTextContent(
+      'Hay 1 persona con clase de prueba el sábado 28 de noviembre a las 3:30 p. m. en U9 y U11 Mixto; ese horario ya no existe. Avísale la hora nueva.');
+    expect(screen.getByRole('link', { name: 'Ver las clases de prueba agendadas' })).toHaveAttribute('href', '/whatsapp?tab=cortesias');
+  });
+
+  it('textoSinHorario: sin grupo en la franja usa el nombre del equipo', () => {
+    expect(textoSinHorario({ id: 'f', grupo: '', fecha: '2026-11-22', hora: '12:00', reservas: 3 }, 'Proyección'))
+      .toBe('Hay 3 personas con clase de prueba el domingo 22 de noviembre a las 12:00 p. m. en Proyección; ese horario ya no existe. Avísales la hora nueva.');
   });
 });
