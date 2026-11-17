@@ -147,3 +147,89 @@ export async function equipoEstaAtendiendo(conversationId: string, ahora = Date.
     if (!filas) return false;
     return estadoDeDialogo(filas, ahora).activo;
 }
+
+// ─── Lo que quedó sin dueño dentro de un silencio (auditoría 8–16 nov 2026) ──
+//
+// Cuando una persona de la escuela escribió hace 1–12 h (hasta 72 h con un desconocido) el bot calla a
+// propósito: la conversación es de ella. En esa semana hubo 165 mensajes así que nadie retomó, entre
+// ellos preguntas de venta: «Por favor confirmar que los dos cupos quedan reservados», «Tienes las
+// tarifas de séniors a la mano», «No me han enviado la info de menores / Me puedes ayudar por fa?».
+// Las ventanas NO cambian (decisión de producto). Esto solo DICE cuáles quedaron sin respuesta, para
+// que un vigilante se lo reporte a la escuela. No envía nada ni está conectado a ningún envío.
+
+/** Horas de silencio tras un mensaje de la escuela: familias (modo discreto) y desconocidos (diálogo del equipo). */
+export const HORAS_SILENCIO_FAMILIA = 12;
+export const HORAS_SILENCIO_DESCONOCIDO = VENTANA_DIALOGO_HORAS;
+/** Antes de esto no se reporta: la persona de la escuela puede estar contestando. */
+export const MINUTOS_DE_GRACIA_SIN_DUENO = 30;
+
+const EMPIEZA_PREGUNTANDO = /^(que|cual|cuales|cuanto|cuanta|cuantos|cuantas|como|donde|cuando|quien|quienes|por que|para que|a que|en que|tienes|tienen|tiene|hay|puedes|puede|pueden|podrias|podria|podrian|me puedes|me puede|me pueden|me podrias|sera que|es posible|se puede|ya (esta|estan|quedo|quedaron|llego)|manejas|manejan)\b/;
+const PIDE_UNA_RESPUESTA = /\b(por favor|porfa|por fa|porfis|me (puedes|puede|pueden|podrias|podria|podrian) (ayudar|confirmar|enviar|mandar|decir|informar|colaborar|regalar|indicar|contar)|(confirmar|confirmame|confirmenme|confirmen|confirmas) (que|si|el|la|los|las)?|necesito (saber|que|la|el|los|las|info|informacion)|quisiera saber|quiero saber|no me han (enviado|respondido|contestado|llegado|mandado|dicho|confirmado)|nadie me (responde|contesta|ha respondido|ha contestado)|sigo (esperando|pendiente|atent[oa])|quedo (atent[oa]|pendiente) (a|de)|me (avisas|avisan|cuentas|cuentan|confirmas|confirman|dices|dicen)|a la mano)\b/;
+const AVISA_UN_PAGO = /\b(ya (pague|pagamos|consigne|transferi|hice (el|la) (pago|transferencia|consignacion))|(envio|adjunto|mando|comparto|te envio|le envio|aqui esta|aqui va|va|este es) (el |la |mi )?(comprobante|soporte|pago|recibo|transferencia|consignacion)|comprobantes? de pago|soportes? de pago|pago (realizado|hecho|efectuado))\b/;
+const ADJUNTOS_DE_PAGO = new Set(['image', 'document']);
+const CIERRE_SIN_PEDIDO = /^(gracias|muchas gracias|mil gracias|ok|okey|okay|vale|listo|perfecto|super|genial|dale|bueno|entendido|de acuerdo|igualmente|bendiciones|feliz (dia|tarde|noche))( (gracias|muchas gracias|profe|mil))?$/;
+
+/** ¿Este texto es una PREGUNTA o un pedido que espera respuesta? Pura. */
+export function esPreguntaQueEsperaRespuesta(texto: string | null | undefined): boolean {
+    const crudo = String(texto ?? '').trim();
+    const t = normalizarFrase(crudo);
+    if (!t || CIERRE_SIN_PEDIDO.test(t)) return false;
+    if (crudo.includes('?')) return (t.match(/[a-z]{2,}/g) ?? []).length >= 1;
+    const sinSaludo = t.replace(/^((hola|holi|buenas|buenos dias|buen dia|buenas tardes|buenas noches|profe|disculpa|disculpe|perdon|oye|y|pero) )+/, '');
+    return EMPIEZA_PREGUNTANDO.test(sinSaludo) || PIDE_UNA_RESPUESTA.test(t);
+}
+
+/** ¿Avisa de un pago (texto, o una foto/PDF sin texto que casi siempre es el comprobante)? Pura. */
+export function esAvisoDePago(f: Pick<FilaReciente, 'type' | 'text_body'>): boolean {
+    const t = normalizarFrase(f.text_body);
+    if (!t) return ADJUNTOS_DE_PAGO.has(String(f.type ?? ''));
+    return AVISA_UN_PAGO.test(t);
+}
+
+export interface EntranteSinDueno {
+    fila: FilaReciente;
+    motivo: 'pregunta' | 'aviso_de_pago';
+    /** Momento (ms) del mensaje de la escuela que abrió el silencio. */
+    silencioDesde: number;
+    /** Minutos que lleva sin que nadie (ni la escuela ni el bot) le conteste. */
+    minutosEsperando: number;
+}
+
+/**
+ * Los entrantes que quedaron SIN RESPUESTA dentro de una ventana de silencio: una pregunta o un
+ * aviso de pago que llegó después de un mensaje de una persona de la escuela (dentro de las `horas`
+ * de silencio), al que nadie —ni la escuela ni el bot— le contestó después, y que ya lleva más que
+ * los minutos de gracia. Del más viejo al más nuevo. Pura: no lee la base ni envía nada.
+ *
+ * `filas`: los mensajes recientes de UNA conversación, en cualquier orden.
+ * `desconocido`: la ventana es de 72 h (diálogo del equipo) en vez de 12 h (modo discreto).
+ */
+export function entrantesSinDuenoEnSilencio(
+    filas: readonly FilaReciente[],
+    ahora = Date.now(),
+    opts: { desconocido?: boolean; horas?: number; minutosDeGracia?: number; saludosConfigurados?: readonly string[] } = {},
+): EntranteSinDueno[] {
+    const horas = opts.horas ?? (opts.desconocido ? HORAS_SILENCIO_DESCONOCIDO : HORAS_SILENCIO_FAMILIA);
+    const gracia = (opts.minutosDeGracia ?? MINUTOS_DE_GRACIA_SIN_DUENO) * 60_000;
+    const orden = filas.slice().sort((a, b) => momento(a) - momento(b));
+    const humanos = orden.filter((f) => esMensajeHumanoReal(f, orden, { saludosConfigurados: opts.saludosConfigurados })).map(momento);
+    if (!humanos.length) return [];
+    // Cualquier saliente posterior cuenta como respuesta (de la escuela o del bot), menos lo que la app manda sola.
+    const respuestas = orden
+        .filter((f) => f.direction === 'outbound' && !(f.payload?.automatico === true || f.payload?.automatico === 'true')
+            && !TIPOS_SIN_DIALOGO.has(String(f.type ?? '')))
+        .map(momento);
+    const salida: EntranteSinDueno[] = [];
+    for (const f of orden) {
+        if (f.direction !== 'inbound') continue;
+        const t = momento(f);
+        if (!t || t > ahora || ahora - t < gracia) continue;
+        const previo = humanos.filter((h) => h <= t).pop();
+        if (previo === undefined || t - previo > horas * 3600_000) continue;   // no llegó dentro de un silencio
+        if (respuestas.some((r) => r > t)) continue;                             // alguien le contestó después
+        const motivo = esAvisoDePago(f) ? 'aviso_de_pago' : esPreguntaQueEsperaRespuesta(f.text_body) ? 'pregunta' : null;
+        if (!motivo) continue;
+        salida.push({ fila: f, motivo, silencioDesde: previo, minutosEsperando: Math.floor((ahora - t) / 60_000) });
+    }
+    return salida;
+}

@@ -78,6 +78,7 @@ async function armarOperacion() {
     await screen.findByText('Mensualidad Noviembre 2026');
     fireEvent.click(await screen.findByTestId('cyp-add-horas'));
     fireEvent.click(await screen.findByText(/Por adelantado/));
+    fireEvent.change(await screen.findByLabelText('¿Quién lo recibió?'), { target: { value: 'Alejandra L.' } });
     await waitFor(() => expect(screen.getByTestId('cyp-primary')).toBeEnabled(), { timeout: 3000 });
 }
 

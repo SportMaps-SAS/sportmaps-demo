@@ -9,6 +9,7 @@
  * un `.in('id', ids)` por tabla (sin consultas por fila). El dinero del mes no se
  * suma aquí: lo da la RPC `preview_close_month` en las tarjetas de arriba.
  */
+import { PagoOrigenInsignia } from '@/components/payment/PagoOrigenInsignia';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -25,7 +26,7 @@ import { filasDelMes, resumenPagos, valorFila, type CobroDelMes, type GrupoPago 
 const COLUMNAS =
   'id, status, amount, amount_paid, concept, due_date, payment_date, period_year, period_month, created_at, '
   + 'payment_category, child_id, user_id, unregistered_athlete_id, branch_id, '
-  + 'payment_method, payment_channel, payment_provider, receipt_url, wompi_reference, wompi_transaction_id, provider_transaction_id';
+  + 'payment_method, payment_channel, payment_provider, receipt_url, wompi_reference, wompi_transaction_id, provider_transaction_id, reference';
 
 const PAGINA = 1000;
 const TROZO = 200;
@@ -177,6 +178,7 @@ export function PagosDelMesCard({ schoolId, activeBranchId, year, month, mesLabe
                     <span className="flex flex-col items-end gap-1">
                       <span className="whitespace-nowrap text-sm font-bold">{formatCurrency(valorFila(f))}</span>
                       <ChipEstado {...f.estado} />
+                      <PagoOrigenInsignia payment={f.cobro} />
                     </span>
                   </button>
                 </li>

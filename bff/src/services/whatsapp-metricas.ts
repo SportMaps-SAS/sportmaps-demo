@@ -261,8 +261,12 @@ export function clasificarComprobante(
     if (fila.status === 'pending' || fila.status === 'processing') return 'en_proceso';
     if (fila.status === 'waiting_user') return 'esperando_familia';
     if (fila.status === 'failed') return 'fallido';
-    if (fila.status === 'ignored') return fila.result_type === 'escalated' ? 'escalado' : 'ignorado';
-    if (fila.status === 'done' && fila.result_type === 'payment_receipt') {
+    // (2026-11-16) `result_type = payment_receipt` es «el bot lo aplicó a un cobro» sin importar el estado de la fila:
+    // cuando el monto leído difiere del cobro, o la familia reclamó el resultado, la fila queda `ignored` (para verse en
+    // la bandeja) pero el comprobante SIGUE en el cobro. Contarla como «ignorada» escondía pagos aplicados.
+    if (fila.status === 'ignored' && fila.result_type !== 'payment_receipt') return fila.result_type === 'escalated' ? 'escalado' : 'ignorado';
+    if (fila.status === 'ignored' && fila.result_type !== 'payment_receipt') return fila.result_type === 'escalated' ? 'escalado' : 'ignorado';
+    if ((fila.status === 'done' || fila.status === 'ignored') && fila.result_type === 'payment_receipt') {
         const s = pago?.status ?? null;
         if (s === 'paid' || s === 'approved' || s === 'completed') {
             return pago?.approved_by ? 'aprobado_por_escuela' : 'aprobado_solo';

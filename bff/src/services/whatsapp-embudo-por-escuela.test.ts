@@ -511,7 +511,11 @@ describe('Monster: el interesado que ya pasó por el embudo nunca queda en silen
             payload: { step: 'embudo_pregunta', flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0, respuestas: {}, branchId: NORTE, sedeTitulo: '🟡 Sede Norte' } },
         };
         const r = await respuesta('monster', 'donde queda la sede', { previos: [interes, BIENVENIDA, pregunta], historia: true });
-        expect(r).toHaveLength(1);
+        // (2026-11-16) Antes se esperaba UN mensaje. Ahora, contestada la pregunta, el bot recuerda UNA vez el paso
+        // que quedó pendiente (el nombre del deportista), con el estado del embudo intacto.
+        expect(r).toHaveLength(2);
+        expect(r[1]).toMatchObject({ step: 'embudo_recordar_paso', flujo: 'embudo' });
+        expect(r[1].texto).toContain('¿Cuál es el nombre completo del deportista?');
         expect(r[0].step).toBe('prospecto_seguimiento_info');
         expect(r[0].texto).toContain('📍 La *Sede Norte* queda en Calle 201 #67-12.');
         expect(r[0].texto).not.toContain('Calle 152');
@@ -525,7 +529,11 @@ describe('Monster: el interesado que ya pasó por el embudo nunca queda en silen
             payload: { step: 'embudo_pregunta', flujo: 'embudo', paso_embudo: 'pregunta', datos_embudo: { i: 0, respuestas: {}, branchId: NORTE } },
         };
         const r = await respuesta('monster', 'cuanto vale la mensualidad', { previos: [hola, BIENVENIDA, pregunta], historia: true });
-        expect(r).toHaveLength(1);
+        // (2026-11-16) Antes se esperaba UN mensaje. Ahora, contestado el valor, el bot recuerda UNA vez la pregunta
+        // del nombre que quedó pendiente.
+        expect(r).toHaveLength(2);
+        expect(r[1]).toMatchObject({ step: 'embudo_recordar_paso', flujo: 'embudo' });
+        expect(r[1].texto).toContain('¿Cuál es el nombre completo del deportista?');
         expect(r[0].step).toBe('prospecto_seguimiento_precios');
         expect(r[0].texto).toMatch(/\$\s?150\.000/);
         // No se tomó como el nombre («¡Mucho gusto, Cuanto!»).

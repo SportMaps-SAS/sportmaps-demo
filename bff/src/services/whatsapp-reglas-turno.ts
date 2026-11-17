@@ -264,7 +264,13 @@ const TRAMITE: RegExp[] = [
     /\b(pagos?|pague|pagar|debo|deuda|mensualidad(es)?|saldo|cobros?|comprobantes?|soportes?|transferencias?|consignacion|nequi|daviplata|llave|cuenta|link|enlace|factura)\b/,
     /\b(horarios?|clases?|entrenamientos?|entreno|sede|cortesia|prueba|inscrip\w*|matricul\w*|cupos?|categorias?)\b/,
     /\b(cuanto|cuando|donde|a que hora)\b/,
+    // Auditoría 8–16 nov 2026: «Profe, las fechas ya están confirmadas o hay opción de que las cambien?» recibía
+    // «Dejo tu mensaje para la profe». Fechas, torneos, valores y servicios son una consulta, no un recado.
+    /\b(fechas?|torneos?|partidos?|uniformes?|vacacional(es)?|clinicas?|campamentos?|precios?|valor(es)?|costos?|tarifas?|descuentos?)\b/,
 ];
+
+/** «necesito a Felipe», «comunícame con Milena»: pide a alguien del equipo POR SU NOMBRE (la palabra que sigue se busca en el equipo). */
+const PIDE_POR_NOMBRE = /\b(?:necesito|busco|requiero|ubicar|localizar|contactar|comunicame con|comuniqueme con|pasame (?:a|con)|paseme (?:a|con)|hablar con|comunicarme con)\s+(?:a |al |a la |con )?(?:el |la )?(?:profe |profesor |profesora |senor |senora |sr |sra |don |dona )?([a-z]+)\b/;
 
 const NO_VOCATIVO_ANTES = new Set([
     'el', 'la', 'los', 'las', 'al', 'del', 'un', 'una', 'de', 'a', 'con', 'para', 'por', 'tu', 'su', 'sus', 'que',
@@ -292,9 +298,13 @@ export function vocativosDelEquipo(nombresCompletos: (string | null | undefined)
         // pila, no solo el primero («Iván Felipe …»), pero solo los de la tabla (un apellido
         // no es un vocativo). Monster 2026-11-05: «Hola Pipe» recibió el aviso de registro.
         const visiblePrimero = (completo || '').trim().split(/\s+/)[0];
-        for (const token of normalizarFrase(completo).split(' ').slice(0, 3)) {
+        const escritos = (completo || '').trim().split(/\s+/);
+        normalizarFrase(completo).split(' ').slice(0, 3).forEach((token, k) => {
             for (const apodo of APODOS_COMUNES[token] ?? []) if (!m.has(apodo)) m.set(apodo, visiblePrimero);
-        }
+            // El segundo nombre de pila, si es uno de la tabla («Iván Felipe …» → «Felipe»): la gente lo llama
+            // por cualquiera de los dos («…necesito a Felipe por favor», auditoría 8–16 nov 2026).
+            if (k > 0 && APODOS_COMUNES[token] && !m.has(token)) m.set(token, escritos[k] ?? visiblePrimero);
+        });
         const pila = normalizarFrase(completo).split(' ')[0];
         if (!pila || pila.length < 3) continue;
         const visible = (completo || '').trim().split(/\s+/)[0];
@@ -319,6 +329,9 @@ export function pideALaPersona(
     const t = normalizarFrase(texto);
     if (!t) return null;
     if (PIDE_PERSONA.some((re) => re.test(t))) return { tipo: 'escalar' };
+    // «…necesito a Felipe por favor» (auditoría 8–16 nov 2026: recibió el aviso de «crea tu cuenta»).
+    const porNombre = t.match(PIDE_POR_NOMBRE);
+    if (porNombre && equipo.has(porNombre[1])) return { tipo: 'escalar' };
 
     const palabras = t.split(' ');
     // La última palabra cuenta como vocativo solo si no va con artículo o
@@ -403,6 +416,102 @@ export function esAutoRespuesta(texto: string | null | undefined): boolean {
     const t = normalizarFrase(texto);
     if (!t || t.split(' ').length < 4) return false;
     return AUTO_RESPUESTA.some((re) => re.test(t));
+}
+
+// ─── Otros bots y spam (auditoría 8–16 nov 2026) ────────────────────────────
+//
+// Un bot ajeno le escribió 10 veces en bucle a una conversación, y el menú automático de otro
+// negocio («Bienvenid@ a Plusgami.store… 1. Cotizar juego  2. …») entró a la venta de un servicio y
+// terminó como pendiente de la escuela. A una máquina no se le responde ni se le deriva a nadie.
+
+/** Renglón que abre con un número de opción: «1. Cotizar», «2) Soporte», «3️⃣ Ventas», «*4* - Otro». */
+const OPCION_NUMERADA = /^\s*[*_]?(?:\d{1,2}|[0-9]️?⃣)[*_]?\s*[.):\-–]?\s+\S/u;
+/** Lo que dice un menú: da la bienvenida a un negocio o pide elegir una opción. */
+const FRASE_DE_MENU = /\b(bienvenid(o|a|os|as)?|menu|elige|elija|selecciona|seleccione|escoge|escoja|marca|marque|digita|digite|opcion(es)?|escribe el numero|responde con el numero|para continuar)\b/;
+
+/**
+ * ¿Es el MENÚ automático de otro negocio? Dos o más opciones numeradas, cada una en su renglón,
+ * y una frase de menú. Una persona que enumera en un renglón («1. sábado 2. domingo»), o sin
+ * «elige»/«bienvenido», no entra. Pura.
+ */
+export function esMenuDeOtroNegocio(texto: string | null | undefined): boolean {
+    const crudo = String(texto ?? '');
+    if (crudo.length < 40) return false;
+    const opciones = crudo.split(/\r?\n/).filter((l) => OPCION_NUMERADA.test(l)).length;
+    return opciones >= 2 && FRASE_DE_MENU.test(normalizarFrase(crudo));
+}
+
+/** Ventana y repeticiones con las que el mismo texto de un remitente se toma por una máquina. */
+export const VENTANA_BUCLE_MIN = 10;
+export const REPETICIONES_DE_BUCLE = 3;
+/** Menos que esto (normalizado) puede repetirlo una persona impaciente: «hola», «???», «me ayudas». */
+const MIN_CARACTERES_DE_BUCLE = 25;
+
+/**
+ * ¿El mismo remitente mandó este MISMO texto (largo) tres o más veces en 10 minutos? Eso es otra
+ * máquina en bucle, no una persona. `filas`: lo reciente de la conversación; si traen el entrante
+ * actual, pasar su `waMessageId` para contarlo una sola vez. Pura.
+ */
+export function esBucleDeOtraMaquina(
+    filas: FilaReciente[], texto: string | null | undefined, waMessageId: string | null = null, ahora = Date.now(),
+): boolean {
+    const t = normalizarFrase(texto);
+    if (t.length < MIN_CARACTERES_DE_BUCLE) return false;
+    const desde = ahora - VENTANA_BUCLE_MIN * 60_000;
+    const previos = filas.filter((f) => f.direction === 'inbound'
+        && (!waMessageId || f.wa_message_id !== waMessageId)
+        && new Date(f.wa_timestamp || f.created_at || 0).getTime() >= desde
+        && normalizarFrase(f.text_body) === t).length;
+    // Con el id del actual se cuentan los ANTERIORES y se suma este; sin él, las filas ya lo traen.
+    return previos + (waMessageId ? 1 : 0) >= REPETICIONES_DE_BUCLE;
+}
+
+/** ¿Lo escribió otra máquina? Auto-respuesta, menú de otro negocio o el mismo texto en bucle. Pura. */
+export function esDeOtraMaquina(
+    filas: FilaReciente[], texto: string | null | undefined, waMessageId: string | null = null, ahora = Date.now(),
+): boolean {
+    return esAutoRespuesta(texto) || esMenuDeOtroNegocio(texto) || esBucleDeOtraMaquina(filas, texto, waMessageId, ahora);
+}
+
+// ─── ¿El mensaje trata de la CUENTA? (auditoría 8–16 nov 2026) ───────────────
+//
+// «Tu número está registrado… todavía no tienes tu cuenta creada» salió 17 veces como respuesta a
+// cosas que no eran de la cuenta: «A qué hora es el entrenamiento?», «Las fechas ya están
+// confirmadas…?», «envío soporte de pago de este mes», «…necesito a Felipe por favor». Ese aviso
+// solo va cuando el mensaje habla de la cuenta, la app o el ingreso (o es un saludo sin más).
+
+const DE_LA_CUENTA = /\b(mi cuenta|la cuenta|una cuenta|crear (la |mi |una )?cuenta|cuenta creada|registr(o|ar|arme|arse|arnos|ado|ada|e|ame)|usuario|contrasena|clave|ingres(o|ar|e)|entrar|iniciar sesion|inicio de sesion|login|loguear\w*|app|aplicacion|aplicativo|plataforma|invitacion|descargar|sportmaps)\b/;
+/** «número de cuenta», «a qué cuenta consigno», «cuenta de ahorros»: es de PAGOS, no de la cuenta de la app. */
+const CUENTA_DE_BANCO = /\b(numero de (la )?cuenta|a (que|cual) cuenta|(la |una )?cuenta (de ahorros|corriente|bancaria|nequi|daviplata|bancolombia|para (pagar|consignar|transferir))|cuenta de cobro)\b/g;
+
+/** ¿Habla de su cuenta, de la app o de cómo entrar? Pura. */
+export function trataDeLaCuenta(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    if (!t) return false;
+    return DE_LA_CUENTA.test(t.replace(CUENTA_DE_BANCO, ' '));
+}
+
+// ─── Pregunta de información de un interesado (auditoría 8–16 nov 2026) ──────
+//
+// Después de la bienvenida del bot: «Dame información» (26 h sin respuesta), «Horarios, costos»
+// (nunca), «si me puedes ayudar con horarios, valores y pagos.», «Entre semana, como manejas los
+// horarios?», «Quiero saber si tienes cursos de vacaciones niña de 10 años por favor» (nunca),
+// «Hola buenas tardes hoy tienen juego?». La puerta de prospecto exige vocabulario de escuela que
+// estas frases no traen; con la bienvenida del bot ya dada, sí son de un interesado.
+
+const TEMA_DE_INFORMACION = /\b(info|informacion|informes|horarios?|costos?|precios?|valor(es)?|tarifas?|mensualidad(es)?|pagos?|clases?|cursos?|entrenamientos?|entrenos?|entrenan|vacacion(es|al|ales)?|categorias?|edad(es)?|sedes?|direccion|ubicacion|cupos?|inscrip\w*|matricul\w*|juegos?|partidos?|torneos?|requisitos?|principiantes?|niveles?)\b/;
+const SALUDO_SIN_PREGUNTA = new Set(['hola', 'holi', 'buenas', 'buenos', 'buen', 'dia', 'dias', 'tardes', 'noches', 'como', 'estas', 'esta', 'estan', 'que', 'tal']);
+
+/**
+ * ¿Pide información de la escuela? Vocabulario de horario, precio, clases, sede… o una pregunta
+ * («?») con algo más que un saludo. «Gracias por la información» es un cierre, no un pedido. Pura.
+ */
+export function pideInformacionDeLaEscuela(texto: string | null | undefined): boolean {
+    const crudo = String(texto ?? '');
+    const t = normalizarFrase(crudo);
+    if (!t || /\b(gracias|agradezco|agradecemos) por\b/.test(t)) return false;
+    if (TEMA_DE_INFORMACION.test(t)) return true;
+    return crudo.includes('?') && t.split(' ').filter((w) => !SALUDO_SIN_PREGUNTA.has(w)).length >= 2;
 }
 
 // ─── P10. Respuesta sin modelo cuando el modelo falla ───────────────────────
@@ -630,14 +739,28 @@ const HABLA_DE_PAGO = /\b(pagos?|pague|pagar|comprobantes?|soportes?|transferenc
 export const VENTANA_ADJUNTO_DEL_TURNO_MS = 5 * 60_000;
 
 /**
+ * Pasos con los que la cola de comprobantes le pide algo a quien compra un SERVICIO y se queda esperándolo: los
+ * datos de quien asiste, si es para la misma persona de la vez pasada, la pantalla completa del pago. Solo existen
+ * en la venta de un servicio (el flujo de familias no los usa). Los mismos textos que
+ * `PASO_PREGUNTA_ASISTENTE`, `PASO_CONFIRMAR_ASISTENTE` y `PASO_VENTA_INCOMPLETO` de whatsapp-comprobante-de-ficha.
+ */
+export const PASOS_DE_COLA_QUE_ESPERAN: ReadonlySet<string> = new Set([
+    'ask_asistente_servicio', 'ask_asistente_confirmar', 'venta_comprobante_incompleto',
+]);
+
+/**
  * ¿Llegó una imagen o un PDF de la familia en esta ráfaga (después de la
  * última respuesta y dentro de los últimos 5 min)? Pura.
  */
 export function adjuntoEnLaRafaga(filas: FilaReciente[], _waMessageIdActual?: string | null, ahora = Date.now()): boolean {
     // La respuesta de la COLA a ese archivo no corta la ráfaga: si ya contestó,
     // con más razón el turno no tiene nada que agregar.
+    // Salvo cuando la cola le PREGUNTÓ algo de la venta de un servicio y quedó esperando a la persona
+    // (`PASOS_DE_COLA_QUE_ESPERAN`): ahí la cola ya no va a decir nada más, y callar deja al cliente sin respuesta
+    // (Monster 2026-11-15: «Ya pagué» y los datos que se pidieron quedaron en silencio).
     const ultimaRespuesta = Math.max(0, ...filas
-        .filter((f) => f.direction === 'outbound' && !esAutomaticoDeApp(f) && !f.payload?.queue_id).map(momento));
+        .filter((f) => f.direction === 'outbound' && !esAutomaticoDeApp(f)
+            && (!f.payload?.queue_id || PASOS_DE_COLA_QUE_ESPERAN.has(String(f.payload?.step ?? '')))).map(momento));
     const desde = Math.max(ultimaRespuesta, ahora - VENTANA_ADJUNTO_DEL_TURNO_MS);
     return filas.some((f) => f.direction === 'inbound'
         && (f.type === 'image' || f.type === 'document') && momento(f) > desde);
@@ -817,6 +940,75 @@ export function exentoDeAntirrepeticion(contexto: Record<string, unknown> | null
     const paso = String(c.step ?? '');
     return Boolean(c.flujo) || c.repetible === true
         || PASOS_QUE_CONTESTAN_UNA_PREGUNTA.has(paso) || paso.startsWith('cortesia_') || paso.endsWith('_fallback');
+}
+
+// ─── El mismo texto dos veces seguidas (auditoría 8–16 nov 2026) ─────────────
+//
+// 20 repeticiones idénticas en 14 conversaciones, en pasos que el freno de 30 min deja pasar porque
+// son de un flujo con estado o van marcados como repetibles: `embudo_horarios` («Elige uno de los
+// horarios de la lista 👇» 6 veces en 4 minutos, 5 de ellas en 9 segundos por una ráfaga),
+// `asistencia_staff`, `venta_servicio_pago`, `escalated`, `venta_servicio_a_la_escuela`.
+// Regla general, sin excepción por flujo: el bot no manda a la misma conversación un texto igual (o
+// con los mismos primeros 60 caracteres) al de su ÚLTIMO saliente si pasaron menos de 2 minutos.
+
+/** Ventana en la que el bot no repite su último mensaje. */
+export const VENTANA_MISMO_TEXTO_MS = 2 * 60_000;
+/** Caracteres (ya normalizados) con los que dos textos se toman por el mismo. */
+export const PREFIJO_MISMO_TEXTO = 60;
+/** Menos que esto no cuenta: «Listo 🙌» o «¡Gracias!» pueden salir dos veces seguidas. */
+const MIN_CARACTERES_MISMO_TEXTO = 15;
+
+/**
+ * Pasos que SÍ se repiten a propósito dentro de los 2 minutos (lista corta, cada uno con su razón):
+ *  - `otp_sent`, `otp_failed`: la persona pidió otra vez el código o volvió a escribirlo mal; callar
+ *    la deja sin saber si el código salió o por qué no entró.
+ *  - `opt_out_confirmado`, `confirmar_baja`: la política de Meta pide confirmar CADA pedido de baja.
+ */
+export const PASOS_QUE_SE_REPITEN_A_PROPOSITO: ReadonlySet<string> = new Set([
+    'otp_sent', 'otp_failed', 'opt_out_confirmado', 'confirmar_baja',
+]);
+
+/**
+ * Pasos cuyo texto abre con un encabezado fijo y lo que cambia viene después (el estado de pagos,
+ * la lista de comprobantes, los medios de pago): solo se frenan si el texto es IGUAL entero, no por
+ * los primeros 60 caracteres.
+ */
+export const PASOS_CON_ENCABEZADO_FIJO: ReadonlySet<string> = new Set([
+    'get_payment_status', 'payment_fallback', 'estado_comprobantes', 'get_payment_methods', 'medios_de_pago_publicos',
+]);
+
+export interface SalienteParaRepeticion {
+    texto?: string | null;
+    /** Momento del envío, en ms. */
+    momento: number;
+    /** Ids de los botones o filas de la lista con que salió. */
+    botones?: readonly string[] | null;
+}
+
+/**
+ * ¿Lo que el bot va a mandar repite su último saliente? Igual, o con los mismos primeros 60
+ * caracteres (normalizados), hace menos de 2 minutos. Dos listas con el mismo texto pero OTRAS
+ * opciones («Ver más horarios» → la página siguiente) no son una repetición. Pura.
+ */
+export function repiteElUltimoSaliente(
+    nuevo: { texto: string | null | undefined; botones?: readonly string[] | null; paso?: string | null },
+    ultimo: SalienteParaRepeticion | null | undefined,
+    ahora = Date.now(),
+): boolean {
+    if (!ultimo || !Number.isFinite(ultimo.momento)) return false;
+    if (ahora - ultimo.momento >= VENTANA_MISMO_TEXTO_MS || ultimo.momento > ahora + 60_000) return false;
+    const paso = String(nuevo.paso ?? '');
+    if (PASOS_QUE_SE_REPITEN_A_PROPOSITO.has(paso)) return false;
+    const a = normalizarFrase(nuevo.texto);
+    const b = normalizarFrase(ultimo.texto);
+    if (a.length < MIN_CARACTERES_MISMO_TEXTO || b.length < MIN_CARACTERES_MISMO_TEXTO) return false;
+    const mismoTexto = a === b
+        || (!PASOS_CON_ENCABEZADO_FIJO.has(paso) && a.slice(0, PREFIJO_MISMO_TEXTO) === b.slice(0, PREFIJO_MISMO_TEXTO));
+    if (!mismoTexto) return false;
+    const ba = [...(nuevo.botones ?? [])];
+    const bb = [...(ultimo.botones ?? [])];
+    if (ba.length && bb.length && (ba.length !== bb.length || ba.some((id, i) => id !== bb[i]))) return false;
+    return true;
 }
 
 // ─── Horas hábiles (SLA de escalamientos, conversación v2) ───────────────────

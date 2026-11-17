@@ -75,6 +75,7 @@ import {
 } from './textos-clase-prueba';
 import { excepcionesDeEscuela, ajusteDeSesion, diaDeLaSemana, type ExcepcionSemana } from './semana-equipo.service';
 import { esAliasDeUsuario } from './whatsapp-usuario-meta';
+import { leerDatosDeRegistro } from './whatsapp-datos-de-registro';
 
 export const FLUJO_CORTESIA = 'clase_cortesia';
 /** Misma ventana de atención de Meta: pasada, el papá ya no recuerda la pregunta. */
@@ -168,6 +169,10 @@ export interface DatosCortesia {
     perfil?: PerfilAtleta | null;
     /** Día de la semana pedido («el sábado»): 0 = domingo … 6 = sábado. */
     dia?: number | null;
+    /** Pidió CORREGIR sus datos: la edad se vuelve a preguntar (no se toma la que dijo antes). */
+    corrigiendo?: boolean;
+    /** Paso que ya se le recordó tras una pregunta a mitad del flujo: el recordatorio sale UNA vez por paso. */
+    recordado?: PasoCortesia | null;
 }
 
 export interface EstadoCortesia {
@@ -252,6 +257,17 @@ export interface CtxCortesia {
     perfilPrevio?: () => Promise<PerfilAtleta | null>;
     /** ¿Ya se le mandó la lista de horarios en las últimas 24 h? No se repite. */
     listadoReciente?: () => Promise<boolean>;
+    /**
+     * Lo que escribió en los últimos días, del más viejo al más nuevo: si ya dijo la edad
+     * («Para mi y tengo 15 años», «Categoría juvenil - mayores 2007») no se le vuelve a pedir.
+     */
+    textosPrevios?: () => Promise<string[]>;
+    /**
+     * El flujo tenía una pregunta pendiente y SOLTÓ el turno porque lo que llegó es otra cosa (una
+     * pregunta de precio, de horario, un comentario). Quien llama contesta por el camino de siempre
+     * y después recuerda el paso (`recordatorioDePasoCortesia`).
+     */
+    alSoltar?: (estado: EstadoCortesia) => void;
     /** Rangos de edad de los grupos (por defecto, grupos-por-edad.service). */
     rangos?: (schoolId: string) => Promise<RangoGrupo[]>;
     /** Qué llevar / a quién buscar, de la escuela (por defecto, school_settings). */
@@ -826,11 +842,33 @@ const NO_ES_NOMBRE = /^(hola+|holi|buenas|buenos dias|buen dia|buenas tardes|bue
 /** Frases sobre la persona, no su nombre: «Soy la mamá de…», «Es para mi hija», «Mi nombre es…». */
 const FRASE_NO_NOMBRE = /^((yo )?soy|es para|son para|para mi|mi (hija|hijo|nombre|nina|nino)|(el|la) (mama|papa|abuela|abuelo|tia|tio|hermana|hermano) de)\b/;
 
-/** Nombre de persona: 3–80 caracteres, con letras, sin números ni @. */
+/**
+ * Una CONSULTA o un pedido, no un nombre (auditoría 8–16 nov 2026). El bot reservó la clase de
+ * cortesía de «*Que Precios Manejas Podrías Darme Más Información*» y, en el embudo, saludó
+ * «¡Mucho gusto, Me!» a «Me equivoqué de sede». Tres señales, cualquiera basta:
+ *  - empieza por un interrogativo o un verbo de pedido (qué, cuál, cuánto, cómo, dónde, cuándo,
+ *    me, quiero, quisiera, podrías, puedes, tienen, manejan…);
+ *  - trae vocabulario de precio, horario, sede o información;
+ *  - trae signos de pregunta, un enlace o un correo.
+ * Ningún nombre de pila empieza por esas palabras ni lleva ese vocabulario. Pura.
+ */
+const EMPIEZA_COMO_CONSULTA = /^(que|cual|cuales|cuanto|cuanta|cuantos|cuantas|como|donde|cuando|quien|por que|porque|para que|me|quiero|quisiera|queria|queremos|podrias|podria|podrian|puedes|puede|pueden|tienen|tiene|tienes|manejan|manejas|maneja|hay|necesito|necesitamos|dame|deme|regalame|oye|y|pero|no|una pregunta|otra pregunta)\b/;
+const VOCABULARIO_DE_CONSULTA = /\b(precios?|valor(es)?|costos?|cuesta|cuestan|tarifas?|mensualidad(es)?|matricula|inscripcion(es)?|pagos?|horarios?|sedes?|direccion|ubicacion|informacion|info|clases?|cursos?|entrenamientos?|categorias?|cupos?|requisitos?|uniformes?|equivoque|equivocamos|principiantes?|pregunta)\b/;
+const ENLACE_O_CORREO = /https?:\/\/|www\.|\b[a-z0-9-]+\.(com|co|net|org|store|app|io)\b|@/i;
+
+export function pareceConsultaNoNombre(texto: string | null | undefined): boolean {
+    const crudo = String(texto ?? '');
+    if (/[?¿]/.test(crudo) || ENLACE_O_CORREO.test(crudo)) return true;
+    const n = normalizar(crudo).replace(/^((hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches|disculpa|perdon) )+/, '');
+    return EMPIEZA_COMO_CONSULTA.test(n) || VOCABULARIO_DE_CONSULTA.test(n);
+}
+
+/** Nombre de persona: 3–80 caracteres, con letras, sin números ni @, y que no sea una consulta. */
 export function nombreValido(texto: string): string | null {
     const t = (texto || '').replace(/\s+/g, ' ').trim();
     if (t.length < 3 || t.length > 80) return null;
     if (/[0-9@?¿]/.test(t)) return null;
+    if (pareceConsultaNoNombre(t)) return null;
     if ((t.match(/\p{L}/gu) ?? []).length < 3) return null;
     // «Hola» 15 min después de «¿nombre completo?» no es un nombre: el bot
     // preguntó «¿Qué edad tiene Hola?» (Dynasty 2026-10-07).
@@ -877,6 +915,52 @@ export function leerEdad(texto: string, ahora: Date): { edad: number; fechaNacim
     if (solo) {
         const edad = Number(solo[1]);
         if (edad >= 3 && edad <= 90) return { edad, fechaNacimiento: null };
+    }
+    // Auditoría 8–16 nov 2026: «19 años / 26/07/07» recibió «No te entendí la edad». La fecha con el
+    // año en dos dígitos y la edad dentro de un texto («tiene 13 años», «13 años 6 meses», «Para mí y
+    // tengo 15 años», «Categoría juvenil - mayores 2007») también valen.
+    return edadEnTextoLibre(texto, hoy.iso);
+}
+
+/**
+ * La edad dentro de un texto cualquiera, con `leerDatosDeRegistro` (fecha con año de 2 o 4 dígitos,
+ * «13 años», «tiene 13», «categoría 2012») y, de respaldo, el año de nacimiento que acompaña a la
+ * categoría («mayores 2007»). Un número suelto NO vale acá: tiene que decir que es una edad. Pura.
+ */
+function edadEnTextoLibre(texto: string | null | undefined, hoyIso: string): { edad: number; fechaNacimiento: string | null } | null {
+    const valida = (e: number | null | undefined): e is number => typeof e === 'number' && e >= 3 && e <= 90;
+    try {
+        const r = leerDatosDeRegistro(texto, { hoy: hoyIso, fuente: 'chat' });
+        if (valida(r.edad)) return { edad: r.edad, fechaNacimiento: r.fechaNacimiento };
+    } catch { /* sigue con el respaldo */ }
+    const m = normalizar(texto).match(/\b(?:categoria|mayores|menores|juvenil|infantil|sub|nacid[oa]s?|nacio)\b[^0-9]{0,24}((?:19|20)\d{2})\b/);
+    const edad = m ? Number(hoyIso.slice(0, 4)) - Number(m[1]) : null;
+    return valida(edad) ? { edad, fechaNacimiento: null } : null;
+}
+
+/**
+ * La edad que la persona YA dijo en la conversación (`textos` del más viejo al más nuevo): gana lo
+ * más reciente. Casos reales (auditoría 8–16 nov 2026): «Para mi y tengo 15 años» → «¿Qué edad
+ * tiene Jeronimo?»; «Categoría juvenil - mayores 2007» → «¿Qué edad tiene Danna?». Solo cuenta lo
+ * que dice que es una edad o una fecha de nacimiento; un «12» suelto puede ser otra cosa. Pura.
+ */
+export function edadDichaAntes(
+    textos: readonly (string | null | undefined)[], ahora: Date,
+): { edad: number; fechaNacimiento: string | null } | null {
+    const hoy = hoyBogota(ahora);
+    for (let i = textos.length - 1; i >= 0; i--) {
+        const l = String(textos[i] ?? '').trim();
+        if (!l) continue;
+        const n = normalizar(l);
+        // Una fecha completa (15/03/2014, 2014-03-15) la lee `leerEdad`; el número suelto no se le pasa.
+        if (/\b\d{1,2}[/.-]\d{1,2}[/.-]\d{4}\b|\b\d{4}[/.-]\d{1,2}[/.-]\d{1,2}\b/.test(n)) {
+            const e = leerEdad(l, ahora);
+            if (e) return e;
+        }
+        const libre = edadEnTextoLibre(l, hoy.iso);
+        if (libre) return libre;
+        const perfil = leerPerfil(l);
+        if (typeof perfil?.edad === 'number') return { edad: perfil.edad, fechaNacimiento: null };
     }
     return null;
 }
@@ -995,7 +1079,13 @@ export async function atenderTurnoCortesia(
         // «Necesito hablar con un asesor», «¿Milena?»: en cualquier paso se
         // suelta el flujo y lo atiende el bot general (escalación).
         if (!botonId && quiereSalirDelFlujo(texto)) return false;
-        return continuar(ctx, d, estado, texto, botonId);
+        const atendido = await continuar(ctx, d, estado, texto, botonId);
+        // Soltó el turno con una pregunta pendiente (lo que llegó es otra conversación): quien llama
+        // contesta por su camino y después recuerda el paso, una vez.
+        if (!atendido && !botonId && texto && PASOS_QUE_PREGUNTAN.has(estado.paso)) {
+            try { ctx.alSoltar?.(estado); } catch { /* el aviso al que llama nunca tumba el turno */ }
+        }
+        return atendido;
     }
 
     // Sin flujo abierto: un botón viejo del flujo (de un mensaje anterior) se
@@ -1361,6 +1451,57 @@ export function filaDeLista(f: FranjaCortesia, n: number): BotonInteractivo {
 
 type Deps = ReturnType<typeof deps>;
 
+/** Pasos en los que el flujo espera un dato de la persona (los que tiene sentido recordar). */
+const PASOS_QUE_PREGUNTAN: ReadonlySet<PasoCortesia> = new Set<PasoCortesia>([
+    'perfil', 'elegir_franja', 'dejar_datos', 'nombre', 'edad', 'acudiente', 'confirmar',
+]);
+
+/** step del recordatorio del paso pendiente (tras contestar una pregunta a mitad del flujo). */
+export const PASO_CORTESIA_RECORDATORIO = 'cortesia_recordar_paso';
+
+/**
+ * Lo que se le recuerda a quien preguntó otra cosa a mitad de la reserva, para que siga donde iba.
+ * UNA vez por paso (`datos.recordado`): la segunda pregunta en el mismo paso se contesta y ya.
+ * null = no hay nada que recordar en ese paso. Pura.
+ */
+export function recordatorioDePasoCortesia(
+    estado: EstadoCortesia, t: TextosClase = TEXTOS_POR_DEFECTO,
+): { texto: string; botones?: BotonInteractivo[]; enTexto?: string } | null {
+    const datos = estado.datos ?? {};
+    if (datos.recordado === estado.paso) return null;
+    const cabeza = `Cuando quieras seguimos con tu ${t.nombre} 🙌`;
+    switch (estado.paso) {
+        case 'perfil': return { texto: `${cabeza} Cuéntame *para quién es* y *qué edad tiene*.` };
+        case 'elegir_franja': return datos.lista?.length
+            ? { texto: `${cabeza} Elige tu horario en la lista de arriba 👆 o escríbeme su número.` } : null;
+        case 'dejar_datos': return { texto: `${cabeza} ¿Me dejas tus datos para que la escuela te contacte?`,
+            botones: BOTONES_DATOS, enTexto: 'Responde *Sí* o *No, gracias*.' };
+        case 'nombre': return { texto: `${cabeza} ¿Cuál es el *nombre completo* de quien va a tomar la clase?` };
+        case 'edad': return { texto: `${cabeza} ¿Qué *edad* tiene ${datos.nombre ? datos.nombre.split(' ')[0] : 'quien va a tomar la clase'}?` };
+        case 'acudiente': return { texto: `${cabeza} ¿Cuál es el *nombre completo del acudiente*?` };
+        case 'confirmar': return { texto: `${cabeza} Responde *Confirmar* para reservar o *Cambiar* para elegir otro horario.`,
+            botones: BOTONES_CONFIRMAR, enTexto: 'Responde *Confirmar* o *Cambiar*.' };
+        default: return null;
+    }
+}
+
+/** «Y son principiantes», «Oye una pregunta»: tres palabras o más que no eligen nada son un comentario o una pregunta. */
+function esComentarioOPregunta(texto: string): boolean {
+    return pareceConsultaNoNombre(texto) || (texto.match(/\p{L}{2,}/gu) ?? []).length >= 3;
+}
+
+async function textosPreviosSeguros(ctx: CtxCortesia): Promise<string[]> {
+    try { return (await ctx.textosPrevios?.()) ?? []; } catch { return []; }
+}
+
+/** «corregir datos», «cambiar el nombre», «la edad está mal»: quiere corregir sus datos, no el horario. */
+function quiereCorregirDatos(texto: string): boolean {
+    const n = normalizar(texto);
+    return /^(corregir|corrige|corrijo)( (los |mis )?datos)?$/.test(n)
+        || /\b(corregir|corrijo|corrige|cambiar|cambio|cambia) (los |mis |el |la |de )?(datos|nombre|edad|acudiente|fecha)\b/.test(n)
+        || /\b(nombre|edad|acudiente|fecha|datos?) (esta|estan|quedo|quedaron) mal\b/.test(n);
+}
+
 async function continuar(
     ctx: CtxCortesia, d: Deps, estado: EstadoCortesia, texto: string, botonId: string | null,
 ): Promise<boolean> {
@@ -1404,12 +1545,28 @@ async function continuar(
             const nombre = nombreValido(texto)
                 ?? (ctx.rafaga ? ctx.rafaga.split('\n').map((l) => nombreValido(l)).find(Boolean) ?? null : null);
             if (!nombre) {
-                if (pareceOtraConversacion(texto)) return false;
+                // Una pregunta («Que precios manejas podrías darme más información») no es un nombre:
+                // se suelta el turno, la contesta el camino de siempre y el paso se recuerda después.
+                if (pareceOtraConversacion(texto) || pareceConsultaNoNombre(texto)) return false;
                 return reintentar(ctx, estado,
                     'Escríbeme el *nombre completo* de quien va a tomar la clase (solo el nombre, sin números).');
             }
             // La edad ya la dijo al principio («para mi hija de 8 años»): no se repite.
             if (typeof datos.edad === 'number') return trasEdad(ctx, { ...datos, nombre, intentos: 0 });
+            // …o la dijo antes en la conversación, o en esta misma ráfaga («Para mi y tengo 15 años»,
+            // «Categoría juvenil - mayores 2007»): tampoco se vuelve a pedir. Si está corrigiendo sus
+            // datos, sí se pregunta (la de antes es la que quiere cambiar).
+            if (!datos.corrigiendo) {
+                let dicha = edadDichaAntes(
+                    [...await textosPreviosSeguros(ctx), ...(ctx.rafaga ? ctx.rafaga.split('\n') : []), texto], d.ahora);
+                if (!dicha) {
+                    const previo = await perfilPrevioSeguro(ctx);
+                    if (typeof previo?.edad === 'number') dicha = { edad: previo.edad, fechaNacimiento: null };
+                }
+                if (dicha) {
+                    return trasEdad(ctx, { ...datos, nombre, edad: dicha.edad, fechaNacimiento: dicha.fechaNacimiento, intentos: 0 });
+                }
+            }
             await ctx.enviar(
                 `Gracias. ¿Qué *edad* tiene ${nombre.split(' ')[0]}? También me sirve la *fecha de nacimiento* (por ejemplo 15/03/2014).`,
                 'cortesia_edad', { paso: 'edad', datos: { ...datos, nombre, intentos: 0 } });
@@ -1418,7 +1575,7 @@ async function continuar(
         case 'edad': {
             const e = leerEdad(texto, d.ahora);
             if (!e) {
-                if (pareceOtraConversacion(texto)) return false;
+                if (pareceOtraConversacion(texto) || pareceConsultaNoNombre(texto)) return false;
                 return reintentar(ctx, estado,
                     'No te entendí la edad. Escríbeme solo el número de años (por ejemplo *12*) o la fecha de nacimiento (*15/03/2014*).');
             }
@@ -1427,18 +1584,25 @@ async function continuar(
         case 'acudiente': {
             const acudiente = nombreValido(texto);
             if (!acudiente) {
-                if (pareceOtraConversacion(texto)) return false;
+                if (pareceOtraConversacion(texto) || pareceConsultaNoNombre(texto)) return false;
                 return reintentar(ctx, estado, 'Escríbeme el *nombre completo del acudiente*.');
             }
             return confirmar(ctx, { ...datos, acudiente });
         }
         case 'confirmar': {
+            // «Corregir datos» / «cambiar el nombre»: se vuelven a pedir los datos, con el horario elegido.
+            if (!botonId && quiereCorregirDatos(texto)) {
+                return pedirNombre(ctx, { franja: datos.franja ?? null, sinFranja: datos.sinFranja,
+                    perfil: datos.perfil ?? null, dia: datos.dia ?? null, corrigiendo: true });
+            }
             const r = siNo(texto, botonId, BOTON_CC.CONFIRMAR, BOTON_CC.CAMBIAR);
             if (r === 'si') return reservar(ctx, d, datos);
             if (r === 'no') {
-                // «Cambiar» arranca de cero: es más claro que preguntar qué dato
-                // cambiar, y son solo tres preguntas.
-                if (datos.sinFranja) return pedirNombre(ctx, { sinFranja: true, franja: null });
+                // «Cambiar» es cambiar el HORARIO (auditoría 8–16 nov 2026: borraba todo y volvía a pedir
+                // nombre y acudiente; 4 conversaciones, una persona lo sufrió 4 veces). Nombre, edad y
+                // acudiente se conservan y solo se vuelven a ofrecer los horarios. Sin horario elegido
+                // (dejó sus datos para que la llamen) lo único que hay para cambiar son los datos.
+                if (datos.sinFranja) return pedirNombre(ctx, { sinFranja: true, franja: null, corrigiendo: true });
                 const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
                 if (!franjas.length) {
                     await ctx.enviar('Ya no quedan franjas disponibles. ¿Quieres dejarme tus datos para que la escuela te contacte?',
@@ -1447,12 +1611,24 @@ async function continuar(
                 }
                 // La edad que dijo en el perfil se conserva: sin ella, tras elegir
                 // de nuevo se le volvía a preguntar (Dynasty 2026-10-07, …5566).
-                await ofrecerFranjas(ctx, franjas, 0, { perfil: datos.perfil ?? null, ...edadDelPerfil(datos.perfil) },
-                    'Listo, empecemos de nuevo. Elige la franja:', 'cortesia_ofrecer');
+                const conservados: DatosCortesia = {
+                    perfil: datos.perfil ?? null, ...edadDelPerfil(datos.perfil),
+                    ...(datos.nombre ? { nombre: datos.nombre } : {}),
+                    ...(typeof datos.edad === 'number' ? { edad: datos.edad } : {}),
+                    ...(datos.fechaNacimiento ? { fechaNacimiento: datos.fechaNacimiento } : {}),
+                    ...(datos.acudiente ? { acudiente: datos.acudiente } : {}),
+                };
+                await ofrecerFranjas(ctx, franjas, 0, conservados,
+                    datosCompletos(conservados)
+                        ? 'Listo, cambiemos el horario 🙌 Tus datos quedan guardados. Elige el nuevo:'
+                        : 'Listo, cambiemos el horario 🙌 Elige el nuevo:',
+                    'cortesia_ofrecer');
                 return true;
             }
-            if (pareceOtraConversacion(texto)) return false;
-            return reintentar(ctx, estado, 'Responde *Confirmar* para reservar o *Cambiar* para empezar de nuevo.',
+            if (pareceOtraConversacion(texto) || pareceConsultaNoNombre(texto)) return false;
+            return reintentar(ctx, estado,
+                'Responde *Confirmar* para reservar o *Cambiar* para elegir otro horario. ' +
+                'Si hay un dato mal, escríbeme *corregir datos*.',
                 BOTONES_CONFIRMAR);
         }
         case 'confirmar_cancelacion': {
@@ -1609,6 +1785,10 @@ async function elegirFranja(
 
     if (!elegidaId) {
         if (pareceOtraConversacion(texto) || esPreguntaDeOtroTema(texto) || !datos.lista?.length) return false;
+        // «Y son principiantes», «Oye una pregunta» (auditoría 8–16 nov 2026): lo que no es una
+        // elección no se contesta repitiendo la lista. Se suelta el turno: lo contesta el camino de
+        // siempre y el paso se recuerda una vez.
+        if (!botonId && esComentarioOPregunta(texto)) return false;
         return reintentar(ctx, { paso: 'elegir_franja', datos },
             'Elige un horario de la lista o escríbeme su número (por ejemplo *2*). También puedes escribirme un día ' +
             '(*el sábado*) o *asesor* si prefieres hablar con una persona.');

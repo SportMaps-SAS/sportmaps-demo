@@ -109,7 +109,11 @@ describe('intencionEnVenta', () => {
             'Me gustaría saber qué trayectoria llevar teniendo en cuenta que acabo de pagar la clínica', 'Esa ya está acabada de pagar',
         ],
         otra_fecha: ['ese día tenemos torneo, ¿hay otra fecha?', 'no puedo ese día', 'habrá otra fecha?', 'se me cruza con un partido'],
-        saludo: ['Hola', 'Ok', '.', 'Buenas', '👍', 'Buenas tardes', 'holaaa', 'Buenas, tengo una pregunta', '?'],
+        saludo: ['Hola', 'Ok', '.', 'Buenas', '👍', 'Buenas tardes', 'holaaa', '?'],
+        // (auditoría 8–16 nov 2026) «Buenas, tengo una pregunta» era 'saludo' (la línea del servicio con botones); ahora
+        // es 'anuncio': se contesta «Claro, dime» y se espera. Igual que «Profe una pregunta» o «Me puedes confirmar».
+        anuncio: ['Buenas, tengo una pregunta', 'Profe una pregunta', 'Me puedes confirmar', 'Seria?'],
+        desiste: ['Estoy en otra ciudad', 'no puedo', 'no me queda'],
         cierre: ['Gracias', 'Okey muchas gracias quedo atento', 'Quedo atento', 'listo', 'Perfecto, gracias', '🙏', 'Sí gracias'],
         detalle: [
             'Solo una confirmacion antes de pagar incluye grupo femenino ??', '¿Con el pago ya tengo el cupo?', 'mi hija tiene 12',

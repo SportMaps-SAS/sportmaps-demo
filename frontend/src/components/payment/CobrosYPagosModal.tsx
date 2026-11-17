@@ -83,6 +83,7 @@ import {
     newAthleteError,
     newAthletePayload,
     paymentDraftError,
+    recibidoDraftError,
     paymentPayload,
     type MultiTargetValue,
     type NewAthleteDraft,
@@ -401,6 +402,8 @@ export function CobrosYPagosDialog({
         for (const l of lines) if (l.due_date < today) extraErrors.push('El vencimiento no puede ser antes de hoy.');
     }
     const localErrors = mode === 'single' ? [...single.errors, ...extraErrors] : [...multiCalc.errors, ...extraErrors];
+    // Pago sin comprobante: falta quién lo recibió. Frena el botón, no la vista previa.
+    const recibidoErr = mode === 'single' && single.toPay.n > 0 ? recibidoDraftError(payment, today) : null;
 
     // ── Cuerpo y vista previa ──────────────────────────────────────────────────
     const body: ChargeBatchRequest | null = useMemo(() => {
@@ -508,13 +511,13 @@ export function CobrosYPagosDialog({
         toCreate,
         toPay,
         adjustOnly: mode === 'single' ? single.adjustOnly : 0,
-        errors: localErrors.length + (dupBlock ? 1 : 0) + (previewFresh && preview!.errors?.length ? preview!.errors.length : 0),
+        errors: localErrors.length + (recibidoErr ? 1 : 0) + (dupBlock ? 1 : 0) + (previewFresh && preview!.errors?.length ? preview!.errors.length : 0),
         previewFresh,
         previewLoading,
         submitting,
         noAthlete: mode === 'single' ? !singleTargetReady : multiAthletes.length === 0,
     });
-    const buttonReason = dupBlock ? 'Decide si es una de las coincidencias o crea igual.' : button.reason;
+    const buttonReason = dupBlock ? 'Decide si es una de las coincidencias o crea igual.' : (recibidoErr ?? button.reason);
 
     const retryHours = async () => {
         if (!result || !ventaDeHoras) return;

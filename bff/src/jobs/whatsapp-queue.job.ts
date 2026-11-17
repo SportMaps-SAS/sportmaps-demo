@@ -19,7 +19,6 @@
  * Plan: docs/specs/whatsapp-cola-de-comprobantes-plan.md §4.3 y §4.4
  */
 
-import { APP_PUBLICA_PROD } from '../utils/url-publica-familias';
 import crypto from 'node:crypto';
 import { supabase } from '../config/supabase';
 import {
@@ -44,7 +43,6 @@ import {
     pagosPendientesDe, resolverPago, describirPago, mensajeElegirPago,
     type PagoPendiente,
 } from '../services/whatsapp-receipt-matching.service';
-import { invitacionPendienteVigente } from '../services/whatsapp-invitacion-vigente.service';
 import { identificarStaffPorTelefono, recibirPlanillaDeStaff } from '../services/whatsapp-asistencia-staff.service';
 import { esErrorDeVentana } from '../services/whatsapp-plantillas.service';
 
@@ -60,8 +58,16 @@ import {
     fichasPorTelefono, pendientesPorLlaves, pagoYaRegistrado, botonesDeCobros,
     deportistaPorNombreSinVerificar, candidatosPorNombre, type FichaConNombre as FichaPorNombre,
     PREGUNTA_DEPORTISTA, PASO_PREGUNTA_DEPORTISTA, TEXTO_YA_REGISTRADO, type LlavesDeFicha,
-    PASO_PREGUNTA_ASISTENTE, TEXTO_VENTA_REPETIDO, preguntaAsistenteDeServicio, paraElServicio, nombreDeAsistenteEnTextos,
+    PASO_PREGUNTA_ASISTENTE, TEXTO_VENTA_REPETIDO, paraElServicio, nombreDeAsistenteEnTextos,
+    PASO_CONFIRMAR_ASISTENTE, PASO_VENTA_INCOMPLETO, BOTONES_MISMO_ASISTENTE, preguntaMismoAsistente, preguntaDeDatosDeServicio,
+    textoCapturaIncompleta,
 } from '../services/whatsapp-comprobante-de-ficha.service';
+import type { DatosDeRegistro } from '../services/whatsapp-datos-de-registro';
+import {
+    SIN_REGISTRO, registroDeFicha, registroDeNota, registroDeChatPrevio, registroGuardado, textosDeLaVenta, faltantesDe,
+    pedidoDeFaltantes, resumenDeAsistente, hayRegistro, mismaPersona,
+} from '../services/wa-registro-de-venta.service';
+import { unirDatosDeRegistro } from '../services/whatsapp-datos-de-registro';
 import type { BotonInteractivo } from '../services/whatsapp.service';
 import {
     leerTextosDelComprobante, decidirCobroPorTexto, type CobroParcial,
@@ -94,8 +100,8 @@ import {
     conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
     decidirMontoDeVenta, cobroPrevioDelServicio, cobroDeServicioPorId, leadDeVenta, asegurarLeadDeVenta, motivoDelItem,
-    hayPrecioDeAfiliado, abonoMinimo, type MontoDeVenta, type LeadDeVenta,
-    textoDeCantidad, type MotivoConCantidad,
+    hayPrecioDeAfiliado, abonoMinimo, type MontoDeVenta, type LeadDeVenta, guardarDatosDeRegistro,
+    textoDeCantidad, type MotivoConCantidad, preciosDeServicios, opcionesDelItem, minimosEnFecha, saldoHastaDelItem, fechaDePagoParaPrecio, type CobroPrevioDeServicio,
 } from '../services/wa-cobro-desde-comprobante.service';
 import {
     cobroAbiertoDelAtleta, reconocerAtletaDelClub, corregirServicioPorMonto, duenoDelCobro, type CobroAbierto,
@@ -112,6 +118,17 @@ import {
     serviciosDeAnuncio, servicioDeAnuncioPorId, servicioVigente, type ItemConFicha,
 } from '../services/whatsapp-anuncio-destino';
 import type { FichaConNombre, OpcionGuiada } from '../services/whatsapp-comprobante-guiado.service';
+import { fichasDeLaEscuela, nombreDelMes } from '../services/whatsapp-comprobante-guiado.service';
+import { aliasesDelServicio } from '../services/wa-cobro-abierto.service';
+import {
+    lecturaCompleta, motivoSinPendientesConPago, textoSinPendientesALaEscuela, TEXTO_ARCHIVO_NO_LEIDO, PASO_ARCHIVO_NO_LEIDO,
+    hijoNombrado, mesNombrado, acotarCobrosPorLoEscrito, fichaPorNombreYApellido, propuestaNumeroFueraDeFicha,
+    CODIGO_NUMERO_FUERA_DE_FICHA, senalDeTorneoOClub, motivoTorneoOClub, textoTorneoOClubRecibido, laVentaCede,
+    pagoPartido, motivoPagoPartido, textoPagoPartido, VENTANA_PAGO_PARTIDO_MIN, CODIGO_PAGO_PARTIDO,
+    difiereDelCobro, motivoMontoDistintoAplicado, textoMinimosEnFecha, sumaDeAbonosDeServicio, propuestaSumaDeAbonos,
+    textoSumaDeAbonos, propuestaDeCobroPrevio, type PagoPrevioDeServicio,
+} from '../services/wa-cola-reglas';
+import { nombresDeAsistentesEn, textoVariosAsistentes } from '../services/whatsapp-datos-de-registro';
 
 const BUCKET = 'payment-receipts';
 const LOTE = 10;
@@ -265,6 +282,29 @@ async function escuelaAtendiendoElChat(fila: FilaCola): Promise<boolean> {
     }
 }
 
+/**
+ * (R8) Los comprobantes ANTERIORES del mismo contacto (últimos 10 min) que cerraron porque el monto no cuadraba:
+ * las posibles partes de un pago partido, del más viejo al más nuevo. UNA lectura; nunca lanza.
+ */
+async function comprobantesRecientesSinAplicar(fila: FilaCola): Promise<{ id: string; monto: number }[]> {
+    try {
+        const base = fila.created_at ? new Date(fila.created_at).getTime() : Date.now();
+        const { data } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, error_message, created_at, monto:pregunta_ocr->ocr->>amount')
+            .eq('integration_id', fila.integration_id).eq('wa_phone_number', fila.wa_phone_number)
+            .neq('id', fila.id).eq('status', 'ignored')
+            .gte('created_at', new Date((Number.isFinite(base) ? base : Date.now()) - VENTANA_PAGO_PARTIDO_MIN * 60_000).toISOString())
+            .order('created_at', { ascending: true })
+            .limit(10);
+        return ((Array.isArray(data) ? data : []) as any[])
+            .filter((f) => String(f.error_message ?? '').startsWith('monto_no_cuadra'))
+            .map((f) => ({ id: String(f.id), monto: Number(f.monto) }))
+            .filter((f) => Number.isFinite(f.monto) && f.monto > 0);
+    } catch {
+        return [];
+    }
+}
+
 async function pistaDeCobro(fila: FilaCola): Promise<PistaDeCobro | null> {
     try {
         return pistaDesdeTextos(await textosCercanos(fila));
@@ -318,9 +358,10 @@ const M = {
     // (`wa_identify_by_phone`), que este worker no consultaba. Un comprobante
     // no es momento de pedir un trámite: o se sabe quién es, o lo ve la escuela.
 
+    // (2026-11-16) Con un comprobante en la mano NO se habla de la cuenta: solo que llegó y que la escuela lo revisa.
+    // El `error_message` de la fila sigue siendo `familia_sin_cuenta` (la bandeja lo compara exacto).
     sinCuenta:
-        'Recibí tu comprobante 📄 Como todavía no tienes tu cuenta creada, ' +
-        'se lo paso a la escuela para que lo aplique.',
+        'Recibí tu comprobante 📄 La escuela lo revisa y te confirma por aquí.',
 
     numeroAmbiguo:
         'Recibí tu comprobante 📄 Tu número está en más de una cuenta de la escuela, ' +
@@ -396,13 +437,38 @@ export function esTransitorio(error: string): boolean {
 
 // ─── Cierres de fila ─────────────────────────────────────────────────────────
 
+// (R1, auditoría 1–16 nov 2026) Guardar SIEMPRE lo leído. 247 filas cerraron `contacto_no_atendido`, «sin pagos
+// pendientes», destino ajeno o «no es un comprobante» sin dejar el monto, la referencia, la fecha, el destino, quién
+// pagó ni la nota: imposibles de auditar. Cada lectura del OCR se anota acá por fila y `cerrar` la persiste en
+// `pregunta_ocr` (el formato de siempre) en TODO cierre que no traiga la suya. El `error_message` no cambia.
+const lecturasDeFilas = new Map<string, { fila: FilaCola; ocr: Awaited<ReturnType<typeof extractReceipt>>; sha: string | null }>();
+
+/** Anota lo que leyó el OCR de esta fila (y el sha del archivo, si se tiene). Nunca lanza. */
+function anotarLectura(fila: FilaCola, ocr: Awaited<ReturnType<typeof extractReceipt>>, base64?: string | null): void {
+    try {
+        if (ocr) lecturasDeFilas.set(fila.id, { fila, ocr, sha: base64 ? shaDe(base64) : null });
+    } catch { /* sin lectura anotada: el cierre sale como antes */ }
+}
+
+/** `pregunta_ocr` con las huellas de siempre MÁS quién pagó, la nota y el titular del destino (R1). */
+const huellasConLectura = (e: Parameters<typeof huellasDelComprobante>[0]) => lecturaCompleta(huellasDelComprobante(e), e.ocr);
+
 async function cerrar(
     id: string,
     status: 'done' | 'ignored' | 'failed',
     extra: Record<string, unknown> = {},
 ) {
+    // (R1) La lectura anotada de esta fila, si el cierre no trae la suya. Un `done` ya la deja en el cobro.
+    const leida = lecturasDeFilas.get(id);
+    lecturasDeFilas.delete(id);
+    const lectura = leida && status !== 'done' && !('pregunta_ocr' in extra)
+        ? huellasConLectura({
+            sha: leida.sha, ocr: leida.ocr, storagePath: leida.fila.storage_path ?? null,
+            parentId: typeof extra.matched_parent_id === 'string' ? extra.matched_parent_id : null,
+        })
+        : null;
     const { error } = await supabase.from('whatsapp_inbound_queue')
-        .update({ status, processed_at: new Date().toISOString(), locked_until: null, ...extra })
+        .update({ status, processed_at: new Date().toISOString(), locked_until: null, ...(lectura ? { pregunta_ocr: lectura } : {}), ...extra })
         .eq('id', id);
     // Un cierre que falla deja la fila en 'processing' y se reprocesa cuando
     // vence el lease. Que al menos quede en el log (así pasó con el
@@ -795,12 +861,29 @@ export async function aplicarComprobante(
         await avisarRevisionTrasVentana(ctx, pago).catch(() => undefined);
     }
 
-    await cerrar(ctx.queueId, 'done', {
+    // (R9, auditoría 1–16 nov 2026) El comprobante quedó en el cobro, pero por OTRO valor: $197.000 leídos contra una
+    // mensualidad de $180.000 que sigue vencida; $708.000 sobre $180.000; $110.000 sobre $150.000. La fila figuraba
+    // `done` (resuelta) y la bandeja solo lista failed/ignored/waiting_user: nadie lo veía. Ahora queda `ignored`
+    // con `result_type = payment_receipt` y el cobro enlazado (el aviso de desenlace y el autocierre por decisión la
+    // siguen tomando igual), para que la bandeja la muestre en ACCIÓN con los dos valores hasta que la escuela
+    // decida el pago. El cobro NO cambia de estado. No aplica a un cobro que el asistente acaba de crear por ese
+    // monto (abono de un servicio), ni a un comprobante rechazado.
+    const valorEsperado = extra.esperado ?? Number(pago.amount);
+    const montoDistinto = resultado.action !== 'rejected' && extra.linea?.nuevo !== true
+        && difiereDelCobro(ctx.ocr?.amount ?? null, valorEsperado);
+    await cerrar(ctx.queueId, montoDistinto ? 'ignored' : 'done', {
         result_type: 'payment_receipt',
         result_ref_id: pago.id,
         matched_parent_id: ctx.parentId,
         matched_child_id: pago.child_id,
-        error_message: extra.motivo ? extra.motivo.slice(0, 500) : null,
+        error_message: montoDistinto
+            // El código y los dos valores primero; detrás, el motivo que ya traía (la propuesta del abono).
+            ? motivoConPropuesta(motivoMontoDistintoAplicado({
+                montoLeido: ctx.ocr.amount as number, valorCobro: valorEsperado,
+                descripcion: cubre.length ? [pago, ...cubre].map((c) => describirPago(c)).join(' + ') : describirPago(pago),
+            }), extra.motivo ?? null)
+            : (extra.motivo ? extra.motivo.slice(0, 500) : null),
+        ...(montoDistinto ? { pregunta_ocr: huellasConLectura({ sha: ctx.sha, ocr: ctx.ocr, storagePath: ctx.storagePath, parentId: ctx.parentId }) } : {}),
     });
     ctx.log?.info?.({ queueId: ctx.queueId, paymentId: pago.id, accion: resultado.action }, '[wa-queue] aplicado');
     return { ok: true, action: resultado.action, veredicto: estampado.veredicto.verdict };
@@ -870,6 +953,108 @@ async function motivoDeOtroConcepto(a: {
     }
 }
 
+// ─── Reglas de la auditoría 1–16 nov 2026 (ver wa-cola-reglas) ───────────────
+
+/** Lo que estas reglas necesitan de una fila ya leída. */
+interface ArgsDeRegla {
+    fila: FilaCola; responder: Responder; ocr: Awaited<ReturnType<typeof extractReceipt>>;
+    sha: string; storagePath: string | null; parentId: string | null; log?: Logger;
+}
+
+/**
+ * (R6) Pago de torneo o de un club: no se pregunta «¿de qué deportista?». A la bandeja como ACCIÓN con el monto y
+ * lo que dijo, y a quien pagó, que llegó (clubes externos pagando $900.000: ~20 filas, > $2,2 M).
+ */
+async function torneoOClubALaEscuela(a: ArgsDeRegla & { dijo: string }): Promise<void> {
+    const monto = montoDelOcr(a.ocr);
+    const m = motivoTorneoOClub({ monto, dijo: a.dijo, quienPago: a.ocr.originName ?? null, fecha: a.ocr.date ?? null });
+    await a.responder(textoTorneoOClubRecibido(monto), 'torneo_o_club');
+    await cerrar(a.fila.id, 'ignored', {
+        result_type: 'escalated', matched_parent_id: a.parentId,
+        error_message: motivoConPropuesta(m.base, m.propuesta),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+    });
+    a.log?.info?.({ queueId: a.fila.id }, '[wa-queue] pago de torneo o de club: a la bandeja como acción');
+}
+
+/**
+ * (R5) El número no está en la ficha de ese deportista, pero el pie o los textos lo nombran (nombre + apellido,
+ * coincidencia única). NUNCA se aplica solo —es dinero atribuido por nombre desde un número que no es el de su
+ * ficha—: a la bandeja como ACCIÓN con la propuesta exacta («parece el pago de noviembre de X: $150.000; el número
+ * no está en su ficha — aplicar y ligar el número») y a quien escribe, que llegó y que la escuela lo valida. No se
+ * le dice ningún dato del deportista. Una lectura (los cobros abiertos de ESE deportista).
+ */
+async function comprobanteDeNumeroFueraDeLaFicha(a: ArgsDeRegla & { ficha: FichaPorNombre; escrito: string }): Promise<void> {
+    const monto = montoDelOcr(a.ocr);
+    const llaves: LlavesDeFicha = a.ficha.tipo === 'child'
+        ? { childIds: [a.ficha.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [a.ficha.id] };
+    const pendientes = await pendientesPorLlaves(a.fila.school_id, llaves);
+    const delMonto = monto === null ? [] : pendientes.filter((p) => mismoMonto(Number(p.amount), monto));
+    const p = propuestaNumeroFueraDeFicha({
+        deportista: a.ficha.nombre, monto, cobro: delMonto.length === 1 ? delMonto[0] : null,
+        abiertos: pendientes.length ? pendientes.slice(0, 4).map((x) => describirPago(x)).join(' / ') : 'sin cobros abiertos',
+    });
+    const escrito = a.escrito.replace(/\s+/g, ' ').replace(/\|/g, '/').trim().slice(0, 100);
+    await a.responder(TEXTO_SIN_VERIFICAR_A_LA_ESCUELA, 'sin_verificar_a_la_escuela');
+    await cerrar(a.fila.id, 'ignored', {
+        result_type: 'escalated', matched_parent_id: a.parentId,
+        ...(a.ficha.tipo === 'child' ? { matched_child_id: a.ficha.id } : {}),
+        error_message: motivoConPropuesta(
+            `sin_familia: ${CODIGO_NUMERO_FUERA_DE_FICHA} — ${p.detalle}${escrito ? ` · escribió «${escrito}»` : ''}`,
+            `Propuesta → pagó: ${a.ocr.originName ?? 'no se leyó'}${a.ocr.date ? ` · ${a.ocr.date}` : ''} · ${p.propuesta}`),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+    });
+    a.log?.info?.({ queueId: a.fila.id, conCobro: delMonto.length === 1 }, '[wa-queue] número fuera de la ficha: a la bandeja con la propuesta exacta');
+}
+
+const palabrasDeNombre = (n: string | null | undefined) => normalizarFrase(n).split(' ').filter((w) => w.length >= 3);
+
+/**
+ * (R4) La familia no tiene cobros abiertos por sus fichas, pero el pie o la nota nombran (nombre + apellido,
+ * coincidencia única) a OTRO deportista activo de la escuela: la hermana que quedó en otra ficha («Mensualidad
+ * Isabella Rodríguez Amórtegui» desde el número de la ficha de Juliana). Si comparte los dos apellidos con un
+ * deportista de este contacto y tiene UN cobro abierto por ese monto (±$1), el comprobante se le aplica (queda
+ * «Por validar», como todos). En cualquier otro caso no se aplica: a la bandeja con la propuesta (R5). true = la
+ * fila quedó atendida. Sin nombre escrito no lee nada.
+ */
+async function deportistaNombradoFueraDeLaFicha(
+    a: { fila: FilaCola; parentId: string | null; ocr: Awaited<ReturnType<typeof extractReceipt>>; sha: string; storagePath: string | null;
+        responder: Responder; alFallar?: (motivo: string) => Promise<void>; log?: Logger },
+    propios: { id: string; nombre: string | null }[], textos: (string | null | undefined)[],
+): Promise<boolean> {
+    const escrito = textos.filter((t) => t && String(t).trim()).join(' · ');
+    // Hace falta al menos nombre + apellido escritos (dos palabras de 3+ letras): si no, ni se lee el padrón.
+    if (palabrasDeNombre(escrito).length < 2 || !a.storagePath) return false;
+    // Si lo escrito trae el nombre de pila de un deportista de ESTE contacto, es de él: no se busca a nadie más.
+    const enTexto = ` ${normalizarFrase(escrito)} `;
+    if (propios.some((d) => { const pila = palabrasDeNombre(d.nombre)[0]; return !!pila && enTexto.includes(` ${pila} `); })) return false;
+    const idsPropios = new Set(propios.map((d) => d.id));
+    const ficha = fichaPorNombreYApellido(textos, (await fichasDeLaEscuela(a.fila.school_id)).filter((f) => !idsPropios.has(f.id)));
+    if (!ficha) return false;
+    const monto = montoDelOcr(a.ocr);
+    const deLaFicha = new Set(palabrasDeNombre(ficha.nombre));
+    const esHermano = propios.some((d) => palabrasDeNombre(d.nombre).filter((w) => deLaFicha.has(w)).length >= 2);
+    if (esHermano && monto !== null && a.alFallar) {
+        const llaves: LlavesDeFicha = ficha.tipo === 'child' ? { childIds: [ficha.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [ficha.id] };
+        const delMonto = (await pendientesPorLlaves(a.fila.school_id, llaves)).filter((p) => mismoMonto(Number(p.amount), monto));
+        if (delMonto.length === 1) {
+            a.log?.info?.({ queueId: a.fila.id, paymentId: delMonto[0].id }, '[wa-queue] el pie nombra a la hermana de otra ficha: se aplica a su cobro');
+            await aplicarComprobante({
+                queueId: a.fila.id, schoolId: a.fila.school_id, parentId: a.parentId, storagePath: a.storagePath, sha: a.sha, ocr: a.ocr,
+                responder: a.responder, alFallar: a.alFallar, log: a.log,
+            }, { ...delMonto[0], atleta: delMonto[0].atleta ?? ficha.nombre }, [], {
+                motivo: `hermano_por_nombre: el pie nombra a ${ficha.nombre} (otra ficha de la misma familia) y el monto es el de su cobro`,
+            });
+            return true;
+        }
+    }
+    await comprobanteDeNumeroFueraDeLaFicha({
+        fila: a.fila, responder: a.responder, ocr: a.ocr, sha: a.sha, storagePath: a.storagePath, parentId: a.parentId, log: a.log,
+        ficha, escrito: a.fila.media_caption ?? a.ocr.description ?? '',
+    });
+    return true;
+}
+
 /**
  * Pregunta con botones lo que falta cuando la familia no tiene cobros pendientes:
  * UN deportista → el mes (últimos 3 + «Otro mes»); 2-3 → de cuál. Devuelve true si
@@ -880,16 +1065,43 @@ async function preguntarMesOQuien(a: {
     fila: FilaCola; parentId: string | null; llaves?: LlavesDeFicha;
     ocr: Awaited<ReturnType<typeof extractReceipt>>; sha: string; storagePath: string | null;
     responder: Responder;
+    /** (R4) El pie, la nota del comprobante y los textos de la ráfaga: de ahí salen el hijo y el mes que nombró. */
+    textos?: (string | null | undefined)[];
+    alFallar?: (motivo: string) => Promise<void>; log?: Logger;
 }): Promise<boolean> {
     try {
-        const ds = await deportistasParaPreguntar(a.fila.school_id, {
+        const todos = await deportistasParaPreguntar(a.fila.school_id, {
             parentId: a.parentId, childIds: a.llaves?.childIds, unregisteredIds: a.llaves?.unregisteredIds,
         });
         const monto = a.ocr.amount ?? null;
         const quienPago = a.ocr.originName ?? null;
         const base = { ocr: a.ocr, sha: a.sha, storagePath: a.storagePath, parentId: a.parentId, referencias: referenciasDelComprobante(a.ocr) };
+        // (R4, auditoría 1–16 nov 2026) Antes de preguntar el deportista o el mes: ¿ya lo dijo? «pago del mes de
+        // noviembre de mi hija Antonella» recibió «¿De cuál deportista es?»; «Mensualidad Isabella Rodríguez
+        // Amórtegui» recibió «¿de qué mes?» de Juliana, la hermana que sí está en la ficha de ese número.
+        const textos = a.textos ?? [a.fila.media_caption, a.ocr.description];
+        const nombrado = todos.length > 1 ? hijoNombrado(textos, todos) : null;
+        if (!nombrado && await deportistaNombradoFueraDeLaFicha(a, todos, textos)) return true;
+        const ds = nombrado ? [nombrado] : todos;
         if (ds.length === 1) {
             const d = ds[0];
+            const mes = mesNombrado(textos, new Date(), todos.map((x) => x.nombre));
+            if (mes) {
+                // El mes ya lo dijo: no se pregunta. Como cuando lo elige con el botón, NO se crea ni se aplica
+                // nada: a la bandeja con la propuesta, y a la familia el cierre de una línea.
+                const sujeto = d.nombre ?? 'deportista sin identificar';
+                const delMes = `${nombreDelMes(mes.mes).toLowerCase()} ${mes.anio}`;
+                await a.responder(textoCierreEnRevision({ monto, atleta: d.nombre, para: nombreDelMes(mes.mes).toLowerCase() }), 'resultado_comprobante_guiado');
+                await cerrar(a.fila.id, 'ignored', {
+                    result_type: 'escalated', matched_parent_id: a.parentId, ...(d.tipo === 'child' ? { matched_child_id: d.id } : {}),
+                    error_message: motivoConPropuesta(
+                        `sin_pendientes: ${sujeto} no tiene cobro de ${delMes} · comprobante de ${monto ? pesos(monto) : 'monto no leído'}`
+                        + `${quienPago ? ` · pagó: ${quienPago}` : ''} · el mes lo dijo en el pie o en el chat`,
+                        `Propuesta → deportista: ${sujeto} · mes: ${delMes} · crear el cobro de ese mes${d.cuota ? ` por ${pesos(d.cuota)}` : ''} y aplicar este comprobante`),
+                    pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+                });
+                return true;
+            }
             const opciones = opcionesDeMeses(ultimosMeses(new Date()));
             const r = await a.responder(textoPreguntaMes({ monto, atleta: d.nombre }), PASO_PREGUNTA_MES, botonesDeOpciones(opciones)) as SalidaDePregunta;
             if (r?.silenciado) return false;
@@ -1049,11 +1261,22 @@ export async function obtenerArchivoDeFila(
  * Lo transitorio (red, 429, 5xx, bucket) reintenta; lo permanente (mime,
  * tamaño, media vencida, sin media_id) cierra la fila en `failed`.
  */
-async function bajarYGuardarArchivo(fila: FilaCola, wa: WhatsAppIntegration, log?: Logger): Promise<ArchivoBajado> {
+async function bajarYGuardarArchivo(
+    fila: FilaCola, wa: WhatsAppIntegration, log?: Logger,
+    /**
+     * (R2, auditoría 1–16 nov 2026) Quien manda es un contacto que el asistente atiende: si el archivo no se puede
+     * abrir (demasiado grande, formato que no se lee, media vencida) se le DICE, en vez de cerrar la fila en
+     * silencio (4 archivos de un mismo contacto, cero respuesta). La fila queda `failed`: acción en la bandeja.
+     */
+    avisar?: (texto: string, paso: string) => Promise<unknown>,
+): Promise<ArchivoBajado> {
     const r = await obtenerArchivoDeFila(fila, wa, { guardar: true });
     if (!r.ok) {
         if (r.transitorio) await reintentar(fila, r.error, log);
-        else await cerrar(fila.id, 'failed', { error_message: r.error });
+        else {
+            if (avisar) await avisar(TEXTO_ARCHIVO_NO_LEIDO, PASO_ARCHIVO_NO_LEIDO).catch(() => undefined);
+            await cerrar(fila.id, 'failed', { error_message: r.error });
+        }
         return { ok: false };
     }
     return { ok: true, base64: r.base64, mime: r.mime, storagePath: r.storagePath as string };
@@ -1201,6 +1424,25 @@ async function referenciaYaUsada(schoolId: string, ocr: { reference?: string | n
     }
 }
 
+/** (R4) El pie, la nota del comprobante y lo que la familia escribió alrededor: de ahí sale el hijo que nombró. */
+async function loEscritoConElPago(fila: FilaCola, ocr: { description?: string | null }): Promise<(string | null | undefined)[]> {
+    return soloLoDelPago(fila.media_caption, ocr.description, await textosCercanos(fila));
+}
+
+const HABLA_DEL_PAGO_RE = /\b(pago|pagos|pague|pagar|pagando|mensualidad|mensualidades|comprobante|comprobantes|soporte|soportes|transferencia|transferi|consignacion|consigne|abono|cuota|adjunto|envio|mando|mes de|del mes)\b/;
+
+/**
+ * (R4) Lo que cuenta para saber de QUIÉN y de QUÉ MES es un comprobante: el pie y la nota del comprobante siempre;
+ * de lo que escribió alrededor, solo lo que habla del pago («mañana Matías no va» junto al comprobante de
+ * Antonella no lo vuelve de Matías). Misma idea que `leerTextosDelComprobante`. Pura.
+ */
+function soloLoDelPago(
+    pie: string | null | undefined, nota: string | null | undefined, cercanos: (string | null | undefined)[],
+): (string | null | undefined)[] {
+    const delChat = cercanos.filter((t) => !!t && String(t).trim() !== String(pie ?? '').trim() && HABLA_DEL_PAGO_RE.test(normalizarFrase(t)));
+    return [pie, nota, ...delChat];
+}
+
 /** De quién es el cobro en una familia: uno (se crea), 2–3 (se pregunta) o no se sabe. */
 type DuenoFamilia =
     | { tipo: 'uno'; dueno: DuenoDelCobro; nombre: string | null; cuotas: number[] }
@@ -1212,7 +1454,14 @@ type DuenoFamilia =
  * deportista que eligió en la pregunta de hermanos) solo esas fichas; si no,
  * los hijos del acudiente. Nunca lanza.
  */
-async function duenoDeLaFamilia(schoolId: string, parentId: string | null, llaves?: LlavesDeFicha): Promise<DuenoFamilia> {
+async function duenoDeLaFamilia(
+    schoolId: string, parentId: string | null, llaves?: LlavesDeFicha,
+    /**
+     * (R4, auditoría 1–16 nov 2026) El pie, la nota y los textos del comprobante: si nombran a UNO de los hermanos,
+     * es de él y no se pregunta «¿De cuál deportista es?». Solo se leen cuando hay más de un deportista.
+     */
+    escrito?: () => Promise<(string | null | undefined)[]>,
+): Promise<DuenoFamilia> {
     try {
         const conLlaves = !!llaves && (llaves.childIds.length + llaves.unregisteredIds.length) > 0;
         const ds = await deportistasParaPreguntar(schoolId, conLlaves
@@ -1222,6 +1471,10 @@ async function duenoDeLaFamilia(schoolId: string, parentId: string | null, llave
         if (ds.length === 1) {
             const d = ds[0];
             return { tipo: 'uno', dueno: d.tipo === 'child' ? { childId: d.id } : { unregisteredId: d.id }, nombre: d.nombre, cuotas };
+        }
+        if (ds.length >= 2 && escrito) {
+            const d = hijoNombrado(await escrito().catch(() => []), ds);
+            if (d) return { tipo: 'uno', dueno: d.tipo === 'child' ? { childId: d.id } : { unregisteredId: d.id }, nombre: d.nombre, cuotas };
         }
         if (ds.length >= 2 && ds.length <= 3) return { tipo: 'varios', fichas: fichasDesdeDeportistas(ds), cuotas };
         return { tipo: 'ninguno', cuotas };
@@ -1338,7 +1591,7 @@ async function motivoForzadoALaEscuela(a: ArgsB4, f: MotivoForzado, por: string)
         error_message: motivoConPropuesta(
             `otro_concepto: ${f.etiqueta.toLowerCase()} (la familia lo eligió) · ${por}`,
             `Propuesta → pagó: ${a.ocr.originName ?? 'no se leyó'}${monto ? ` · ${pesos(monto)}` : ''} · crear el cobro de ${f.etiqueta} (${pesos(f.monto)}) y aplicar este comprobante`),
-        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
     });
 }
 
@@ -1362,7 +1615,7 @@ async function atenderMotivoDeFamilia(a: ArgsB4, b4: ContextoB4, forzado: Motivo
             await motivoForzadoALaEscuela(a, forzado, `el comprobante (${monto ? pesos(monto) : 'sin monto'}) no es el precio`);
             return true;
         }
-        const dueno = await duenoDeLaFamilia(schoolId, a.parentId, a.llaves);
+        const dueno = await duenoDeLaFamilia(schoolId, a.parentId, a.llaves, () => loEscritoConElPago(a.fila, a.ocr));
         if (dueno.tipo === 'varios') {
             if (await preguntarDeQuienEs(a, dueno.fichas, forzado)) return true;
             await motivoForzadoALaEscuela(a, forzado, 'no se sabe de qué deportista es');
@@ -1392,7 +1645,7 @@ async function atenderMotivoDeFamilia(a: ArgsB4, b4: ContextoB4, forzado: Motivo
 
     const dueno: DuenoFamilia = esperado.childId
         ? await duenoDeLaFamilia(schoolId, null, { childIds: [esperado.childId], unregisteredIds: [] })
-        : await duenoDeLaFamilia(schoolId, a.parentId, a.llaves);
+        : await duenoDeLaFamilia(schoolId, a.parentId, a.llaves, () => loEscritoConElPago(a.fila, a.ocr));
     if (dueno.tipo === 'ninguno') return false;
     const precios = await preciosDeMotivos(schoolId, dueno.tipo === 'uno' ? dueno.dueno : {}, {
         motivos: [esperado.motivo], telefono: a.fila.wa_phone_number,
@@ -1430,7 +1683,7 @@ async function conCantidadALaEscuela(a: ArgsB4, m: MotivoConCantidad): Promise<v
         error_message: motivoConPropuesta(
             `monto_con_cantidad: ${monto ? pesos(monto) : 'el monto'} no es un precio de la escuela, pero cuadra con varias unidades de un artículo`,
             propuestaConCantidad(m, a.ocr.originName, monto)),
-        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: a.ocr, storagePath: a.storagePath, parentId: a.parentId }),
     });
 }
 
@@ -1442,7 +1695,7 @@ async function conCantidadALaEscuela(a: ArgsB4, m: MotivoConCantidad): Promise<v
  */
 async function motivoPorMontoDeFamilia(a: ArgsB4, o: { motivos?: Motivo[] } = {}): Promise<MotivoDeFamilia> {
     const monto = montoDelOcr(a.ocr);
-    const dueno = await duenoDeLaFamilia(a.fila.school_id, a.parentId, a.llaves);
+    const dueno = await duenoDeLaFamilia(a.fila.school_id, a.parentId, a.llaves, () => loEscritoConElPago(a.fila, a.ocr));
     if (dueno.tipo === 'ninguno' || monto === null) return { atendida: false, precios: [], tipo: 'ninguno' };
     const precios = await preciosDeMotivos(a.fila.school_id, dueno.tipo === 'uno' ? dueno.dueno : {}, {
         motivos: o.motivos, telefono: a.fila.wa_phone_number,
@@ -1583,7 +1836,7 @@ async function prospectoALaEscuela(p: ArgsProspecto, a: ArgsB4, codigo: string, 
             + `${esperado.monto ? ` por ${pesos(esperado.monto)}` : ''} y llegó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
             + ` a ${p.ocr.destination ?? 'un destino sin leer'} (prospecto)`,
             `Propuesta → pagó: ${p.ocr.originName ?? 'no se leyó'} · revisar el destino y el valor; si está bien, registrar el cobro del prospecto y aplicar este comprobante`),
-        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
     });
     await pasarAPersona(p, 'comprobante_prospecto_no_coincide');
 }
@@ -1611,7 +1864,7 @@ async function prospectoSinConcepto(
                 `prospecto_con_cantidad: ${lead.nombre ?? 'prospecto'} mandó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
                 + ` a ${p.ocr.destination ?? 'un destino sin leer'}; cuadra con varias unidades de un artículo`,
                 propuestaConCantidad(conCantidad, p.ocr.originName, monto)),
-            pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+            pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
         });
         await pasarAPersona(p, 'comprobante_prospecto_con_cantidad');
         return;
@@ -1628,7 +1881,7 @@ async function prospectoSinConcepto(
             `prospecto_sin_concepto: ${lead.nombre ?? 'prospecto'} mandó ${monto ? pesos(monto) : 'un comprobante sin monto'}`
             + ` a ${p.ocr.destination ?? 'un destino sin leer'}; el monto no corresponde a un precio de la escuela`,
             `Propuesta → pagó: ${p.ocr.originName ?? 'no se leyó'} · se le preguntó de qué es; con su respuesta, registrar el cobro del prospecto y aplicar este comprobante`),
-        pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
     });
     await pasarAPersona(p, 'comprobante_prospecto_sin_concepto');
 }
@@ -1731,7 +1984,11 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
 // Plan: docs/specs/whatsapp-ventas-de-servicio-blindaje.md §4.C.
 
 /** La venta a la que va un comprobante: el ítem y, si lo hay, el esperado vivo de ese servicio. */
-export interface VentaDelComprobante { item: ItemConFicha; esperado: ConceptoEsperado | null }
+export interface VentaDelComprobante {
+    item: ItemConFicha; esperado: ConceptoEsperado | null;
+    /** Desde cuándo está en esa venta (de ahí se lee lo que ya escribió: la memoria de la venta). */
+    desde?: string | null;
+}
 
 const esMotivoDeServicio = (m: string) => (MOTIVOS_DE_SERVICIO as readonly string[]).includes(m);
 
@@ -1756,7 +2013,12 @@ async function ventaParaComprobante(
         if (!items.length) return null;
         const deServicio = esperados.filter((e) => esMotivoDeServicio(e.motivo) && (o.familia || !e.childId));
         const { venta } = await contextoDeVenta(schoolId, conversationId, telefono, { items });
-        if (venta) return { item: venta.item, esperado: deServicio.find((e) => e.motivo === motivoDelItem(venta.item)) ?? null };
+        if (venta) {
+            return {
+                item: venta.item, esperado: deServicio.find((e) => e.motivo === motivoDelItem(venta.item)) ?? null,
+                desde: venta.desde ?? null,
+            };
+        }
         for (const e of deServicio) {
             const delMotivo = items.filter((it) => motivoDelItem(it) === e.motivo);
             if (delMotivo.length === 1) return { item: delMotivo[0], esperado: e };
@@ -1918,6 +2180,23 @@ interface ArgsVenta {
     log?: Logger;
     /** La respuesta a la pregunta del nombre: lo repetido ya se revisó antes de preguntar. */
     sinRevisarRepetido?: boolean;
+    /** (2026-11-16) Lo que ya se sabía de quien asiste al preguntar + lo que contestó (viaja en la fila). */
+    registroPrevio?: DatosDeRegistro | null;
+    /** Contestó «Es para otra persona»: los datos de la ficha no son de quien asiste esta vez. */
+    otraPersona?: boolean;
+    /** Contestó «Sí» a «¿Es para X, como la vez pasada?»: no se vuelve a preguntar. */
+    confirmado?: boolean;
+    /** Lo que se sabe de quien asiste (lo llena `atenderComprobanteDeVenta`): va en la propuesta de la bandeja. */
+    registro?: DatosDeRegistro | null;
+    /** (2026-11-16) La opción que la persona eligió en la conversación (vacacional), si el comprobante la acompaña. */
+    opcionDicha?: OpcionDicha | null;
+}
+
+/** La opción elegida del servicio que dejó el agente de la venta en el payload del saliente `venta_servicio_opcion`. */
+export interface OpcionDicha {
+    clave: string; etiqueta: string; precio: number | null; fechas: string | null;
+    /** El monto leído es el precio de esa opción (±$1). */
+    coincide: boolean;
 }
 
 /** Lo ya decidido de una venta: dueño, nombre y lo que dice el monto. */
@@ -1936,8 +2215,31 @@ const contextoDeVentaParaAplicar = (v: ArgsVenta): ContextoAplicacion => ({
 
 /** Quién pagó y quién asiste, para la propuesta de la bandeja. Pura. */
 const propuestaDeVenta = (v: ArgsVenta, nombre: string | null, accion: string) =>
-    `Propuesta → pagó: ${v.ocr.originName ?? 'no se leyó'} · asiste: ${nombre ?? 'sin nombre'}`
-    + `${v.ocr.date ? ` · fecha del pago: ${v.ocr.date}` : ''} · ${accion}`;
+    `Propuesta → pagó: ${v.ocr.originName ?? 'no se leyó'} · asiste: ${asistenteParaLaEscuela(v, nombre)}`
+    + `${v.ocr.date ? ` · fecha del pago: ${v.ocr.date}` : ''}${notaDeOpcion(v.opcionDicha, montoDelOcr(v.ocr))} · ${accion}`;
+
+/**
+ * (2026-11-16) « · eligió Semana 1 y 2 ($250.000) · fechas dichas: «del 1 al 12 de diciembre»», o la discrepancia («eligió X
+ * ($P) pero el comprobante es de $M»). Vacío sin opción. Pura.
+ */
+export function notaDeOpcion(o: OpcionDicha | null | undefined, monto: number | null): string {
+    if (!o) return '';
+    const precio = o.precio !== null ? ` (${pesos(o.precio)})` : '';
+    const fechas = o.fechas ? ` · fechas dichas: «${o.fechas.replace(/\s+/g, ' ').replace(/\|/g, '/').slice(0, 120)}»` : '';
+    const discrepancia = !o.coincide && monto !== null ? ` pero el comprobante es de ${pesos(monto)}: revisar cuál es` : '';
+    return ` · eligió ${o.etiqueta}${precio}${discrepancia}${fechas}`;
+}
+
+/**
+ * Quien asiste, con lo que se sabe y lo que falta («Gabriela Covaleda García · 13 años (sin fecha) · falta: fecha de
+ * nacimiento»). Sin datos de registro, el nombre como siempre. Los datos solo si son de ESA persona. Pura.
+ */
+function asistenteParaLaEscuela(v: ArgsVenta, nombre: string | null): string {
+    const r = v.registro ?? null;
+    if (!r || !hayRegistro(r)) return nombre ?? 'sin nombre';
+    if (nombre && r.nombre && !mismaPersona(nombre, r.nombre)) return nombre;
+    return resumenDeAsistente({ ...r, nombre: nombre ?? r.nombre }, hoyBogota());
+}
 
 /**
  * La venta no se pudo cerrar sola: a la escuela con el motivo (bandeja de
@@ -1945,30 +2247,96 @@ const propuestaDeVenta = (v: ArgsVenta, nombre: string | null, accion: string) =
  */
 async function ventaALaEscuela(v: ArgsVenta, e: {
     codigo: string; detalle: string; propuesta: string; texto: string | null;
+    /** Largo máximo del `error_message` (500 por defecto; el aviso de abonos explica más y pide 900). */
+    max?: number;
 }): Promise<void> {
     if (e.texto) await v.responder(e.texto, 'venta_comprobante_a_la_escuela');
     await cerrar(v.fila.id, 'ignored', {
         result_type: 'escalated',
         matched_parent_id: v.familia?.parentId ?? null,
-        error_message: motivoConPropuesta(`${e.codigo}: ${e.detalle}`, e.propuesta),
-        pregunta_ocr: huellasDelComprobante({ sha: v.sha, ocr: v.ocr, storagePath: v.storagePath, parentId: v.familia?.parentId ?? null }),
+        error_message: motivoConPropuesta(`${e.codigo}: ${e.detalle}`, e.propuesta, e.max),
+        pregunta_ocr: huellasConLectura({ sha: v.sha, ocr: v.ocr, storagePath: v.storagePath, parentId: v.familia?.parentId ?? null }),
     });
     await abrirParaLaEscuela(v.fila, v.wa, v.conversationId, 'venta_comprobante_a_la_escuela', v.log);
     v.log?.info?.({ queueId: v.fila.id, codigo: e.codigo, item: v.venta.item.id }, '[wa-queue] venta: a la escuela');
 }
 
-/** El monto no es del servicio: a la escuela, y a la persona el valor que sí es. */
+/** Días hacia atrás en los que otro comprobante del mismo contacto para el mismo servicio cuenta como parte del abono. */
+const DIAS_ABONOS_SUMABLES = 15;
+
+/**
+ * (2026-11-16, Monster, clínica) Los comprobantes ANTERIORES del mismo contacto para ESTE servicio que cerraron
+ * `venta_monto_no_cuadra` y siguen abiertos en la bandeja (en días distintos también): las posibles partes de un abono.
+ * Del más viejo al más nuevo. UNA lectura; nunca lanza.
+ */
+async function abonosPreviosDeVenta(fila: FilaCola, servicio: string): Promise<PagoPrevioDeServicio[]> {
+    try {
+        const { data } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, error_message, created_at, monto:pregunta_ocr->ocr->>amount, fecha:pregunta_ocr->ocr->>date')
+            .eq('integration_id', fila.integration_id).eq('wa_phone_number', fila.wa_phone_number)
+            .neq('id', fila.id).eq('status', 'ignored')
+            .gte('created_at', new Date(Date.now() - DIAS_ABONOS_SUMABLES * 24 * 3600_000).toISOString())
+            .order('created_at', { ascending: true })
+            .limit(30);
+        return ((Array.isArray(data) ? data : []) as any[])
+            .filter((f) => String(f.error_message ?? '').startsWith('venta_monto_no_cuadra') && String(f.error_message).includes(servicio))
+            .map((f) => ({
+                id: String(f.id), monto: Number(f.monto),
+                fecha: /^\d{4}-\d{2}-\d{2}/.test(String(f.fecha ?? '')) ? String(f.fecha).slice(0, 10) : (String(f.created_at ?? '').slice(0, 10) || null),
+            }))
+            .filter((f) => Number.isFinite(f.monto) && f.monto > 0);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * El monto no es del servicio: a la escuela, y a la persona el valor que sí es. La bandeja además explica POR QUÉ
+ * (los dos mínimos —de afiliado y de no afiliado— vigentes en la fecha del pago y el `saldo_hasta`), propone sumar el
+ * cobro previo parcial del mismo contacto y, si lo que mandó antes (en otro día) más esto alcanza el mínimo, propone la
+ * suma como abono. Nunca aplica nada solo y no cambia el precio que decide la RPC.
+ */
 async function ventaMontoNoCuadra(
     v: ArgsVenta, monto: number, precios: number[], minimo: number | null, nombre: string | null, por = 'catálogo',
+    o: { previo?: CobroPrevioDeServicio | null; afiliado?: boolean } = {},
 ): Promise<void> {
-    const servicio = v.venta.item.name;
+    const item = v.venta.item;
+    const servicio = item.name;
     const valores = precios.length ? precios.map((p) => pesos(p)).join(' / ') : 'sin precio';
+    const hoy = hoyBogota();
+    // Lo de más abajo solo se lee para explicar; si algo falla, sale lo de siempre.
+    let explica = '';
+    const propuestas: string[] = [];
+    let texto = textoVentaNoCuadra(monto, servicio, precios, minimo);
+    try {
+        const fechaPago = fechaDePagoParaPrecio(v.ocr.date, hoy);
+        const saldoHasta = await saldoHastaDelItem(v.fila.school_id, item.id);
+        explica = textoMinimosEnFecha(minimosEnFecha(item, fechaPago), saldoHasta, hoy);
+        if (o.previo) {
+            const p = propuestaDeCobroPrevio({ previo: o.previo, monto });
+            if (p) propuestas.push(p);
+        }
+        const previos = await abonosPreviosDeVenta(v.fila, servicio);
+        if (previos.length) {
+            const fechas = [...previos.map((p) => p.fecha), fechaPago ?? hoy].filter(Boolean) as string[];
+            const primera = fechaDePagoParaPrecio([...fechas].sort()[0], hoy) ?? hoy;
+            const suma = sumaDeAbonosDeServicio({
+                previos, monto, minimosPrimera: minimosEnFecha(item, primera === hoy ? null : primera),
+                afiliado: o.afiliado === true ? true : null,
+            });
+            if (suma) {
+                propuestas.push(propuestaSumaDeAbonos(suma, servicio));
+                texto = textoSumaDeAbonos(monto, suma, delServicio(servicio));
+            }
+        }
+    } catch { /* sin explicación extra */ }
     await ventaALaEscuela(v, {
         codigo: 'venta_monto_no_cuadra',
         detalle: `comprobante de ${pesos(monto)} para ${servicio}; el valor de hoy es ${valores}`
-            + `${minimo ? ` (abono mínimo ${pesos(minimo)})` : ''} según ${por}`,
-        propuesta: propuestaDeVenta(v, nombre, 'revisar a qué corresponde antes de aplicarlo'),
-        texto: textoVentaNoCuadra(monto, servicio, precios, minimo),
+            + `${minimo ? ` (abono mínimo ${pesos(minimo)})` : ''} según ${por}${explica ? ` · ${explica}` : ''}`,
+        propuesta: [propuestaDeVenta(v, nombre, 'revisar a qué corresponde antes de aplicarlo'), ...propuestas].join(' · '),
+        texto,
+        max: 900,
     });
 }
 
@@ -2013,7 +2381,7 @@ async function crearCobroDeVenta(plan: PlanDeVenta, precio: PrecioDeMotivo): Pro
             return;
         }
         if (r.codigo === 'monto_no_coincide') {
-            await ventaMontoNoCuadra(v, monto, r.precio ? [r.precio] : [], r.abonoMinimo ?? null, nombre, 'la base');
+            await ventaMontoNoCuadra(v, monto, r.precio ? [r.precio] : [], r.abonoMinimo ?? null, nombre, 'la base', { afiliado: plan.afiliado });
             return;
         }
         await ventaALaEscuela(v, {
@@ -2033,8 +2401,8 @@ async function crearCobroDeVenta(plan: PlanDeVenta, precio: PrecioDeMotivo): Pro
     const res = await aplicarComprobante(contextoDeVentaParaAplicar(v), pago, [], {
         ...(r.esAbono ? {
             soloRevision: true, esperado: monto,
-            motivo: `abono_en_revision: ${item.name} — abono de ${pesos(monto)} de ${pesos(r.precio)} para separar el cupo (cobro creado por el asistente)`,
-        } : {}),
+            motivo: `abono_en_revision: ${item.name} — abono de ${pesos(monto)} de ${pesos(r.precio)} para separar el cupo (cobro creado por el asistente)${notaDeOpcion(v.opcionDicha, monto)}`,
+        } : v.opcionDicha ? { motivo: `opcion_elegida:${notaDeOpcion(v.opcionDicha, monto).replace(/^ · /, ' ')}` } : {}),
         linea: { monto, motivo: item.name, atleta: nombre, paymentId: pago.id, nuevo: true },
         para: item.name.toLowerCase(),
         alAplicar: alAplicarVenta(item.name, {
@@ -2111,8 +2479,101 @@ async function ejecutarVenta(plan: PlanDeVenta, d: MontoDeVenta): Promise<void> 
             });
             return;
         default:
-            await ventaMontoNoCuadra(v, monto, d.tipo === 'no_cuadra' ? d.precios : [], d.tipo === 'no_cuadra' ? d.minimo : null, nombre);
+            await ventaMontoNoCuadra(v, monto, d.tipo === 'no_cuadra' ? d.precios : [], d.tipo === 'no_cuadra' ? d.minimo : null, nombre, 'catálogo', { afiliado: plan.afiliado });
     }
+}
+
+/**
+ * (2026-11-16) La opción elegida en la conversación: el último saliente (48 h) del chat que trae `opcion_elegida` en el
+ * payload (paso `venta_servicio_opcion`). Solo se lee si el servicio tiene opciones. `coincide`: el monto leído es el
+ * precio de esa opción (±$1). Una lectura; nunca lanza.
+ */
+async function opcionElegidaDeLaVenta(
+    conversationId: string | null, item: ItemConFicha, monto: number, afiliado: boolean,
+): Promise<OpcionDicha | null> {
+    if (!conversationId || !opcionesDelItem(item as any).length) return null;
+    try {
+        const { data } = await supabase.from('whatsapp_messages')
+            .select('payload, created_at')
+            .eq('conversation_id', conversationId).eq('direction', 'outbound')
+            .gte('created_at', new Date(Date.now() - 48 * 3600_000).toISOString())
+            .order('created_at', { ascending: false })
+            .limit(10);
+        const p = ((Array.isArray(data) ? data : []) as any[]).map((m) => m?.payload)
+            .find((x) => x && typeof x.opcion_elegida === 'string' && x.opcion_elegida);
+        if (!p) return null;
+        const op = opcionesDelItem(item as any).find((o) => o.clave === p.opcion_elegida);
+        if (!op) return null;
+        const delPayload = Number(p.opcion_precio);
+        const delCatalogo = preciosDeServicios([item as any], { afiliado }).find((x) => x.opcion === op.clave && !x.esAbono)?.monto ?? null;
+        const precio = Number.isFinite(delPayload) && delPayload > 0 ? delPayload : delCatalogo;
+        return {
+            clave: op.clave, etiqueta: typeof p.opcion_etiqueta === 'string' && p.opcion_etiqueta ? p.opcion_etiqueta : op.etiqueta,
+            precio, fechas: typeof p.fechas_dichas === 'string' && p.fechas_dichas.trim() ? p.fechas_dichas.trim() : null,
+            coincide: precio !== null && mismoMonto(precio, monto),
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * (2026-11-16) La opción que la persona eligió gana sobre la que deduce el monto: entre varias que valen lo mismo
+ * (`ambiguo`), o cuando el monto cuadraba con OTRA opción o con ninguna. No toca un abono, un saldo ni un cobro previo,
+ * y no cambia el precio que decide la RPC. Pura.
+ */
+export function preferirOpcionElegida(decision: MontoDeVenta, item: ItemConFicha, o: OpcionDicha, afiliado: boolean): MontoDeVenta {
+    const elegida = (precios: PrecioDeMotivo[]) => precios.find((p) => p.opcion === o.clave && !p.esAbono);
+    if (decision.tipo === 'ambiguo') {
+        const p = elegida(decision.precios);
+        return p ? { tipo: 'completo', precio: p } : decision;
+    }
+    const sinElegir = decision.tipo === 'no_cuadra' || (decision.tipo === 'completo' && decision.precio.opcion !== o.clave);
+    if (!sinElegir || o.precio === null) return decision;
+    const delCatalogo = elegida(preciosDeServicios([item as any], { afiliado }));
+    const precio: PrecioDeMotivo = delCatalogo
+        ? { ...delCatalogo, monto: o.precio }
+        : {
+            motivo: motivoDelItem(item), monto: o.precio, fuente: 'tournament_item', fuenteId: item.id,
+            etiqueta: `${item.name} — ${o.etiqueta}`, opcion: o.clave,
+        };
+    return { tipo: 'completo', precio };
+}
+
+/**
+ * (2026-11-16) Dos nombres en el pie o la nota de la foto: se pregunta UNA vez de quién es el comprobante (o si son dos
+ * cupos) y la fila queda esperando; la respuesta la lee `resolverRespuestaDeAsistente` (`venta.variosNombres`). Con la
+ * escuela en el chat (no se le escribe) va a la bandeja como acción con los dos nombres.
+ */
+async function preguntarVariosNombres(
+    v: ArgsVenta, monto: number, lead: LeadDeVenta | null, varios: string[],
+): Promise<boolean> {
+    const { item, esperado } = v.venta;
+    let salida: SalidaDePregunta;
+    if (!(await yaSalioElPaso(v.conversationId, PASO_PREGUNTA_ASISTENTE))) {
+        salida = await v.responder(textoVariosAsistentes(varios, { pagado: true }), PASO_PREGUNTA_ASISTENTE,
+            undefined, undefined, { asistentes_dichos: varios }) as SalidaDePregunta;
+        if (salida?.silenciado) {
+            await ventaALaEscuela(v, {
+                codigo: 'venta_varios_nombres',
+                detalle: `comprobante de ${pesos(monto)} para ${item.name}; el pie o la nota nombran a ${varios.join(' y ')} (la escuela está en el chat)`,
+                propuesta: propuestaDeVenta(v, null, 'confirmar de quién es (o si son dos cupos), crear el cobro del servicio y aplicar este comprobante'),
+                texto: null,
+            });
+            return true;
+        }
+    }
+    await esperarAlUsuario(v.fila.id, {
+        opciones: [], ocr: v.ocr, sha: v.sha, storagePath: v.storagePath, parentId: null, tipo: 'asistente_servicio',
+        venta: {
+            itemId: item.id, itemNombre: item.name, esperadoId: esperado?.id ?? null,
+            leadId: lead?.id ?? null, conversationId: v.conversationId, variosNombres: varios,
+            ...(v.registro && hayRegistro(v.registro) ? { registro: v.registro } : {}),
+        },
+        enFila: salida?.enFila,
+    });
+    v.log?.info?.({ queueId: v.fila.id, item: item.id, nombres: varios.length }, '[wa-queue] venta: dos nombres en el pie, se preguntó de quién es');
+    return true;
 }
 
 /**
@@ -2120,16 +2581,23 @@ async function ejecutarVenta(plan: PlanDeVenta, d: MontoDeVenta): Promise<void> 
  * espera la misma respuesta) y la fila queda esperando. Con la conversación
  * tomada por la escuela (no se le escribe) va a la bandeja con lo que falta.
  */
-async function preguntarNombreDeAsistente(v: ArgsVenta, monto: number, lead: LeadDeVenta | null): Promise<boolean> {
+async function preguntarNombreDeAsistente(
+    v: ArgsVenta, monto: number, lead: LeadDeVenta | null, registro: DatosDeRegistro | null = null,
+): Promise<boolean> {
     const { item, esperado } = v.venta;
+    const hoy = hoyBogota();
+    // (2026-11-16) Se pide SOLO lo que falta, en un mensaje: lo que ya se sabe (ficha, nota del comprobante, lo
+    // que escribió en la venta) viaja en la fila y se une con la respuesta.
+    const sabido = registro ?? SIN_REGISTRO;
     let salida: SalidaDePregunta;
     if (!(await yaSalioElPaso(v.conversationId, PASO_PREGUNTA_ASISTENTE))) {
-        salida = await v.responder(preguntaAsistenteDeServicio(monto, item.name), PASO_PREGUNTA_ASISTENTE) as SalidaDePregunta;
+        salida = await v.responder(preguntaDeDatosDeServicio(monto, item.name, sabido, hoy), PASO_PREGUNTA_ASISTENTE,
+            undefined, undefined, { faltan_datos: faltantesDe(sabido, hoy) }) as SalidaDePregunta;
         if (salida?.silenciado) {
-            await ventaALaEscuela(v, {
+            await ventaALaEscuela({ ...v, registro: sabido }, {
                 codigo: 'venta_falta_nombre',
                 detalle: `comprobante de ${pesos(monto)} para ${item.name}; falta el nombre de quien asiste (la escuela está en el chat)`,
-                propuesta: propuestaDeVenta(v, null, 'pedir el nombre, crear el cobro del servicio y aplicar este comprobante'),
+                propuesta: propuestaDeVenta({ ...v, registro: sabido }, null, 'pedir el nombre, crear el cobro del servicio y aplicar este comprobante'),
                 texto: null,
             });
             return true;
@@ -2140,11 +2608,69 @@ async function preguntarNombreDeAsistente(v: ArgsVenta, monto: number, lead: Lea
         venta: {
             itemId: item.id, itemNombre: item.name, esperadoId: esperado?.id ?? null,
             leadId: lead?.id ?? null, conversationId: v.conversationId,
+            ...(hayRegistro(sabido) ? { registro: sabido } : {}),
+            ...(v.otraPersona ? { otraPersona: true } : {}),
         },
         enFila: salida?.enFila,
     });
     v.log?.info?.({ queueId: v.fila.id, item: item.id }, '[wa-queue] venta: se preguntó el nombre de quien asiste');
     return true;
+}
+
+/**
+ * (R4, 2026-11-16) Segunda compra desde el mismo chat: la ficha ya tiene a quien asistió a OTRO servicio. No se
+ * le pide todo de nuevo ni se asume que es la misma persona: «¿Es para *Nombre*, como la vez pasada?» con [Sí]
+ * [Es para otra persona] (los dos se entienden también escritos). La fila espera la respuesta.
+ */
+async function preguntarSiEsElMismo(
+    v: ArgsVenta, monto: number, lead: LeadDeVenta, deFicha: DatosDeRegistro,
+): Promise<boolean> {
+    const { item, esperado } = v.venta;
+    const nombre = lead.nombre as string;
+    let salida: SalidaDePregunta;
+    if (!(await yaSalioElPaso(v.conversationId, PASO_CONFIRMAR_ASISTENTE))) {
+        salida = await v.responder(preguntaMismoAsistente(monto, nombre), PASO_CONFIRMAR_ASISTENTE, BOTONES_MISMO_ASISTENTE) as SalidaDePregunta;
+        if (salida?.silenciado) {
+            await ventaALaEscuela({ ...v, registro: deFicha }, {
+                codigo: 'venta_falta_nombre',
+                detalle: `comprobante de ${pesos(monto)} para ${item.name}; falta confirmar si es para ${nombre}, como la vez pasada (la escuela está en el chat)`,
+                propuesta: propuestaDeVenta({ ...v, registro: deFicha }, nombre, 'confirmar quién asiste, crear el cobro del servicio y aplicar este comprobante'),
+                texto: null,
+            });
+            return true;
+        }
+    }
+    await esperarAlUsuario(v.fila.id, {
+        opciones: [], ocr: v.ocr, sha: v.sha, storagePath: v.storagePath, parentId: null, tipo: 'asistente_servicio',
+        venta: {
+            itemId: item.id, itemNombre: item.name, esperadoId: esperado?.id ?? null,
+            leadId: lead.id, conversationId: v.conversationId, confirmar: { nombre }, registro: deFicha,
+        },
+        enFila: salida?.enFila,
+    });
+    v.log?.info?.({ queueId: v.fila.id, item: item.id }, '[wa-queue] venta: se preguntó si es para la misma persona de la vez pasada');
+    return true;
+}
+
+/** Une las fuentes en orden de prioridad, dejando fuera las que hablan de OTRA persona. Pura. */
+function unirRegistroDe(quien: string | null, fuentes: (DatosDeRegistro | null | undefined)[]): DatosDeRegistro {
+    let nombre = quien;
+    const validas: DatosDeRegistro[] = [];
+    for (const f of fuentes) {
+        if (!f) continue;
+        if (f.nombre && nombre && !mismaPersona(f.nombre, nombre)) continue;
+        nombre = nombre ?? f.nombre;
+        validas.push({ ...f, nombre: null });
+    }
+    return unirDatosDeRegistro({ nombre }, ...validas);
+}
+
+/** El responder que agrega, a la respuesta del comprobante, lo que falta para completar la inscripción (UN mensaje). */
+function conPedidoDeDatos(responder: Responder, pedido: string, faltan: string[]): Responder {
+    if (!pedido) return responder;
+    return (texto, paso, botones, linea, payload) => (paso === 'venta_comprobante_recibido' || paso === 'venta_comprobante_a_la_escuela'
+        ? responder(`${texto}\n\n${pedido}`, paso, botones, linea, { ...(payload ?? {}), faltan_datos: faltan })
+        : responder(texto, paso, botones, linea, payload));
 }
 
 /**
@@ -2164,7 +2690,7 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     let duenoFam: DuenoFamilia | null = null;
     if (fam) {
         if (monto === null || fam.pendientes.some((p) => mismoMonto(Number(p.amount), monto))) return false;
-        duenoFam = await duenoDeLaFamilia(schoolId, fam.parentId, fam.llaves);
+        duenoFam = await duenoDeLaFamilia(schoolId, fam.parentId, fam.llaves, () => loEscritoConElPago(fila, ocr));
         if (duenoFam.tipo === 'ninguno' || duenoFam.cuotas.some((c) => mismoMonto(c, monto))) return false;
     }
 
@@ -2196,6 +2722,21 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     // es el nombre de quien asiste (Aleja 💫, 2026-11-11). Una lectura, solo para un prospecto.
     const perfil = fam ? null : await nombreDePerfilDe(v.conversationId);
     const lead = fam ? null : await leadDeVenta(schoolId, fila.wa_phone_number, esperado?.leadId ?? null, perfil);
+    // (R3, 2026-11-16) La memoria de quien asiste: lo que contestó, la nota y el pie del comprobante, y la ficha
+    // del prospecto. El chat de la venta se lee más abajo y solo si todavía falta algo.
+    const hoy = hoyBogota();
+    const deNota = fam ? null : registroDeNota([ocr.description, fila.media_caption], { hoy, titular: ocr.destinationName ?? null });
+    const deFicha = fam || !lead || v.otraPersona ? null
+        : registroDeFicha({ ...(lead.ficha ?? {}), source_detail: lead.sourceDetail }, { hoy, conocido: lead.conocido });
+    if (!fam) v = { ...v, registro: unirRegistroDe(v.nombre ?? null, [v.registroPrevio, deNota, deFicha]) };
+    // (2026-11-16) Dos nombres en el pie o la nota de la foto («Jugador 1: … / Jugador 2: …»): el cobro es por persona, no
+    // se elige una en silencio. Se pregunta UNA vez de quién es (`venta.variosNombres`, que ya sabe contestar
+    // `resolverRespuestaDeAsistente`). Con `v.nombre` ya es la respuesta: no se vuelve a preguntar.
+    if (!fam && !v.nombre) {
+        const varios = [fila.media_caption, ocr.description]
+            .map((t) => nombresDeAsistentesEn(t, { sinLineasSueltas: true })).find((n) => n.length >= 2) ?? [];
+        if (varios.length >= 2) return preguntarVariosNombres(v, monto, lead, varios);
+    }
     let dueno: DuenoDelCobro | null = duenoFam?.tipo === 'uno' ? duenoFam.dueno : lead ? { leadId: lead.id } : null;
     let afiliado = fam ? true
         : hayPrecioDeAfiliado([item]) ? (await esAfiliado(schoolId, fila.wa_phone_number)).afiliado : false;
@@ -2252,6 +2793,13 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     }
 
     let decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo });
+    // (2026-11-16) Si la persona eligió una opción (vacacional: semanas) y el monto es su precio, esa opción manda sobre la
+    // deducción por monto; si no coincide, se sigue como hoy y la discrepancia queda en la propuesta de la bandeja.
+    const opcionDicha = await opcionElegidaDeLaVenta(v.conversationId, item, monto, afiliado);
+    if (opcionDicha) {
+        v = { ...v, opcionDicha };
+        if (opcionDicha.coincide) decision = preferirOpcionElegida(decision, item, opcionDicha, afiliado);
+    }
     // Red de seguridad (Monster 2026-11-10, Gabriela: el abono de $150.000 de la clínica se comparó con el
     // Vacacional): si el monto no cuadra con el servicio elegido pero cuadra con UN solo otro servicio vigente,
     // el comprobante es de ese. Con más de uno o ninguno, sigue a la escuela como siempre. UNA lectura de
@@ -2283,14 +2831,14 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     // Contacto sin teléfono que no dijo su nombre y cuyo monto no es del catálogo: puede ser el de un atleta del
     // club (precio de grupo); se pregunta el nombre en vez de mandarlo directo a la escuela.
     if (esAlias && !nombreTemprano && !cobroAbierto && decision.tipo === 'no_cuadra') {
-        return preguntarNombreDeAsistente(v, monto, lead);
+        return preguntarNombreDeAsistente(v, monto, lead, v.registro ?? null);
     }
 
     if (fam && (decision.tipo === 'no_cuadra' || decision.tipo === 'ambiguo')) return false;
     if (fam && await repetido()) return true;
     const nombreConocido = duenoFam?.tipo === 'uno' ? duenoFam.nombre : (v.nombre ?? (lead?.conocido ? lead.nombre : null));
     if (decision.tipo === 'no_cuadra') {
-        await ventaMontoNoCuadra(v, monto, decision.precios, decision.minimo, nombreConocido);
+        await ventaMontoNoCuadra(v, monto, decision.precios, decision.minimo, nombreConocido, 'catálogo', { previo, afiliado });
         return true;
     }
     if (decision.tipo === 'ambiguo') {
@@ -2342,14 +2890,44 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
         return true;
     }
     let nombre = nombreConocido ?? (atletaReconocido ? nombreTemprano : null);
-    if (!nombre && !fam) nombre = nombreDeAsistenteEnTextos([fila.media_caption, ocr.description], item.name, v.textos ?? []);
-    if (!nombre) return preguntarNombreDeAsistente(v, monto, lead);
+    let otraPersona = v.otraPersona === true;
+    if (!fam && !atletaReconocido) {
+        // Lo que viene CON este pago (la nota del comprobante, el pie, una marca en el chat) manda sobre la ficha:
+        // si nombra a otra persona, esta compra es para ella.
+        const conElPago = deNota?.nombre ?? nombreDeAsistenteEnTextos([fila.media_caption, ocr.description], item.name, v.textos ?? []);
+        const deLaFicha = !v.nombre && lead?.conocido ? lead.nombre : null;
+        if (!v.nombre && conElPago && (!deLaFicha || !mismaPersona(conElPago, deLaFicha))) {
+            nombre = conElPago;
+            if (deLaFicha) otraPersona = true;
+        }
+        // (R3c) Lo que ya escribió en esta venta: UNA lectura, solo si falta el nombre o algún dato.
+        let deChat: DatosDeRegistro | null = null;
+        const sabido = () => unirRegistroDe(nombre, [v.registroPrevio, deNota, deChat, otraPersona ? null : deFicha]);
+        if (!v.nombre && (!nombre || faltantesDe(sabido(), hoy).length)) {
+            const hasta = fila.created_at ? new Date(Date.parse(fila.created_at) + 5 * 60_000).toISOString() : null;
+            deChat = registroDeChatPrevio(await textosDeLaVenta(v.conversationId, { desde: v.venta.desde ?? null, hasta }), { hoy });
+            if (!nombre && deChat.nombre) nombre = deChat.nombre;
+        }
+        // (R4) El nombre sale SOLO de la ficha y es de otro servicio: se confirma antes de usarlo.
+        const servicioDeLaFicha = lead?.sourceDetail?.asistente_servicio?.servicio_id;
+        if (nombre && deLaFicha && nombre === deLaFicha && !v.confirmado && lead
+            && typeof servicioDeLaFicha === 'string' && servicioDeLaFicha !== item.id) {
+            return preguntarSiEsElMismo(v, monto, lead, deFicha ?? SIN_REGISTRO);
+        }
+        v = { ...v, otraPersona, registro: sabido() };
+    }
+    if (!nombre) return preguntarNombreDeAsistente(v, monto, lead, v.registro ?? null);
 
     // Prospecto: con el nombre, el lead (se crea si no existe; si existe sin ese nombre, se le pone).
     let duenoFinal = dueno;
     if (!fam && !atletaReconocido) {
+        const registro = v.registro ?? null;
+        // (R2) El pago se registra con lo que se sabe; lo que falte para la inscripción se pide en la MISMA respuesta.
+        const faltan = registro ? faltantesDe(registro, hoy) : [];
+        if (faltan.length) v = { ...v, responder: conPedidoDeDatos(v.responder, pedidoDeFaltantes(faltan, registro, item.name), faltan) };
         const leadId = await asegurarLeadDeVenta({
             schoolId, conversationId: v.conversationId, telefono: fila.wa_phone_number, nombre, item, lead,
+            registro, otraPersona,
         });
         if (!leadId) {
             await ventaALaEscuela(v, {
@@ -2387,7 +2965,10 @@ export async function aplicarComprobanteDeVenta(
     const fila = (Array.isArray(tomadas) ? tomadas[0] : null) as (FilaCola & { pregunta_ocr?: any }) | null;
     const guardado = fila?.pregunta_ocr;
     if (!fila || !guardado?.ocr) return;
-    const datos = (guardado.venta ?? {}) as { itemId?: string; itemNombre?: string; esperadoId?: string | null; conversationId?: string | null };
+    const datos = (guardado.venta ?? {}) as {
+        itemId?: string; itemNombre?: string; esperadoId?: string | null; conversationId?: string | null;
+        registro?: unknown; otraPersona?: boolean; confirmado?: boolean;
+    };
     const marca = datos.itemId ? { [MARCA_VENTA]: datos.itemId } : undefined;
     const monto = montoDelOcr(guardado.ocr);
     const aLaEscuela = async (motivo: string) => {
@@ -2413,6 +2994,8 @@ export async function aplicarComprobanteDeVenta(
         ocr: guardado.ocr, sha: guardado.sha, storagePath: guardado.storagePath,
         venta: { item, esperado: esperados.find((e) => e.id === datos.esperadoId) ?? null },
         cobroActivo, familia: null, nombre, textos: [], alFallar: aLaEscuela, log, sinRevisarRepetido: true,
+        registroPrevio: datos.registro ? registroGuardado(datos.registro) : null,
+        otraPersona: datos.otraPersona === true, confirmado: datos.confirmado === true,
     });
 
     // Otro comprobante del contacto esperando la misma respuesta (se preguntó UNA vez).
@@ -2457,6 +3040,9 @@ async function continuarComoComprobante(
     opts: { llaves?: LlavesDeFicha; alFallar?: (motivo: string) => Promise<void>; motivo?: MotivoForzado | null } = {},
 ): Promise<void> {
     const alFallar = opts.alFallar ?? ((motivo: string) => reintentar(fila, motivo, log));
+    // El pie y lo que escribió alrededor del archivo: UNA lectura para todas las reglas que lo miran.
+    let textosLeidos: (string | null | undefined)[] | null = null;
+    const cercanos = async () => (textosLeidos ??= await textosCercanos(fila));
     // ¿La MISMA imagen ya se recibió de esta familia? (…0340, 07-oct: la foto
     // enviada dos veces recibió «lo apliqué…» y 40 s después «no tienes cobros
     // pendientes».) Va antes que todo: la respuesta nunca contradice a la primera.
@@ -2523,8 +3109,19 @@ async function continuarComoComprobante(
     // foto es de ESE cobro suelto, nunca de la mensualidad
     // (docs/specs/ventas-por-whatsapp.md §5.3). Va antes que todo lo demás:
     // el cobro de la venta es la mejor pista que existe.
-    const venta = decidirComprobanteDeVenta(
-        await ventaAbiertaDeContacto(fila.integration_id, fila.wa_phone_number), pendientes);
+    const ventaAbierta = await ventaAbiertaDeContacto(fila.integration_id, fila.wa_phone_number);
+    let venta = decidirComprobanteDeVenta(ventaAbierta, pendientes);
+    // (R7, auditoría 1–16 nov 2026) «no estamos pagando la clínica, estamos pagando la mensualidad» quedó como
+    // cobro de clínica. Si lo que escribió DESMIENTE el servicio de la venta abierta, el comprobante nunca va a
+    // la venta: sigue el camino de familia. Solo se leen los textos si la venta iba a decidir.
+    if (venta.tipo !== 'seguir') {
+        const servicio = [(ventaAbierta as { nombre?: string | null } | null)?.nombre ?? null, venta.tipo === 'aplicar' ? venta.pago.concept : null];
+        const alias = servicio.flatMap((c) => (c ? aliasesDelServicio({ name: String(c).split(/\s[—-]\s/)[0] }) : []));
+        if (alias.length && laVentaCede({ textos: [fila.media_caption, ocr.description, ...(await cercanos())], alias, monto: ocr.amount ?? null }).desmiente) {
+            log?.info?.({ queueId: fila.id }, '[wa-queue] el texto desmiente el servicio de la venta abierta: camino de familia');
+            venta = { tipo: 'seguir' };
+        }
+    }
     if (venta.tipo === 'aplicar') {
         log?.info?.({ queueId: fila.id, paymentId: venta.pago.id }, '[wa-queue] comprobante de la venta abierta');
         await aplicarComprobante({
@@ -2553,21 +3150,35 @@ async function continuarComoComprobante(
     // (Frente C, 2026-11-08) ¿Está comprando un servicio (la clínica, aun siendo del
     // club)? Si el monto es del servicio —precio de afiliado, abono, saldo— el cobro
     // es del servicio para su deportista. Si no, sigue el camino de siempre.
+    let ventaCedida = false;
     if (b4.activo && !opts.motivo) {
         const conversationId = await conversacionDeLaFila(fila);
         const venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados, { familia: true });
         // Un cobro PARCIAL de la familia cuenta como «lo suyo de siempre» frente a la venta (Monster 2026-11-12, Shara:
         // $145.000 sobre una mensualidad de $145.000 con $20.000 abonados no es un cupo de la clínica). Solo se lee si hay venta.
-        const delSaldo = venta
-            ? (await cobrosParcialesDe(fila.school_id, parentId, opts.llaves))
-                .map((c) => ({ id: c.id, amount: c.amount, concept: c.concept, due_date: null, child_id: null, atleta: null }) as PagoPendiente)
-            : [];
-        if (venta && await atenderComprobanteDeVenta({
+        const parcialesDeLaFamilia = venta ? await cobrosParcialesDe(fila.school_id, parentId, opts.llaves) : [];
+        const delSaldo = parcialesDeLaFamilia
+            .map((c) => ({ id: c.id, amount: c.amount, concept: c.concept, due_date: null, child_id: null, atleta: null }) as PagoPendiente);
+        // (R7, auditoría 1–16 nov 2026) La venta de un servicio no secuestra pagos de familias: «no estamos pagando
+        // la clínica, estamos pagando la mensualidad»; torneo + mensualidad pegados a la clínica; $10.000 de saldo de
+        // una mensualidad tomado como abono de la clínica. Si el texto desmiente el servicio, habla de la mensualidad
+        // sin nombrarlo, o el monto es el saldo (o la suma) de cobros de la familia, sigue el camino de familia.
+        const cede = venta
+            ? laVentaCede({
+                textos: [fila.media_caption, ocr.description, ...(await cercanos())], alias: aliasesDelServicio(venta.item),
+                monto: ocr.amount ?? null, pendientes, parciales: parcialesDeLaFamilia,
+            })
+            : null;
+        if (cede?.cede) log?.info?.({ queueId: fila.id, razon: cede.razon, item: venta?.item.id }, '[wa-queue] venta: cede al camino de familia');
+        ventaCedida = cede?.cede === true;
+        if (venta && !cede?.cede && await atenderComprobanteDeVenta({
             fila, wa: null, conversationId, responder: conMarcaDeVenta(responder, venta.item.id), ocr, sha: shaArchivo,
             storagePath, venta, cobroActivo: true, familia: { parentId, llaves: opts.llaves, pendientes: [...pendientes, ...delSaldo] }, alFallar, log,
         })) return;
     }
-    if (b4.activo && await atenderMotivoDeFamilia(argsB4, b4, opts.motivo ?? null)) return;
+    // Con la venta cedida (R7), tampoco la crea el pago esperado de ese servicio: solo lo de la familia.
+    const b4DeFamilia = ventaCedida ? { ...b4, esperados: b4.esperados.filter((e) => !esMotivoDeServicio(e.motivo)) } : b4;
+    if (b4.activo && await atenderMotivoDeFamilia(argsB4, b4DeFamilia, opts.motivo ?? null)) return;
 
     // ¿Dice que es OTRA cosa? (P0, 2026-10-07: «Clase perfeccionamiento» y «lo
     // de los uniformes» se aplicaron a la mensualidad y la escuela los rechazó
@@ -2617,8 +3228,8 @@ async function continuarComoComprobante(
     // Montos con el recargo del enlace de pago de cada cobro (2026-10-13).
     const recargos = await cargarRecargos(fila.school_id, pendientes);
     // Huellas para que la bandeja cierre sola la fila cuando se decida el pago.
-    const huellas = huellasDelComprobante({ sha: shaArchivo, ocr, storagePath, parentId });
-    const lectura = leerTextosDelComprobante(fila.media_caption, await textosCercanos(fila), pendientes);
+    const huellas = huellasConLectura({ sha: shaArchivo, ocr, storagePath, parentId });
+    const lectura = leerTextosDelComprobante(fila.media_caption, await cercanos(), pendientes);
     const porTexto = decidirCobroPorTexto({
         pendientes,
         parciales: await cobrosParcialesDe(fila.school_id, parentId, opts.llaves),
@@ -2627,6 +3238,32 @@ async function continuarComoComprobante(
         permiteAbonos: await escuelaRecibeAbonos(fila.school_id),
         recargos,
     });
+    // (R8, auditoría 1–16 nov 2026) Pago partido: $9.000 + $81.000 = la cuota de $90.000 dio `monto_no_cuadra` dos
+    // veces. Antes de cerrar (o preguntar) por un monto que no cuadra, se suman los comprobantes del mismo contacto
+    // de los últimos 10 minutos; si la suma calza con un cobro abierto, a la bandeja como ACCIÓN con esa propuesta
+    // (no se aplica solo: un cobro admite un comprobante).
+    if (montoLeido !== null && pendientes.length && !pendientes.some((p) => mismoMonto(Number(p.amount), montoLeido))
+        && (porTexto?.tipo === 'preguntar' || (porTexto?.tipo === 'a_la_escuela' && porTexto.codigo === 'monto_no_cuadra'))) {
+        const partido = pagoPartido(await comprobantesRecientesSinAplicar(fila), montoLeido, pendientes);
+        if (partido) {
+            const m = motivoPagoPartido({
+                partes: partido.partes, monto: montoLeido, total: partido.total,
+                descripcion: describirPago(partido.cobro), cobroId: partido.cobro.id,
+            });
+            await responder(textoPagoPartido(partido.total, partido.partes.length + 1), 'pago_partido');
+            await cerrar(fila.id, 'ignored', {
+                result_type: 'escalated', matched_parent_id: parentId, matched_child_id: partido.cobro.child_id,
+                error_message: motivoConPropuesta(m.base, m.propuesta),
+                ...(huellas ? { pregunta_ocr: huellas } : {}),
+            });
+            // Las partes anteriores dejan de decir «monto no cuadra»: son del mismo pago. UNA actualización.
+            await supabase.from('whatsapp_inbound_queue')
+                .update({ error_message: motivoConPropuesta(`${CODIGO_PAGO_PARTIDO}: parte de un pago de ${pesos(partido.total)} para ${describirPago(partido.cobro)}`, `Propuesta → ver la fila ${fila.id}, que trae la suma y el cobro`) })
+                .in('id', partido.partes.map((p) => p.id)).eq('status', 'ignored');
+            log?.info?.({ queueId: fila.id, paymentId: partido.cobro.id, partes: partido.partes.length + 1 }, '[wa-queue] pago partido: a la bandeja con la suma');
+            return;
+        }
+    }
     if (porTexto?.tipo === 'a_la_escuela') {
         // (Plan B4) El monto es exactamente un precio de la escuela (matrícula,
         // uniformes, clínica): eso pesa más que «abono de la mensualidad». Se
@@ -2703,6 +3340,20 @@ async function continuarComoComprobante(
         }
     }
 
+    // (R4, auditoría 1–16 nov 2026) El nombre del pie o de la nota manda sobre el hijo por defecto: pie «Mensualidad
+    // Isabella Rodríguez Amórtegui» y se preguntó por la hermana. Antes de «¿a cuál de estos cobros?», los del hijo
+    // que la familia nombró (pie, nota del comprobante, textos de la ráfaga) y, si dijo el mes, los de ese mes: con
+    // UNO por el monto del comprobante se aplica sin preguntar; con varios, se pregunta solo entre los suyos.
+    if (match.tipo === 'preguntar') {
+        const acotado = acotarCobrosPorLoEscrito(pendientes, soloLoDelPago(fila.media_caption, ocr.description, await cercanos()), montoLeido);
+        if (acotado.elegido) {
+            log?.info?.({ queueId: fila.id, paymentId: acotado.elegido.id, por: acotado.por }, '[wa-queue] cobro elegido por el hijo que nombra el pie o la nota');
+            match = { tipo: 'unico', pago: acotado.elegido };
+        } else if (acotado.opciones && acotado.opciones.length >= 2) {
+            match = { tipo: 'preguntar', opciones: acotado.opciones.slice(0, 5) };
+        }
+    }
+
     if (match.tipo === 'sin_pendientes') {
         // (d) ¿Ya estaba registrado? Un pago aprobado con la misma referencia, o
         // por el mismo monto en esos días: se dice, no se escala.
@@ -2714,6 +3365,14 @@ async function continuarComoComprobante(
                 result_type: 'none', result_ref_id: ya.id, matched_parent_id: parentId,
                 error_message: `ya registrado: ${ya.concept ?? ya.id}`,
             });
+            return;
+        }
+        // (R6, auditoría 1–16 nov 2026) Sin un cobro abierto por ese monto y el pie, la nota o los textos hablan
+        // de un torneo, un equipo, un club o una liga: no se pregunta «¿de qué mes?» ni «¿de cuál deportista?».
+        const textosDelPago = [fila.media_caption, ocr.description, ...(await cercanos())];
+        const deTorneo = senalDeTorneoOClub(textosDelPago);
+        if (deTorneo) {
+            await torneoOClubALaEscuela({ fila, responder, ocr, sha: shaArchivo, storagePath, parentId, dijo: deTorneo, log });
             return;
         }
         // (Plan B4) Sin cobros pero el monto es un precio de la escuela: se crea
@@ -2738,11 +3397,42 @@ async function continuarComoComprobante(
         // con la propuesta «crear el cobro de ese mes y aplicar».
         if (await preguntarMesOQuien({
             fila, parentId, llaves: opts.llaves, ocr, sha: shaArchivo, storagePath, responder,
+            textos: soloLoDelPago(fila.media_caption, ocr.description, await cercanos()),
+            alFallar, log,
         })) return;
+        // (R2, auditoría 1–16 nov 2026) Un comprobante REAL de una familia sin cobros abiertos (13 filas; al menos
+        // 3 eran pagos de otra cosa) ya no cierra «sin pagos pendientes» / informativo: queda en ACCIÓN con el
+        // monto y la propuesta. A la familia, que llegó y que lo mira la escuela (nunca «quedó registrado»).
+        const esPagoReal = montoLeido !== null && pareceComprobanteDePago(ocr);
+        const propuestaSinPendientes = async () => {
+            const ds = await deportistasParaPreguntar(fila.school_id, {
+                parentId, childIds: opts.llaves?.childIds, unregisteredIds: opts.llaves?.unregisteredIds,
+            }).catch(() => []);
+            return motivoSinPendientesConPago({
+                monto: montoLeido as number, quienPago: ocr.originName ?? null, deportistas: ds.map((d) => d.nombre),
+                fecha: ocr.date ?? null, dice: fila.media_caption ?? ocr.description ?? null,
+            });
+        };
         if (!parentId) {
-            // Sin cuenta y sin cobros por la ficha: lo aplica la escuela, como antes.
+            // Sin cuenta y sin cobros por la ficha: lo aplica la escuela, como antes (ahora con monto y propuesta).
             await responder(M.escaladoSinAcudiente, 'familia_sin_cuenta');
-            await cerrar(fila.id, 'ignored', { result_type: 'escalated', error_message: 'familia_sin_cuenta: la ficha no tiene cobros pendientes' });
+            await cerrar(fila.id, 'ignored', {
+                result_type: 'escalated',
+                error_message: motivoConPropuesta('familia_sin_cuenta: la ficha no tiene cobros pendientes',
+                    esPagoReal ? (await propuestaSinPendientes()).propuesta : null),
+                ...(huellas ? { pregunta_ocr: huellas } : {}),
+            });
+            return;
+        }
+        if (esPagoReal) {
+            const m = await propuestaSinPendientes();
+            await responder(textoSinPendientesALaEscuela(montoLeido), 'sin_pendientes');
+            await cerrar(fila.id, 'ignored', {
+                result_type: 'escalated', matched_parent_id: parentId,
+                error_message: motivoConPropuesta(m.base, m.propuesta),
+                ...(huellas ? { pregunta_ocr: huellas } : {}),
+            });
+            log?.info?.({ queueId: fila.id }, '[wa-queue] sin cobros abiertos y un pago real: a la bandeja como acción');
             return;
         }
         await responder(M.sinPendientes, 'sin_pendientes');
@@ -3043,6 +3733,7 @@ async function intentarPlanillaDeStaff(
     let ocr: LecturaPrevia['ocr'];
     try {
         ocr = await extractReceipt(base64, mime);
+        anotarLectura(fila, ocr, base64);
     } catch (err: any) {
         await reintentar(fila, `OCR (comprobantes) no disponible: ${err?.message ?? err}`, log);
         return { atendida: true };
@@ -3099,6 +3790,7 @@ async function procesarComoStaffAdmin(
         ({ base64, mime, storagePath } = bajada);
         try {
             ocr = await extractReceipt(base64, mime);
+            anotarLectura(fila, ocr, base64);
         } catch (err: any) {
             await reintentar(fila, `OCR (comprobantes) no disponible: ${err?.message ?? err}`, log);
             return;
@@ -3200,25 +3892,15 @@ export function decidirAdjunto(a: {
     return 'silencio';
 }
 
-// Los enlaces salen a familias reales por el número de la escuela: siempre la
-// app de producción. Con FRONTEND_URL, el BFF de dev mandaba dev.sportmaps.co
-// (la base es una sola y dev también procesa la cola; 2026-10-06).
-const FRONTEND_URL = APP_PUBLICA_PROD;
-
 /**
  * Familia conocida por la escuela pero sin cuenta. El enlace es el de SU
  * invitación (mismo criterio que whatsapp-bot.service): el registro normal no
  * vincula `children`, solo `accept_invitation_pro` lo hace.
  */
-async function mensajeSinCuenta(fila: FilaCola): Promise<string> {
-    // Solo la invitación de un atleta ACTIVO (whatsapp-invitacion-vigente): a la
-    // familia de un atleta dado de baja no se le ofrece crear la cuenta.
-    const { invitacion } = await invitacionPendienteVigente(
-        fila.integration_id, fila.wa_phone_number, fila.school_id);
-    if (!invitacion?.invite_id) return M.sinCuenta;
-    const enlace = `${FRONTEND_URL}/register?invite=${invitacion.invite_id}` +
-        (invitacion.email ? `&email=${encodeURIComponent(invitacion.email)}` : '');
-    return `${M.sinCuenta}\n\nSi creas tu cuenta aquí, la próxima vez tu comprobante se aplica solo: ${enlace}`;
+async function mensajeSinCuenta(_fila: FilaCola): Promise<string> {
+    // (2026-11-16) Ya no se ofrece el enlace de registro con un comprobante en la mano: llegó y la escuela lo revisa.
+    // La invitación la ofrece el bot cuando la familia escribe de otra cosa, no la cola.
+    return M.sinCuenta;
 }
 
 /**
@@ -3275,7 +3957,7 @@ async function escalarALaEscuela(
     motivo: string,
     log?: Logger,
 ): Promise<void> {
-    const bajada = await bajarYGuardarArchivo(fila, wa, log);
+    const bajada = await bajarYGuardarArchivo(fila, wa, log, responder);
     if (!bajada.ok) return;
 
     // ¿Es siquiera un comprobante? (2026-10-06, ver `esConsultaSobreCobro`.)
@@ -3286,6 +3968,7 @@ async function escalarALaEscuela(
     if (!consulta) {
         try {
             const ocr = await extractReceipt(bajada.base64, bajada.mime);
+            anotarLectura(fila, ocr, bajada.base64);
             // Ni comprobante ni consulta ni nada que hable de pagar (la foto del
             // entrenamiento): sin responder, el archivo ya quedó en el buzón.
             if (ocr.isReceipt === false && !(await hayContextoDePago(fila, conversationId, ocr))) {
@@ -3332,6 +4015,7 @@ export function _fijarEsperaAcuse(ms: number): void { esperaAcuseMs = ms; }
 const PASOS_PREGUNTA = new Set([
     'ask_cual_pago', 'confirmar_combinacion', PASO_PREGUNTA_DEPORTISTA,
     PASO_PREGUNTA_MES, PASO_PREGUNTA_CONCEPTO, PASO_PREGUNTA_DEPORTISTA_BOTONES, PASO_PREGUNTA_ASISTENTE,
+    PASO_CONFIRMAR_ASISTENTE,
 ]);
 
 /** Respuestas de una ráfaga de archivos del mismo contacto, para mandarlas en UN mensaje. */
@@ -3611,11 +4295,12 @@ async function comprobanteDeFamiliaSinCuenta(
     fila: FilaCola, wa: WhatsAppIntegration, conversationId: string | null,
     responder: Responder, llaves: LlavesDeFicha, log?: Logger,
 ): Promise<void> {
-    const bajada = await bajarYGuardarArchivo(fila, wa, log);
+    const bajada = await bajarYGuardarArchivo(fila, wa, log, responder);
     if (!bajada.ok) return;
     let ocr;
     try {
         ocr = await extractReceipt(bajada.base64, bajada.mime);
+        anotarLectura(fila, ocr, bajada.base64);
     } catch (err: any) {
         await reintentar(fila, `OCR no disponible: ${err?.message ?? err}`, log);
         return;
@@ -3673,6 +4358,28 @@ async function excedeOcrSinFicha(fila: FilaCola): Promise<boolean> {
     }
 }
 
+/**
+ * ¿Algún adjunto anterior del contacto en la ventana resultó ser un pago real (quedó escalado, en un cobro o
+ * esperando respuesta)? Entonces la ráfaga no es de fotos sueltas: se sigue leyendo. Una lectura; nunca lanza.
+ */
+async function rafagaConPagoReal(fila: FilaCola): Promise<boolean> {
+    try {
+        const base = fila.created_at ? new Date(fila.created_at).getTime() : Date.now();
+        if (!Number.isFinite(base)) return false;
+        const { data } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, status, result_type')
+            .eq('integration_id', fila.integration_id).eq('wa_phone_number', fila.wa_phone_number)
+            .neq('id', fila.id)
+            .gte('created_at', new Date(base - VENTANA_OCR_SIN_FICHA_MIN * 60_000).toISOString())
+            .lt('created_at', new Date(base).toISOString())
+            .limit(30);
+        return ((Array.isArray(data) ? data : []) as any[]).some((f) =>
+            f.status === 'waiting_user' || f.result_type === 'escalated' || f.result_type === 'payment_receipt');
+    } catch {
+        return false;
+    }
+}
+
 /** ¿El embudo ya separó o agendó una clase en este chat (últimos 4 días)? Ante la duda de lectura, sí (no se descarta). */
 async function tieneCupoSeparadoEnChat(conversationId: string): Promise<boolean> {
     const desde = new Date(Date.now() - 4 * 24 * 3600_000).toISOString();
@@ -3680,6 +4387,128 @@ async function tieneCupoSeparadoEnChat(conversationId: string): Promise<boolean>
         .eq('conversation_id', conversationId).eq('direction', 'outbound').gte('created_at', desde)
         .in('payload->>step', ['embudo_esperando_pago', 'embudo_agendada']).limit(1);
     return Boolean(error) || (data ?? []).length > 0;
+}
+
+/** Horas en que la misma captura incompleta (contacto + monto + destino) no abre otra fila de acción. */
+const HORAS_CAPTURA_INCOMPLETA = 24;
+/** Prefijo del `error_message` de una captura incompleta de una venta (la Bandeja la muestra como acción). */
+export const CODIGO_VENTA_INCOMPLETO = 'venta_comprobante_incompleto';
+
+const soloDigitos = (s: string | null | undefined) => String(s ?? '').replace(/\D/g, '');
+
+/** ¿Ya hay una fila de acción por esta misma captura incompleta (contacto + monto + destino, 24 h)? Una lectura; nunca lanza. */
+async function capturaIncompletaPrevia(fila: FilaCola, monto: number, destino: string | null | undefined): Promise<string | null> {
+    try {
+        const { data } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, error_message, monto:pregunta_ocr->ocr->>amount, destino:pregunta_ocr->ocr->>destination')
+            .eq('integration_id', fila.integration_id).eq('wa_phone_number', fila.wa_phone_number)
+            .neq('id', fila.id).eq('status', 'ignored')
+            .gte('created_at', new Date(Date.now() - HORAS_CAPTURA_INCOMPLETA * 3600_000).toISOString())
+            .limit(30);
+        const igual = ((Array.isArray(data) ? data : []) as any[]).find((f) =>
+            String(f.error_message ?? '').startsWith(CODIGO_VENTA_INCOMPLETO)
+            && mismoMonto(Number(f.monto), monto) && soloDigitos(f.destino) === soloDigitos(destino));
+        return igual?.id ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * (R7) Captura incompleta con una venta viva: monto leído, sin fecha ni número de comprobante. NO se crea el cobro
+ * (sin referencia y con una imagen que cambia en cada reenvío, cada reenvío lo duplicaría): queda en la bandeja
+ * como ACCIÓN con la lectura guardada, lo que se sabe de quien asiste y la propuesta; y a la persona se le dice
+ * que llegó, que le faltan la fecha y el número, y de una vez los datos de registro que falten. La misma captura
+ * otra vez (24 h) no abre otra fila ni repite la respuesta. El comprobante completo entra por el camino de siempre.
+ */
+async function ventaConCapturaIncompleta(a: {
+    fila: FilaCola; wa: WhatsAppIntegration; conversationId: string | null; responder: Responder;
+    ocr: Awaited<ReturnType<typeof extractReceipt>>; venta: VentaDelComprobante; textos: (string | null | undefined)[];
+    base64: string; storagePath: string; log?: Logger;
+}, monto: number): Promise<void> {
+    const { fila, ocr, venta } = a;
+    const item = venta.item;
+    const huellas = huellasConLectura({ sha: shaDe(a.base64), ocr, storagePath: a.storagePath, parentId: null });
+    const previa = await capturaIncompletaPrevia(fila, monto, ocr.destination);
+    if (previa) {
+        await cerrar(fila.id, 'ignored', {
+            result_type: 'none', pregunta_ocr: huellas,
+            error_message: `venta_comprobante_repetido: misma captura incompleta que la fila ${previa}`,
+        });
+        a.log?.info?.({ queueId: fila.id, filaPrevia: previa }, '[wa-queue] venta: captura incompleta repetida');
+        return;
+    }
+    // La memoria de quien asiste: la ficha, la nota y el pie, y lo que escribió alrededor (ya leído).
+    const hoy = hoyBogota();
+    const lead = await leadDeVenta(fila.school_id, fila.wa_phone_number, venta.esperado?.leadId ?? null, await nombreDePerfilDe(a.conversationId));
+    const registro = unirRegistroDe(null, [
+        registroDeNota([ocr.description, fila.media_caption], { hoy, titular: ocr.destinationName ?? null }),
+        registroDeChatPrevio(a.textos.slice(1), { hoy }),
+        lead ? registroDeFicha({ ...(lead.ficha ?? {}), source_detail: lead.sourceDetail }, { hoy, conocido: lead.conocido }) : null,
+    ]);
+    const faltan = faltantesDe(registro, hoy);
+    // Lo que se entendió queda en la ficha (no se vuelve a pedir cuando llegue el comprobante completo).
+    if (registro.nombre) {
+        await asegurarLeadDeVenta({
+            schoolId: fila.school_id, conversationId: a.conversationId, telefono: fila.wa_phone_number,
+            nombre: registro.nombre, item, lead, registro,
+        });
+    } else if (lead && hayRegistro(registro)) {
+        await guardarDatosDeRegistro({ lead, registro, item });
+    }
+    let destino: Awaited<ReturnType<typeof destinoDelComprobante>> = null;
+    try { destino = await destinoDelComprobante(fila.school_id, ocr); } catch { destino = null; }
+    const aDonde = destino === 'general' ? 'a una cuenta de la escuela'
+        : destino === 'ajena' ? `a ${ocr.destination ?? '?'}, que NO es una cuenta de la escuela`
+            : `a ${ocr.destination ?? 'un destino sin leer'} (destino sin confirmar)`;
+    await a.responder(textoCapturaIncompleta(monto, pedidoDeFaltantes(faltan, registro, item.name)), PASO_VENTA_INCOMPLETO,
+        undefined, undefined, { faltan_datos: faltan });
+    await cerrar(fila.id, 'ignored', {
+        result_type: 'escalated',
+        error_message: motivoConPropuesta(
+            `${CODIGO_VENTA_INCOMPLETO}: captura de ${pesos(monto)} para ${item.name} ${aDonde}, sin fecha ni número de comprobante`,
+            `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'} · asiste: ${resumenDeAsistente(registro, hoy)} · `
+            + 'se le pidió la pantalla completa; si no llega, verificar el ingreso en la cuenta y crear el cobro a mano'),
+        pregunta_ocr: huellas,
+    });
+    await abrirParaLaEscuela(fila, a.wa, a.conversationId, 'venta_comprobante_a_la_escuela', a.log);
+    a.log?.info?.({ queueId: fila.id, item: item.id, destino }, '[wa-queue] venta: captura incompleta, a la bandeja como acción');
+}
+
+/**
+ * (R1) Un contacto que el bot NO atiende (marcado personal, negocio…; la escuela en el chat sin venta en la
+ * conversación) manda una imagen con monto que se iba a cerrar en silencio. Si tiene un pago de servicio ESPERADO
+ * sin consumir (el bot le dio los datos de pago), no se pierde: a la bandeja como acción. Sin escribirle (es un
+ * contacto que el bot no atiende). UNA lectura, y solo para imágenes con monto. true = quedó en la bandeja.
+ */
+async function capturaDeVentaDeContactoNoAtendido(
+    fila: FilaCola, wa: WhatsAppIntegration, conversationId: string | null,
+    archivo: { base64: string; storagePath: string | null }, ocr: Awaited<ReturnType<typeof extractReceipt>>, log?: Logger,
+): Promise<boolean> {
+    const monto = montoDelOcr(ocr);
+    if (monto === null) return false;
+    let esperado: ConceptoEsperado | null = null;
+    try {
+        esperado = (await conceptosEsperadosDe(fila.school_id, fila.wa_phone_number)).find((e) => esMotivoDeServicio(e.motivo) && !e.childId) ?? null;
+    } catch { esperado = null; }
+    if (!esperado) return false;
+    const guardada = archivo.storagePath
+        ? { ok: true as const, base64: archivo.base64, storagePath: archivo.storagePath }
+        : await bajarYGuardarArchivo(fila, wa, log);
+    if (!guardada.ok) return true;
+    const completo = pareceComprobanteDePago(ocr);
+    await cerrar(fila.id, 'ignored', {
+        result_type: 'escalated',
+        error_message: motivoConPropuesta(
+            `${completo ? 'venta_servicio' : CODIGO_VENTA_INCOMPLETO}: ${completo ? 'comprobante' : 'captura'} de ${pesos(monto)} `
+            + `de un contacto con un pago de servicio pendiente (${esperado.motivo}) a ${ocr.destination ?? 'un destino sin leer'}`
+            + `${completo ? '' : ', sin fecha ni número de comprobante'}; el asistente no atiende este chat`,
+            `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'} · asiste: sin nombre · revisar el ingreso en la cuenta, pedir los datos de quien asiste y crear el cobro a mano`),
+        pregunta_ocr: huellasConLectura({ sha: shaDe(archivo.base64), ocr, storagePath: guardada.storagePath, parentId: null }),
+    });
+    await abrirParaLaEscuela(fila, wa, conversationId, 'venta_comprobante_a_la_escuela', log);
+    log?.info?.({ queueId: fila.id }, '[wa-queue] contacto no atendido con un pago de servicio pendiente: a la bandeja');
+    return true;
 }
 
 /**
@@ -3718,7 +4547,9 @@ async function comprobanteDeNumeroSinFicha(
     // MAX_OCR_SIN_FICHA por ventana; las demás se cierran en silencio, sin
     // bajarlas ni contestar, y quedan marcadas para no reintentarse. Salvo que
     // esté comprando un servicio: sus comprobantes nunca se pierden.
-    if (!hablaPorTexto && !venta && await excedeOcrSinFicha(fila)) {
+    // (R5) …salvo que un archivo anterior de la MISMA ráfaga ya haya resultado ser un pago real (quedó en la
+    // bandeja, en un cobro o esperando respuesta): sus otros comprobantes no se cierran sin leer.
+    if (!hablaPorTexto && !venta && await excedeOcrSinFicha(fila) && !(await rafagaConPagoReal(fila))) {
         venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados);
         if (!venta) {
             await cerrar(fila.id, 'ignored', { result_type: 'none', error_message: MOTIVO_OCR_OMITIDO_RAFAGA });
@@ -3728,9 +4559,9 @@ async function comprobanteDeNumeroSinFicha(
     }
     if (!venta) venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados);
     const hablaDePago = hablaPorTexto || !!venta;
-    let archivo: { base64: string; mime: string };
+    let archivo: { base64: string; mime: string; storagePath?: string | null };
     if (hablaDePago) {
-        const bajada = await bajarYGuardarArchivo(fila, wa, log);
+        const bajada = await bajarYGuardarArchivo(fila, wa, log, responder);
         if (!bajada.ok) return true;
         archivo = bajada;
     } else {
@@ -3741,10 +4572,23 @@ async function comprobanteDeNumeroSinFicha(
     let ocr;
     try {
         ocr = await extractReceipt(archivo.base64, archivo.mime);
+        anotarLectura(fila, ocr, archivo.base64);
     } catch (err: any) {
         // Un OCR caído nunca decide (regla 2 del worker): antes esto cerraba como
         // `contacto_no_atendido` y un pago real se perdía. Se reintenta.
         await reintentar(fila, `OCR no disponible: ${err?.message ?? err}`, log);
+        return true;
+    }
+    // (R1/R7, 2026-11-16) Venta viva y una imagen con monto que NO llega a comprobante (la pantalla «¡Transferencia
+    // exitosa!» recortada: sin fecha ni número): antes el destino quedaba «ajena» y la fila cerraba en silencio como
+    // `contacto_no_atendido` (Monster 2026-11-15, $140.000 del vacacional). Nunca en silencio: a la bandeja como
+    // acción, y a la persona, que llegó y qué le falta.
+    const montoDeCaptura = montoDelOcr(ocr);
+    if (venta && montoDeCaptura !== null && !pareceComprobanteDePago(ocr) && archivo.storagePath) {
+        await ventaConCapturaIncompleta({
+            fila, wa, conversationId, responder: conMarcaDeVenta(responder, venta.item.id), ocr, venta, textos,
+            base64: archivo.base64, storagePath: archivo.storagePath, log,
+        }, montoDeCaptura);
         return true;
     }
     // Se le escribe solo si el dinero fue a una cuenta general de la escuela, o
@@ -3762,13 +4606,18 @@ async function comprobanteDeNumeroSinFicha(
         // pero se guarda y queda en la bandeja como `destino_ajeno`.
         const guardada = await bajarYGuardarArchivo(fila, wa, log);
         if (!guardada.ok) return true;
+        // (R1) Con una venta viva la persona es un cliente en plena compra: se le dice que el archivo llegó.
+        if (venta) {
+            await conMarcaDeVenta(responder, venta.item.id)(
+                textoVentaRecibida({ monto: montoDelOcr(ocr), servicio: venta.item.name, nombre: null }), 'venta_comprobante_a_la_escuela');
+        }
         await cerrar(fila.id, 'ignored', {
             result_type: 'escalated',
             error_message: motivoConPropuesta(
                 `recuperado: destino_ajeno — el dinero fue a ${ocr.destination ?? '?'}, que no es una cuenta de la escuela (número sin ficha)`
                 + `${venta ? ` · venta de ${venta.item.name}` : ''}`,
                 `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'}${ocr.amount ? ` · ${cop(ocr.amount)}` : ''} · confirmar con quien lo mandó si era para la escuela`),
-            pregunta_ocr: huellasDelComprobante({
+            pregunta_ocr: huellasConLectura({
                 sha: crypto.createHash('sha256').update(Buffer.from(guardada.base64, 'base64')).digest('hex'),
                 ocr, storagePath: guardada.storagePath, parentId: null,
             }),
@@ -3787,12 +4636,34 @@ async function comprobanteDeNumeroSinFicha(
                 error_message: motivoConPropuesta(
                     'sin_familia: imagen_de_quien_espera_pago — mandó una imagen que no se reconoce como comprobante y tiene un cupo separado por el embudo',
                     'Propuesta → abrir la imagen: puede ser el comprobante o pantallazos de su reserva'),
-                pregunta_ocr: huellasDelComprobante({
+                pregunta_ocr: huellasConLectura({
                     sha: crypto.createHash('sha256').update(Buffer.from(guardada.base64, 'base64')).digest('hex'),
                     ocr, storagePath: guardada.storagePath, parentId: null,
                 }),
             });
             return true;
+        }
+        // (R5, auditoría 1–16 nov 2026) Antes del silencio: ¿el pie o los textos nombran a un deportista ACTIVO
+        // (nombre + apellido, coincidencia única) que tiene un cobro abierto por ESE monto (±$1)? Entonces es el
+        // acudiente escribiendo desde un número que no está en la ficha (~14 filas, 5 contactos): no se cierra en
+        // silencio ni se aplica solo; a la bandeja con la propuesta exacta y se le dice que llegó.
+        const escritoAca = [fila.media_caption, ...textos.slice(1), ocr.description];
+        if (montoDeCaptura !== null && !o.tomada && palabrasDeNombre(escritoAca.filter(Boolean).join(' ')).length >= 2) {
+            const nombrada = await deportistaPorNombreSinVerificar(fila.school_id, escritoAca);
+            const ficha = nombrada.exacta ?? nombrada.parecida;
+            const abiertos = ficha
+                ? await pendientesPorLlaves(fila.school_id, ficha.tipo === 'child'
+                    ? { childIds: [ficha.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [ficha.id] })
+                : [];
+            if (ficha && abiertos.some((p) => mismoMonto(Number(p.amount), montoDeCaptura))) {
+                const guardada = await bajarYGuardarArchivo(fila, wa, log);
+                if (!guardada.ok) return true;
+                await comprobanteDeNumeroFueraDeLaFicha({
+                    fila, responder, ocr, sha: shaDe(guardada.base64), storagePath: guardada.storagePath, parentId: null, log,
+                    ficha, escrito: [fila.media_caption, ...textos.slice(1)].filter(Boolean).join(' · '),
+                });
+                return true;
+            }
         }
         await silencio();
         return true;
@@ -3830,6 +4701,31 @@ async function comprobanteDeNumeroSinFicha(
             alFallar: (motivo) => reintentar(fila, motivo, log), log,
         });
         return true;
+    }
+    // (R6, auditoría 1–16 nov 2026) Un club que paga un torneo no tiene «deportista»: clubes externos pagando
+    // $900.000 recibieron «¿de qué deportista?». Si el pie, la nota, los textos o quien paga hablan de torneo,
+    // equipo, club o liga, va a la bandeja como pago de torneo/club y se le dice que llegó.
+    const deTorneo = senalDeTorneoOClub([...textos, ocr.description, ocr.originName]);
+    if (deTorneo) {
+        await torneoOClubALaEscuela({ fila, responder, ocr, sha: shaDe(bajada.base64), storagePath: bajada.storagePath, parentId: null, dijo: deTorneo, log });
+        return true;
+    }
+    // (R5) El pie o los textos nombran a UN deportista activo (nombre + apellido, sin ser el nombre completo) que
+    // tiene un cobro abierto por ESE monto (±$1): no se le pregunta «¿de qué deportista?» ni se cierra en silencio.
+    // A la bandeja con la propuesta exacta; NUNCA se aplica solo (pie «comprobante de pago SARA DAZA»; una acudiente
+    // que escribía desde un número que no está en la ficha mandó 9 archivos y ninguno se aplicó). Si el monto no es
+    // el de un cobro suyo, sigue la pregunta escrita de siempre (el nombre completo es lo único que liga).
+    if (porNombre.parecida && montoLeido !== null) {
+        const ficha = porNombre.parecida;
+        const abiertos = await pendientesPorLlaves(fila.school_id, ficha.tipo === 'child'
+            ? { childIds: [ficha.id], unregisteredIds: [] } : { childIds: [], unregisteredIds: [ficha.id] });
+        if (abiertos.some((p) => mismoMonto(Number(p.amount), montoLeido))) {
+            await comprobanteDeNumeroFueraDeLaFicha({
+                fila, responder, ocr, sha: shaDe(bajada.base64), storagePath: bajada.storagePath, parentId: null, log,
+                ficha, escrito: [fila.media_caption, ...textos.slice(1)].filter(Boolean).join(' · '),
+            });
+            return true;
+        }
     }
     // UNA vez: si ya se le preguntó (otra foto de la ráfaga), esta queda esperando la misma respuesta.
     let salida: SalidaDePregunta;
@@ -3874,7 +4770,7 @@ async function comprobantePorNombreSinVerificar(a: {
             result_type: 'escalated',
             ...(childId ? { matched_child_id: childId } : {}),
             error_message: motivoConPropuesta(`sin_familia: ${codigo} — ${detalle}`, `Propuesta → ${pago} · ${propuesta}`),
-            pregunta_ocr: huellasDelComprobante({ sha: a.sha, ocr, storagePath: a.storagePath, parentId: null }),
+            pregunta_ocr: huellasConLectura({ sha: a.sha, ocr, storagePath: a.storagePath, parentId: null }),
         });
         a.log?.info?.({ queueId: fila.id, codigo }, '[wa-queue] número sin verificar: a la bandeja con la propuesta');
     };
@@ -4024,11 +4920,16 @@ async function comprobanteDeContactoNoAtendido(
     let ocr;
     try {
         ocr = await extractReceipt(archivo.base64, archivo.mime);
+        anotarLectura(fila, ocr, archivo.base64);
     } catch (err: any) {
         await reintentar(fila, `OCR no disponible: ${err?.message ?? err}`, log);
         return;
     }
-    if (!pareceComprobanteDePago(ocr)) { await silencio(); return; }
+    if (!pareceComprobanteDePago(ocr)) {
+        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        await silencio();
+        return;
+    }
     const destino = await destinoDelComprobante(fila.school_id, ocr);
     if (destino === 'fuera_de_sportmaps') {
         await cerrar(fila.id, 'ignored', { result_type: 'none', error_message: MOTIVO_FUERA_DE_SPORTMAPS });
@@ -4036,7 +4937,11 @@ async function comprobanteDeContactoNoAtendido(
     }
     // Solo una cuenta GENERAL de la escuela cuenta: a una cuenta ajena o al Nequi
     // personal restringido de la dueña, un contacto personal manda plata por otras razones.
-    if (destino !== 'general') { await silencio(); return; }
+    if (destino !== 'general') {
+        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        await silencio();
+        return;
+    }
 
     const guardada = archivo.storagePath
         ? { ok: true as const, base64: archivo.base64, storagePath: archivo.storagePath }
@@ -4048,7 +4953,7 @@ async function comprobanteDeContactoNoAtendido(
         error_message: motivoConPropuesta(
             `sin_familia: contacto_no_atendido (${tipoDeContacto}): comprobante${ocr.amount ? ` de ${cop(ocr.amount)}` : ''} a una cuenta de la escuela`,
             `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'} · deportista: sin identificar (el número no está en ninguna ficha) · ${ocr.date ?? 'sin fecha'}`),
-        pregunta_ocr: huellasDelComprobante({ sha, ocr, storagePath: guardada.storagePath, parentId: null }),
+        pregunta_ocr: huellasConLectura({ sha, ocr, storagePath: guardada.storagePath, parentId: null }),
     });
     log?.info?.({ queueId: fila.id, tipo: tipoDeContacto }, '[wa-queue] contacto no atendido con un comprobante: a la bandeja');
 }
@@ -4139,6 +5044,8 @@ async function procesarFila(fila: FilaCola, log?: Logger, rafaga?: Rafaga): Prom
             () => procesarFilaInterna(fila, log, rafaga, (t) => { acuseTimer = t; }));
     } finally {
         if (acuseTimer) clearTimeout(acuseTimer);
+        // La lectura anotada (R1) no sobrevive a la fila: si quedó esperando o reintentando, se suelta acá.
+        lecturasDeFilas.delete(fila.id);
     }
 }
 
@@ -4429,7 +5336,7 @@ async function procesarFilaInterna(
         return;
     }
     // Tope de comprobantes por número y por escuela ANTES de cualquier OCR (wa-limite-comprobantes.service).
-    if (await frenarSiExcedeLimite(fila.id, { guardarArchivo: () => bajarYGuardarArchivo(fila, wa, log), responder,
+    if (await frenarSiExcedeLimite(fila.id, { guardarArchivo: () => bajarYGuardarArchivo(fila, wa, log, responder), responder,
         cerrar: (extra) => cerrar(fila.id, 'ignored', extra) }, log)) return;
     if (decision === 'escalar_sin_cuenta') {
         // (a) Con ficha por teléfono: se aplica por la ficha, sin pedir cuenta.
@@ -4486,7 +5393,7 @@ async function procesarFilaInterna(
     }
 
     // 3. Bajar y GUARDAR antes de leer.
-    const bajada = await bajarYGuardarArchivo(fila, wa, log);
+    const bajada = await bajarYGuardarArchivo(fila, wa, log, responder);
     if (!bajada.ok) return;
     const { base64, mime, storagePath } = bajada;
 
@@ -4494,6 +5401,7 @@ async function procesarFilaInterna(
     let ocr;
     try {
         ocr = await extractReceipt(base64, mime);
+        anotarLectura(fila, ocr, base64);
     } catch (err: any) {
         await reintentar(fila, `OCR no disponible: ${err?.message ?? err}`, log);
         return;
@@ -4563,12 +5471,28 @@ export function motivoPreguntaVencida(e: { enviada: boolean; enBorrador: boolean
     return { codigo: 'sin_respuesta', texto: `pregunta_vencida: la familia no dijo a qué cobro va en ${HORAS_VIDA_PREGUNTA} h; aplicarlo a mano` };
 }
 
+/**
+ * La pregunta de los datos de quien asiste venció: el motivo con el monto, quién pagó, lo que se sabe de quien
+ * asiste y la propuesta (la Bandeja lo muestra como acción). El comienzo del texto es el de siempre. Pura.
+ */
+export function motivoVentaSinNombre(f: { servicio?: string | null; monto?: unknown; pago?: string | null; registro?: unknown }): string {
+    const monto = Number(f.monto);
+    const base = `venta_falta_nombre: no dijo el nombre de quien asiste a ${f.servicio ?? 'el servicio'} en ${HORAS_VIDA_PREGUNTA} h; `
+        + 'crear el cobro del servicio a mano con este comprobante';
+    const registro = f.registro ? registroGuardado(f.registro) : null;
+    if (!(Number.isFinite(monto) && monto > 0) && !f.pago && !hayRegistro(registro)) return base;
+    return motivoConPropuesta(base,
+        `Propuesta → ${Number.isFinite(monto) && monto > 0 ? `${pesos(monto)} · ` : ''}pagó: ${f.pago ?? 'no se leyó'} · `
+        + `asiste: ${resumenDeAsistente(registro, hoyBogota())}`);
+}
+
 /** Vence las preguntas viejas. Idempotente y seguro con los 3 BFF: el UPDATE exige `waiting_user`. */
 export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now()): Promise<number> {
     const corte = new Date(ahora - HORAS_VIDA_PREGUNTA * 3600_000).toISOString();
     const { data: filas, error } = await supabase.from('whatsapp_inbound_queue')
         .select('id, integration_id, wa_phone_number, pregunta_at, updated_at, en_fila:pregunta_ocr->en_fila, '
-            + 'tipo:pregunta_ocr->>tipo, servicio:pregunta_ocr->venta->>itemNombre')
+            + 'tipo:pregunta_ocr->>tipo, servicio:pregunta_ocr->venta->>itemNombre, '
+            + 'monto:pregunta_ocr->ocr->>amount, pago:pregunta_ocr->ocr->>originName, registro:pregunta_ocr->venta->registro')
         .eq('status', 'waiting_user')
         .lt('updated_at', corte)
         .limit(50);
@@ -4605,7 +5529,7 @@ export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now
         } catch { /* sin detalle: vence igual con el motivo genérico */ }
 
         const motivo = f.tipo === 'asistente_servicio' && f.pregunta_at
-            ? { codigo: 'sin_respuesta' as PorQueVencio, texto: `venta_falta_nombre: no dijo el nombre de quien asiste a ${f.servicio ?? 'el servicio'} en ${HORAS_VIDA_PREGUNTA} h; crear el cobro del servicio a mano con este comprobante` }
+            ? { codigo: 'sin_respuesta' as PorQueVencio, texto: motivoVentaSinNombre(f) }
             : motivoPreguntaVencida({ enviada, enBorrador, enFila: !f.pregunta_at && !!f.en_fila });
         const { data: cerradas } = await supabase.from('whatsapp_inbound_queue')
             .update({

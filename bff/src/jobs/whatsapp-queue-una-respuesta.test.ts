@@ -281,7 +281,9 @@ describe('…8804c0: familia sin cuenta', () => {
         await runWhatsAppQueue();
         expect(updatesCola).toContainEqual({ matched_child_id: 'child-1' });
         expect(mensajesDelBot()).toBe(1);
-        expect(enviados()[0]).toContain('Como todavía no tienes tu cuenta creada');
+        // (2026-11-16) Ya no se habla de la cuenta con un comprobante en la mano.
+        expect(enviados()[0]).toContain('La escuela lo revisa y te confirma por aquí');
+        expect(enviados()[0]).not.toMatch(/cuenta/i);
     });
 
     it('el bot ya dijo debe_registrarse / familia_sin_cuenta en 24 h: UN mensaje corto, sin el párrafo', async () => {
@@ -319,7 +321,7 @@ describe('ráfaga: 2 fotos del mismo contacto en el lote', () => {
         state.primera = false;
         await runWhatsAppQueue();
         expect(mensajesDelBot()).toBe(1);
-        expect(enviados()[0]).toMatch(/^Recibí tus 2 comprobantes 📄 Como todavía no tienes tu cuenta/);
+        expect(enviados()[0]).toMatch(/^Recibí tus 2 comprobantes 📄 La escuela lo revisa y te confirma por aquí/);
     });
 
     it('fotos de DOS contactos distintos no se mezclan', async () => {

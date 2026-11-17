@@ -5,6 +5,7 @@
  * Fast Refresh funcione (un archivo .tsx solo exporta componentes).
  */
 import { buildReceiptOcrFields } from '@/lib/receiptOcrFields';
+import { errorDeRecibido } from '@/lib/payments/constanciaDeRecibido';
 import type { ReceiptValidationResult } from '@/hooks/useReceiptValidator';
 import type { AthleteDuplicate, NewAthletePayload, PaymentPayload, TargetKind } from '@/lib/api/chargeBatches';
 
@@ -64,10 +65,12 @@ export interface PaymentDraft {
     receiptUrl: string | null;
     ocr: ReceiptValidationResult | null;
     wantsEInvoice: boolean;
+    /** Quién del equipo recibió la plata. Obligatorio si no hay comprobante. */
+    receivedBy: string;
 }
 
 export const emptyPaymentDraft = (today: string, on = false): PaymentDraft => ({
-    on, method: 'cash', date: today, reference: '', receiptUrl: null, ocr: null, wantsEInvoice: false,
+    on, method: 'cash', date: today, reference: '', receiptUrl: null, ocr: null, wantsEInvoice: false, receivedBy: '',
 });
 
 /** null si se puede registrar; si no, qué falta. */
@@ -77,6 +80,20 @@ export function paymentDraftError(p: PaymentDraft, today: string): string | null
     if (p.date > today) return 'La fecha del pago no puede ser futura.';
     return null;
 }
+
+/**
+ * Sin comprobante (efectivo, o transferencia sin soporte) falta saber quién recibió la plata.
+ * Va APARTE de paymentDraftError a propósito: no debe frenar la vista previa (el resumen se
+ * sigue viendo mientras se escribe el nombre), solo el botón de confirmar.
+ */
+export function recibidoDraftError(p: PaymentDraft, today: string): string | null {
+    if (!p.on || !sinComprobante(p)) return null;
+    return errorDeRecibido({ metodo: p.method, fecha: p.date, por: p.receivedBy }, today);
+}
+
+/** ¿Este pago se registra SIN comprobante? (efectivo, o transferencia sin soporte adjunto) */
+export const sinComprobante = (p: Pick<PaymentDraft, 'method' | 'receiptUrl'>): boolean =>
+    !(p.method === 'transfer' && p.receiptUrl);
 
 /**
  * `buildReceiptOcrFields` estampa `receipt_verdict_at: new Date()` en cada llamada. El cuerpo se
@@ -101,6 +118,7 @@ export function paymentPayload(p: PaymentDraft): PaymentPayload {
         payment_date: p.date,
         ...(ref ? { reference: ref } : {}),
         ...(withReceipt ? { receipt_url: p.receiptUrl! } : {}),
+        ...(!withReceipt && p.receivedBy.trim() ? { received_by: p.receivedBy.trim() } : {}),
         ...(withReceipt && p.ocr?.imageSha256 ? { receipt_sha256: p.ocr.imageSha256 } : {}),
         // Hash y referencia OCR quedan en UNA fila (la de mayor monto), lo decide la RPC (Q23).
         ...(withReceipt && p.ocr ? { ocr: ocrEstable(p.ocr) } : {}),

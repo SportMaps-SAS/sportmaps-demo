@@ -3,6 +3,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { PaymentOriginBadge } from '@/components/payment/PaymentOriginBadge';
+import { PagoOrigenInsignia } from '@/components/payment/PagoOrigenInsignia';
+import type { OrigenDelPagoInput } from '@/lib/payments/origenDelPago';
 import { StatFilterBar, type StatFilterTone } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
 import { formatDayCO } from '@/lib/dateUtils';
@@ -38,7 +40,7 @@ interface Transaction {
   amount: number;
   isPartial: boolean;
   origin: PaymentOrigin;
-  raw: PaymentOriginInput;
+  raw: OrigenDelPagoInput;
   /** Día + hora + id: orden estable. Ver `sortKey` más abajo. */
   sortKey: string;
 }
@@ -107,7 +109,7 @@ export function TransactionsCard({ payments, onRefresh, refreshing }: Transactio
       amount: Number(p.status === 'partial' ? (p.amount_paid ?? 0) : p.amount),
       isPartial: p.status === 'partial',
       origin: resolvePaymentOrigin(p as unknown as PaymentOriginInput),
-      raw: p as unknown as PaymentOriginInput,
+      raw: p as unknown as OrigenDelPagoInput,
     }))
     .sort((a, b) => b.sortKey.localeCompare(a.sortKey));
 
@@ -187,7 +189,7 @@ export function TransactionsCard({ payments, onRefresh, refreshing }: Transactio
             </div>
             <p className="text-xs text-muted-foreground line-clamp-2">{t.concept}</p>
             <div className="flex items-center justify-between gap-2">
-              <PaymentOriginBadge payment={t.raw} />
+              <PaymentOriginBadge payment={t.raw} /><PagoOrigenInsignia payment={t.raw} />
               <span className="text-[11px] text-muted-foreground whitespace-nowrap shrink-0">
                 {formatDayCO(t.date)}
               </span>
@@ -238,7 +240,7 @@ export function TransactionsCard({ payments, onRefresh, refreshing }: Transactio
                     </Badge>
                   )}
                 </TableCell>
-                <TableCell><PaymentOriginBadge payment={t.raw} /></TableCell>
+                <TableCell><div className="flex flex-col items-start gap-1"><PaymentOriginBadge payment={t.raw} /><PagoOrigenInsignia payment={t.raw} /></div></TableCell>
               </TableRow>
             ))}
           </TableBody>
