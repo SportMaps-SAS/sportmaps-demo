@@ -31,6 +31,8 @@ export interface CobroCuenta {
   wompi_reference?: string | null;
   wompi_transaction_id?: string | null;
   provider_transaction_id?: string | null;
+  /** payments.reference: «XLS-…» = cobro cargado desde el Excel (solo la escuela lo ve). */
+  reference?: string | null;
 }
 
 /** Estados que `/my-payments?pay=<id>` abre directo en el checkout (MyPaymentsPage). */

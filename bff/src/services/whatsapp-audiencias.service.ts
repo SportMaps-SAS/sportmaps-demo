@@ -31,6 +31,7 @@ import { intencionDeProspecto, interesesDeProspecto } from './whatsapp-atencion.
 import { esMarcaNoFamilia } from './whatsapp-tipo-contacto';
 import { EVENTO_DE_SERVICIO, EVENTO_CLINICA, EVENTO_VACACIONAL, EVENTO_CAMPAMENTO } from './whatsapp-reglas-turno';
 import { enmascararNumero } from './avisos-correo.service';
+import { leerOptinsDeContactos } from './whatsapp-optin.service';
 import {
     leerAjustesCampanas, type InteresAudiencia, type PalabrasDeSede,
 } from './whatsapp-campanas.service';
@@ -170,6 +171,8 @@ export interface ResultadoAudiencia {
     excluidos: Record<string, number>;
     guardados: number;
     muestra: { telefono: string; intereses: string[]; sede: string | null; excluido: string | null; evidencia: string | null }[];
+    /** Solo con `opts.conFilas` (simulaciones): una fila por contacto clasificado, para cruzarla sin escribir nada. */
+    filas?: { contact_wa_id: string; intereses: string[]; excluido: string | null; ultimo_entrante_at: string | null }[];
 }
 
 function vacio(estado: ResultadoAudiencia['estado'], detalle?: string): ResultadoAudiencia {
@@ -270,7 +273,7 @@ export function ultimoEntrante(lastInboundAt: string | null | undefined, ultimoL
  */
 export async function clasificarEscuela(
     schoolId: string,
-    opts: { aplicar?: boolean; completo?: boolean; ahora?: number } = {},
+    opts: { aplicar?: boolean; completo?: boolean; ahora?: number; conFilas?: boolean } = {},
 ): Promise<ResultadoAudiencia> {
     const ahora = opts.ahora ?? Date.now();
     try {
@@ -364,11 +367,11 @@ export async function clasificarEscuela(
                 const m = f.motivo as MotivoExclusion;
                 if (MOTIVOS_EXCLUSION.has(m) && !excluidoPorWa.has(f.contact_wa_id)) excluidoPorWa.set(f.contact_wa_id, m);
             }
-            const { data: optins } = await supabase.from('whatsapp_optins')
-                .select('contact_wa_id, opted_in_at, opted_out_at')
-                .eq('integration_id', integrationId).in('contact_wa_id', lote);
-            for (const o of (optins as any[]) ?? []) {
-                const baja = o.opted_out_at && (!o.opted_in_at || new Date(o.opted_out_at) >= new Date(o.opted_in_at));
+            const optins = await leerOptinsDeContactos(integrationId, lote);
+            for (const o of optins) {
+                // Baja total vigente o baja de promociones (botón «No recibir más»).
+                const baja = o.promos_out_at
+                    || (o.opted_out_at && (!o.opted_in_at || new Date(o.opted_out_at) >= new Date(o.opted_in_at)));
                 if (baja) excluidoPorWa.set(String(o.contact_wa_id), 'baja');
             }
         }
@@ -408,6 +411,11 @@ export async function clasificarEscuela(
             for (const i of f.intereses) r.porInteres[i] = (r.porInteres[i] ?? 0) + 1;
             const s = f.branch_id ?? 'sin_sede';
             r.porSede[s] = (r.porSede[s] ?? 0) + 1;
+        }
+        if (opts.conFilas) {
+            r.filas = filas.map((f) => ({
+                contact_wa_id: f.contact_wa_id, intereses: f.intereses, excluido: f.excluido, ultimo_entrante_at: f.ultimo_entrante_at,
+            }));
         }
         r.muestra = candidatos.slice(0, 20).map(({ conv, cl, entrantes }) => ({
             telefono: enmascararNumero(conv.contact_wa_id),

@@ -8,9 +8,14 @@
  * calidad del número.
  *
  * La pantalla es simple a propósito: la tarjeta dice «Lista: N personas ·
- * [Aprobar y enviar]», con la declaración de la escuela cuando la base es el
- * contacto previo, y después el avance con Pausar / Reanudar. Lo demás
- * (activar, palabras de sede, topes) lo configura SportMaps.
+ * [Aprobar y enviar]», con la declaración de responsabilidad en CADA
+ * aprobación, y después el avance con Pausar / Reanudar.
+ *
+ * La escuela autogestiona sus campañas (spec whatsapp-autoservicio, 2026-11-15):
+ * las ACTIVA ella misma aceptando la declaración, y si el sistema las pausa, las
+ * reanuda viendo el motivo y aceptándolo. SportMaps solo pone las barreras
+ * (topes, horarios, pausa automática) y un freno de emergencia que la escuela
+ * no puede levantar.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { bffClient } from '@/lib/api/bffClient';
@@ -21,7 +26,8 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Loader2, Megaphone, Pause, Play, Plus, ShieldAlert } from 'lucide-react';
+import { BarChart3, Loader2, Megaphone, Pause, Play, Plus, ShieldAlert } from 'lucide-react';
+import { ReporteDeCampana } from './ReporteDeCampana';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
 
@@ -35,6 +41,8 @@ export interface CampanaVista {
     filtro: { intereses?: string[]; branch_ids?: string[] } | null;
     respuesta_si: string | null; destinatarios: number | null; aprobada_at: string | null; vence_at: string | null;
     pausa_motivo: string | null; conteo_previsto: number | null; avance: Avance | null;
+    /** Servicio del catálogo que vende la campaña: quien ya lo pagó o abonó no la recibe. */
+    servicio_id?: string | null; servicio_nombre?: string | null; ya_compraron?: number | null;
 }
 interface PlantillaMarketing {
     nombre: string; idioma: string; estado: string; lista: boolean; motivo: string | null; texto: string; botones: string[];
@@ -53,9 +61,21 @@ export interface ResumenCampanas {
     habilitadas?: boolean;
     integracion?: string;
     cupo?: CupoCampanas | null;
-    ajustes?: { base_consentimiento: string; tope_diario: number; lote_piloto: number; pausada: boolean; pausa_motivo: string | null };
+    ajustes?: {
+        base_consentimiento: string; tope_diario: number; lote_piloto: number; pausada: boolean; pausa_motivo: string | null;
+        /** 'plataforma' = freno de emergencia de SportMaps: la escuela no lo levanta. */
+        pausa_origen?: 'freno' | 'escuela' | 'plataforma' | null;
+        /** Lo que la escuela acepta al reanudar tras la pausa automática. */
+        aceptacion?: string | null;
+    };
+    /** Declaración que la escuela acepta para activar (apagadas, o prendidas sin haberla aceptado). */
+    activacion?: { version: string; texto: string } | null;
+    falta_activacion?: boolean;
+    /** Freno global de SportMaps: ninguna escuela aprueba ni envía por ahora. */
+    pausa_global?: boolean;
     audiencia?: { total: number; porInteres: Record<string, number>; porSede: Record<string, number> };
     sedes?: { id: string; nombre: string }[];
+    servicios?: { id: string; nombre: string }[];
     plantillas?: PlantillaMarketing[];
     declaracion?: { version: string; texto: string } | null;
     campanas?: CampanaVista[];
@@ -89,16 +109,24 @@ export function motivoDePausa(m: string | null | undefined): string {
         muchos_fallos: 'muchos mensajes no se pudieron entregar',
         sin_integracion: 'tu número de WhatsApp está desconectado',
         escuela_en_pausa: 'las campañas de tu escuela están en pausa',
+        pausa_de_plataforma: 'el equipo de SportMaps las pausó para proteger tu número',
     };
     return (m && t[m]) || 'revisa la campaña';
 }
 
 const ERRORES: Record<string, string> = {
     falta_declaracion: 'Falta confirmar la declaración.',
-    plantilla_no_lista: 'Meta todavía no aprueba el mensaje.',
+    plantilla_no_lista: 'Meta todavía no aprueba el mensaje. Cuando lo apruebe, vuelve y aprueba la campaña.',
+    falta_interes: 'Elige al menos un interés: la campaña va a quienes preguntaron por ese tema, no a toda la lista.',
     campanas_apagadas: 'Las campañas están apagadas para tu escuela.',
     escuela_en_pausa: 'Tus campañas están en pausa.',
     no_es_borrador: 'Esta campaña ya fue aprobada.',
+    falta_activacion: 'Primero activa las campañas aceptando la declaración.',
+    falta_aceptacion: 'Marca que viste el motivo de la pausa.',
+    solo_la_escuela: 'Esto solo lo puede hacer la administración de la escuela.',
+    pausa_global: 'SportMaps pausó temporalmente todas las campañas. Te avisamos cuando vuelvan.',
+    pausa_de_plataforma: 'El equipo de SportMaps pausó tus campañas. Escríbenos para revisarlo.',
+    sin_destinatarios: 'Nadie de la lista puede recibir este mensaje ahora.',
 };
 
 /** Enviados hasta ahora (lo que ya salió, con o sin respuesta). */
@@ -119,6 +147,12 @@ export function textoLimiteMeta(c: CupoCampanas): string {
     return `Límite de Meta: ${c.limite_meta} personas distintas cada 24 h${supuesto}${usados}`;
 }
 
+/** El id de campaña de `?campana=<uuid>` en la dirección, o null. */
+export function campanaDelEnlace(search: string = typeof window === 'undefined' ? '' : window.location.search): string | null {
+    const id = new URLSearchParams(search).get('campana') ?? '';
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id : null;
+}
+
 // ─── Componente ─────────────────────────────────────────────────────────────
 
 export function Campanas({ schoolId }: { schoolId: string }) {
@@ -128,8 +162,12 @@ export function Campanas({ schoolId }: { schoolId: string }) {
     const [ocupado, setOcupado] = useState<string | null>(null);
     const [aprobando, setAprobando] = useState<string | null>(null);
     const [acepto, setAcepto] = useState(false);
+    const [aceptoActivar, setAceptoActivar] = useState(false);
+    const [aceptoMotivo, setAceptoMotivo] = useState(false);
     const [creando, setCreando] = useState(false);
-    const [nueva, setNueva] = useState({ nombre: '', plantilla: '', intereses: [] as string[], respuestaSi: '' });
+    // Campaña cuyo reporte está abierto. `?campana=<id>` lo abre de una (el enlace del aviso al equipo de SportMaps).
+    const [reporteDe, setReporteDe] = useState<string | null>(() => campanaDelEnlace());
+    const [nueva, setNueva] = useState({ nombre: '', plantilla: '', intereses: [] as string[], respuestaSi: '', servicioId: '', venceAt: '' });
 
     const base = `/api/v1/whatsapp/${schoolId}/campanas`;
 
@@ -152,6 +190,36 @@ export function Campanas({ schoolId }: { schoolId: string }) {
             await cargar();
         } catch (e: any) {
             toast({ title: 'No se pudo', description: e?.message, variant: 'destructive' });
+        } finally {
+            setOcupado(null);
+        }
+    };
+
+    /** La escuela prende sus campañas aceptando la declaración (queda registrada con su usuario y la fecha). */
+    const activar = async () => {
+        setOcupado('activar');
+        try {
+            await bffClient.post(`${base}/activar`, { declaracion_aceptada: aceptoActivar });
+            toast({ title: 'Campañas activadas', description: 'Ya puedes crear tu primera campaña.' });
+            setAceptoActivar(false);
+            await cargar();
+        } catch (e: any) {
+            toast({ title: 'No se pudieron activar', description: ERRORES[e?.body?.error] ?? e?.message, variant: 'destructive' });
+        } finally {
+            setOcupado(null);
+        }
+    };
+
+    /** Levanta la pausa de la escuela (viendo y aceptando el motivo si la puso el sistema). */
+    const reanudarEscuela = async () => {
+        setOcupado('escuela');
+        try {
+            await bffClient.post(`${base}/reanudar-escuela`, { acepto_motivo: aceptoMotivo });
+            toast({ title: 'Pausa levantada', description: 'Reanuda cada campaña cuando quieras.' });
+            setAceptoMotivo(false);
+            await cargar();
+        } catch (e: any) {
+            toast({ title: 'No se pudo reanudar', description: ERRORES[e?.body?.error] ?? e?.message, variant: 'destructive' });
         } finally {
             setOcupado(null);
         }
@@ -180,10 +248,13 @@ export function Campanas({ schoolId }: { schoolId: string }) {
             await bffClient.post(base, {
                 nombre: nueva.nombre, plantilla: nueva.plantilla,
                 filtro: { intereses: nueva.intereses }, respuesta_si: nueva.respuestaSi || null,
+                servicio_id: nueva.servicioId || null,
+                // Fin del día elegido, hora de Bogotá: después de eso lo que falte ya no sale.
+                vence_at: nueva.venceAt ? `${nueva.venceAt}T23:59:00-05:00` : null,
             });
             toast({ title: 'Campaña creada', description: 'Revisa la lista y apruébala cuando quieras.' });
             setCreando(false);
-            setNueva({ nombre: '', plantilla: '', intereses: [], respuestaSi: '' });
+            setNueva({ nombre: '', plantilla: '', intereses: [], respuestaSi: '', servicioId: '', venceAt: '' });
             await cargar();
         } catch (e: any) {
             toast({ title: 'No se pudo crear', description: e?.message, variant: 'destructive' });
@@ -207,12 +278,12 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                         Un mensaje, una sola vez, a quienes te preguntaron por clases, con la opción «No recibir más».
                     </CardDescription>
                 </CardHeader>
-                <CardContent>
-                    <p className="text-sm text-muted-foreground">
-                        {resumen.disponible
-                            ? 'Están apagadas para tu escuela. Escríbele a SportMaps para activarlas.'
-                            : 'Todavía no están disponibles.'}
-                    </p>
+                <CardContent className="space-y-3">
+                    {!resumen.disponible && <p className="text-sm text-muted-foreground">Todavía no están disponibles.</p>}
+                    {resumen.disponible && resumen.activacion && (
+                        <DeclaracionDeActivacion texto={resumen.activacion.texto} acepto={aceptoActivar} setAcepto={setAceptoActivar}
+                            ocupado={ocupado !== null} onActivar={() => void activar()} />
+                    )}
                 </CardContent>
             </Card>
         );
@@ -228,14 +299,60 @@ export function Campanas({ schoolId }: { schoolId: string }) {
 
     return (
         <div className="space-y-4">
-            {resumen.ajustes?.pausada && (
+            {resumen.pausa_global && (
                 <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20">
                     <CardContent className="pt-6 flex gap-3 text-sm">
                         <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0" />
-                        <p>
-                            <span className="font-medium">Tus campañas están en pausa</span> porque {motivoDePausa(resumen.ajustes.pausa_motivo)}.
-                            Así cuidamos tu número. Reanuda la campaña cuando lo hayas revisado.
-                        </p>
+                        <p><span className="font-medium">Las campañas están detenidas por SportMaps</span> para todas las escuelas, por
+                            precaución. No se aprueba ni se envía nada hasta que las reactivemos; tus borradores no se pierden.</p>
+                    </CardContent>
+                </Card>
+            )}
+
+            {resumen.falta_activacion && resumen.activacion && (
+                <Card data-testid="falta-activacion">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-base">Antes de aprobar una campaña, acepta la declaración</CardTitle>
+                        <CardDescription>Se acepta una sola vez. Queda registrada con tu usuario y la fecha.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <DeclaracionDeActivacion texto={resumen.activacion.texto} acepto={aceptoActivar} setAcepto={setAceptoActivar}
+                            ocupado={ocupado !== null} onActivar={() => void activar()} />
+                    </CardContent>
+                </Card>
+            )}
+
+            {resumen.ajustes?.pausada && (
+                <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/20" data-testid="pausa-escuela">
+                    <CardContent className="pt-6 flex gap-3 text-sm">
+                        <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0" />
+                        <div className="space-y-3">
+                            <p>
+                                <span className="font-medium">Tus campañas están en pausa</span> porque{' '}
+                                {resumen.ajustes.pausa_origen === 'plataforma'
+                                    ? motivoDePausa('pausa_de_plataforma')
+                                    : motivoDePausa(resumen.ajustes.pausa_motivo)}. Así cuidamos tu número.
+                            </p>
+                            {resumen.ajustes.pausa_origen === 'plataforma' ? (
+                                <p>Esta pausa solo la puede levantar SportMaps. Escríbenos y la revisamos contigo.</p>
+                            ) : (
+                                <>
+                                    {resumen.ajustes.aceptacion && (
+                                        <label className="flex items-start gap-2">
+                                            <input type="checkbox" className="mt-1" checked={aceptoMotivo}
+                                                onChange={(e) => setAceptoMotivo(e.target.checked)} aria-label="Vi el motivo de la pausa" />
+                                            <span>{resumen.ajustes.aceptacion}</span>
+                                        </label>
+                                    )}
+                                    <Button size="sm" disabled={ocupado !== null || (!!resumen.ajustes.aceptacion && !aceptoMotivo)}
+                                        onClick={() => void reanudarEscuela()}>
+                                        {ocupado === 'escuela' && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                                        <Play className="h-4 w-4 mr-1" /> Levantar la pausa
+                                    </Button>
+                                    <p className="text-xs text-muted-foreground">Después reanudas cada campaña con su botón «Reanudar».</p>
+                                </>
+                            )}
+                        </div>
                     </CardContent>
                 </Card>
             )}
@@ -313,6 +430,27 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                                 </div>
                                 <p className="text-xs text-muted-foreground mt-1">Sin marcar ninguno, va a todos.</p>
                             </div>
+                            {(resumen.servicios?.length ?? 0) > 0 && (
+                                <div>
+                                    <Label htmlFor="campana-servicio">¿Vende un servicio de tu catálogo?</Label>
+                                    <select id="campana-servicio" className="w-full border rounded-md h-10 px-2 bg-background text-sm"
+                                        value={nueva.servicioId} onChange={(e) => setNueva({ ...nueva, servicioId: e.target.value })}>
+                                        <option value="">No, es una campaña general</option>
+                                        {resumen.servicios!.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                                    </select>
+                                    <p className="text-xs text-muted-foreground mt-1">
+                                        Si eliges uno, quien ya lo pagó o abonó no recibe la campaña.
+                                    </p>
+                                </div>
+                            )}
+                            <div>
+                                <Label htmlFor="campana-vence">¿Hasta qué día vale? (opcional)</Label>
+                                <Input id="campana-vence" type="date" value={nueva.venceAt}
+                                    onChange={(e) => setNueva({ ...nueva, venceAt: e.target.value })} />
+                                <p className="text-xs text-muted-foreground mt-1">
+                                    Ponla si el mensaje tiene fecha límite: pasado ese día, lo que falte por enviar ya no sale.
+                                </p>
+                            </div>
                             <div>
                                 <Label htmlFor="campana-si">Lo que respondes cuando tocan «Sí»</Label>
                                 <Textarea id="campana-si" rows={3} value={nueva.respuestaSi} maxLength={1024}
@@ -350,8 +488,21 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                             {c.estado === 'borrador' && (
                                 <>
                                     <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <span className="font-medium">Lista: {c.conteo_previsto ?? 0} personas</span>
-                                        <Button size="sm" disabled={ocupado !== null || !c.conteo_previsto || plantilla?.lista === false}
+                                        <div>
+                                            <span className="font-medium">Lista: {c.conteo_previsto ?? 0} personas</span>
+                                            {!!c.ya_compraron && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    {c.ya_compraron} ya pagaron o abonaron {c.servicio_nombre ?? 'el servicio'} y no la reciben.
+                                                </p>
+                                            )}
+                                            {c.vence_at && (
+                                                <p className="text-xs text-muted-foreground">
+                                                    Vale hasta el {new Date(c.vence_at).toLocaleDateString('es-CO', { timeZone: 'America/Bogota' })}.
+                                                </p>
+                                            )}
+                                        </div>
+                                        <Button size="sm" disabled={ocupado !== null || !c.conteo_previsto || plantilla?.lista === false
+                                            || !!resumen.falta_activacion || !!resumen.pausa_global || !!resumen.ajustes?.pausada}
                                             onClick={() => { setAprobando(aprobando === c.id ? null : c.id); setAcepto(false); }}>
                                             Aprobar y enviar
                                         </Button>
@@ -409,8 +560,16 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                                         </Button>
                                     )}
                                     {c.estado === 'pausada' && (
-                                        <Button size="sm" disabled={ocupado !== null} onClick={() => void accion(c.id, 'reanudar')}>
+                                        <Button size="sm" disabled={ocupado !== null || !!resumen.ajustes?.pausada || !!resumen.pausa_global}
+                                            title={resumen.ajustes?.pausada ? 'Primero levanta la pausa de la escuela (arriba).' : undefined}
+                                            onClick={() => void accion(c.id, 'reanudar')}>
                                             <Play className="h-4 w-4 mr-1" /> Reanudar
+                                        </Button>
+                                    )}
+                                    {(c.estado === 'aprobada' || c.estado === 'enviando' || c.estado === 'pausada' || c.estado === 'terminada') && (
+                                        <Button size="sm" variant="outline" className={c.estado === 'terminada' ? undefined : 'ml-2'}
+                                            onClick={() => setReporteDe(c.id)}>
+                                            <BarChart3 className="h-4 w-4 mr-1" /> Ver reporte
                                         </Button>
                                     )}
                                 </>
@@ -419,6 +578,27 @@ export function Campanas({ schoolId }: { schoolId: string }) {
                     </Card>
                 );
             })}
+
+            {reporteDe && (
+                <ReporteDeCampana schoolId={schoolId} campanaId={reporteDe} abierto
+                    nombre={campanas.find((c) => c.id === reporteDe)?.nombre} onCerrar={() => setReporteDe(null)} />
+            )}
+        </div>
+    );
+}
+
+/** La declaración de responsabilidad que la escuela acepta UNA vez para usar campañas. */
+function DeclaracionDeActivacion(p: {
+    texto: string; acepto: boolean; setAcepto: (v: boolean) => void; ocupado: boolean; onActivar: () => void;
+}) {
+    return (
+        <div className="border rounded-lg p-3 space-y-3 bg-muted/30 text-sm">
+            <label className="flex items-start gap-2">
+                <input type="checkbox" className="mt-1" checked={p.acepto}
+                    onChange={(e) => p.setAcepto(e.target.checked)} aria-label="Acepto la declaración de responsabilidad" />
+                <span>{p.texto}</span>
+            </label>
+            <Button size="sm" disabled={p.ocupado || !p.acepto} onClick={p.onActivar}>Aceptar y activar campañas</Button>
         </div>
     );
 }

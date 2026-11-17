@@ -301,14 +301,34 @@ describe('(b) número sin ficha', () => {
         expect(cierre()).toMatchObject({ status: 'done', result_ref_id: 'p-oct' });
     });
 
-    it('solo un nombre PARECIDO (no completo) → nada se liga: la pregunta escrita, sin botones', async () => {
+    // (R5, auditoría 1–16 nov 2026) Antes este caso esperaba la pregunta escrita aunque el deportista parecido
+    // tuviera un cobro abierto por ESE monto. La regla nueva: con nombre + apellido (coincidencia única) y un cobro
+    // por ese valor, no se pregunta ni se aplica solo: a la bandeja con la propuesta exacta. Sin un cobro por ese
+    // valor, la pregunta escrita sigue (caso de abajo).
+    it('solo un nombre PARECIDO (no completo) y SIN un cobro por ese monto → nada se liga: la pregunta escrita, sin botones', async () => {
         state.claim = [FILA('f1', { media_caption: 'pago de Laura' })];
         deportistaPorNombreSinVerificarMock.mockResolvedValue({ exacta: null, parecida: { id: 'c1', nombre: 'Laura Peña', tipo: 'child' } });
-        pendientesPorLlavesMock.mockResolvedValue([OCT]);
+        pendientesPorLlavesMock.mockResolvedValue([{ ...OCT, amount: 180000 }]);
         await runWhatsAppQueue();
         expect(sendInteractiveButtonsMock).not.toHaveBeenCalled();
         expect(enviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
         expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+    });
+
+    it('(R5) pie «comprobante de pago LAURA PEÑA» desde un número que no está en la ficha, con un cobro abierto por ese monto → ACCIÓN con la propuesta exacta; no se pregunta ni se aplica', async () => {
+        state.claim = [FILA('f1', { media_caption: 'comprobante de pago LAURA PEÑA' })];
+        deportistaPorNombreSinVerificarMock.mockResolvedValue({ exacta: null, parecida: { id: 'c1', nombre: 'Laura Sofía Peña Ruiz', tipo: 'child' } });
+        pendientesPorLlavesMock.mockResolvedValue([OCT]);
+        await runWhatsAppQueue();
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+        // A quien escribe: que llegó y que la escuela lo valida. Ni el nombre, ni el mes, ni el cobro.
+        expect(enviados()).toEqual(['Gracias 🙏 Le paso tu comprobante a la escuela para que lo revise y te confirme por aquí.']);
+        const c = cierre();
+        expect(c).toMatchObject({ status: 'ignored', result_type: 'escalated', matched_child_id: 'c1' });
+        expect(c.error_message).toMatch(/^sin_familia: numero_fuera_de_la_ficha — parece el pago de octubre de Laura Sofía Peña Ruiz: \$150\.000; el número no está en su ficha/);
+        expect(c.error_message).toContain('aplicar al cobro p-oct');
+        expect(c.error_message).toContain('ligar el número');
+        expect(c.pregunta_ocr).toMatchObject({ sha: expect.any(String), ocr: { amount: 150000, originName: 'Pedro Gómez' } });
     });
 
     it('a una cuenta que no es de la escuela → sin responderle, pero a la bandeja como destino_ajeno (nunca se ignora un comprobante)', async () => {
@@ -380,9 +400,29 @@ describe('(d) sin cobros pendientes', () => {
         expect(cierre()).toMatchObject({ status: 'ignored', result_type: 'none', result_ref_id: 'p-oct' });
     });
 
-    it('nada coincide → el mensaje de siempre', async () => {
+    // (R2, auditoría 1–16 nov 2026) Antes: «…no tienes cobros pendientes ✅» y la fila cerraba informativa
+    // (`sin pagos pendientes`, sin escalar): 13 comprobantes reales quedaron así, al menos 3 eran pagos de otra cosa.
+    // Ahora un comprobante REAL queda en ACCIÓN con el monto y la propuesta, y la familia recibe otra respuesta.
+    it('nada coincide y es un comprobante real → ACCIÓN con monto y propuesta; a la familia, que lo revisa la escuela', async () => {
+        await runWhatsAppQueue();
+        expect(enviados()).toHaveLength(1);
+        expect(enviados()[0]).toContain('Recibí tu comprobante de *$150.000*');
+        expect(enviados()[0]).toContain('no te aparece ningún cobro pendiente');
+        expect(enviados()[0]).not.toMatch(/registrad|aplicad/i);
+        const c = cierre();
+        expect(c).toMatchObject({ status: 'ignored', result_type: 'escalated', matched_parent_id: 'parent-1' });
+        expect(c.error_message).toMatch(/^sin_pendientes: pagó \$150\.000 y no tiene cobros abiertos: puede ser otro concepto o un mes que no se ha generado/);
+        expect(c.error_message).toContain('Propuesta → pagó: Pedro Gómez');
+        expect(c.pregunta_ocr).toMatchObject({ ocr: { amount: 150000, reference: 'REF-EJEMPLO-1', originName: 'Pedro Gómez' } });
+    });
+
+    it('nada coincide y la lectura NO muestra un pago (sin referencia ni banco) → el mensaje de siempre, pero la lectura queda guardada (R1)', async () => {
+        extractReceiptMock.mockResolvedValue(comprobante(150000, { reference: null, bank: null, date: null }));
         await runWhatsAppQueue();
         expect(enviados()[0]).toContain('no tienes cobros pendientes');
+        const c = cierre();
+        expect(c).toMatchObject({ status: 'ignored', result_type: 'none', error_message: 'sin pagos pendientes' });
+        expect(c.pregunta_ocr).toMatchObject({ sha: expect.any(String), ocr: { amount: 150000, originName: 'Pedro Gómez' } });
     });
 });
 

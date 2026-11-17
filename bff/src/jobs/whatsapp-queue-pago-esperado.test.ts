@@ -292,8 +292,12 @@ describe('A. monto menor a la cuota → abono en revisión (el plan NO se cambia
         expect(enviados()[0]).toContain('Listo: abono de *$150.000* de *Laura* para *octubre*. La escuela lo confirma.');
         expect(enviados()[0]).toMatch(/Quedan \*\$\s?30\.000\*/);
         const c = cierre();
-        expect(c).toMatchObject({ status: 'done', result_type: 'payment_receipt', result_ref_id: 'p-oct' });
-        expect(c.error_message).toMatch(/^abono_en_revision: Propuesta → deportista: Laura Peña/);
+        // (R9, auditoría 1–16 nov 2026) Antes la fila quedaba `done` con el motivo empezando por «abono_en_revision:»:
+        // resuelta e invisible en la bandeja ($110.000 sobre $150.000 nadie lo vio). El comprobante sigue en el
+        // MISMO cobro, que no cambia de estado; la fila ahora es `ignored` + `payment_receipt` para que la bandeja la
+        // muestre en ACCIÓN con los dos valores, y conserva detrás la propuesta del abono.
+        expect(c).toMatchObject({ status: 'ignored', result_type: 'payment_receipt', result_ref_id: 'p-oct' });
+        expect(c.error_message).toMatch(/^monto_distinto_aplicado: comprobante de \$150\.000 aplicado a .*, que vale \$180\.000 \(faltan \$30\.000\): revisar antes de aprobar \| abono_en_revision: Propuesta → deportista: Laura Peña/);
         expect(c.error_message).toContain('el plan NO se cambia');
     });
 

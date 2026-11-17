@@ -37,6 +37,7 @@ import { runWhatsAppPlantillasSync } from './whatsapp-plantillas-sync.job';
 import { runWhatsAppResumenDiario } from './whatsapp-resumen-diario.job';
 import { runBotResumenSemanal } from './bot-resumen-semanal.job';
 import { runInformeCalidadBotSemanal } from '../services/informe-calidad-bot.service';
+import { runWhatsAppVigilante } from '../services/whatsapp-vigilante.service';
 import { runInformeCarteraSemanal } from '../services/informe-cartera.service';
 import { runFranjasCortesia } from '../services/franjas-cortesia.service';
 import { anularCobrosSueltosVencidos } from '../services/ventas-servicios.service';
@@ -874,6 +875,28 @@ export function initMaintenanceJobs() {
     }, { timezone: 'America/Bogota' });
 
     console.log('[CRON] Informe de calidad del bot registrado para los lunes 08:00 COT.');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // VIGILANTE del bot de WhatsApp a SportMaps — lunes a sábado 07:15 COT, con
+    // ticks hasta las 10:15 para recoger un BFF dormido o reiniciado. Por
+    // escuela con WhatsApp: comprobantes sin desenlace, preguntas pasadas a la
+    // escuela sin respuesta, clientes sin respuesta, afirmaciones del bot por
+    // verificar y repeticiones. Uno por día entre los tres BFF (email_sends,
+    // clave por fecha; el tick que llega tarde gasta una sola consulta).
+    // Destino: SUPPORT_ALERT_EMAIL. Kill-switch: DISABLE_WHATSAPP_VIGILANTE.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('15 7-10 * * 1-6', async () => {
+        if (process.env.DISABLE_WHATSAPP_VIGILANTE === 'true') return;
+        try {
+            const r = await runWhatsAppVigilante();
+            if (r !== 'duplicado') console.log(`[CRON] Vigilante del bot de WhatsApp: ${r}.`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el vigilante del bot de WhatsApp:', err?.message || err);
+        }
+    }, { timezone: 'America/Bogota' });
+
+    console.log('[CRON] Vigilante del bot de WhatsApp registrado de lunes a sábado 07:15 COT.');
 
     // ────────────────────────────────────────────────────────────────────────
     // Informe de CARTERA semanal a owner + admins — lunes 07:10 COT, con ticks

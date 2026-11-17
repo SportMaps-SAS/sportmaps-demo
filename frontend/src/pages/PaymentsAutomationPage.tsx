@@ -55,6 +55,7 @@ import { ReconciliationTab } from '@/components/payment/ReconciliationTab';
 import { CreateGlosaDialog } from '@/components/payment/CreateGlosaDialog';
 import { listBySchool as listSchoolGlosas, REASON_ADMIN_LABELS, STATUS_LABELS, OPEN_GLOSA_STATUSES, type Glosa } from '@/lib/api/glosas';
 import { PaymentOriginBadge } from '@/components/payment/PaymentOriginBadge';
+import { PagoOrigenInsignia } from '@/components/payment/PagoOrigenInsignia';
 import { FailedAttemptChip } from '@/components/payment/FailedAttemptChip';
 import { isGatewayPayment } from '@/lib/paymentOrigin';
 import { PaymentAccountsEditor } from '@/components/payment/PaymentAccountsEditor';
@@ -464,6 +465,8 @@ interface PaymentTransaction {
   wompi_transaction_id?: string | null;
   provider_transaction_id?: string | null;
   qr_id?: string | null;
+  /** payments.reference: «XLS-…» marca los cobros cargados desde el Excel de la escuela. */
+  reference?: string | null;
   /** Sede del cobro (payments.branch_id). NULL = «Sin sede»: solo se ve en «Todas». */
   branch_id?: string | null;
   /** Prospecto que originó el cobro (clase de prueba, servicio vendido por el bot). */
@@ -884,7 +887,7 @@ export default function PaymentsAutomationPage() {
           unregistered_athlete_id, early_payment_discount_applied, signup_lead_id,
           period_year, period_month, payment_category,
           payment_channel, payment_provider, wompi_reference, wompi_transaction_id,
-          provider_transaction_id, qr_id,
+          provider_transaction_id, qr_id, reference,
           ocr_amount, ocr_currency, ocr_date, ocr_bank, ocr_reference, ocr_provider,
           receipt_verdict, ocr_destination, ocr_destination_name, receipt_verdict_reasons, reconciliation_status,
           receipt_verdict_at,
@@ -1041,6 +1044,7 @@ export default function PaymentsAutomationPage() {
         wompi_transaction_id: p.wompi_transaction_id ?? null,
         provider_transaction_id: p.provider_transaction_id ?? null,
         qr_id: p.qr_id ?? null,
+        reference: p.reference ?? null,
         unregistered_athlete_id: p.unregistered_athlete_id,
         early_payment_discount_applied: p.early_payment_discount_applied,
         ocr_amount: p.ocr_amount, ocr_currency: p.ocr_currency,
@@ -2523,7 +2527,7 @@ export default function PaymentsAutomationPage() {
                         <div className="flex items-center gap-2 min-w-0">
                           {/* Misma corrección que en la tabla: la fecha del pago, no la de emisión. */}
                           <p className="text-xs text-muted-foreground whitespace-nowrap">{reportedDate(payment)}</p>
-                          <PaymentOriginBadge payment={payment} compact />
+                          <PaymentOriginBadge payment={payment} compact /><PagoOrigenInsignia payment={payment} />
                         </div>
                         {payment.receipt_url && (
                           <Button variant="ghost" size="sm" className="h-7 text-blue-600 hover:bg-blue-50 shrink-0" onClick={() => handleShowProof(payment)}>
@@ -2612,7 +2616,7 @@ export default function PaymentsAutomationPage() {
                           <TableCell className="font-semibold"><MontoRecibido payment={payment} /></TableCell>
                           {/* Antes: {payment.payment_method || 'TRANSFER'} — inventaba
                               "TRANSFER" en los pagos sin método registrado. */}
-                          <TableCell><PaymentOriginBadge payment={payment} /></TableCell>
+                          <TableCell><div className="flex flex-col items-start gap-1"><PaymentOriginBadge payment={payment} /><PagoOrigenInsignia payment={payment} /></div></TableCell>
                           <TableCell>
                             <Badge variant="outline" className={`text-xs ${cfg.className}`}>{cfg.label}</Badge>
                             {/* El intento fallido es un hecho aparte del estado: el cobro

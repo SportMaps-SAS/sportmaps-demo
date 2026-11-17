@@ -51,3 +51,68 @@ export async function estaDadoDeBaja(
  */
 export const AVISO_DADO_DE_BAJA =
     '\n\n_Tienes las notificaciones de la escuela apagadas. Escríbeme *ACTIVAR* si quieres volver a recibirlas._';
+
+// ─── Baja de PROMOCIONES (2026-11-15, migración 20261115143758) ─────────────
+// Distinta de la baja total (`opted_out_at`): quien toca «No recibir más» en una
+// campaña deja de recibir promociones, pero sigue recibiendo sus avisos de pago.
+
+/** Registra la baja de promociones (botón de campaña). Nunca toca la baja total. Nunca lanza. */
+export async function registrarBajaDePromos(
+    integration: { id: string; school_id: string }, contactWaId: string, ref: string | null,
+): Promise<boolean> {
+    try {
+        const { error } = await supabase.rpc('wa_registrar_baja_promos', {
+            p_integration_id: integration.id, p_school_id: integration.school_id,
+            p_contact_wa_id: contactWaId, p_ref: ref,
+        });
+        if (error) console.error('[whatsapp-optin] wa_registrar_baja_promos', { err: error.message });
+        return !error;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Levanta la baja de promociones porque la PERSONA lo pidió (escribió ACTIVAR o
+ * aceptó recibir novedades). Una inscripción o una invitación no llaman acá.
+ * true = había una baja y se levantó. Nunca lanza.
+ */
+export async function levantarBajaDePromos(integrationId: string, contactWaId: string): Promise<boolean> {
+    try {
+        const { data, error } = await supabase.rpc('wa_reactivar_promos', {
+            p_integration_id: integrationId, p_contact_wa_id: contactWaId,
+        });
+        if (error) console.error('[whatsapp-optin] wa_reactivar_promos', { err: error.message });
+        return !error && data === true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * ¿Esta fila de `whatsapp_optins` saca a la persona de las promociones? Baja total
+ * vigente o baja de promociones. Pura.
+ */
+export function sinPromociones(o: { opted_in_at?: string | null; opted_out_at?: string | null; promos_out_at?: string | null } | null | undefined): boolean {
+    if (!o) return false;
+    if (o.promos_out_at) return true;
+    return Boolean(o.opted_out_at) && (!o.opted_in_at || new Date(o.opted_out_at!) >= new Date(o.opted_in_at));
+}
+
+export interface FilaOptin { contact_wa_id: string; opted_in_at: string | null; opted_out_at: string | null; promos_out_at?: string | null }
+
+/**
+ * Las filas de `whatsapp_optins` de un lote de contactos, con la baja de
+ * promociones. Si `promos_out_at` todavía no existe (BFF desplegado antes que la
+ * migración 20261115143758, error 42703) lee lo de siempre: las bajas totales
+ * NUNCA se pierden por la columna nueva. Lanza si la lectura falla por otra cosa.
+ */
+export async function leerOptinsDeContactos(integrationId: string, contactos: string[]): Promise<FilaOptin[]> {
+    if (!contactos.length) return [];
+    const leer = (cols: string) => supabase.from('whatsapp_optins').select(cols)
+        .eq('integration_id', integrationId).in('contact_wa_id', contactos);
+    let { data, error } = await leer('contact_wa_id, opted_in_at, opted_out_at, promos_out_at');
+    if (error && (error as any).code === '42703') ({ data, error } = await leer('contact_wa_id, opted_in_at, opted_out_at'));
+    if (error) throw new Error(error.message ?? 'no se pudo leer whatsapp_optins');
+    return ((data as unknown) as FilaOptin[]) ?? [];
+}

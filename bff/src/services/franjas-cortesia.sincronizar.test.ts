@@ -48,6 +48,7 @@ function base(o: {
     existentes?: any[];
     ajustes?: any;
     excepciones?: any[];
+    leads?: any[];
 }) {
     h.llamadas = [];
     h.resolver = (tabla, ops) => {
@@ -73,6 +74,11 @@ function base(o: {
             }
             if (!o.m1 && cols.includes('cerrada_por')) return { data: null, error: { code: '42703', message: 'column school_trial_slots.cerrada_por does not exist' } };
             return { data: o.existentes ?? [], error: null };
+        }
+        if (tabla === 'school_signup_leads') {
+            if (!o.m1 && cols.includes('cupo_separado_slot_id')) return { data: null, error: { code: '42703', message: 'column school_signup_leads.cupo_separado_slot_id does not exist' } };
+            const [columna, ids] = ops.find(([m]) => m === 'in')?.[1] ?? [];
+            return { data: (o.leads ?? []).filter((l) => ids?.includes(l[columna])), error: null };
         }
         return { data: null, error: null };
     };
@@ -159,6 +165,54 @@ describe('con la migración M1', () => {
         const lectura = h.llamadas.find((l) => l.tabla === 'school_trial_slots' && !l.ops.some(([m]) => m === 'insert'))!;
         expect(tiene(lectura.ops, 'eq', 'team_id', 't-mini')).toBe(true);
         expect(r.creadas).toBe(1);
+    });
+
+    it('hora corregida (7:00 → 8:00) con gente en la de 7:00: se cierra a gente nueva sin tocar reservas y se devuelve la lista', async () => {
+        base({
+            m1: true, equipos: [MINI],   // el horario ya dice sábado 08:00
+            existentes: [
+                slot({ id: 'vieja-7', team_id: 't-mini', label: 'MINIVOLLEY', slot_date: '2026-10-10', start_time: '07:00:00', reserved_count: 2 }),
+                slot({ id: 'ya-cerrada', team_id: 't-mini', label: 'MINIVOLLEY', slot_date: '2026-10-11', start_time: '07:00:00', reserved_count: 1, is_open: false, cerrada_por: 'horario' }),
+            ],
+            leads: [
+                { id: 'l1', full_name: 'Ana Pérez', status: 'new', trial_slot_id: 'vieja-7' },
+                { id: 'l2', full_name: 'Luis Gómez', status: 'contacted', cupo_separado_slot_id: 'vieja-7' },
+                { id: 'l3', full_name: 'Descartado', status: 'discarded', trial_slot_id: 'vieja-7' },
+                { id: 'l4', full_name: 'Sara Ríos', status: 'new', trial_slot_id: 'ya-cerrada' },
+            ],
+        });
+        const r = await sincronizarFranjasDeEscuela('s1', { aplicar: true, hoy: HOY, semanas: 1, soloEquipo: 't-mini' });
+        expect(r.errores).toEqual([]);
+        // La de 8:00 nace; la de 7:00 se cierra con cerrada_por = horario.
+        expect(r.creadas).toBe(1);
+        const updates = escrituras('school_trial_slots', 'update');
+        expect(updates).toHaveLength(1);
+        const [cerrar] = updates;
+        // Solo is_open y cerrada_por: ni reserved_count ni nada del lead.
+        expect(cerrar.ops.find(([m]) => m === 'update')![1][0]).toEqual({ is_open: false, cerrada_por: 'horario' });
+        expect(cerrar.ops.find(([m]) => m === 'in')![1][1]).toEqual(['vieja-7']);
+        expect(tiene(cerrar.ops, 'eq', 'is_open', true)).toBe(true);
+        expect(tiene(cerrar.ops, 'eq', 'reserved_count', 0)).toBe(false);
+        expect(escrituras('school_signup_leads', 'update')).toHaveLength(0);
+        expect(r.cerradasConReserva).toBe(1);
+        expect(r.cerradas).toBe(0);
+        expect(r.conReservaSinHorario).toEqual([
+            { id: 'vieja-7', team_id: 't-mini', grupo: 'MINIVOLLEY', fecha: '2026-10-10', hora: '07:00', reservas: 2,
+                personas: [{ nombre: 'Ana Pérez', estado: 'agendada' }, { nombre: 'Luis Gómez', estado: 'separada' }] },
+            { id: 'ya-cerrada', team_id: 't-mini', grupo: 'MINIVOLLEY', fecha: '2026-10-11', hora: '07:00', reservas: 1,
+                personas: [{ nombre: 'Sara Ríos', estado: 'agendada' }] },
+        ]);
+    });
+
+    it('sin la migración M1 la franja con reservas no se cierra (nadie podría reabrirla), pero se reporta', async () => {
+        base({
+            m1: false, equipos: [MINI],
+            existentes: [slot({ id: 'vieja-7', team_id: 't-mini', slot_date: '2026-10-10', start_time: '07:00:00', reserved_count: 2 })],
+        });
+        const r = await sincronizarFranjasDeEscuela('s1', { aplicar: true, hoy: HOY, semanas: 1 });
+        expect(escrituras('school_trial_slots', 'update')).toHaveLength(0);
+        expect(r.cerradasConReserva).toBe(0);
+        expect(r.conReservaSinHorario.map((f) => [f.id, f.reservas, f.personas])).toEqual([['vieja-7', 2, []]]);
     });
 
     it('simulación: cuenta lo que haría sin escribir', async () => {

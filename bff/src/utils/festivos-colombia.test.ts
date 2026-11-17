@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { esFestivoColombia, festivosColombia, domingoDePascua } from './festivos-colombia';
+import { describe, it, expect, afterEach } from 'vitest';
+import {
+    esFestivoColombia, festivosColombia, domingoDePascua, fijarFestivosDeLaBase, olvidarFestivosDeLaBase,
+} from './festivos-colombia';
 
 // Calendarios oficiales verificados el 2026-10-04 contra prensa nacional
 // (El País Cali / Caracol para 2025-2026, El Universal para 2027) y la
@@ -26,6 +28,29 @@ const OFICIAL_2027 = [
     '2027-07-12', '2027-07-20', '2027-08-07', '2027-08-16', '2027-10-18',
     '2027-11-01', '2027-11-15', '2027-12-08', '2027-12-25',
 ];
+
+describe('la tabla co_holidays es la fuente; el cálculo es la red de seguridad', () => {
+    afterEach(() => olvidarFestivosDeLaBase());
+
+    it('lo leído de la base manda sobre el cálculo, y avisa de las diferencias', () => {
+        const tabla = festivosColombia(2027).filter((d) => d !== '2027-07-12').concat('2027-09-09');
+        const r = fijarFestivosDeLaBase(tabla);
+        expect(r.anios).toEqual([2027]);
+        expect(r.diferencias).toEqual(['2027-07-12 (solo en el cálculo)', '2027-09-09 (solo en la tabla)']);
+        expect(esFestivoColombia('2027-09-09')).toBe(true);
+        expect(esFestivoColombia('2027-07-12')).toBe(false);
+    });
+
+    it('un año que la tabla no trae, o que llega a medias, se calcula', () => {
+        fijarFestivosDeLaBase(['2031-01-01', '2031-12-25']);   // a medias: no reemplaza
+        expect(esFestivoColombia('2031-05-01')).toBe(true);
+        expect(esFestivoColombia('2040-01-01')).toBe(true);
+    });
+
+    it('Virgen de Chiquinquirá con traslado: 13-jul-2026, 12-jul-2027, 10-jul-2028', () => {
+        for (const d of ['2026-07-13', '2027-07-12', '2028-07-10']) expect(esFestivoColombia(d)).toBe(true);
+    });
+});
 
 describe('festivos-colombia', () => {
     it('Pascua: 2025-04-20, 2026-04-05, 2027-03-28', () => {

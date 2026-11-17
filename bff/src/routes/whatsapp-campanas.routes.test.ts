@@ -13,6 +13,9 @@ const est = vi.hoisted(() => ({
     admins: new Set(['milena']),
     ajustes: { disponible: true, ajustes: null as any },
     llamadas: [] as { fn: string; args: any[] }[],
+    /** ¿La escuela ya aceptó la declaración de activación? */
+    activada: true,
+    frenoGlobal: { pausada: false, desde: null as string | null, motivo: null as string | null },
 }));
 
 vi.mock('../config/supabase', () => {
@@ -29,8 +32,22 @@ vi.mock('../services/plataforma-wa.service', () => ({ nombreDeEscuela: vi.fn(asy
 vi.mock('../services/whatsapp-campanas.service', () => {
     const anotar = (fn: string, r: any) => vi.fn(async (...args: any[]) => { est.llamadas.push({ fn, args }); return r; });
     return {
-        DECLARACION: { version: 'contacto_previo_v1', texto: (e: string, d: number) => `Declaro que ${e} (${d} días)` },
+        RESPONSABILIDAD: {
+            versionActivacion: 'activacion_v1', versionCampana: 'campana_v1',
+            textoActivacion: (e: string) => `Activo las campañas de ${e}`,
+            textoCampana: (e: string, base: string, d: number) => `Declaro por ${e} (${base}, ${d} días)`,
+        },
         leerAjustesCampanas: vi.fn(async () => est.ajustes),
+        // Lecturas del GET: no se anotan (lo que se cuenta en `llamadas` es audiencia, campañas y acciones).
+        activacionAceptada: vi.fn(async () => est.activada),
+        declaracionDeActivacion: vi.fn(async () => ({ version: 'activacion_v1', texto: 'Activo las campañas de Monster´s Volley Club' })),
+        serviciosParaCampana: vi.fn(async () => []),
+        compradoresDeServicio: vi.fn(async () => new Set<string>()),
+        leerFrenoGlobal: vi.fn(async () => est.frenoGlobal),
+        textoDeAceptacionDePausa: (motivo: string | null) => `Acepto reanudar (${motivo})`,
+        activarCampanas: anotar('activar', { ok: true }),
+        reanudarEscuela: anotar('reanudar_escuela', { ok: true }),
+        pausarEscuela: anotar('pausar_escuela', { ok: true }),
         integracionActivaDeEscuela: anotar('integracion', { id: 'integ-1', waba_id: 'w' }),
         audienciaVigente: anotar('audiencia', [
             { contact_wa_id: 'a', intereses: ['clinica'], branch_id: 'S1' },
@@ -84,9 +101,11 @@ afterAll(() => { server.close(); });
 beforeEach(() => {
     est.usuario = 'milena';
     est.llamadas = [];
+    est.activada = true;
+    est.frenoGlobal = { pausada: false, desde: null, motivo: null };
     est.ajustes = {
         disponible: true,
-        ajustes: { habilitadas: true, baseConsentimiento: 'contacto_previo_declarado', topeDiarioMax: 200, lotePiloto: 50, antiguedadMaxDias: 180, pausadaAt: null, pausaMotivo: null },
+        ajustes: { habilitadas: true, baseConsentimiento: 'contacto_previo_declarado', topeDiarioMax: 200, lotePiloto: 50, antiguedadMaxDias: 180, pausadaAt: null, pausaMotivo: null, pausaOrigen: null },
     };
 });
 
@@ -100,6 +119,9 @@ describe('autorización', () => {
         est.usuario = 'coach-1';
         expect((await get(`/${ESCUELA}/campanas`)).status).toBe(403);
         expect((await post(`/${ESCUELA}/campanas/${CAMP}/aprobar`, { declaracion_aceptada: true })).status).toBe(403);
+        expect((await post(`/${ESCUELA}/campanas/activar`, { declaracion_aceptada: true })).status).toBe(403);
+        expect((await post(`/${ESCUELA}/campanas/reanudar-escuela`, { acepto_motivo: true })).status).toBe(403);
+        expect((await post(`/${ESCUELA}/campanas/pausar-escuela`)).status).toBe(403);
         expect(est.llamadas).toHaveLength(0);
     });
 
@@ -114,7 +136,11 @@ describe('GET /:schoolId/campanas', () => {
         est.ajustes = { disponible: false, ajustes: null };
         expect(await (await get(`/${ESCUELA}/campanas`)).json()).toEqual({ disponible: false });
         est.ajustes = { disponible: true, ajustes: null };
-        expect(await (await get(`/${ESCUELA}/campanas`)).json()).toEqual({ disponible: true, habilitadas: false });
+        // Apagadas: lo único que viaja es la declaración que la escuela acepta para prenderlas sola.
+        expect(await (await get(`/${ESCUELA}/campanas`)).json()).toEqual({
+            disponible: true, habilitadas: false,
+            activacion: { version: 'activacion_v1', texto: 'Activo las campañas de Monster´s Volley Club' },
+        });
         expect(est.llamadas).toHaveLength(0);
     });
 
@@ -122,10 +148,16 @@ describe('GET /:schoolId/campanas', () => {
         const j = await (await get(`/${ESCUELA}/campanas`)).json();
         expect(j).toMatchObject({
             disponible: true, habilitadas: true, integracion: 'ok',
-            ajustes: { base_consentimiento: 'contacto_previo_declarado', lote_piloto: 50, pausada: false },
+            // Ya activadas por la escuela, sin freno global y sin pausa.
+            falta_activacion: false, activacion: null, pausa_global: false,
+            ajustes: {
+                base_consentimiento: 'contacto_previo_declarado', lote_piloto: 50, pausada: false,
+                pausa_motivo: null, pausa_origen: null, aceptacion: null,
+            },
             audiencia: { total: 2 },
             sedes: [{ id: 'S1', nombre: 'Suba' }],
-            declaracion: { version: 'contacto_previo_v1', texto: 'Declaro que Monster´s Volley Club (180 días)' },
+            // La declaración de responsabilidad de CADA aprobación (versión de campaña, no la de contacto previo).
+            declaracion: { version: 'campana_v1', texto: 'Declaro por Monster´s Volley Club (contacto_previo_declarado, 180 días)' },
         });
         // «Cupo de hoy: 150 de 200 · reserva 50 para interesados y avisos», con el tope de la escuela.
         expect(j.cupo).toEqual({
@@ -135,6 +167,33 @@ describe('GET /:schoolId/campanas', () => {
         expect(est.llamadas.find((l) => l.fn === 'cupo')?.args).toEqual([{ id: 'integ-1', waba_id: 'w' }, 200]);
         expect(j.campanas[0]).toMatchObject({ id: 'c-borrador', conteo_previsto: 1, avance: null });
         expect(j.campanas[1]).toMatchObject({ id: 'c-curso', conteo_previsto: null, avance: { total: 10, enviado: 4 } });
+    });
+
+    it('la declaración viaja SIEMPRE, también con base opt-in', async () => {
+        est.ajustes.ajustes.baseConsentimiento = 'optin';
+        const j = await (await get(`/${ESCUELA}/campanas`)).json();
+        expect(j.declaracion).toEqual({ version: 'campana_v1', texto: 'Declaro por Monster´s Volley Club (optin, 180 días)' });
+    });
+
+    it('prendidas sin que la escuela haya aceptado la activación: falta_activacion con el texto a aceptar; freno global a la vista', async () => {
+        est.activada = false;
+        est.frenoGlobal = { pausada: true, desde: '2026-11-15T15:00:00Z', motivo: 'incidente' };
+        const j = await (await get(`/${ESCUELA}/campanas`)).json();
+        expect(j).toMatchObject({
+            habilitadas: true, falta_activacion: true, pausa_global: true,
+            activacion: { version: 'activacion_v1', texto: 'Activo las campañas de Monster´s Volley Club' },
+        });
+    });
+
+    it('en pausa: la del freno trae el texto que la escuela acepta para reanudar; la de plataforma y la propia, no', async () => {
+        Object.assign(est.ajustes.ajustes, { pausadaAt: '2026-11-15T15:00:00Z', pausaMotivo: 'calidad_del_numero', pausaOrigen: 'freno' });
+        expect((await (await get(`/${ESCUELA}/campanas`)).json()).ajustes).toMatchObject({
+            pausada: true, pausa_motivo: 'calidad_del_numero', pausa_origen: 'freno', aceptacion: 'Acepto reanudar (calidad_del_numero)',
+        });
+        est.ajustes.ajustes.pausaOrigen = 'plataforma';
+        expect((await (await get(`/${ESCUELA}/campanas`)).json()).ajustes).toMatchObject({ pausada: true, pausa_origen: 'plataforma', aceptacion: null });
+        est.ajustes.ajustes.pausaOrigen = 'escuela';
+        expect((await (await get(`/${ESCUELA}/campanas`)).json()).ajustes).toMatchObject({ pausada: true, pausa_origen: 'escuela', aceptacion: null });
     });
 });
 
@@ -147,6 +206,41 @@ describe('acciones', () => {
 
         await post(`/${ESCUELA}/campanas/${CAMP}/aprobar`, { declaracion_aceptada: 'si' });
         expect(est.llamadas.at(-1)!.args[0].declaracionAceptada).toBe(false);
+    });
+
+    // Quien actúa queda en la declaración y en la bitácora: sale de la sesión, nunca del cuerpo.
+    const SUPLANTACION = { por: 'otra-persona', p_por: 'otra-persona', user_id: 'otra-persona', schoolId: 'otra-escuela' };
+
+    it('activar: `por` es la sesión aunque el cuerpo traiga otro; la declaración solo vale con `true`', async () => {
+        const r = await post(`/${ESCUELA}/campanas/activar`, { declaracion_aceptada: true, ...SUPLANTACION });
+        expect(r.status).toBe(200);
+        expect(await r.json()).toEqual({});
+        expect(est.llamadas).toEqual([{ fn: 'activar', args: [{ schoolId: ESCUELA, por: 'milena', declaracionAceptada: true }] }]);
+
+        await post(`/${ESCUELA}/campanas/activar`, { declaracion_aceptada: 'true', ...SUPLANTACION });
+        expect(est.llamadas.at(-1)).toEqual({ fn: 'activar', args: [{ schoolId: ESCUELA, por: 'milena', declaracionAceptada: false }] });
+        await post(`/${ESCUELA}/campanas/activar`);
+        expect(est.llamadas.at(-1)!.args[0]).toEqual({ schoolId: ESCUELA, por: 'milena', declaracionAceptada: false });
+    });
+
+    it('reanudar-escuela: `por` es la sesión aunque el cuerpo traiga otro; `acepto_motivo` solo vale con `true`', async () => {
+        const r = await post(`/${ESCUELA}/campanas/reanudar-escuela`, { acepto_motivo: true, ...SUPLANTACION });
+        expect(r.status).toBe(200);
+        expect(est.llamadas).toEqual([{ fn: 'reanudar_escuela', args: [{ schoolId: ESCUELA, por: 'milena', aceptada: true }] }]);
+
+        await post(`/${ESCUELA}/campanas/reanudar-escuela`, { acepto_motivo: 1, ...SUPLANTACION });
+        expect(est.llamadas.at(-1)).toEqual({ fn: 'reanudar_escuela', args: [{ schoolId: ESCUELA, por: 'milena', aceptada: false }] });
+    });
+
+    it('pausar-escuela: `por` es la sesión', async () => {
+        const r = await post(`/${ESCUELA}/campanas/pausar-escuela`, SUPLANTACION);
+        expect(r.status).toBe(200);
+        expect(est.llamadas).toEqual([{ fn: 'pausar_escuela', args: [{ schoolId: ESCUELA, por: 'milena' }] }]);
+    });
+
+    it('aprobar: un `por` en el cuerpo se ignora', async () => {
+        await post(`/${ESCUELA}/campanas/${CAMP}/aprobar`, { declaracion_aceptada: true, ...SUPLANTACION });
+        expect(est.llamadas.at(-1)).toEqual({ fn: 'aprobar', args: [{ schoolId: ESCUELA, campanaId: CAMP, por: 'milena', declaracionAceptada: true }] });
     });
 
     it('crear: 201 con el filtro saneado y la sesión como autora', async () => {

@@ -18,7 +18,7 @@
  *     sin color; ONBOARDING, UPGRADE y UNFLAGGED NO frenan.
  *  3. La plantilla de la campaña: `message_template_quality_update` YELLOW/RED,
  *     o un estado distinto de APPROVED (PAUSED, DISABLED…).
- *  4. Bajas > 5 % o fallos > 20 % de lo enviado en 24 h.
+ *  4. Bajas > 5 % (con al menos 100 envíos o 5 bajas) o fallos > 20 % de lo enviado en 24 h.
  *
  * Lo que NO frena: `account_update` llega a diario con `ACCOUNT_DELETED`
  * (23→29-oct, de otras cuentas de la app); frenar con «cualquier
@@ -40,6 +40,27 @@ export const UMBRAL_FALLOS = 0.20;
  * primeros 10 (5 %) no frena y dos (10 %) sí.
  */
 export const MUESTRA_MINIMA = 20;
+/**
+ * Las bajas solo frenan con evidencia suficiente: al menos 100 envíos en 24 h, o
+ * al menos 5 bajas. Un lote piloto de 50 con 3 bajas (6 %) NO frena; con 5 (10 %)
+ * sí. Importa más desde que una segunda pausa dentro de 7 días pasa a manos de
+ * SportMaps: no puede dispararla un puñado de personas.
+ */
+export const MUESTRA_PLENA_BAJAS = 100;
+export const BAJAS_MINIMAS = 5;
+
+/** ¿Estas bajas sobre estos envíos (24 h) frenan? Pura. */
+export function bajasFrenan(enviados: number, bajas: number): boolean {
+    if (enviados < MUESTRA_PLENA_BAJAS && bajas < BAJAS_MINIMAS) return false;
+    return bajas / Math.max(enviados, MUESTRA_MINIMA) > UMBRAL_BAJAS;
+}
+
+/** Cuántas bajas más (en 24 h) aguanta la escuela antes de que salte el freno. Pura; mínimo 0. */
+export function bajasQueFaltanParaElFreno(enviados: number, bajas: number): number {
+    let extra = 0;
+    while (extra < 10_000 && !bajasFrenan(enviados, bajas + extra)) extra++;
+    return extra;
+}
 
 /** Eventos del número que SÍ frenan. Los demás (ONBOARDING, UPGRADE, UNFLAGGED) no. */
 const EVENTOS_DE_NUMERO_QUE_FRENAN = new Set(['FLAGGED', 'DOWNGRADE']);
@@ -136,7 +157,7 @@ export function evaluarFreno(s: SenalesDeCalidad): DecisionFreno {
     }
 
     const base = Math.max(s.enviados24h, MUESTRA_MINIMA);
-    if (s.bajas24h / base > UMBRAL_BAJAS) {
+    if (bajasFrenan(s.enviados24h, s.bajas24h)) {
         return { frenar: true, motivo: 'muchas_bajas', detalle: `${s.bajas24h} bajas de ${s.enviados24h} envíos en 24 h` };
     }
     if (s.fallidos24h / base > UMBRAL_FALLOS) {
@@ -148,7 +169,7 @@ export function evaluarFreno(s: SenalesDeCalidad): DecisionFreno {
 // ─── Lectura de las señales ──────────────────────────────────────────────────
 
 /** Estados de envío que cuentan como «salió» para las tasas. */
-const SALIERON = new Set(['enviado', 'incierto', 'respondio_si', 'respondio_luego', 'baja', 'fallido']);
+export const SALIERON: ReadonlySet<string> = new Set(['enviado', 'incierto', 'respondio_si', 'respondio_luego', 'baja', 'fallido']);
 
 export interface IntegracionParaFreno {
     id: string;

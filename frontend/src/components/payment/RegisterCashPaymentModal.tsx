@@ -32,6 +32,9 @@ import {
   isDuplicatePeriodError,
 } from '@/lib/paymentPeriod';
 import { chargeCategoryOf, type PaymentChargeCategory } from '@/lib/payment-accounts';
+import { todayColombia } from '@/lib/dateUtils';
+import { errorDeRecibido, notasConRecibido, lineaRecibido, type RecibidoSinComprobante } from '@/lib/payments/constanciaDeRecibido';
+import { RecibidoSinComprobanteCampos } from '@/components/payment/RecibidoSinComprobanteCampos';
 import {
   MANUAL_CHARGE_CATEGORY_OPTIONS,
   effectiveManualCategory,
@@ -95,7 +98,7 @@ interface ChargeSnapshot {
   status: string;
 }
 
-const PAYMENT_SNAPSHOT_COLUMNS = 'id, amount, amount_paid, late_fee_amount, early_payment_discount_applied, status';
+const PAYMENT_SNAPSHOT_COLUMNS = 'id, amount, amount_paid, late_fee_amount, early_payment_discount_applied, status, notes';
 
 function snapshotOf(p: any): ChargeSnapshot {
   return {
@@ -189,6 +192,10 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
   // Solo aplica a paymentMethod === 'transfer'; opcional, porque la escuela
   // tambien concilia contra el extracto bancario sin tener la imagen.
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
+  // Quién del equipo recibió la plata. Obligatorio cuando no hay comprobante
+  // (efectivo, o transferencia sin soporte): ver lib/payments/constanciaDeRecibido.
+  const [receivedBy, setReceivedBy] = useState('');
+  const [showReceivedError, setShowReceivedError] = useState(false);
   const [ocrResult, setOcrResult] = useState<ReceiptValidationResult | null>(null);
   // Key para remontar el FileUpload y limpiar su estado interno al quitar el soporte.
   const [uploadKey, setUploadKey] = useState(0);
@@ -423,6 +430,16 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
     ? pendingPayments.find(p => p.id === selectedPaymentId)
     : undefined;
 
+  // Sin comprobante = efectivo, o transferencia sin soporte adjunto. Ahí la
+  // escuela deja constancia de quién recibió la plata; cómo y cuándo ya los dicen
+  // «Método de pago» y «Fecha del pago».
+  const needsReceivedBy = paymentMethod === 'cash' || !receiptUrl;
+  const receivedError = needsReceivedBy
+    ? errorDeRecibido({ metodo: paymentMethod, fecha: pickedDay(), por: receivedBy }, todayColombia())
+    : null;
+  const constancia = (): RecibidoSinComprobante | null =>
+    needsReceivedBy && !receivedError ? { metodo: paymentMethod, fecha: pickedDay(), por: receivedBy } : null;
+
   // Categoría que se le pasa al verificador del comprobante: con ella, una
   // llave restringida a esa categoría (p. ej. Nequi solo para inscripciones)
   // cuenta como destino válido en vez de salir amarilla.
@@ -534,6 +551,12 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
       return;
     }
 
+    if (receivedError) {
+      setShowReceivedError(true);
+      toast({ title: 'Falta la constancia del pago', description: receivedError, variant: 'destructive' });
+      return;
+    }
+
     setLoading(true);
     try {
       const prefix = paymentMethod === 'cash' ? 'CASH' : 'TRF';
@@ -550,6 +573,28 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
         p_receipt_fields: isTransfer && receiptUrl ? buildReceiptOcrFields(ocrResult) : null,
       });
       if (error) throw error;
+
+      // register_manual_payments no recibe notas: la constancia se anota aquí, en
+      // UNA lectura de las notas y un UPDATE por cobro (máx. 50, acción manual).
+      // Si falla, el pago YA quedó registrado: se avisa para anotarlo a mano.
+      const c = constancia();
+      let constanciaFallo = false;
+      if (c) {
+        try {
+          const ids = selectedMulti.map(p => p.id);
+          const { data: previas, error: lecErr } = await (supabase.from('payments') as any)
+            .select('id, notes').in('id', ids).eq('school_id', schoolId);
+          if (lecErr) throw lecErr;
+          const porId = new Map<string, string | null>((previas || []).map((r: any) => [r.id, r.notes]));
+          const res = await Promise.all(ids.map(id =>
+            (supabase.from('payments') as any)
+              .update({ notes: notasConRecibido(porId.get(id), c) })
+              .eq('id', id).eq('school_id', schoolId)));
+          constanciaFallo = res.some((r: any) => r.error);
+        } catch {
+          constanciaFallo = true;
+        }
+      }
 
       const total = Number(data?.total) || multiTotal;
       const resumen = selectedMulti.length <= 3
@@ -582,7 +627,10 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
 
       toast({
         title: 'Pagos registrados',
-        description: `${selectedMulti.length} cobro(s) por ${formatCurrency(total)} quedaron como pagados.`,
+        description: `${selectedMulti.length} cobro(s) por ${formatCurrency(total)} quedaron como pagados.${
+          constanciaFallo ? ' No se pudo guardar quién recibió el pago: anótalo en las notas de cada cobro.' : ''
+        }`,
+        variant: constanciaFallo ? 'destructive' : undefined,
       });
       onSuccess();
       onOpenChange(false);
@@ -618,6 +666,13 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
 
     const selectedStudent = athletes.find(a => a.id === selectedAthleteId);
     if (!selectedStudent || !schoolId || !user) return;
+
+    if (receivedError) {
+      setShowReceivedError(true);
+      toast({ title: 'Falta la constancia del pago', description: receivedError, variant: 'destructive' });
+      return;
+    }
+    const c = constancia();
 
     setLoading(true);
     setStaleNotice(null);
@@ -694,6 +749,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
             approved_by: user.id,
             approved_at: new Date().toISOString(),
             reference,
+            ...(c ? { notes: notasConRecibido(fresh.notes, c) } : {}),
             ...unblockFields,
             ...receiptFields,
           } as any)
@@ -752,6 +808,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
           approved_by: user.id,
           approved_at: new Date().toISOString(),
           reference,
+          ...(c ? { notes: lineaRecibido(c) } : {}),
           amount_paid: numericAmount,
           // Periodo solo en INSERT. En el UPDATE se respeta el que ya trae el
           // cobro pendiente: pisarlo colisiona con uniq_payment_active_period_*.
@@ -819,6 +876,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
                 approved_by: user.id,
                 approved_at: new Date().toISOString(),
                 reference,
+                ...(c ? { notes: notasConRecibido(conflict.notes, c) } : {}),
                 ...unblockFields,
                 ...receiptFields,
               } as any).eq('id', conflict.id).eq('amount', conflictSnap.amount).select('id');
@@ -909,6 +967,8 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
     setChosenCategory(null);
     setAmount(0);
     setPaymentDate(new Date());
+    setReceivedBy('');
+    setShowReceivedError(false);
     setAthleteSearchQuery('');
     setAthletePopoverOpen(false);
     setPeriod(null);
@@ -1526,6 +1586,19 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
               </Popover>
             </div>
           </div>
+
+          {/* Sin comprobante: quién del equipo recibió la plata (cómo y cuándo ya están arriba). */}
+          {needsReceivedBy && (
+            <RecibidoSinComprobanteCampos
+              value={{ metodo: paymentMethod, fecha: pickedDay(), por: receivedBy }}
+              onChange={(v) => setReceivedBy(v.por)}
+              hoy={todayColombia()}
+              mostrarMetodo={false}
+              mostrarFecha={false}
+              idPrefix="manual-recibido"
+              error={showReceivedError ? receivedError : null}
+            />
+          )}
 
           {/* El cobro cambió en la base desde que se abrió el formulario. */}
           {staleNotice && (

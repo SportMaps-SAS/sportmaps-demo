@@ -61,6 +61,7 @@ export default function FinancesPage() {
           wompi_transaction_id,
           provider_transaction_id,
           qr_id,
+          reference,
           period_year,
           period_month,
           last_failure_at,

@@ -42,11 +42,14 @@ import {
 import { escuelaActivaEn, HORAS_SILENCIO_ESCUELA } from './whatsapp-modo-discreto';
 import { marcaPorNombre } from './whatsapp-tipo-contacto';
 import { frenoDeCalidad, MOTIVO_LEGIBLE, type MotivoFreno } from './whatsapp-campanas-freno';
+import { leerOptinsDeContactos, sinPromociones } from './whatsapp-optin.service';
 import { cupoMetaDelNumero, inicioDelDiaCot } from './whatsapp-campanas-cupo';
 import { adminsDeEscuela } from './plataforma-wa.service';
 import { correosDeSoporte, enviarConReserva, uuidDeClave } from './avisos-correo.service';
 import { sendToUser } from './push.service';
 import type { FilaReciente } from './whatsapp-reglas-turno';
+import { motivoConCodigo } from './whatsapp-errores-meta';
+import { avisarSoporteDeCampanas } from './whatsapp-campana-reporte.service';
 
 // ─── Ajustes por escuela ─────────────────────────────────────────────────────
 
@@ -65,12 +68,19 @@ export interface AjustesCampanas {
     palabrasSede: PalabrasDeSede[];
     pausadaAt: string | null;
     pausaMotivo: string | null;
+    /** Quién pausó la escuela: 'plataforma' = freno de emergencia de SportMaps (la escuela no lo levanta). */
+    pausaOrigen: 'freno' | 'escuela' | 'plataforma' | null;
 }
 
-const COLS_AJUSTES = 'school_id, habilitadas, base_consentimiento, tope_diario_max, lote_piloto, '
+const COLS_AJUSTES_BASE = 'school_id, habilitadas, base_consentimiento, tope_diario_max, lote_piloto, '
     + 'frecuencia_min_dias, antiguedad_max_dias, palabras_sede, pausada_at, pausa_motivo';
+/** `pausa_origen` llega con la migración 20261115143758: sin ella se lee lo de siempre (origen desconocido = freno). */
+const COLS_AJUSTES = `${COLS_AJUSTES_BASE}, pausa_origen`;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Con la base «contacto previo», nadie recibe campañas si su último mensaje tiene más de estos días. */
+export const ANTIGUEDAD_MAX_DIAS = 90;
 
 function entero(v: unknown, min: number, max: number, porDefecto: number): number {
     const n = Number(v);
@@ -97,10 +107,13 @@ export function ajustesCampanasDesdeFila(fila: Record<string, unknown> | null | 
         topeDiarioMax: entero(fila.tope_diario_max, 1, 100000, 200),
         lotePiloto: entero(fila.lote_piloto, 1, 1000, 50),
         frecuenciaMinDias: entero(fila.frecuencia_min_dias, 1, 90, 7),
-        antiguedadMaxDias: entero(fila.antiguedad_max_dias, 1, 365, 180),
+        // Tope de 90 días (igual que `wa_campana_aprobar`): un valor mayor guardado cuenta como 90.
+        antiguedadMaxDias: Math.min(entero(fila.antiguedad_max_dias, 1, 365, ANTIGUEDAD_MAX_DIAS), ANTIGUEDAD_MAX_DIAS),
         palabrasSede: palabrasDeSedeValidas(fila.palabras_sede),
         pausadaAt: typeof fila.pausada_at === 'string' && fila.pausada_at ? fila.pausada_at : null,
         pausaMotivo: typeof fila.pausa_motivo === 'string' && fila.pausa_motivo ? fila.pausa_motivo : null,
+        pausaOrigen: fila.pausa_origen === 'plataforma' || fila.pausa_origen === 'escuela' || fila.pausa_origen === 'freno'
+            ? fila.pausa_origen : null,
     };
 }
 
@@ -110,8 +123,13 @@ export function ajustesCampanasDesdeFila(fila: Record<string, unknown> | null | 
  */
 export async function leerAjustesCampanas(schoolId: string): Promise<{ disponible: boolean; ajustes: AjustesCampanas | null }> {
     try {
-        const { data, error } = await supabase.from('whatsapp_campanas_ajustes')
+        let { data, error } = await supabase.from('whatsapp_campanas_ajustes')
             .select(COLS_AJUSTES).eq('school_id', schoolId).maybeSingle();
+        // 42703 = la columna nueva todavía no existe (BFF desplegado antes que la migración).
+        if (error && (error as any).code === '42703') {
+            ({ data, error } = await supabase.from('whatsapp_campanas_ajustes')
+                .select(COLS_AJUSTES_BASE).eq('school_id', schoolId).maybeSingle() as any);
+        }
         if (error) return { disponible: false, ajustes: null };
         return { disponible: true, ajustes: ajustesCampanasDesdeFila(data as Record<string, unknown> | null) };
     } catch {
@@ -136,6 +154,32 @@ export const DECLARACION = {
 
 /** Lo que queda en `declaracion_version` con la base de opt-in (no hay declaración que aceptar). */
 export const VERSION_OPTIN = 'optin_v1';
+
+/**
+ * Declaración de responsabilidad (spec whatsapp-autoservicio, 2026-11-15): la
+ * escuela autogestiona sus campañas y responde por ellas. Se acepta UNA vez al
+ * activar y otra en CADA aprobación; queda en `whatsapp_campanas_declaraciones`
+ * con el texto, el usuario y la fecha. Cambiar un texto = subir su versión.
+ */
+export const RESPONSABILIDAD = {
+    versionActivacion: 'activacion_v1',
+    versionCampana: 'campana_v1',
+    textoActivacion: (escuela: string) =>
+        `En nombre de ${escuela} declaro que: (1) el contenido de nuestras campañas será verídico; (2) solo `
+        + 'escribiremos a personas que nos dieron su consentimiento o que nos escribieron primero en los últimos '
+        + `${ANTIGUEDAD_MAX_DIAS} días, y cada campaña irá a quienes preguntaron por ese tema; y (3) respetaremos `
+        + 'los horarios de la Ley 2300 de 2023 (lunes a viernes 7:00 a 19:00, sábados 8:00 a 15:00, nunca domingos ni '
+        + `festivos). ${escuela} crea, aprueba y envía sus campañas y es responsable de ellas; SportMaps solo pone `
+        + 'los límites que protegen el número (topes diarios, reserva para avisos de pago, pausa automática y horarios).',
+    textoCampana: (escuela: string, base: BaseConsentimiento, dias: number) =>
+        `En nombre de ${escuela} declaro que el contenido de este mensaje es verídico (precios, fechas y cupos), que `
+        + (base === 'contacto_previo_declarado'
+            ? `las personas de esta lista le escribieron a ${escuela} por WhatsApp en los últimos ${dias} días pidiendo `
+              + 'información y no están inscritas, '
+            : 'las personas de esta lista aceptaron recibir novedades de la escuela, ')
+        + 'y que el envío sale solo en los horarios de la Ley 2300. Cada persona recibe un solo mensaje, con la opción '
+        + '«No recibir más», y quien la toque no vuelve a recibir promociones.',
+} as const;
 
 // ─── Plantilla de campaña (el único camino MARKETING) ───────────────────────
 
@@ -418,10 +462,12 @@ export interface CampanaFila {
     pausa_motivo: string | null;
     declaracion_version?: string | null;
     created_at?: string;
+    /** Servicio del catálogo que vende la campaña: quien ya lo pagó o abonó no la recibe. */
+    servicio_id?: string | null;
 }
 
 export const COLS_CAMPANA = 'id, integration_id, school_id, nombre, plantilla, idioma, filtro, variables, respuesta_si, '
-    + 'estado, destinatarios, aprobada_at, vence_at, pausa_motivo, declaracion_version, created_at';
+    + 'estado, destinatarios, aprobada_at, vence_at, pausa_motivo, declaracion_version, created_at, servicio_id';
 
 interface EnvioFila {
     id: string;
@@ -506,13 +552,26 @@ export async function pausarPorFreno(p: {
     campana: Pick<CampanaFila, 'id' | 'school_id' | 'nombre'>; motivo: MotivoFreno; detalle: string; ahora: Date;
 }): Promise<void> {
     const ahoraIso = p.ahora.toISOString();
+    // `wa_campanas_pausar_escuela` valida el origen adentro: 'freno' es automático (sin
+    // persona). Si la escuela reanudó un freno hace menos de 7 días, la pausa nace como
+    // 'plataforma' y solo SportMaps la levanta.
+    let reincidente = false;
     try {
-        await supabase.from('whatsapp_campanas_ajustes')
-            .update({ pausada_at: ahoraIso, pausa_motivo: p.motivo, updated_at: ahoraIso })
-            .eq('school_id', p.campana.school_id);
-        await supabase.from('whatsapp_campanas')
-            .update({ estado: 'pausada', pausa_motivo: p.motivo, updated_at: ahoraIso })
-            .eq('school_id', p.campana.school_id).in('estado', ['aprobada', 'enviando']);
+        const { data, error } = await supabase.rpc('wa_campanas_pausar_escuela', {
+            p_school_id: p.campana.school_id, p_por: null, p_origen: 'freno', p_motivo: p.motivo,
+        });
+        reincidente = (data as any)?.reincidente === true;
+        if (error) {
+            // La RPC no respondió (p. ej. BFF desplegado antes que la migración 20261115143758): el freno
+            // NO puede quedar sin efecto. Se pausa como antes, directo, sin las columnas nuevas.
+            console.error('[campanas] wa_campanas_pausar_escuela falló; se pausa directo', { campanaId: p.campana.id, err: error.message });
+            await supabase.from('whatsapp_campanas_ajustes')
+                .update({ pausada_at: ahoraIso, pausa_motivo: p.motivo, updated_at: ahoraIso })
+                .eq('school_id', p.campana.school_id);
+            await supabase.from('whatsapp_campanas')
+                .update({ estado: 'pausada', pausa_motivo: p.motivo, updated_at: ahoraIso })
+                .eq('school_id', p.campana.school_id).in('estado', ['aprobada', 'enviando']);
+        }
     } catch (err: any) {
         console.error('[campanas] no se pudo pausar', { campanaId: p.campana.id, err: err?.message });
     }
@@ -523,7 +582,9 @@ export async function pausarPorFreno(p: {
         clave: `wa_campana_freno:${p.campana.id}:${p.motivo}:${fecha}`,
         titulo: 'Pausamos tu campaña de WhatsApp',
         mensaje: `«${p.campana.nombre}» quedó en pausa porque ${legible}. Así cuidamos tu número. `
-            + 'Revísala en WhatsApp › Campañas y reanúdala cuando quieras.',
+            + (reincidente
+                ? 'Es la segunda pausa en menos de 7 días: el equipo de SportMaps la revisa contigo antes de reanudar.'
+                : 'Revisa el motivo en WhatsApp › Campañas; puedes reanudar cuando lo hayas visto.'),
         link: '/whatsapp?tab=campanas',
         tipo: 'warning',
         data: { tipo: 'whatsapp_campana_pausada', campana_id: p.campana.id },
@@ -602,6 +663,8 @@ export async function runCampanas(ahora: Date = new Date()): Promise<ResultadoCa
             console.error('[campanas] el tick de la campaña falló', { campanaId: c.id, err: err?.message || err });
         }
     }
+    // Fallos o inciertos que revisa SportMaps: un aviso por campaña y tipo de error (una consulta; nunca lanza).
+    await avisarSoporteDeCampanas(campanas);
     return r;
 }
 
@@ -742,11 +805,10 @@ async function enviarLote(
 
     // Tres lecturas por lote, no tres por envío: conversación, mensajes de las
     // últimas 12 h y consentimiento.
-    const [{ data: convs }, { data: optins }] = await Promise.all([
+    const [{ data: convs }, optins] = await Promise.all([
         supabase.from('whatsapp_conversations').select('id, contact_wa_id, contact_name, last_inbound_at')
             .eq('integration_id', integ.id).in('contact_wa_id', ids),
-        supabase.from('whatsapp_optins').select('contact_wa_id, opted_in_at, opted_out_at')
-            .eq('integration_id', integ.id).in('contact_wa_id', ids),
+        leerOptinsDeContactos(integ.id, ids),
     ]);
     const convPorWa = new Map(((convs as any[]) ?? []).map((x) => [String(x.contact_wa_id), x]));
     const optinPorWa = new Map(((optins as any[]) ?? []).map((x) => [String(x.contact_wa_id), x]));
@@ -772,8 +834,8 @@ async function enviarLote(
 
         // Defensa en profundidad (la RPC ya los omite): nunca marketing a quien
         // pidió la baja, ni sin opt-in cuando la base es 'optin'.
-        const dadoDeBaja = Boolean(optin?.opted_out_at)
-            && (!optin?.opted_in_at || new Date(optin.opted_out_at) >= new Date(optin.opted_in_at));
+        // Baja total vigente o baja de promociones (botón «No recibir más»).
+        const dadoDeBaja = sinPromociones(optin);
         const conOptin = Boolean(optin?.opted_in_at) && !dadoDeBaja;
         if (dadoDeBaja || (ajustes.baseConsentimiento === 'optin' && !conOptin)) {
             await supabase.from('whatsapp_campana_envios')
@@ -818,7 +880,8 @@ async function enviarLote(
                 payload: { step: 'campana', campana_id: c.id, envio_id: envio.id, plantilla: plantilla.nombre, variables },
             }).catch(() => undefined);
         } else {
-            const destino = destinoTrasErrorDeEnvio(Number(envio.intentos ?? 1), envioMeta.error, ahoraMs);
+            // El motivo queda como `(#código) título`: el reporte de la campaña lo traduce.
+            const destino = destinoTrasErrorDeEnvio(Number(envio.intentos ?? 1), motivoConCodigo(envioMeta.errorCode, envioMeta.error), ahoraMs);
             await aplicarDestino(c, envio, destino, ahoraMs);
             if (destino.estado === 'pendiente') r.reintentos++;
             else r.fallidos++;
@@ -959,15 +1022,14 @@ export async function audienciaVigente(integrationId: string, ajustes: AjustesCa
     for (let i = 0; i < filas.length; i += 500) {
         const lote = filas.slice(i, i + 500).map((f) => f.contact_wa_id);
         const [optins, conversaciones, bloqueados] = await Promise.all([
-            supabase.from('whatsapp_optins').select('contact_wa_id, opted_in_at, opted_out_at')
-                .eq('integration_id', integrationId).in('contact_wa_id', lote),
+            leerOptinsDeContactos(integrationId, lote),
             supabase.from('whatsapp_conversations').select('contact_wa_id, contact_kind')
                 .eq('integration_id', integrationId).in('contact_wa_id', lote),
             supabase.from('whatsapp_blocked_numbers').select('contact_wa_id, integration_id')
                 .in('contact_wa_id', lote),
         ]);
-        for (const o of ((optins as any)?.data as any[]) ?? []) {
-            if (o.opted_out_at) fuera.add(String(o.contact_wa_id));
+        for (const o of optins) {
+            if (o.opted_out_at || o.promos_out_at) fuera.add(String(o.contact_wa_id));
             else if (o.opted_in_at) conOptin.add(String(o.contact_wa_id));
         }
         for (const c of ((conversaciones as any)?.data as any[]) ?? []) {
@@ -984,10 +1046,12 @@ export async function audienciaVigente(integrationId: string, ajustes: AjustesCa
 export interface Conteo { total: number; porInteres: Record<string, number>; porSede: Record<string, number> }
 
 /** Conteo por interés y por sede ('sin_sede' si no se supo). Pura. */
-export function contarFilas(filas: FilaAudiencia[], filtro?: FiltroCampana | null): Conteo {
+export function contarFilas(filas: FilaAudiencia[], filtro?: FiltroCampana | null, fuera?: ReadonlySet<string> | null): Conteo {
     const c: Conteo = { total: 0, porInteres: {}, porSede: {} };
     for (const f of filas) {
         if (!filtroCoincide(f, filtro)) continue;
+        // Quien ya pagó o abonó el servicio que vende la campaña (igual que `wa_campana_aprobar`).
+        if (fuera?.has(f.contact_wa_id)) continue;
         c.total++;
         for (const i of f.intereses ?? []) c.porInteres[i] = (c.porInteres[i] ?? 0) + 1;
         const s = f.branch_id ?? 'sin_sede';
@@ -1018,6 +1082,8 @@ export interface DatosNuevaCampana {
     filtro?: FiltroCampana;
     respuestaSi?: string | null;
     venceAt?: string | null;
+    /** Servicio del catálogo que vende la campaña (opcional). Debe ser de ESTA escuela. */
+    servicioId?: string | null;
 }
 
 /** Valida los datos de una campaña nueva. Devuelve el error legible o null. Pura. */
@@ -1036,6 +1102,7 @@ export function errorEnDatosDeCampana(d: DatosNuevaCampana, ahora = Date.now()):
         const t = new Date(d.venceAt).getTime();
         if (Number.isNaN(t) || t <= ahora) return 'La fecha de vencimiento tiene que ser futura.';
     }
+    if (d.servicioId != null && d.servicioId !== '' && !UUID.test(String(d.servicioId))) return 'El servicio no es válido.';
     return null;
 }
 
@@ -1046,8 +1113,19 @@ export async function crearCampana(schoolId: string, por: string | null, d: Dato
     if (!ajustes?.habilitadas) return falla(409, 'campanas_apagadas');
     const err = errorEnDatosDeCampana(d);
     if (err) return falla(400, 'datos_invalidos', err);
+    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !(d.filtro?.intereses?.length)) {
+        return falla(400, 'falta_interes');
+    }
     const integ = await integracionActivaDeEscuela(schoolId);
     if (typeof integ === 'string') return falla(409, integ);
+
+    // El servicio que vende la campaña tiene que ser del catálogo de ESTA escuela.
+    const servicioId = d.servicioId ? String(d.servicioId) : null;
+    if (servicioId) {
+        const { data: item } = await supabase.from('school_tournament_items')
+            .select('id').eq('id', servicioId).eq('school_id', schoolId).maybeSingle();
+        if (!item) return falla(400, 'datos_invalidos', 'Ese servicio no es de tu catálogo.');
+    }
 
     const plantilla = await plantillaDeCampana(integ, d.plantilla, d.idioma || 'es_CO');
     const { data, error } = await supabase.from('whatsapp_campanas').insert({
@@ -1060,6 +1138,7 @@ export async function crearCampana(schoolId: string, por: string | null, d: Dato
         variables: plantilla.ok && plantilla.variables === 1 ? ['nombre'] : [],
         respuesta_si: d.respuestaSi?.trim() || null,
         vence_at: d.venceAt || null,
+        ...(servicioId ? { servicio_id: servicioId } : {}),
         estado: 'borrador',
         creada_por: por,
     }).select(COLS_CAMPANA).single();
@@ -1079,14 +1158,43 @@ export async function simularCampana(schoolId: string, campanaId: string): Promi
         audienciaVigente(integ.id, ajustes),
         plantillaDeCampana(integ, campana.plantilla, campana.idioma),
     ]);
-    return { ok: true, conteo: contarFilas(filas, campana.filtro), plantilla };
+    const fuera = campana.servicio_id ? await compradoresDeServicio(schoolId, campana.servicio_id) : null;
+    return { ok: true, conteo: contarFilas(filas, campana.filtro, fuera), plantilla };
+}
+
+/**
+ * contact_wa_id de quienes ya pagaron, abonaron o mandaron comprobante de un servicio
+ * (`wa_compradores_de_servicio`). Es solo para el conteo que ve la escuela: la exclusión
+ * de verdad la hace la base al aprobar y otra vez al enviar. Nunca lanza (vacío ante un error).
+ */
+export async function compradoresDeServicio(schoolId: string, servicioId: string): Promise<Set<string>> {
+    try {
+        const { data, error } = await supabase.rpc('wa_compradores_de_servicio', { p_school_id: schoolId, p_item_id: servicioId });
+        if (error) return new Set();
+        return new Set(((data as any[]) ?? []).map((f) => String(f?.contact_wa_id ?? f)).filter(Boolean));
+    } catch {
+        return new Set();
+    }
+}
+
+/** Servicios activos del catálogo de la escuela, para elegir cuál vende la campaña. Nunca lanza. */
+export async function serviciosParaCampana(schoolId: string): Promise<{ id: string; nombre: string }[]> {
+    try {
+        const { data, error } = await supabase.from('school_tournament_items')
+            .select('id, name').eq('school_id', schoolId).eq('active', true).order('name').limit(100);
+        if (error) return [];
+        return ((data as any[]) ?? []).map((i) => ({ id: String(i.id), nombre: String(i.name ?? '') }));
+    } catch {
+        return [];
+    }
 }
 
 /**
  * Aprobar = foto de la audiencia (`wa_campana_aprobar` valida ADENTRO que quien
- * aprueba administre ESA escuela, que esté en 'borrador' y que las campañas
- * estén encendidas). Con la base 'contacto_previo_declarado' exige la
- * declaración aceptada.
+ * aprueba administre ESA escuela —el administrador de plataforma NO aprueba por
+ * ella—, que esté en 'borrador', que las campañas estén encendidas y que la
+ * escuela haya aceptado la declaración de activación). CADA aprobación exige y
+ * registra su declaración de responsabilidad, sea cual sea la base.
  */
 export async function aprobarCampana(p: {
     schoolId: string; campanaId: string; por: string; declaracionAceptada: boolean;
@@ -1097,21 +1205,179 @@ export async function aprobarCampana(p: {
     const { ajustes } = await leerAjustesCampanas(p.schoolId);
     if (!ajustes?.habilitadas) return falla(409, 'campanas_apagadas');
     if (ajustes.pausadaAt) return falla(409, 'escuela_en_pausa', ajustes.pausaMotivo ?? undefined);
-    const declarada = ajustes.baseConsentimiento === 'contacto_previo_declarado';
-    if (declarada && !p.declaracionAceptada) return falla(400, 'falta_declaracion');
+    if (!p.declaracionAceptada) return falla(400, 'falta_declaracion');
+    // Con la base «contacto previo» la campaña va a un interés concreto, nunca a toda la lista.
+    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !(campana.filtro?.intereses?.length)) {
+        return falla(400, 'falta_interes');
+    }
 
     const integ = await integracionPorId(campana.integration_id);
     if (!integ) return falla(409, 'sin_integracion');
     const plantilla = await plantillaDeCampana(integ, campana.plantilla, campana.idioma);
     if (!plantilla.ok) return falla(409, 'plantilla_no_lista', plantilla.detalle);
 
+    const escuela = await nombreDeLaEscuela(p.schoolId);
     const { data, error } = await supabase.rpc('wa_campana_aprobar', {
-        p_campana_id: campana.id, p_por: p.por, p_declaracion: declarada ? DECLARACION.version : VERSION_OPTIN,
+        p_campana_id: campana.id, p_por: p.por,
+        p_declaracion_version: RESPONSABILIDAD.versionCampana,
+        p_declaracion_texto: RESPONSABILIDAD.textoCampana(escuela, ajustes.baseConsentimiento, ajustes.antiguedadMaxDias),
+        // El texto de la plantilla que queda en la declaración lo lee la base del espejo de Meta
+        // (whatsapp_template_status), no de un parámetro: no se puede declarar un texto distinto.
     });
-    if (error) return falla(409, 'no_se_pudo_aprobar', error.message);
+    if (error) return fallaDeRpc(error);
     // 0 = nadie cumple el filtro: la RPC deja la campaña en borrador (no es un éxito).
     if (!Number(data)) return falla(409, 'sin_destinatarios');
     return { ok: true, destinatarios: Number(data) };
+}
+
+/** El cuerpo de la plantilla tal cual lo aprobó Meta, con sus `{{1}}` sin reemplazar. Pura. */
+export function cuerpoCrudoDePlantilla(components: any[] | null | undefined): string {
+    const body = (components ?? []).find((c: any) => String(c?.type).toUpperCase() === 'BODY');
+    return String(body?.text ?? '').trim();
+}
+
+/** Los errores de las RPC de campañas, en las claves que entiende la pantalla. */
+function fallaDeRpc(error: { message?: string; code?: string }) {
+    const m = String(error.message ?? '');
+    if (m.includes('PAUSA_DE_PLATAFORMA')) return falla(409, 'pausa_de_plataforma');
+    if (error.code === '42501' || m === 'Forbidden') return falla(403, 'solo_la_escuela');
+    if (m.includes('DECLARACION_DE_ACTIVACION_REQUERIDA')) return falla(409, 'falta_activacion');
+    if (m.includes('DECLARACION_REQUERIDA')) return falla(400, 'falta_declaracion');
+    if (m.includes('CAMPANAS_EN_PAUSA_GLOBAL')) return falla(409, 'pausa_global');
+    if (m.includes('ACEPTACION_REQUERIDA')) return falla(400, 'falta_aceptacion');
+    if (m.includes('SIN_AJUSTES')) return falla(404, 'sin_ajustes');
+    if (m.includes('PLANTILLA_NO_APROBADA')) return falla(409, 'plantilla_no_lista');
+    if (m.includes('INTERES_REQUERIDO')) return falla(400, 'falta_interes');
+    return falla(409, 'no_se_pudo_aprobar', m);
+}
+
+async function nombreDeLaEscuela(schoolId: string): Promise<string> {
+    const { data } = await supabase.from('schools').select('name').eq('id', schoolId).maybeSingle();
+    return String((data as any)?.name ?? '').trim() || 'la escuela';
+}
+
+// ─── Activación por la propia escuela y pausas ───────────────────────────────
+
+/** ¿La escuela ya aceptó la declaración de activación? Nunca lanza (false ante la duda). */
+export async function activacionAceptada(schoolId: string): Promise<boolean> {
+    try {
+        const { data, error } = await supabase.from('whatsapp_campanas_declaraciones')
+            .select('id').eq('school_id', schoolId).eq('tipo', 'activacion').limit(1);
+        return !error && ((data as any[]) ?? []).length > 0;
+    } catch {
+        return false;
+    }
+}
+
+/** El texto que la escuela acepta al activar (lo muestra la pantalla). */
+export async function declaracionDeActivacion(schoolId: string): Promise<{ version: string; texto: string }> {
+    return { version: RESPONSABILIDAD.versionActivacion, texto: RESPONSABILIDAD.textoActivacion(await nombreDeLaEscuela(schoolId)) };
+}
+
+/**
+ * La administración de ESA escuela prende sus campañas aceptando la declaración
+ * (`wa_campanas_activar` valida a `por` adentro; el admin de plataforma recibe
+ * 403). No cambia topes ni levanta pausas.
+ */
+export async function activarCampanas(p: { schoolId: string; por: string; declaracionAceptada: boolean }): Promise<ResultadoOperacion> {
+    if (!p.declaracionAceptada) return falla(400, 'falta_declaracion');
+    const { version, texto } = await declaracionDeActivacion(p.schoolId);
+    const { error } = await supabase.rpc('wa_campanas_activar', {
+        p_school_id: p.schoolId, p_por: p.por, p_version: version, p_texto: texto,
+    });
+    if (error) return fallaDeRpc(error);
+    return { ok: true };
+}
+
+/** Lo que la escuela acepta al reanudar tras el freno (queda en la bitácora con usuario y fecha). */
+export function textoDeAceptacionDePausa(motivo: string | null): string {
+    const legible = (motivo && (MOTIVO_LEGIBLE as Record<string, string>)[motivo]) || 'el sistema detectó un riesgo para el número';
+    return `Vi que mis campañas se pausaron porque ${legible}. Revisé el motivo y acepto reanudarlas bajo mi responsabilidad. `
+        + 'Entiendo que si la pausa automática vuelve a saltar en los próximos 7 días, solo SportMaps podrá levantarla.';
+}
+
+/**
+ * La escuela levanta SU pausa (la del freno automático, aceptando el motivo, o una
+ * suya) sin reanudar ninguna campaña. La pausa de plataforma no la levanta la
+ * escuela: `wa_campanas_reanudar_escuela` valida el origen ADENTRO.
+ */
+export async function reanudarEscuela(p: { schoolId: string; por: string; aceptada: boolean }): Promise<ResultadoOperacion> {
+    const { ajustes } = await leerAjustesCampanas(p.schoolId);
+    if (!ajustes?.habilitadas) return falla(409, 'campanas_apagadas');
+    if (!ajustes.pausadaAt) return { ok: true };
+    if (ajustes.pausaOrigen === 'plataforma') return falla(409, 'pausa_de_plataforma');
+    const delFreno = ajustes.pausaOrigen !== 'escuela';
+    if (delFreno && !p.aceptada) return falla(400, 'falta_aceptacion');
+    const { error } = await supabase.rpc('wa_campanas_reanudar_escuela', {
+        p_school_id: p.schoolId, p_por: p.por,
+        p_aceptacion: delFreno ? textoDeAceptacionDePausa(ajustes.pausaMotivo) : null,
+    });
+    if (error) return fallaDeRpc(error);
+    return { ok: true };
+}
+
+/** La escuela pausa TODAS sus campañas (origen 'escuela'; la levanta ella misma). */
+export async function pausarEscuela(p: { schoolId: string; por: string }): Promise<ResultadoOperacion> {
+    const { error } = await supabase.rpc('wa_campanas_pausar_escuela', {
+        p_school_id: p.schoolId, p_por: p.por, p_origen: 'escuela', p_motivo: 'manual',
+    });
+    if (error) return fallaDeRpc(error);
+    return { ok: true };
+}
+
+/**
+ * Freno de emergencia de SportMaps sobre UNA escuela: pausa (o levanta) todas sus
+ * campañas. La RPC valida ADENTRO que `por` sea administrador de plataforma activo.
+ */
+export async function pausaDePlataforma(p: { schoolId: string; por: string; pausar: boolean; motivo?: string | null }): Promise<ResultadoOperacion> {
+    const { error } = p.pausar
+        ? await supabase.rpc('wa_campanas_pausar_escuela', {
+            p_school_id: p.schoolId, p_por: p.por, p_origen: 'plataforma', p_motivo: (p.motivo ?? '').trim() || 'pausa_de_plataforma',
+        })
+        : await supabase.rpc('wa_campanas_reanudar_escuela', { p_school_id: p.schoolId, p_por: p.por, p_aceptacion: null });
+    if (error) return fallaDeRpc(error);
+    return { ok: true };
+}
+
+export interface FrenoGlobal { pausada: boolean; desde: string | null; motivo: string | null }
+
+/** Freno global de campañas (todas las escuelas). Sin la migración: sin freno. Nunca lanza. */
+export async function leerFrenoGlobal(): Promise<FrenoGlobal> {
+    try {
+        const { data } = await supabase.from('whatsapp_campanas_freno_global').select('pausada_at, motivo').maybeSingle();
+        const desde = typeof (data as any)?.pausada_at === 'string' ? (data as any).pausada_at : null;
+        return { pausada: Boolean(desde), desde, motivo: desde ? ((data as any)?.motivo ?? null) : null };
+    } catch {
+        return { pausada: false, desde: null, motivo: null };
+    }
+}
+
+/** Pone o quita el freno global (`wa_campanas_freno_global` valida ADENTRO al administrador de plataforma). */
+export async function cambiarFrenoGlobal(p: { por: string; pausar: boolean; motivo?: string | null }): Promise<ResultadoOperacion> {
+    const { error } = await supabase.rpc('wa_campanas_freno_global', {
+        p_por: p.por, p_pausar: p.pausar, p_motivo: (p.motivo ?? '').trim() || null,
+    });
+    if (error) return fallaDeRpc(error);
+    return { ok: true };
+}
+
+export interface EscuelaConCampanas {
+    school_id: string; nombre: string; habilitadas: boolean;
+    pausada_at: string | null; pausa_motivo: string | null; pausa_origen: string | null;
+}
+
+/** Escuelas con fila de campañas, para la pantalla de plataforma (una lectura + nombres en lote). */
+export async function escuelasConCampanas(): Promise<EscuelaConCampanas[]> {
+    const { data } = await supabase.from('whatsapp_campanas_ajustes')
+        .select('school_id, habilitadas, pausada_at, pausa_motivo, pausa_origen').limit(500);
+    const filas = (data as any[]) ?? [];
+    if (!filas.length) return [];
+    const { data: escuelas } = await supabase.from('schools').select('id, name').in('id', filas.map((f) => f.school_id));
+    const nombre = new Map(((escuelas as any[]) ?? []).map((e) => [String(e.id), String(e.name ?? '')]));
+    return filas.map((f) => ({
+        school_id: String(f.school_id), nombre: nombre.get(String(f.school_id)) ?? '', habilitadas: f.habilitadas === true,
+        pausada_at: f.pausada_at ?? null, pausa_motivo: f.pausa_motivo ?? null, pausa_origen: f.pausa_origen ?? null,
+    }));
 }
 
 export async function pausarCampana(schoolId: string, campanaId: string): Promise<ResultadoOperacion> {
@@ -1124,17 +1390,21 @@ export async function pausarCampana(schoolId: string, campanaId: string): Promis
 }
 
 /**
- * Reanudar (a mano): la campaña vuelve a 'enviando' y, si la escuela estaba en
- * pausa por el freno, se levanta. Si la señal sigue, el próximo tick vuelve a
- * frenar.
+ * Reanudar UNA campaña (a mano): vuelve a 'enviando'. Ya NO levanta la pausa de la
+ * escuela: con la escuela en pausa responde 409 (primero `reanudarEscuela`, viendo
+ * y aceptando el motivo; o SportMaps, si la pausa es de plataforma).
  */
 export async function reanudarCampana(schoolId: string, campanaId: string): Promise<ResultadoOperacion> {
     const campana = await campanaDeEscuela(schoolId, campanaId);
     if (!campana) return falla(404, 'campana_no_existe');
     if (campana.estado !== 'pausada') return falla(409, 'no_esta_en_pausa');
+    // Reanudar UNA campaña ya no levanta la pausa de la escuela: eso es `reanudarEscuela`
+    // (ver el motivo y aceptarlo) o, si es de plataforma, SportMaps.
+    const { ajustes } = await leerAjustesCampanas(schoolId);
+    if (ajustes?.pausadaAt) {
+        return falla(409, ajustes.pausaOrigen === 'plataforma' ? 'pausa_de_plataforma' : 'escuela_en_pausa', ajustes.pausaMotivo ?? undefined);
+    }
     const ahoraIso = new Date().toISOString();
-    await supabase.from('whatsapp_campanas_ajustes')
-        .update({ pausada_at: null, pausa_motivo: null, updated_at: ahoraIso }).eq('school_id', schoolId);
     await supabase.from('whatsapp_campanas')
         .update({ estado: campana.aprobada_at ? 'enviando' : 'borrador', pausa_motivo: null, updated_at: ahoraIso })
         .eq('id', campana.id);

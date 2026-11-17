@@ -77,7 +77,9 @@ router.patch('/:schoolId/cortesias/:leadId/asistencia', requireAuth, async (req:
  * POST /api/v1/whatsapp/:schoolId/cortesias/sincronizar-franjas   { teamId?: uuid }  (o team_id)
  *
  * Lo llama «Mi semana» del entrenador (fire-and-forget) después de cancelar,
- * mover o agregar un entreno (plan B2/B3 §3, T7). Dos cosas, en este orden:
+ * mover o agregar un entreno (plan B2/B3 §3, T7), y WhatsApp › Horarios al
+ * guardar el horario de un grupo (esa sí espera la respuesta y muestra
+ * `franjas.sinHorarioConReserva`). Dos cosas, en este orden:
  *   1. A quien tenía una clase de prueba en una sesión cancelada o movida se le
  *      escribe «clase reprogramada» con el botón para elegir otro horario (sin
  *      volver a cobrar). Idempotente por lead y franja.
@@ -117,7 +119,12 @@ router.post('/:schoolId/cortesias/sincronizar-franjas', requireAuth, async (req:
         const r = await sincronizarFranjasDeEscuela(schoolId, { aplicar: true, soloEquipo: teamId });
         return res.json({
             ok: true, reprogramadas,
-            franjas: { creadas: r.creadas, cerradas: r.cerradas, conservadasConReserva: r.conservadasConReserva.length, errores: r.errores.length },
+            franjas: {
+                creadas: r.creadas, cerradas: r.cerradas, conservadasConReserva: r.conservadasConReserva.length, errores: r.errores.length,
+                // Con reservas en un horario que ya no existe (cerradas a gente
+                // nueva): «Horarios» le dice a la escuela a quiénes avisar.
+                sinHorarioConReserva: r.conReservaSinHorario ?? [],
+            },
         });
     } catch (e: any) {
         console.error('[cortesias] sincronizar franjas falló', { schoolId, err: e?.message });

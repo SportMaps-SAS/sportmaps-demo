@@ -283,7 +283,11 @@ describe('excedente y cuentas por fuera de SportMaps (2026-10-13)', () => {
         expect(enviados()[0]).toContain('Listo: comprobante de *$200.000* de *Atleta* para *octubre*');
         expect(enviados()[0]).toContain('$20.000 de más');
         expect(enviados()[0]).toContain('saldo a favor');
-        expect(cierre()).toMatchObject({ status: 'done', result_type: 'payment_receipt', result_ref_id: 'p-men' });
+        // (R9, auditoría 1–16 nov 2026) Antes `done`: $197.000 leídos contra una mensualidad de $180.000 figuraban
+        // resueltos y nadie los revisó. El comprobante sigue aplicado al mismo cobro; la fila queda `ignored` +
+        // `payment_receipt` para que la bandeja la muestre en ACCIÓN con los dos valores.
+        expect(cierre()).toMatchObject({ status: 'ignored', result_type: 'payment_receipt', result_ref_id: 'p-men' });
+        expect(cierre().error_message).toMatch(/^monto_distinto_aplicado: comprobante de \$200\.000 aplicado a .*, que vale \$180\.000 \(\$20\.000 de más\)/);
     });
 
     it('pagó de menos y la escuela no recibe abonos → como antes, a la escuela con huellas para la bandeja', async () => {

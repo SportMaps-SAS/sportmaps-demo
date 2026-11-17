@@ -28,6 +28,8 @@ import type { ConceptoEsperado } from './wa-concepto-esperado.service';
 import type { OpcionGuiada } from './whatsapp-comprobante-guiado.service';
 import { esAfiliado } from './wa-afiliado.service';
 import { normalizarFrase } from './whatsapp-reglas-turno';
+import type { DatosDeRegistro } from './whatsapp-datos-de-registro';
+import { camposDeRegistro, hayRegistro, mismaPersona } from './wa-registro-de-venta.service';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -117,7 +119,53 @@ export type MotivoPorMonto =
     | { tipo: 'ambiguo'; precios: PrecioDeMotivo[] }
     /** El monto es una cuota de la familia: sigue el camino de hoy (la mensualidad). */
     | { tipo: 'es_cuota' }
+    /**
+     * El monto es N × un mismo artículo (N de 2 a 4), solo o con la matrícula. NO se crea solo:
+     * la base no admite dos cobros del mismo artículo con un comprobante (UNIQUE
+     * `(queue_id, fuente, fuente_id)`). Va a la escuela con la propuesta escrita.
+     */
+    | { tipo: 'con_cantidad'; base: PrecioDeMotivo | null; articulo: PrecioDeMotivo; cantidad: number }
     | { tipo: 'ninguno' };
+
+/** El caso `con_cantidad` de `motivoPorMonto`. */
+export type MotivoConCantidad = Extract<MotivoPorMonto, { tipo: 'con_cantidad' }>;
+
+/** Cuántas veces se busca un mismo artículo en un comprobante. */
+const CANTIDAD_MIN = 2;
+const CANTIDAD_MAX = 4;
+
+const enPesos = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+
+/**
+ * La propuesta para la nota que ve la escuela: «matrícula ($310.000) + 2 × Camiseta de
+ * entrenamiento ($30.000 c/u)». Pura.
+ */
+export function textoDeCantidad(m: Pick<MotivoConCantidad, 'base' | 'articulo' | 'cantidad'>): string {
+    const articulo = `${m.cantidad} × ${m.articulo.etiqueta} (${enPesos(m.articulo.monto)} c/u)`;
+    if (!m.base) return articulo;
+    const base = m.base.motivo === 'inscripcion' ? 'matrícula' : m.base.etiqueta;
+    return `${base} (${enPesos(m.base.monto)}) + ${articulo}`;
+}
+
+/**
+ * ¿El monto es N × un mismo artículo (2 a 4), solo o sumado a la matrícula? Solo si hay UNA
+ * forma de explicarlo (dos artículos del mismo precio no dicen cuál es). Pura.
+ */
+function cantidadDeArticulo(monto: number, lista: PrecioDeMotivo[]): MotivoConCantidad | null {
+    const articulos = lista.filter((p) => p.motivo === 'articulos' && !p.esAbono);
+    const bases: (PrecioDeMotivo | null)[] = [null, ...lista.filter((p) => p.motivo === 'inscripcion' && !p.esAbono)];
+    const formas: MotivoConCantidad[] = [];
+    for (const base of bases) {
+        for (const articulo of articulos) {
+            for (let cantidad = CANTIDAD_MIN; cantidad <= CANTIDAD_MAX; cantidad++) {
+                if (igual((base?.monto ?? 0) + cantidad * articulo.monto, monto)) {
+                    formas.push({ tipo: 'con_cantidad', base, articulo, cantidad });
+                }
+            }
+        }
+    }
+    return formas.length === 1 ? formas[0] : null;
+}
 
 /** Misma fuente e id = opciones del mismo ítem (p. ej. las semanas del vacacional). Pura. */
 const mismoServicio = (a: PrecioDeMotivo, b: PrecioDeMotivo) =>
@@ -174,7 +222,8 @@ export function motivoPorMonto(
     }
     if (sumas.length === 1) return { tipo: 'varios', precios: sumas[0] };
     if (sumas.length > 1) return { tipo: 'ambiguo', precios: sinRepetir(sumas.flat()) };
-    return { tipo: 'ninguno' };
+    // Solo lo que hasta acá no se explicaba: lo que ya se resolvía (uno, varios, ambiguo) no cambia.
+    return cantidadDeArticulo(monto, lista) ?? { tipo: 'ninguno' };
 }
 
 /** Dónde cayó la plata, con la precisión que pide «agendar al recibir». */
@@ -404,6 +453,8 @@ export interface ItemDeServicio {
     /** 1–100: con este % del precio se separa el cupo (abono; el resto queda pendiente). Exige `allow_installments`. */
     abono_minimo_pct?: number | null;
     allow_installments?: boolean | null;
+    /** 'YYYY-MM-DD': hasta cuándo se paga el saldo de un abono (puede no existir ni venir en la lectura). */
+    saldo_hasta?: string | null;
     /** `[{clave, etiqueta, precio, precio_afiliado}]`. */
     opciones?: unknown;
 }
@@ -811,6 +862,39 @@ function preciosDeVentaEn(item: ItemDeServicio, ahora: number, afiliado: boolean
     return { completos, total, minimo };
 }
 
+/** El precio y el abono mínimo de un servicio para un tipo de persona en una fecha. */
+export interface NivelDeAbonoEnFecha { total: number; minimo: number | null }
+
+/**
+ * (2026-11-16, Monster: tres comprobantes de la clínica cerraron «monto no cuadra») Lo que pedía el servicio EN ESA FECHA,
+ * para quien NO es afiliado y para quien sí (null si el ítem no tiene precio de afiliado o tiene opciones, que no
+ * tienen un total único). `fecha` null = hoy. Solo para explicar a la escuela: el precio del cobro lo sigue poniendo
+ * la RPC. Pura.
+ */
+export function minimosEnFecha(item: ItemDeServicio, fecha: string | null, ahora = Date.now()): {
+    fecha: string; noAfiliado: NivelDeAbonoEnFecha | null; afiliado: NivelDeAbonoEnFecha | null;
+} {
+    const dia = fecha ?? hoyBogota(ahora);
+    const cuando = fecha ? msDelDia(fecha) : ahora;
+    const nivel = (afiliado: boolean): NivelDeAbonoEnFecha | null => {
+        const p = preciosDeVentaEn(item, cuando, afiliado);
+        return p.total === null ? null : { total: p.total, minimo: p.minimo };
+    };
+    return { fecha: dia, noAfiliado: nivel(false), afiliado: hayPrecioDeAfiliado([item]) ? nivel(true) : null };
+}
+
+/** El `saldo_hasta` del ítem (una lectura, solo cuando hay que explicarle a la escuela). Nunca lanza; null si no existe la columna. */
+export async function saldoHastaDelItem(schoolId: string, itemId: string): Promise<string | null> {
+    try {
+        const { data, error } = await supabase.from('school_tournament_items')
+            .select('saldo_hasta').eq('school_id', schoolId).eq('id', itemId).maybeSingle();
+        const f = (data as any)?.saldo_hasta;
+        return !error && typeof f === 'string' && /^[0-9]{4}-[0-9]{2}-[0-9]{2}/.test(f) ? f.slice(0, 10) : null;
+    } catch {
+        return null;
+    }
+}
+
 /** ¿`monto` es un abono válido de `total` (≥ mínimo −$1 y < total −$1, como la RPC)? Pura. */
 const esAbonoValido = (monto: number, total: number | null, minimo: number | null) =>
     total !== null && minimo !== null && monto >= minimo - TOLERANCIA && monto < total - TOLERANCIA;
@@ -927,6 +1011,8 @@ export interface LeadDeVenta {
     /** El nombre es el del deportista (el lead pasó por un registro completo: embudo, puerta, formulario). */
     conocido: boolean;
     sourceDetail: Record<string, any>;
+    /** Lo que la ficha guarda de quien asiste (2026-11-16): fecha de nacimiento, acudiente y respuestas (posición). */
+    ficha?: { full_name: string | null; birth_date: string | null; guardian_name: string | null; respuestas: Record<string, unknown> | null };
 }
 
 /**
@@ -952,7 +1038,7 @@ export async function leadDeVenta(
     perfil?: string | null,
 ): Promise<LeadDeVenta | null> {
     try {
-        let q = supabase.from('school_signup_leads').select('id, full_name, status, source_detail').eq('school_id', schoolId);
+        let q = supabase.from('school_signup_leads').select('id, full_name, status, source_detail, birth_date, guardian_name, respuestas').eq('school_id', schoolId);
         if (leadId) {
             q = q.eq('id', leadId);
         } else {
@@ -965,8 +1051,17 @@ export async function leadDeVenta(
         const l = !error && Array.isArray(data) ? (data[0] as any) : null;
         if (!l?.id || l.status === 'discarded') return null;
         const sd = (l.source_detail && typeof l.source_detail === 'object' ? l.source_detail : {}) as Record<string, any>;
-        const nombre = esNombreDeRelleno(l.full_name, sd.asistente_servicio ? null : perfil) ? null : String(l.full_name).trim();
-        return { id: l.id, nombre, conocido: !!nombre && !!(sd.registro_completo_at || sd.asistente_servicio), sourceDetail: sd };
+        // `asistente_servicio` SIN nombre (el bot anotó la fecha o la edad antes de saber quién asiste) no confirma
+        // el nombre de la ficha: sigue siendo el del perfil.
+        const conAsistente = typeof sd.asistente_servicio?.nombre === 'string' && !!sd.asistente_servicio.nombre.trim();
+        const nombre = esNombreDeRelleno(l.full_name, conAsistente ? null : perfil) ? null : String(l.full_name).trim();
+        return {
+            id: l.id, nombre, conocido: !!nombre && !!(sd.registro_completo_at || conAsistente), sourceDetail: sd,
+            ficha: {
+                full_name: l.full_name ?? null, birth_date: l.birth_date ?? null, guardian_name: l.guardian_name ?? null,
+                respuestas: l.respuestas && typeof l.respuestas === 'object' ? l.respuestas : null,
+            },
+        };
     } catch {
         return null;
     }
@@ -982,22 +1077,53 @@ export async function leadDeVenta(
 export async function asegurarLeadDeVenta(p: {
     schoolId: string; conversationId: string | null; telefono: string; nombre: string;
     item: Pick<ItemDeServicio, 'id' | 'name' | 'kind'>; lead: LeadDeVenta | null;
+    /**
+     * (2026-11-16) Los datos de registro de quien asiste (fecha de nacimiento, acudiente, posición, edad): se
+     * guardan en la ficha para no volver a pedirlos. Sin esto, todo queda como antes.
+     */
+    registro?: DatosDeRegistro | null;
+    /** La ficha ya es de otra persona y esta compra es para alguien más: no se pisa, queda en `otros_asistentes`. */
+    otraPersona?: boolean;
+    /** Recibe `false` cuando la ficha NO quedó escrita (para no decir «anoté» sin haber guardado). */
+    alGuardar?: (ok: boolean) => void;
 }): Promise<string | null> {
     try {
         const ahora = new Date().toISOString();
+        const hoy = hoyBogota(Date.now());
         if (p.lead) {
+            const sd = p.lead.sourceDetail ?? {};
+            const fichaActual = { ...(p.lead.ficha ?? {}), source_detail: sd };
             if (!p.lead.conocido) {
-                const sd = p.lead.sourceDetail ?? {};
+                const extra = p.registro
+                    ? camposDeRegistro(fichaActual, { ...p.registro, nombre: p.nombre }, { servicioId: p.item.id, ahora, hoy })
+                    : null;
+                const { source_detail: sdExtra, ...columnas } = extra ?? { source_detail: null };
                 const { error } = await supabase.from('school_signup_leads').update({
                     full_name: p.nombre,
+                    ...columnas,
                     source_detail: {
                         ...sd,
                         ...(p.lead.nombre && p.lead.nombre !== p.nombre && !sd.contacto ? { contacto: p.lead.nombre } : {}),
-                        asistente_servicio: { nombre: p.nombre, servicio_id: p.item.id, at: ahora },
+                        asistente_servicio: {
+                            ...(((sdExtra as any)?.asistente_servicio ?? {}) as Record<string, unknown>),
+                            nombre: p.nombre, servicio_id: p.item.id, at: ahora,
+                        },
                     },
                     updated_at: ahora,
                 }).eq('id', p.lead.id);
                 if (error) console.warn('[wa-cobro-comprobante] no se pudo poner el nombre al prospecto', { leadId: p.lead.id, msg: error.message });
+                p.alGuardar?.(!error);
+            } else if (p.registro && hayRegistro(p.registro)) {
+                // La ficha ya tiene a quien asiste: se completan sus datos; si es otra persona, va aparte.
+                const otra = p.otraPersona === true || !mismaPersona(p.lead.nombre, p.nombre);
+                const extra = camposDeRegistro(fichaActual, { ...p.registro, nombre: otra ? p.nombre : (p.lead.nombre ?? p.nombre) },
+                    { servicioId: p.item.id, ahora, hoy, otraPersona: otra });
+                const { error } = await supabase.from('school_signup_leads')
+                    .update({ ...extra, updated_at: ahora }).eq('id', p.lead.id);
+                if (error) console.warn('[wa-cobro-comprobante] no se pudieron guardar los datos de registro', { leadId: p.lead.id, msg: error.message });
+                p.alGuardar?.(!error);
+            } else {
+                p.alGuardar?.(true);
             }
             return p.lead.id;
         }
@@ -1006,17 +1132,53 @@ export async function asegurarLeadDeVenta(p: {
             schoolId: p.schoolId, conversationId: p.conversationId ?? '', contactWaId: p.telefono, nombre: p.nombre,
             textos: [], estado: 'respondido', servicio: { id: p.item.id, nombre: p.item.name, tipo: p.item.kind },
         });
-        if (!r?.leadId) return null;
+        if (!r?.leadId) { p.alGuardar?.(false); return null; }
         // Marca: este nombre es el de quien asiste (el próximo comprobante no lo vuelve a preguntar).
-        const { data: creado } = await supabase.from('school_signup_leads').select('source_detail').eq('id', r.leadId).maybeSingle();
-        await supabase.from('school_signup_leads').update({
+        const { data: creado } = await supabase.from('school_signup_leads')
+            .select('source_detail, birth_date, guardian_name, respuestas').eq('id', r.leadId).maybeSingle();
+        const sdCreado = (((creado as any)?.source_detail ?? {}) as Record<string, unknown>);
+        const extra = p.registro
+            ? camposDeRegistro({ ...((creado as any) ?? {}), source_detail: sdCreado }, { ...p.registro, nombre: p.nombre },
+                { servicioId: p.item.id, ahora, hoy })
+            : null;
+        const { source_detail: sdExtra, ...columnas } = extra ?? { source_detail: null };
+        const { error: eMarca } = await supabase.from('school_signup_leads').update({
+            ...columnas,
             source_detail: {
-                ...(((creado as any)?.source_detail ?? {}) as Record<string, unknown>),
-                asistente_servicio: { nombre: p.nombre, servicio_id: p.item.id, at: ahora },
+                ...sdCreado,
+                asistente_servicio: {
+                    ...(((sdExtra as any)?.asistente_servicio ?? {}) as Record<string, unknown>),
+                    nombre: p.nombre, servicio_id: p.item.id, at: ahora,
+                },
             },
         }).eq('id', r.leadId);
+        p.alGuardar?.(!eMarca);
         return r.leadId;
     } catch {
+        p.alGuardar?.(false);
         return null;
+    }
+}
+
+/**
+ * (2026-11-16) Datos de registro que llegan ANTES del nombre o DESPUÉS del cobro (la fecha de nacimiento, el
+ * acudiente, la posición): se guardan en la ficha que ya existe, sin tocar su nombre. true = quedó escrito.
+ * Sin ficha no hay dónde guardar: false (quien llama no dice que lo anotó). Nunca lanza.
+ */
+export async function guardarDatosDeRegistro(p: {
+    lead: LeadDeVenta | null; registro: DatosDeRegistro; item: Pick<ItemDeServicio, 'id'>;
+}): Promise<boolean> {
+    if (!p.lead || !hayRegistro(p.registro)) return false;
+    try {
+        const ahora = new Date().toISOString();
+        const extra = camposDeRegistro(
+            { ...(p.lead.ficha ?? {}), source_detail: p.lead.sourceDetail ?? {} },
+            { ...p.registro, nombre: p.lead.conocido ? p.lead.nombre : null },
+            { servicioId: p.item.id, ahora, hoy: hoyBogota(Date.now()) });
+        const { error } = await supabase.from('school_signup_leads').update({ ...extra, updated_at: ahora }).eq('id', p.lead.id);
+        if (error) console.warn('[wa-cobro-comprobante] no se pudieron guardar los datos de registro', { leadId: p.lead.id, msg: error.message });
+        return !error;
+    } catch {
+        return false;
     }
 }

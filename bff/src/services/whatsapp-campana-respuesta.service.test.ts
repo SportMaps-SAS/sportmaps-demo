@@ -163,21 +163,48 @@ describe('filtros puros', () => {
 });
 
 describe('botones', () => {
-    it('«No recibir más» → opt-out con el wamid, fuera de la audiencia, envío baja y confirmación (aun con la escuela escribiendo)', async () => {
+    it('«No recibir más» → baja de promociones con el wamid, fuera de la audiencia, envío baja y confirmación (aun con la escuela escribiendo)', async () => {
         est.discreto = true; est.escuelaActiva = true;
         const msg = boton('baja');
         expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg })).toBe('baja');
-        const optout = db.rpcLlamadas.find((l) => l.fn === 'wa_register_optin')!;
-        expect(optout.args).toMatchObject({ p_integration_id: INTEG.id, p_contact_wa_id: TEL, p_opt_out: true, p_source_ref: msg.waMessageId });
+        const baja = db.rpcLlamadas.find((l) => l.fn === 'wa_registrar_baja_promos')!;
+        expect(baja.args).toEqual({ p_integration_id: INTEG.id, p_school_id: ESC, p_contact_wa_id: TEL, p_ref: msg.waMessageId });
         expect(db.t.whatsapp_audiencia[0].excluido).toBe('baja');
         expect(db.t.whatsapp_campana_envios[0].estado).toBe('baja');
         expect(est.enviados).toHaveLength(1);
-        expect(est.enviados[0].texto).toMatch(/no volverás a recibir mensajes automáticos de Monster´s Volley Club/);
+        // Lo que se le promete: no más PROMOCIONES; los avisos de pago siguen.
+        expect(est.enviados[0].texto).toMatch(/no volverás a recibir promociones de Monster´s Volley Club/);
+        expect(est.enviados[0].texto).toMatch(/esos avisos sí te siguen llegando/);
+        expect(est.enviados[0].texto).not.toMatch(/mensajes automáticos/);
         const saliente = db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!;
         expect(saliente.args.p_payload).toMatchObject({ step: 'opt_out_confirmado', automatico: true });
 
-        // Segundo toque: el opt-out se reafirma, pero no se repite la confirmación.
+        // Segundo toque: la baja se reafirma, pero no se repite la confirmación.
         expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('baja') })).toBe('repetido');
+        expect(db.rpcLlamadas.filter((l) => l.fn === 'wa_registrar_baja_promos')).toHaveLength(2);
+        expect(est.enviados).toHaveLength(1);
+    });
+
+    it('«No recibir más» NO es la baja total: nunca llama wa_register_optin; registra wa_registrar_baja_promos con el wamid como p_ref', async () => {
+        const msg = boton('baja');
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg })).toBe('baja');
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_register_optin')).toBe(false);
+        expect(db.rpcLlamadas.filter((l) => l.fn === 'wa_registrar_baja_promos').map((l) => l.args)).toEqual([
+            { p_integration_id: INTEG.id, p_school_id: ESC, p_contact_wa_id: TEL, p_ref: msg.waMessageId },
+        ]);
+        expect(msg.waMessageId).toMatch(/^wamid\./);
+        // Ninguna RPC de este turno lleva un opt-out total.
+        expect(db.rpcLlamadas.some((l) => l.args?.p_opt_out === true)).toBe(false);
+    });
+
+    it('«No recibir más» de una campaña que ya no existe: la baja de promociones se registra igual', async () => {
+        const OTRA = '22222222-2222-4222-8222-222222222222';
+        const msg = boton('baja', OTRA);
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg })).toBe('baja');
+        expect(db.rpcLlamadas.find((l) => l.fn === 'wa_registrar_baja_promos')!.args).toMatchObject({ p_contact_wa_id: TEL, p_ref: msg.waMessageId });
+        expect(db.t.whatsapp_audiencia[0].excluido).toBe('baja');
+        // El envío de la campaña que sí existe no se toca.
+        expect(db.t.whatsapp_campana_envios[0].estado).toBe('enviado');
         expect(est.enviados).toHaveLength(1);
     });
 

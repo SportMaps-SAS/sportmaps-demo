@@ -67,6 +67,11 @@ vi.mock('@/lib/api/chargeBatches', async (orig) => {
 
 import { CobrosYPagosModal } from './CobrosYPagosModal';
 
+/** Pago en efectivo = sin comprobante: el botón espera a que se diga quién recibió la plata. */
+async function llenarRecibio(por = 'Alejandra L.') {
+    fireEvent.change(await screen.findByLabelText('¿Quién lo recibió?'), { target: { value: por } });
+}
+
 function renderModal(props: Partial<React.ComponentProps<typeof CobrosYPagosModal>> = {}) {
     return render(
         <CobrosYPagosModal open onOpenChange={vi.fn()} onSuccess={vi.fn()} initialAthleteId="ath-1" {...props} />,
@@ -120,6 +125,7 @@ describe('CobrosYPagosModal — interruptor y permisos', () => {
 describe('CobrosYPagosModal — un atleta', () => {
     it('preelige el pendiente más antiguo, deshabilita el que está en revisión y registra el pago', async () => {
         renderModal();
+        await llenarRecibio();
         await waitFor(() => expect(api.openCharges).toHaveBeenCalledWith({ type: 'child', id: 'ath-1' }));
         expect(await screen.findByText('Mensualidad Septiembre 2026')).toBeInTheDocument();
 
@@ -140,10 +146,22 @@ describe('CobrosYPagosModal — un atleta', () => {
             athletes: [{ type: 'child', id: 'ath-1' }],
             preview_hash: 'h1',
             pending: [{ payment_id: 'p-sep', pay_amount: 759_150, close_mode: 'abono', seen: { amount: 759_150, amount_paid: 0 } }],
-            payment: { method: 'cash' },
+            payment: { method: 'cash', received_by: 'Alejandra L.' },
         });
         expect(body.client_request_id).toMatch(/^[0-9a-f-]{36}$/);
         expect(await screen.findByTestId('cyp-result')).toHaveTextContent('1 pago registrado');
+    });
+
+    it('en efectivo (sin comprobante) el botón espera a «¿Quién lo recibió?» y lo dice', async () => {
+        renderModal();
+        await screen.findByLabelText('¿Quién lo recibió?');
+        await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(1), { timeout: 3000 });
+        // La vista previa se ve igual; lo que falta frena solo el botón.
+        expect(screen.getByTestId('cyp-primary')).toBeDisabled();
+        expect(screen.getByTestId('cyp-button-reason')).toHaveTextContent('Escribe quién recibió el pago');
+        await llenarRecibio();
+        // El cuerpo cambió (lleva received_by): se pide la vista previa de nuevo tras el debounce.
+        await waitFor(() => expect(screen.getByTestId('cyp-primary')).toBeEnabled(), { timeout: 4000 });
     });
 
     it('condonar el recargo cambia el saldo y el monto a pagar', async () => {
@@ -165,6 +183,7 @@ describe('CobrosYPagosModal — un atleta', () => {
         const { ChargeBatchError } = await import('@/lib/api/chargeBatches');
         api.create.mockRejectedValueOnce(new ChargeBatchError('PREVIEW_STALE', 'Algo cambió mientras revisabas.', 409));
         renderModal();
+        await llenarRecibio();
         const btn = screen.getByTestId('cyp-primary');
         await waitFor(() => expect(btn).toBeEnabled(), { timeout: 3000 });
         fireEvent.click(btn);
@@ -179,6 +198,7 @@ describe('CobrosYPagosModal — vista previa sin pedidos de más', () => {
 
     it('un re-render con el mismo cuerpo, o editar y deshacer, no vuelven a pedir la vista previa', async () => {
         renderModal();
+        await llenarRecibio();
         await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(1), { timeout: 3000 });
         await waitFor(() => expect(screen.getByTestId('cyp-primary')).toBeEnabled());
         const pagar = screen.getByLabelText('Pagar');
@@ -201,6 +221,7 @@ describe('CobrosYPagosModal — vista previa sin pedidos de más', () => {
             .mockRejectedValueOnce(new ChargeBatchError('RATE_LIMIT', 'Demasiadas', 429, undefined, 1))
             .mockImplementation(ok);
         renderModal();
+        await llenarRecibio();
         expect(await screen.findByText(/Espera un momento/, undefined, { timeout: 3000 })).toBeInTheDocument();
         await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2), { timeout: 3000 });
         await waitFor(() => expect(screen.getByTestId('cyp-primary')).toBeEnabled());
@@ -211,6 +232,7 @@ describe('CobrosYPagosModal — vista previa sin pedidos de más', () => {
         const { ChargeBatchError } = await import('@/lib/api/chargeBatches');
         api.preview.mockRejectedValue(new ChargeBatchError('RATE_LIMIT', 'Hiciste muchas solicitudes seguidas.', 429, undefined, 1));
         renderModal();
+        await llenarRecibio();
         expect(await screen.findByText('Hiciste muchas solicitudes seguidas.', undefined, { timeout: 5000 })).toBeInTheDocument();
         expect(api.preview).toHaveBeenCalledTimes(2);
         await espera(1300);

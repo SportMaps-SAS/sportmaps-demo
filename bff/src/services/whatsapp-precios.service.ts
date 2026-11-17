@@ -12,6 +12,7 @@
  */
 import { supabase } from '../config/supabase';
 import { pesos } from './whatsapp-reclamo-valor.service';
+import type { PrecioDeMotivo } from './wa-cobro-desde-comprobante.service';
 
 export interface PlanConPrecio {
     nombre: string | null;
@@ -55,8 +56,104 @@ export function textoDePrecios(planes: PlanConPrecio[]): string | null {
         ...lista.map((p) => `• ${p.nombre}: *${pesos(p.precio)}*${p.clases ? ` · ${p.clases}` : ''}`)].join('\n');
 }
 
-/** Planes activos de la escuela con su precio. Nunca lanza. */
-export async function textoDePreciosDeEscuela(schoolId: string): Promise<string | null> {
+// ─── Matrícula y artículos (Monster 2026-11-16) ──────────────────────────────
+//
+// El bot solo sabía la mensualidad: la matrícula (`offering_plans.registration_fee`)
+// y los artículos (`school_merchandise_items`) había que escribirlos a mano en la
+// ficha, y el verificador de salida rechazaba cualquier otra cifra. Ahora salen de
+// los campos, con las MISMAS lecturas y la misma regla del reconocimiento de
+// comprobantes (`preciosDeMotivos`): si los planes activos tienen matrículas
+// distintas y no se sabe el plan, no se afirma ninguna.
+
+/** Lo que la escuela tiene cargado además de la mensualidad. */
+export interface ValoresFijos {
+    /** null = no hay, o los planes activos tienen valores distintos (no se afirma ninguno). */
+    matricula: number | null;
+    /** Un artículo activo con su precio (y los de cada talla, de menor a mayor). */
+    articulos: { nombre: string; precios: number[] }[];
+}
+
+/** Tope de artículos que se listan en un mensaje de WhatsApp. */
+const MAX_ARTICULOS_EN_TEXTO = 12;
+
+/** De los precios del reconocimiento de comprobantes, la matrícula y los artículos. Pura. */
+export function valoresFijosDe(precios: PrecioDeMotivo[]): ValoresFijos {
+    const matriculas = [...new Set(precios
+        .filter((p) => p.motivo === 'inscripcion' && !p.esAbono && p.monto > 0).map((p) => Math.round(p.monto)))];
+    const porArticulo = new Map<string, { nombre: string; precios: Set<number> }>();
+    for (const p of precios) {
+        if (p.motivo !== 'articulos' || p.esAbono || !(p.monto > 0)) continue;
+        const nombre = String(p.etiqueta ?? '').replace(/\s+/g, ' ').trim();
+        if (!nombre) continue;
+        const llave = p.fuenteId ?? nombre.toLowerCase();
+        const a = porArticulo.get(llave) ?? { nombre, precios: new Set<number>() };
+        a.precios.add(Math.round(p.monto));
+        porArticulo.set(llave, a);
+    }
+    return {
+        matricula: matriculas.length === 1 ? matriculas[0] : null,
+        articulos: [...porArticulo.values()]
+            .map((a) => ({ nombre: a.nombre, precios: [...a.precios].sort((x, y) => x - y) }))
+            .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')),
+    };
+}
+
+/** ¿Hay matrícula o algún artículo para decir? Pura. */
+export function hayValoresFijos(v: ValoresFijos | null | undefined): boolean {
+    return !!v && (v.matricula !== null || v.articulos.length > 0);
+}
+
+/**
+ * Matrícula y artículos en líneas aparte, o null si no hay ninguno. Pura.
+ * «📝 Matrícula: *$310.000*» / «👕 Uniformes y artículos:» + un renglón por artículo.
+ */
+export function textoDeValoresFijos(v: ValoresFijos | null | undefined): string | null {
+    if (!v || !hayValoresFijos(v)) return null;
+    const bloques: string[] = [];
+    if (v.matricula !== null) bloques.push(`📝 Matrícula: *${pesos(v.matricula)}*`);
+    if (v.articulos.length) {
+        const lista = v.articulos.slice(0, MAX_ARTICULOS_EN_TEXTO).map((a) => (a.precios.length === 1
+            ? `• ${a.nombre}: *${pesos(a.precios[0])}*`
+            : `• ${a.nombre}: de *${pesos(a.precios[0])}* a *${pesos(a.precios[a.precios.length - 1])}* según la talla`));
+        if (v.articulos.length > MAX_ARTICULOS_EN_TEXTO) lista.push('• Hay más artículos: pregúntale a la escuela por el que necesites.');
+        bloques.push(['👕 Uniformes y artículos:', ...lista].join('\n'));
+    }
+    return bloques.join('\n\n');
+}
+
+/**
+ * Los montos que el asistente puede decir por estos valores: la matrícula, cada
+ * precio de artículo y la SUMA matrícula + un artículo (lo que paga quien entra:
+ * $310.000 + $60.000 = $370.000). Pura.
+ */
+export function montosDeValoresFijos(v: ValoresFijos | null | undefined): number[] {
+    if (!v) return [];
+    const articulos = v.articulos.flatMap((a) => a.precios);
+    return [...new Set([
+        ...(v.matricula !== null ? [v.matricula] : []),
+        ...articulos,
+        ...(v.matricula !== null ? articulos.map((a) => (v.matricula as number) + a) : []),
+    ])];
+}
+
+const SIN_VALORES_FIJOS: ValoresFijos = { matricula: null, articulos: [] };
+
+/**
+ * Matrícula y artículos activos de la escuela, por las lecturas del
+ * reconocimiento de comprobantes (una por fuente, sin N+1). Nunca lanza.
+ */
+export async function valoresFijosDeEscuela(schoolId: string): Promise<ValoresFijos> {
+    try {
+        if (!schoolId) return SIN_VALORES_FIJOS;
+        const { preciosDeMotivos } = await import('./wa-cobro-desde-comprobante.service');
+        return valoresFijosDe(await preciosDeMotivos(schoolId, {}, { motivos: ['inscripcion', 'articulos'] }));
+    } catch {
+        return SIN_VALORES_FIJOS;
+    }
+}
+
+/** Solo las mensualidades de los planes activos. Nunca lanza. */
+async function textoDeMensualidadesDeEscuela(schoolId: string): Promise<string | null> {
     try {
         const { data, error } = await supabase
             .from('offering_plans')
@@ -70,6 +167,19 @@ export async function textoDePreciosDeEscuela(schoolId: string): Promise<string 
     } catch {
         return null;
     }
+}
+
+/**
+ * Los valores de la escuela: las mensualidades de los planes activos y, en líneas
+ * aparte, la matrícula y los artículos que tenga cargados. null = no hay ninguno.
+ * Quien llama ya revisó `wa_responder_precios`. Nunca lanza.
+ */
+export async function textoDePreciosDeEscuela(schoolId: string): Promise<string | null> {
+    const [mensualidades, fijos] = await Promise.all([
+        textoDeMensualidadesDeEscuela(schoolId),
+        valoresFijosDeEscuela(schoolId),
+    ]);
+    return [mensualidades, textoDeValoresFijos(fijos)].filter(Boolean).join('\n\n') || null;
 }
 
 // ─── «¿Cuántas clases tiene el plan pro?» (Dynasty 2026-10-24) ────────────────

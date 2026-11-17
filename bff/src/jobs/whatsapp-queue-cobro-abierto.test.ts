@@ -529,7 +529,7 @@ describe('Carlos Martínez (contacto wau-, ficha inactiva con linked_profile_id,
         await procesar(foto('c1', 'A', '2026-11-10T12:30:00-05:00', { wa_phone_number: WAU }), comprobante(175000), 'A');
         expect(fila('c1')).toMatchObject({ status: 'waiting_user', pregunta_ocr: { tipo: 'asistente_servicio' } });
         expect(textosEnviados()).toHaveLength(1);
-        expect(textosEnviados()[0]).toMatch(/nombre completo de quien asiste/);
+        expect(textosEnviados()[0]).toMatch(/datos de quien asiste:\s+1\. Nombre completo\s+2\. Fecha de nacimiento/); // 2026-11-16: pide los datos que faltan, no solo el nombre
         expect(pago('pay-escuela')).toMatchObject({ status: 'pending' });
     });
 });
@@ -622,7 +622,7 @@ describe('Aleja (lead con el nombre del perfil de WhatsApp)', () => {
         expect(crearLlamadas()).toHaveLength(0);
         expect(fila('a1')).toMatchObject({ status: 'waiting_user', pregunta_ocr: { tipo: 'asistente_servicio' } });
         expect(textosEnviados()).toHaveLength(1);
-        expect(textosEnviados()[0]).toMatch(/nombre completo de quien asiste/);
+        expect(textosEnviados()[0]).toMatch(/datos de quien asiste:\s+1\. Nombre completo\s+2\. Fecha de nacimiento/); // 2026-11-16: pide los datos que faltan, no solo el nombre
     });
 
     it('con un nombre real ya confirmado como quien asiste, no se vuelve a preguntar aunque se parezca al perfil', async () => {

@@ -145,6 +145,11 @@ export function huellasDelComprobante(e: {
             destination: e.ocr.destination ?? null,
             date: e.ocr.date ?? null,
             bank: e.ocr.bank ?? null,
+            // (2026-11-16) Quién pagó, la nota y el titular del destino: sin esto 247 filas quedaron imposibles de auditar.
+            // La nota va recortada (puede traer datos de terceros; el texto crudo del comprobante NO se guarda).
+            originName: e.ocr.originName ?? null,
+            description: e.ocr.description ? String(e.ocr.description).replace(/\s+/g, ' ').trim().slice(0, 300) : null,
+            destinationName: e.ocr.destinationName ?? null,
         }
         : null;
     return {

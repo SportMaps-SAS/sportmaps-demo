@@ -271,9 +271,9 @@ describe('runWhatsAppQueue — la puerta de atención', () => {
 
         expect(sendTextMessageMock).toHaveBeenCalledTimes(1);
         const [texto] = textosEnviados();
-        expect(texto).toMatch(/todavía no tienes tu cuenta creada/);
-        expect(texto).toMatch(/escuela/);
-        expect(texto).not.toMatch(/correo|código/i);
+        // (2026-11-16) Con un comprobante en la mano ya NO se habla de la cuenta: solo que llegó y que la escuela lo revisa.
+        expect(texto).toBe('Recibí tu comprobante 📄 La escuela lo revisa y te confirma por aquí.');
+        expect(texto).not.toMatch(/cuenta|correo|código|register/i);
         // Se lee (2026-10-06): sin lectura no se sabe si es un comprobante.
         expect(extractReceiptMock).toHaveBeenCalledTimes(1);
         // El archivo SÍ se guarda: la escuela tiene que verlo para aplicarlo.
@@ -282,13 +282,14 @@ describe('runWhatsAppQueue — la puerta de atención', () => {
         expect(ultimoCierre()).toMatchObject({ status: 'ignored', result_type: 'escalated', error_message: 'familia_sin_cuenta' });
     });
 
-    it('familia_sin_cuenta con invitación pendiente: el mensaje trae SU enlace', async () => {
+    it('familia_sin_cuenta con invitación pendiente: con un comprobante NO se ofrece el enlace (2026-11-16; antes traía SU enlace)', async () => {
         state.atencion = { atender: true, tipo: 'familia_sin_cuenta', botEncendido: true };
         state.vigente = { invitacion: { invite_id: 'inv-1', email: 'mama@x.com' }, atletaInactivo: false };
 
         await runWhatsAppQueue();
 
-        expect(textosEnviados()[0]).toContain('/register?invite=inv-1');
+        expect(textosEnviados()[0]).not.toContain('/register');
+        expect(textosEnviados()[0]).not.toMatch(/cuenta/i);
     });
 
     it('ambiguo: «más de una cuenta», escalated, sin pedir correo', async () => {
@@ -487,7 +488,7 @@ describe('runWhatsAppQueue — adjunto con consulta', () => {
 
         await runWhatsAppQueue();
 
-        expect(textosEnviados()[0]).toMatch(/todavía no tienes tu cuenta creada/);
+        expect(textosEnviados()[0]).toBe('Recibí tu comprobante 📄 La escuela lo revisa y te confirma por aquí.');
         expect(ultimoCierre()).toMatchObject({ status: 'ignored', result_type: 'escalated', error_message: 'familia_sin_cuenta' });
         expect(abrirConsultaMock).not.toHaveBeenCalled();
     });
@@ -531,7 +532,7 @@ describe('runWhatsAppQueue — adjunto con consulta', () => {
 
         await runWhatsAppQueue();
 
-        expect(textosEnviados()[0]).toMatch(/todavía no tienes tu cuenta creada/);
+        expect(textosEnviados()[0]).toBe('Recibí tu comprobante 📄 La escuela lo revisa y te confirma por aquí.');
         expect(textosEnviados()[0]).not.toContain('/register');
     });
 });
