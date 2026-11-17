@@ -11,6 +11,7 @@ import { Repeat } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { BrandingScope } from "@/components/BrandingScope";
 import { useDeviceContext } from "@/hooks/useDeviceContext";
+import { useUsageTracking } from "@/hooks/useUsageTracking";
 import { usePwaTenantSync } from "@/hooks/usePwaTenantSync";
 import { PushPermissionBanner } from "@/components/PushPermissionBanner";
 import { useSincronizarPushSilencioso } from "@/hooks/usePushSubscription";
@@ -35,6 +36,8 @@ export default function AuthLayout() {
   // Registrar device del usuario al loguearse (Fase 6.1).
   // Hoy solo web/PWA; cuando se instale Capacitor (Fase 7) detecta nativo.
   useDeviceContext();
+  // Uso por pantalla/botón agregado por día (ui_usage_daily). No bloquea nada.
+  useUsageTracking();
   // Deja el slug de la escuela en localStorage para que la PROXIMA carga pida
   // el manifest con la marca correcta y la app se instale con su logo.
   usePwaTenantSync();

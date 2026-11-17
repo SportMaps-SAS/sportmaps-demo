@@ -156,6 +156,7 @@ import upgradeRequestsRouter from './routes/upgrade-requests.routes';
 import schoolsRouter from './routes/schools.routes';
 import customDomainsRouter from './routes/custom-domains.routes';
 import devicesRouter from './routes/devices.routes';
+import usageRouter from './routes/usage.routes';
 import pwaRouter from './routes/pwa.routes';
 import mobileRouter from './routes/mobile.routes';
 import internalNotificationsRouter from './routes/internal-notifications.routes';
@@ -430,6 +431,8 @@ app.use('/api/v1/schools', generalLimiter, customDomainsRouter);
 // Devices (Fase 6.1 — base mobile). Web/PWA tambien lo usa para tracking
 // de adopcion. CSRF se aplica dentro del router para state-changing.
 app.use('/api/v1/devices', generalLimiter, devicesRouter);
+// Uso por pantalla/botón (ui_usage_daily). Telemetría agregada: nunca bloquea al usuario.
+app.use('/api/v1/usage', generalLimiter, usageRouter);
 // Manifest dinamico de la PWA. PUBLICO y sin auth: el navegador lo pide antes
 // de que exista sesion, y Vercel le reescribe /manifest.webmanifest hacia aca.
 app.use('/api/v1/pwa', pwaLimiter, pwaRouter);

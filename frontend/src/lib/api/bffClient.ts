@@ -15,6 +15,7 @@
  */
 
 import { supabase } from '@/integrations/supabase/client';
+import { trackApi } from '@/lib/usage/usageTracker';
 
 /**
  * Resuelve la URL del BFF en runtime.
@@ -112,11 +113,18 @@ async function request<T>(
 ): Promise<T> {
     const headers = await buildHeaders(customHeaders, authMode);
 
-    const response = await fetch(`${BFF_URL}${path}`, {
-        method,
-        headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    let response: Response;
+    try {
+        response = await fetch(`${BFF_URL}${path}`, {
+            method,
+            headers,
+            body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+    } catch (err) {
+        trackApi(method, path, 0); // sin red / bloqueado
+        throw err;
+    }
+    trackApi(method, path, response.status);
 
     let responseBody: unknown;
     try {
