@@ -148,6 +148,13 @@ export async function clasificarConMarca(
 
     const tipo = await clasificarSinGuardar(integration, conversationId, contactWaId);
     if (conversationId) await guardarTipo(conversationId, tipo);
+    // (2026-11-17, Monster/Sebastian Hurtado) Un profe o admin que además está en la ficha de una familia llegaba
+    // aquí como «familia» y Mapi le contestaba como a un padre («¿para qué necesitas el número?…»). Ahora, como con
+    // la marca manual «también es familia»: el bot no le escribe, pero sus comprobantes se siguen aplicando en
+    // silencio. Solo se consulta el personal cacheado (una lectura por escuela cada 10 min), y solo si ya es familia.
+    if (TIPOS_QUE_SE_ATIENDEN.has(tipo) && await rolDePersonal(integration.school_id, contactWaId)) {
+        return { tipo, tambienFamilia: true };
+    }
     return { tipo, tambienFamilia: false };
 }
 
