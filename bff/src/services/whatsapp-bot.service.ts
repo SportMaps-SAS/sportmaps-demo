@@ -119,6 +119,7 @@ import {
     SLA_ESCALAMIENTO_MIN_HABILES, slaVencido,
     esMenuDeOtroNegocio, esBucleDeOtraMaquina, trataDeLaCuenta, pideInformacionDeLaEscuela,
     repiteElUltimoSaliente, VENTANA_MISMO_TEXTO_MS,
+    VENTANA_NO_INTERVENIR_MIN, escuelaEscribioHace, pideSuSaldoOPaga, esQuejaContraLaEscuela, quitarPromesasDeSeguimiento, correoPlausible,
     type FilaReciente, type ComprobanteAnunciado, type HorarioDeAtencion,
 } from './whatsapp-reglas-turno';
 import { atenderAusenciaEnBot } from './whatsapp-ausencias.service';
@@ -1026,6 +1027,18 @@ export function saludoSinContenido(texto: string | null | undefined, equipo: Rea
 }
 
 /**
+ * ¿Una persona de la escuela escribió en esta conversación en las últimas 2 h (`VENTANA_NO_INTERVENIR_MIN`)?
+ * Lee los mensajes recientes en el momento. Ante un error: false (el bot sigue como antes). Nunca lanza.
+ */
+async function laEscuelaEstaEnLaCharla(conversationId: string, minutos: number = VENTANA_NO_INTERVENIR_MIN): Promise<boolean> {
+    try {
+        return escuelaEscribioHace(await mensajesRecientes(conversationId), minutos);
+    } catch {
+        return false;
+    }
+}
+
+/**
  * P9 — Mensaje para una persona del equipo sin trámite que el bot pueda
  * atender. UNA respuesta por conversación cada 24 h; el resto solo va al buzón.
  * Nunca «solo puedo ayudar con…»: a quien le escribe a Milena no se le dice
@@ -1041,6 +1054,15 @@ async function dejarMensajeALaPersona(
     // mensaje a una familia se leen como un grito.
     if (nombre && nombre === nombre.toUpperCase()) {
         nombre = nombre.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+    }
+    // (2026-11-17, Monster: Isabella, Sergio, Daniel B.N., Luisca, Tomiii) Con una persona de la escuela en la
+    // conversación en las últimas 2 h el bot no repite «Soy Mapi… dejo tu mensaje»: ella ya está ahí. Se vuelve a
+    // leer acá (no solo en la puerta del turno) porque el eco de su mensaje a veces llega después de que el turno
+    // empezó. Comprobantes y pagos no pasan por esta función.
+    if (!enSimulacion() && await laEscuelaEstaEnLaCharla(conversationId)) {
+        console.info('[whatsapp-bot] mensaje para una persona: la escuela escribió hace poco; el bot no interviene', { conversationId });
+        await marcarAbiertaSinAviso(conversationId);
+        return;
     }
     if (!(await pasoReciente(conversationId, 'mensaje_para_persona', 24))) {
         const saludoPersona = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
@@ -2089,7 +2111,13 @@ async function atenderSinCuentaLoQueNoEsDeLaCuenta(
         const rafaga = (turno.rafaga || text).trim();
         const equipo = await vocativosDeEscuela(integration.school_id);
         const lineas = rafaga.split('\n').map((l) => l.trim()).filter(Boolean);
-        if (lineas.every((l) => saludoSinContenido(l, equipo) || esCierreSuelto(l, equipo))) return false;
+        if (lineas.every((l) => saludoSinContenido(l, equipo) || esCierreSuelto(l, equipo))) {
+            // (2026-11-17, Monster: Olinda, «Hola buenas tardes») Un saludo o un «gracias» no es un pedido de cuenta:
+            // «Créala aquí» no se le manda a quien solo saluda. Queda en el buzón; la escuela decide.
+            console.info('[whatsapp-bot] sin cuenta: solo saluda; no se manda la invitación', { conversationId });
+            await marcarAbiertaSinAviso(conversationId);
+            return true;
+        }
 
         const recientes = turno.recientes ?? await mensajesRecientes(conversationId);
         if (await atenderVentaDeFamilia({ integration, conversationId, contactWaId, text, botonId: null,
@@ -2112,7 +2140,21 @@ async function atenderSinCuentaLoQueNoEsDeLaCuenta(
         }
         if (await responderHorarioDeHoy(integration, conversationId, contactWaId, text, rafaga)) return true;
         // Lo de SUS cobros («cuánto debo», «mi saldo») sí es de la cuenta: sigue el aviso.
-        if (!pideInformacionDeLaEscuela(rafaga) || hablaDePagoOEstado(rafaga)) return false;
+        if (pideSuSaldoOPaga(rafaga)) return false;
+        // (2026-11-17, Monster: Keynor Rey, nota de voz sobre congelar la mensualidad; Lau, fotos de una maleta;
+        // Mónica Ramírez, madre activa) La invitación a crear la cuenta solo sale si la pide o va a pagar o a
+        // consultar su saldo. Una pregunta o una charla va a la escuela, con aviso.
+        if (!pideInformacionDeLaEscuela(rafaga)) {
+            await abrirEnBuzon(integration, conversationId, contactWaId, {
+                motivo: 'puerta_otro', detalle: `Familia sin cuenta escribe: «${rafaga.slice(0, 300)}».`,
+            });
+            if (!enSimulacion() && await laEscuelaEstaEnLaCharla(conversationId)) return true;
+            if (!(await pasoReciente(conversationId, PASO_PREGUNTA_A_LA_ESCUELA, 24))) {
+                await deliver(integration, conversationId, contactWaId,
+                    'Ya le pasé tu mensaje a la escuela y te responde por aquí 🙌', { step: PASO_PREGUNTA_A_LA_ESCUELA });
+            }
+            return true;
+        }
         if (await responderProspectoConIa(integration, conversationId, contactWaId, rafaga, recientes,
             await ajustesDeLaEscuela(integration.school_id))) {
             return true;
@@ -2120,7 +2162,8 @@ async function atenderSinCuentaLoQueNoEsDeLaCuenta(
         await abrirEnBuzon(integration, conversationId, contactWaId, {
             motivo: 'puerta_otro', detalle: `Familia sin cuenta pregunta: «${rafaga.slice(0, 300)}».`,
         });
-        if (!(await pasoReciente(conversationId, PASO_PREGUNTA_A_LA_ESCUELA, 24))) {
+        if (!(!enSimulacion() && await laEscuelaEstaEnLaCharla(conversationId))
+            && !(await pasoReciente(conversationId, PASO_PREGUNTA_A_LA_ESCUELA, 24))) {
             await deliver(integration, conversationId, contactWaId,
                 'Ya le pasé tu pregunta a la escuela y te responde por aquí 🙌', { step: PASO_PREGUNTA_A_LA_ESCUELA });
         }
@@ -2263,7 +2306,16 @@ async function identificarPorTelefono(
         const { invitacion, atletaInactivo } = await invitacionPendienteVigente(
             integration.id, contactWaId, integration.school_id);
         let enlace: string | null;
-        if (invitacion?.invite_id) {
+        // (2026-11-17, Monster: Gaby, `…@gmail.col`) Un correo mal escrito en la invitación hace que el registro falle
+        // en silencio al aceptar (la sesión tiene que ser de ESE correo). Sin enlace: se avisa a la escuela.
+        const correoDudoso = Boolean(invitacion?.email) && !correoPlausible(invitacion?.email);
+        if (correoDudoso) {
+            enlace = null;
+            await abrirEnBuzon(integration, conversationId, contactWaId, {
+                motivo: 'puerta_otro',
+                detalle: `El correo de la invitación parece mal escrito («${String(invitacion?.email).slice(0, 80)}»): corregirlo en la ficha antes de mandar el enlace.`,
+            });
+        } else if (invitacion?.invite_id) {
             // El correo viaja para que el formulario lo precargue:
             // `accept_invitation_pro` exige que la sesion sea de ESE correo, y
             // si el papa usa otro la aceptacion falla EN SILENCIO despues de
@@ -6493,7 +6545,28 @@ async function entregarTextoDelModelo(
         conDatosDePagos?: boolean;
     },
 ): Promise<'enviado' | 'respaldo' | 'escalado'> {
+    // Un solo mensaje por turno: si este turno ya avisó a la escuela («Voy a pasar tu caso…»), el texto del
+    // modelo no sale encima (Monster 11-14, Paola Rodríguez: `escalated` y `llm_text` en el mismo segundo).
+    if (escuelaDelTurno.getStore()?.entregas?.includes('escalated')) {
+        console.info('[whatsapp-bot] el turno ya escaló; el texto del modelo no sale', { conversationId });
+        return 'escalado';
+    }
+    // Carrera con el eco de la escuela (Yeins Q: el bot saludó 1 min después de que ella saludó): se vuelve a leer
+    // justo antes de enviar.
+    if (!enSimulacion() && await laEscuelaEstaEnLaCharla(conversationId, SILENCIO_HUMANO_MIN)) {
+        console.info('[whatsapp-bot] la escuela escribió mientras el modelo redactaba; no sale', { conversationId });
+        await marcarAbiertaSinAviso(conversationId);
+        return 'enviado';
+    }
     let f = filtrarSalidaDelModelo(texto, NOMBRES_DE_HERRAMIENTAS);
+    // El bot no vuelve a escribir por su cuenta: «quedo atento», «te aviso cuando…» son promesas que no cumple.
+    if (f.texto) {
+        const sinPromesas = quitarPromesasDeSeguimiento(f.texto);
+        if (sinPromesas !== f.texto) {
+            f = { ...f, texto: sinPromesas && /\p{L}{2,}/u.test(sinPromesas) ? sinPromesas : null, alterado: true,
+                motivos: [...f.motivos, 'promesa_de_seguimiento'] };
+        }
+    }
     // Turno de redactar que solo promete consultar (sin datos): va el respaldo
     // determinista, que sí trae los datos. Ver prometeConsultarSinDatos.
     if (f.texto && opciones.respaldo && prometeConsultarSinDatos(f.texto)) {
@@ -6551,6 +6624,22 @@ async function handleIntent(
     waMessageId: string | null = null,
 ): Promise<void> {
     if (!text) return;
+
+    // (2026-11-17, Monster 14–17 nov) El modelo NO habla encima de la escuela. Con una persona de la escuela en
+    // la conversación en las últimas 2 h, lo que no es de pagos queda para ella (Andrea P: «quedo atento a lo
+    // que confirmen tú y tu esposo»; Paola Rodríguez: «es normal alterarse», en plena queja). Los pagos y los
+    // comprobantes siguen su camino.
+    if (!enSimulacion() && !hablaDePagoOEstado(text) && !anunciaComprobante(text)
+        && await laEscuelaEstaEnLaCharla(conversationId)) {
+        console.info('[whatsapp-bot] la escuela escribió hace poco; el modelo no interviene', { conversationId });
+        await marcarAbiertaSinAviso(conversationId);
+        return;
+    }
+    // Una queja o un reclamo contra la escuela: el bot no opina ni consuela, solo avisa (un solo mensaje).
+    if (esQuejaContraLaEscuela(text) && !hablaDePagoOEstado(text)) {
+        await escalate(integration, conversationId, contactWaId, 'queja_de_la_familia', { texto: text });
+        return;
+    }
 
     // Con memoria: los últimos mensajes de las 24 h + el actual (ver
     // `historialDeConversacion`). El actual ya quedó guardado por la ingesta;
@@ -6610,6 +6699,14 @@ async function handleIntent(
         // que prefieras». Quien pide salir del flujo va a una persona.
         if (quiereSalirDelFlujo(text)) {
             await escalate(integration, conversationId, contactWaId, 'cortesia_pide_una_persona', { texto: text });
+            return;
+        }
+        // (2026-11-17, Monster: Gabriela V, familia con ficha, «Pipeee Tenemos cupoo» mientras coordinaba una
+        // recogida con el profe) A una familia con ficha NUNCA se le ofrece la clase de prueba por una frase suelta:
+        // solo si pide la clase de prueba / cortesía con esas palabras. Lo demás queda en el buzón, sin mensaje.
+        if (parentId && !pideClaseDeCortesia(text)) {
+            console.info('[whatsapp-bot] familia con ficha sin pedir la clase de prueba: no se ofrece', { conversationId });
+            await abrirEnBuzon(integration, conversationId, contactWaId);
             return;
         }
         // Sin segundo turno de redacción: el texto, las franjas y los botones

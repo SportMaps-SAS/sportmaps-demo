@@ -1077,3 +1077,83 @@ export function slaVencido(
     const t = new Date(creadaAt).getTime();
     return Number.isFinite(t) && minutosHabiles(t, ahora, cfg) >= minHabiles;
 }
+
+// ─── No hablar encima de la escuela (hallazgo 4, Monster 14–17 nov 2026) ─────
+//
+// El silencio normal (`SILENCIO_HUMANO_MIN`, 15 min) no alcanza: la escuela contesta, sigue con su vida y
+// una hora después el bot entra con su presentación, un «crea tu cuenta» o una opinión sobre la charla
+// (Isabella, Andrea P, Paola Rodríguez, Yeins Q…). Con una PERSONA de la escuela en la conversación en las
+// últimas 2 h el bot solo interviene por pagos y comprobantes.
+
+/** Con una persona de la escuela escribiendo en este lapso, el bot no inicia charla (solo pagos y comprobantes). */
+export const VENTANA_NO_INTERVENIR_MIN = 120;
+
+/** ¿Una persona de la escuela escribió en la conversación en las últimas `minutos`? Pura. */
+export function escuelaEscribioHace(
+    filas: FilaReciente[], minutos: number = VENTANA_NO_INTERVENIR_MIN, ahora = Date.now(),
+): boolean {
+    return humanoReciente(filas, minutos, ahora);
+}
+
+/**
+ * Queja o reclamo contra la escuela o sus entrenadores («Quiero poner una queja», «no estoy de acuerdo»,
+ * «no me parece»). El bot NO opina ni consuela: avisa a la escuela y calla (Monster 11-14, Paola Rodríguez:
+ * «Entiendo, es normal alterarse»). Los reclamos de PLATA van por su propia ruta (`esDisputaDePago`). Pura.
+ */
+const QUEJA = /\b(poner una queja|quiero (hacer|poner|dejar|presentar) (una )?(queja|reclamo)|mi queja|(una )?queja (formal|contra|por|sobre)|reclamo formal|no estoy de acuerdo|no me parece (justo|bien|correcto|que)|no me parece\b|me parece (injusto|mal|una falta|inaceptable)|inconforme|inconformidad|injust[oa]s?|falta de respeto|me siento (maltratad[oa]|ofendid[oa])|exijo|inaceptable|denunci\w+)\b/;
+export function esQuejaContraLaEscuela(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    return !!t && QUEJA.test(t);
+}
+
+/**
+ * ¿Pide SU saldo o declara que va a pagar / ya pagó? Más estrecho que `hablaDePagoOEstado` (que también atrapa
+ * «la mensualidad que venimos pagando» en una pregunta cualquiera). Es lo único que justifica mandar el
+ * «crea tu cuenta» a quien aún no la tiene (Monster 11-16, Mónica Ramírez: preguntaba si el vacacional era
+ * aparte de la mensualidad y recibió la invitación). Pura.
+ */
+const SU_SALDO_O_PAGO = /\b(cuanto (debo|llevo|me falta|tengo que pagar)|que debo|mi saldo|mi deuda|estoy al dia|tengo (algo )?pendiente|estado de cuenta|mis (pagos|cobros)|ya (pague|pagamos|hice el pago|hicimos el pago|transferi|consigne|envie el comprobante)|(envio|adjunto|mando|enviar|les envio|te envio) (el |mi )?(comprobante|soporte|pago)|comprobante de pago|(como|donde) (pago|puedo pagar)|quiero pagar|voy a pagar)\b/;
+export function pideSuSaldoOPaga(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    return !!t && SU_SALDO_O_PAGO.test(t);
+}
+
+/**
+ * Promesas de seguimiento que el bot no puede cumplir («quedo atento a lo que confirmen», «te aviso cuando
+ * sepa»): el bot no vuelve a escribir por su cuenta. Quita la oración que las contiene; el resto del texto
+ * se conserva. Devuelve el mismo texto si no hay ninguna. Pura.
+ */
+const PROMESA_DE_SEGUIMIENTO = /\b((quedo|quedamos|quedare|estare|estamos|seguire|seguimos) (muy )?(atent[oa]s?|pendientes?|al tanto)|(te|le|les) (aviso|avisare|escribo|escribire|informo|informare|confirmo|confirmare|recuerdo|recordare) (cuando|apenas|en cuanto|tan pronto|mas tarde|manana|luego)|me (comunico|pondre en contacto) (contigo|con ustedes)|vigilo|estare vigilando)\b/;
+export function quitarPromesasDeSeguimiento(texto: string): string {
+    if (!texto || !PROMESA_DE_SEGUIMIENTO.test(normalizarFrase(texto))) return texto;
+    const lineas = texto.split(/\r?\n/).map((linea) => {
+        const oraciones = linea.split(/(?<=[.!?…])\s+/);
+        return oraciones.filter((o) => !PROMESA_DE_SEGUIMIENTO.test(normalizarFrase(o))).join(' ').trim();
+    });
+    return lineas.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * ¿Es un correo que sirve para armar un enlace de registro? Formato, TLD plausible y los errores de
+ * tecleo más comunes de los proveedores masivos (`…@gmail.col`, `gmial.com`, `hotmail.con`). Pura.
+ * Monster 11-16, Gaby: el enlace de la invitación llevaba `lucyalviraperez@gmail.col`.
+ */
+const TLD_CONOCIDOS = new Set(['com', 'net', 'org', 'edu', 'gov', 'info', 'biz', 'io', 'app', 'dev', 'me', 'tv', 'xyz',
+    'online', 'site', 'store', 'club', 'pro', 'name', 'mobi', 'cloud', 'email', 'tech', 'shop', 'live']);
+const TLD_DE_TECLEO = new Set(['cm', 'om', 'cim', 'vom', 'xom', 'coom', 'comm', 'con', 'col', 'cmo', 'ocm']);
+const PROVEEDOR_CON_TECLEO = new Set(['gmial', 'gmai', 'gamil', 'gmil', 'gnail', 'gmaill', 'gmeil', 'gmal', 'gimail',
+    'hotmial', 'hotmal', 'hotmai', 'hotnail', 'hotmaill', 'outlok', 'outloo', 'outllook', 'yaho', 'yahooo', 'yahoi']);
+export function correoPlausible(correo: string | null | undefined): boolean {
+    const c = String(correo ?? '').trim().toLowerCase();
+    const m = c.match(/^[a-z0-9._%+'-]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)$/);
+    if (!m || c.includes('..')) return false;
+    const partes = m[1].split('.');
+    const tld = partes[partes.length - 1];
+    if (TLD_DE_TECLEO.has(tld)) return false;
+    if (!(tld.length === 2 || TLD_CONOCIDOS.has(tld))) return false;
+    const proveedor = partes.length >= 2 ? partes[partes.length - 2] : '';
+    if (PROVEEDOR_CON_TECLEO.has(proveedor)) return false;
+    // gmail solo existe como gmail.com (`gmail.co` es el tecleo habitual).
+    if (proveedor === 'gmail' && m[1] !== 'gmail.com') return false;
+    return true;
+}

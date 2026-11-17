@@ -599,18 +599,20 @@ describe('8 · pregunta por la llave / Bre-B con el bloque de pago recién envia
         expect(reg.avisos).toHaveLength(1);
     });
 
-    it('si el bloque de pago NO ha salido (o salió hace horas), va el bloque completo como siempre', async () => {
-        for (const recientes of [[], [BLOQUE_DE_PAGO(CLINICA, 300)]]) {
+    it('si el bloque de pago NO ha salido (o salió hace más de 48 h), va el bloque completo como siempre', async () => {
+        for (const recientes of [[], [BLOQUE_DE_PAGO(CLINICA, 50 * 60)]]) {
             const { ctx, reg } = ctxDe({ recientes, cuentas: NEQUI });
             expect(await atenderVentaDeServicio(ctx, venta(CLINICA), 'Para transferir por bre b')).toBe('venta_pago');
             expect(reg.pagos).toBe(1);
         }
     });
 
-    it('si además pregunta el valor, va el bloque completo', async () => {
+    it('si además pregunta el valor, salen las líneas del valor (no el bloque otra vez)', async () => {
         const { ctx, reg } = ctxDe({ recientes: [BLOQUE_DE_PAGO(CLINICA, 4)], cuentas: NEQUI });
-        expect(await atenderVentaDeServicio(ctx, venta(CLINICA), '¿Cuánto es y es por llave?')).toBe('venta_pago');
-        expect(reg.pagos).toBe(1);
+        expect(await atenderVentaDeServicio(ctx, venta(CLINICA), '¿Cuánto es y es por llave?')).toBe('venta_respuesta');
+        expect(reg.pagos).toBe(0);
+        expect(reg.enviados[0].texto).toContain('Valor hoy');
+        expect(reg.enviados[0].texto).toContain('mismos que te envié arriba');
     });
 });
 
