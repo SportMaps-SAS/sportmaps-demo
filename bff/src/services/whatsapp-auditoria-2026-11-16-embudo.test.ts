@@ -52,6 +52,7 @@ interface Enviado { texto: string; step: string; estado: EstadoEmbudo | null; bo
 
 function crear(op: { ajustes?: AjustesWhatsAppEscuela; estado?: EstadoEmbudo | null } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null, soltados: [] as EstadoEmbudo[] };
+    const reloj = { t: AHORA.getTime() };
     const avisarEscuela = vi.fn(async () => {});
     const ctx: CtxEmbudo = {
         conversationId: 'conv-1', schoolId: 'monster', contactWaId: '573001112233',
@@ -72,9 +73,9 @@ function crear(op: { ajustes?: AjustesWhatsAppEscuela; estado?: EstadoEmbudo | n
         leadDelContacto: async () => null,
         leerEstado: async () => s.estado,
         alSoltar: (e) => { s.soltados.push(e); },
-        ahora: () => AHORA,
+        ahora: () => new Date(reloj.t),
     };
-    return { ctx, s, avisarEscuela, turno: (t: string, b: string | null = null) => atenderTurnoEmbudo(ctx, t, b),
+    return { ctx, s, avisarEscuela, reloj, turno: (t: string, b: string | null = null) => atenderTurnoEmbudo(ctx, t, b),
         ultimo: () => s.enviados[s.enviados.length - 1] };
 }
 
@@ -220,15 +221,19 @@ describe('5. lo que no es una elección no repite «Elige uno de los horarios de
         expect(recordatorioDePasoEmbudo(aj(), { paso: 'pregunta', datos: { ...estado.datos, i: 1, recordado: rec.clave } })).not.toBeNull();
     });
 
-    it('un «ok» suelto sí recibe la lista, UNA vez; al segundo pasa a una persona (antes el intento no se contaba y nunca pasaba)', async () => {
+    it('un texto suelto que no elige nada se recuerda en texto (sin repetir la lista); al segundo pasa a una persona', async () => {
         const c = crear();
         await hastaHorarios(c);
-        await c.turno('ok');
-        expect(c.ultimo().texto).toContain('Elige uno de los horarios de la lista 👇');
+        c.reloj.t += 30_000;
+        await c.turno('el día');
+        expect(c.ultimo().texto).not.toContain('Estos son los próximos horarios');
+        expect(c.ultimo().texto).toContain('elige tu horario en la lista de arriba');
         expect(c.s.estado).toMatchObject({ paso: 'elegir_franja', datos: { intentos: 1 } });
-        await c.turno('listo');
+        c.reloj.t += 30_000;
+        await c.turno('el mes');
         expect(c.ultimo().step).toBe('embudo_a_persona');
-        expect(c.s.enviados.filter((e) => e.texto.includes('Elige uno de los horarios de la lista'))).toHaveLength(1);
+        expect(c.avisarEscuela).toHaveBeenCalledTimes(1);
+        expect(c.s.enviados.filter((e) => e.texto.includes('Estos son los próximos horarios'))).toHaveLength(1);
     });
 });
 

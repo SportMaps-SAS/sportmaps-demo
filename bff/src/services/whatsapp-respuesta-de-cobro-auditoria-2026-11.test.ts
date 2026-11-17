@@ -256,3 +256,27 @@ describe('R11 · reclamo o corrección del cliente tras el resultado', () => {
             .toEqual({ tipo: 'si_es_un_pago' });
     });
 });
+
+// ─── Monster 2026-11-17 (Liliana): un comprobante más nuevo no se contesta con la pregunta vieja ─────────────
+describe('hayComprobanteMasNuevo', () => {
+    it('sin created_at de la fila no consulta y no bloquea', async () => {
+        const { hayComprobanteMasNuevo } = await import('./whatsapp-respuesta-de-cobro.service');
+        expect(await hayComprobanteMasNuevo('i', '57300', { id: 'f1' })).toBe(false);
+    });
+    it('hay un archivo posterior del mismo contacto → true; ninguno → false', async () => {
+        const { hayComprobanteMasNuevo } = await import('./whatsapp-respuesta-de-cobro.service');
+        const original = h.supabase.from;
+        const conFilas = (rows: any[]) => ({ from: () => { const b: any = {}; for (const m of ['select', 'eq', 'in', 'neq', 'gt', 'limit']) b[m] = () => b; b.then = (r: any) => Promise.resolve({ data: rows, error: null }).then(r); return b; } });
+        try {
+            (h.supabase as any).from = conFilas([{ id: 'nuevo' }]).from;
+            expect(await hayComprobanteMasNuevo('i', '57300', { id: 'f1', created_at: '2026-11-15T19:02:00Z' })).toBe(true);
+            (h.supabase as any).from = conFilas([]).from;
+            expect(await hayComprobanteMasNuevo('i', '57300', { id: 'f1', created_at: '2026-11-15T19:02:00Z' })).toBe(false);
+        } finally { (h.supabase as any).from = original; }
+    });
+    it('ante un error de la consulta se comporta como antes (false)', async () => {
+        const { hayComprobanteMasNuevo } = await import('./whatsapp-respuesta-de-cobro.service');
+        // el doble de supabase de este archivo no implementa `neq`: lanza y la función lo absorbe
+        expect(await hayComprobanteMasNuevo('i', '57300', { id: 'f1', created_at: '2026-11-15T19:02:00Z' })).toBe(false);
+    });
+});

@@ -75,6 +75,9 @@ describe('detectaAusencia', () => {
         'ellas no pueden asistir el sábado 7 de noviembre',
         'Nury siguió mal de su mano, este mes no va a entrenar, no puede',
         'Te comento que durante dos meses Isabella no asiste a entreno por compromisos del colegio',
+        // Monster 2026-11-17 (Raúl): salir de un grupo no es la ausencia de hoy.
+        'Amigo buenos días. Cómo vamos? Amigo para avisarte que vamos a salir oa del grupo de  capacitaciones porque no alcanzamos a ir. Muchos éxitos con eso.',
+        'Profe, nos retiramos del club porque no podemos ir',
     ])('NO dispara con «%s»', (texto) => {
         expect(detectaAusencia(texto, HOY)).toBeNull();
     });

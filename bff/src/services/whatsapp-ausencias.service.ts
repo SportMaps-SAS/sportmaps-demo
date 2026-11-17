@@ -54,6 +54,13 @@ const DUDA = /\b(no se si|todavia no se|aun no se|no estoy segur[oa])\b/;
 /** Plata: «el pago no va a llegar hoy» no es una ausencia. */
 const DE_PLATA = /\b(pago|pagos|pagar|pague|comprobante|transferencia|consignacion|consigne|factura|cobro|mensualidad|plata|dinero|abono|nequi|daviplata)\b/;
 const PREGUNTA_DE_HORARIO = /\b(hay|habra|tienen|tiene) (clase|entreno|entrenamiento|practica)\b/;
+/**
+ * Un retiro o una salida de grupo no es la ausencia de hoy: «vamos a salir del
+ * grupo de capacitaciones porque no alcanzamos a ir» (Monster 2026-11-17, Raúl:
+ * el bot contestó «le aviso al entrenador que Raul no va hoy»). Va a la escuela.
+ */
+const SALIDA_DE_GRUPO = /\b(salir|salimos|salgo|salirnos|salirme|retir\w*|darnos de baja|darme de baja|dar de baja|dejar(?:emos| de)?|dejamos de|cancelar(?:emos)? la (?:inscripcion|matricula)|ya no (?:vamos|voy|va|van) a (?:ir|asistir|entrenar|seguir))\b[^.!?]{0,60}\b(grupo|grupos|club|escuela|capacitacion\w*|clases|entrenamientos|programa|curso)\b/;
+const AVISO_DE_SALIDA = /\b(salir (?:oa |o a )?del grupo|del grupo de capacitacion\w*|nos retiramos|me retiro|lo retiro|la retiro|los retiro)\b/;
 
 const MESES_RE = '(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)';
 /** «los sábados», «todos los lunes», «cada viernes», «sábados de 9 a 1». */
@@ -110,6 +117,7 @@ export function detectaAusencia(texto: string | null | undefined, hoy: string = 
     if (!n || n.length > 400) return null;
     if (DUDA.test(n) || DE_PLATA.test(n)) return null;
     if (PREGUNTA_DE_HORARIO.test(n) && !NO_PUEDE.test(n)) return null;
+    if ((SALIDA_DE_GRUPO.test(n) || AVISO_DE_SALIDA.test(n)) && !/\bhoy\b/.test(n) && !diceManana(n)) return null;
     // Sin «hoy» ni «mañana», un horario fijo («los sábados de 9 a 1») o un evento
     // con fecha («el torneo del 7 de noviembre», «el comunicado») no es la
     // ausencia de hoy: va a la escuela. (Dynasty 10-20: «Paula no puede ir… estudia

@@ -81,6 +81,8 @@ export type PasarALaEscuela = (p: { resumen: string; mensajeFamilia: string | nu
 
 interface FilaEsperando {
     id: string;
+    /** Cuándo llegó el comprobante que originó la pregunta. */
+    created_at?: string | null;
     pregunta_opciones: PagoPendiente[] | null;
     pregunta_ocr: {
         ocr: any;
@@ -227,6 +229,32 @@ export async function resolverReclamoDeResultado(
     }
 }
 
+/**
+ * ¿Después del comprobante de esta pregunta llegó otro archivo del mismo contacto? Nunca lanza: ante un error,
+ * false (se comporta como antes). Una sola consulta acotada por integración + teléfono.
+ */
+export async function hayComprobanteMasNuevo(
+    integrationId: string,
+    contactWaId: string,
+    fila: { id: string; created_at?: string | null },
+): Promise<boolean> {
+    if (!fila.created_at) return false;
+    try {
+        const { data } = await supabase
+            .from('whatsapp_inbound_queue')
+            .select('id')
+            .eq('integration_id', integrationId)
+            .eq('wa_phone_number', contactWaId)
+            .in('message_type', ['image', 'document'])
+            .neq('id', fila.id)
+            .gt('created_at', fila.created_at)
+            .limit(1);
+        return Array.isArray(data) && data.length > 0;
+    } catch {
+        return false;
+    }
+}
+
 async function resolverFilaAbierta(
     integration: WhatsAppIntegration,
     contactWaId: string,
@@ -236,7 +264,7 @@ async function resolverFilaAbierta(
 ): Promise<boolean> {
     const { data } = await supabase
         .from('whatsapp_inbound_queue')
-        .select('id, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id')
+        .select('id, created_at, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id')
         .eq('integration_id', integration.id)
         .eq('wa_phone_number', contactWaId)
         .eq('status', 'waiting_user')
@@ -281,6 +309,13 @@ async function resolverFilaAbierta(
     if (fila.pregunta_ocr?.tipo === 'mes' || fila.pregunta_ocr?.tipo === 'concepto') {
         const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
         if (edad > VIGENCIA_H) return false;
+        // (2026-11-17, Monster/Liliana) Llegó un comprobante MÁS NUEVO después del de esta pregunta: lo que la
+        // persona escribe ahora habla del nuevo. Antes «envío comprobante vacacional» (18 h después) contestó la
+        // pregunta vieja y el comprobante de $37.500 (reposición de balón) quedó como «vacacional». La pregunta
+        // vieja la vence el worker y va a la bandeja con su motivo.
+        if (await hayComprobanteMasNuevo(integration.id, contactWaId, fila)) return false;
+        // Una cortesía («gracias», «ok») dentro de la hora no es una respuesta ni merece «No te entendí».
+        if (edad <= 1 && soloSaludoOCortesia(texto)) return true;
         // (R10) Pasada una hora, solo cuenta lo que calza con una opción o habla de pago/mes/monto.
         if (!cuentaComoRespuesta({
             texto, minutos: edad * 60,

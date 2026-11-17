@@ -701,6 +701,7 @@ export function intencionEnVenta(texto: string | null | undefined): IntencionVen
     if (ANUNCIA_PREGUNTA.test(t) || SOLO_LLAMA.test(t)) return 'anuncio';
     if (AFIRMACION.test(t)) return 'pago';
     if (INCLUYE.test(t) && !DATOS_DE_PAGO_EXPLICITOS.test(t)) return 'detalle';
+    if (NO_AFILIADO.test(t)) return 'pago';
     if (PAGO.test(t)) return 'pago';
     if (!conPregunta && saludoConVocativo(palabras)) return 'saludo';
     return 'detalle';
@@ -717,6 +718,34 @@ const PIDE_DOCUMENTO_DEL_TITULAR = /\b(cc|c c|cedula|nit|documento|identificacio
 const PIDE_TITULAR = /\b(titular|a nombre de quien|nombre de quien)\b/;
 /** «¿Por llave?», «Bre-B». */
 const PIDE_LLAVE = /\b(llave|llaves|bre b|breb)\b/;
+
+/** (auditoría Monster 14–16 nov 2026) El bloque de pago completo sale UNA vez; después, la línea con lo que pidió. */
+export const MIN_BLOQUE_DE_PAGO_ENVIADO = 48 * 60;
+/** «¿Puedo pagar hasta mañana?», «Puedo pagar mañana?», «¿hay plazo?»: pregunta por el plazo, no pide el bloque. */
+const PIDE_PLAZO = /\b(hasta (manana|hoy|cuando|que (dia|fecha|hora)|el (lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}))|plazo|fecha limite|ultimo dia|a mas tardar|(puedo|podemos|podria|podriamos|puede|pueden) (pagar|abonar|consignar|transferir) (manana|despues|luego|mas tarde|otro dia|la proxima semana)|pagar (manana|despues|luego|mas tarde))\b/;
+/** «¿Me pasas el número de Nequi?», «¿a dónde consigno?», «los datos»: pide el dato de la cuenta. */
+const PIDE_DATO_DE_CUENTA = /\b(nequi|daviplata|bancolombia|numero|cuenta|cuentas|titular|a nombre|nombre de quien|donde (pago|consigno|transfiero|se paga|puedo pagar)|a donde|datos)\b/;
+/** «¿Y para NO afiliados?», «el vacacional para no afiliados»: pide la tarifa de quien no es del club. */
+const NO_AFILIADO = /\b(no afiliad[oa]s?|no son afiliad[oa]s?|sin ser afiliad[oa]s?|no (soy|somos|estoy|estamos) afiliad[oa]s?|no (soy|somos) (del|parte del) club)\b/;
+
+/**
+ * ¿Pide EXPLÍCITAMENTE la tarifa de quien NO es afiliado? Solo ese sentido: decir «soy afiliado» no da el precio de
+ * afiliado (eso lo decide el número, no el mensaje). Pura.
+ */
+export function pideTarifaDeNoAfiliado(texto: string | null | undefined): boolean {
+    return NO_AFILIADO.test(normalizarFrase(texto));
+}
+
+/** «¿los entrenos serían normales?»: pregunta por los entrenamientos de siempre del club, que el servicio no trae. */
+const ENTRENOS = '(?:entreno|entrenos|entrenamiento|entrenamientos)';
+const NORMALES = '(?:normal|normales|regular|regulares|convencional|convencionales|de siempre|habitual|habituales|ordinario|ordinarios)';
+const ENTRENOS_REGULARES = new RegExp(`\\b${ENTRENOS}\\b(?: \\w+){0,4} ${NORMALES}\\b|\\b${NORMALES} (?:\\w+ ){0,3}${ENTRENOS}\\b`);
+export function preguntaPorEntrenosRegulares(texto: string | null | undefined): boolean {
+    return ENTRENOS_REGULARES.test(normalizarFrase(texto));
+}
+export const TEXTO_ENTRENOS_SIN_DATO = 'De los entrenamientos de siempre no tengo el dato 🙌 Ya le pasé tu pregunta a la escuela y te responde por aquí.';
+/** Minutos en los que una segunda pregunta ya no recibe otro «Ya le pasé tu pregunta»: la escuela igual se entera. */
+export const MIN_ENTRE_AVISOS_A_LA_ESCUELA = 3;
 
 // ─── Elegir una opción del servicio (auditoría 8–16 nov 2026) ───────────────
 //
@@ -1144,8 +1173,11 @@ async function seguro<T>(fn: () => Promise<T>, siFalla: T): Promise<T> {
     try { return await fn(); } catch { return siFalla; }
 }
 
-async function afiliadoSiHaceFalta(ctx: CtxVentaServicio, item: ItemConFicha): Promise<boolean> {
-    return tienePrecioDeAfiliado(item) ? seguro(() => ctx.afiliado(), false) : false;
+async function afiliadoSiHaceFalta(ctx: CtxVentaServicio, item: ItemConFicha, texto?: string | null): Promise<boolean> {
+    if (!tienePrecioDeAfiliado(item)) return false;
+    // «Y para NO afiliados»: pidió la otra tarifa, aunque su número sea de una familia del club.
+    if (pideTarifaDeNoAfiliado(texto)) return false;
+    return seguro(() => ctx.afiliado(), false);
 }
 
 /**
@@ -1159,7 +1191,7 @@ export async function enviarPagoDeServicio(
 ): Promise<'venta_pago' | 'venta_sin_precio'> {
     const marca = { [MARCA_VENTA]: item.id, ...(o.extra ?? {}) };
     const hoy = hoyBogota((ctx.ahora ?? (() => new Date()))().getTime());
-    const afiliado = await afiliadoSiHaceFalta(ctx, item);
+    const afiliado = await afiliadoSiHaceFalta(ctx, item, o.pregunta);
     const precio = precioDelServicio(item, { afiliado, hoy });
     if (precio.hoy === null && !precio.opciones.length) {
         await ctx.enviar(textoSinPrecioDeServicio(item), { ...marca, step: PASO_VENTA.SIN_PRECIO, pendiente_escuela: 'valor del servicio' });
@@ -1218,6 +1250,131 @@ export function pagoRecibidoEnVenta(recientes: FilaReciente[], venta: VentaActiv
         if (!(m >= desde && m <= ahora + 60_000)) return false;
         if (f.direction === 'inbound') return f.type === 'image' || f.type === 'document';
         return f.payload?.[MARCA_VENTA] === venta.item.id && /^venta_comprobante_(recibido|repetido)$/.test(String(f.payload?.step ?? ''));
+    });
+}
+
+/**
+ * UN mensaje a la persona y la pregunta pendiente a la escuela. La primera vez: «Eso te lo confirma la escuela… Ya le
+ * pasé tu pregunta» (o `textoPropio`); una segunda pregunta en los siguientes minutos NO recibe otro mensaje (antes
+ * salían juntos «Ya le pasé tu pregunta» + «Anotado 🙌 También se lo paso…»): la escuela igual se entera. Más tarde,
+ * el «Anotado» corto. Nunca lanza por la base.
+ */
+async function aLaEscuela(
+    ctx: CtxVentaServicio, item: ItemConFicha, marca: Record<string, unknown>, texto: string, ahora: number,
+    textoPropio: string | null, extra: Record<string, unknown>,
+): Promise<ResultadoVenta> {
+    const detalle = textoPropio
+        ? `Pregunta sobre «${item.name}» que el asistente no puede contestar (no es del servicio): «${texto.slice(0, 300)}».`
+        : `Pregunta sobre «${item.name}» que el asistente no tiene en los datos: «${texto.slice(0, 300)}».`;
+    if (pasoDeVentaReciente(ctx.recientes, PASO_VENTA.A_LA_ESCUELA, MIN_ENTRE_AVISOS_A_LA_ESCUELA, ahora)) {
+        await seguro(() => ctx.avisarEscuela(detalle), undefined);
+        return 'venta_a_la_escuela';
+    }
+    const repetido = pasoDeVentaReciente(ctx.recientes, PASO_VENTA.A_LA_ESCUELA, 30, ahora);
+    await ctx.enviar(textoPropio ?? (repetido ? TEXTO_A_LA_ESCUELA_REPETIDO : TEXTO_A_LA_ESCUELA), {
+        ...marca, ...extra, step: PASO_VENTA.A_LA_ESCUELA, pendiente_escuela: texto.slice(0, 300),
+    }, textoPropio || repetido ? undefined : botonesDeCierre(item, ctx.recientes, ahora));
+    await seguro(() => ctx.avisarEscuela(detalle), undefined);
+    return 'venta_a_la_escuela';
+}
+
+/**
+ * Con el bloque de pago YA enviado (48 h), lo que la persona pide después recibe UNA línea, no el bloque otra vez
+ * (Monster 14–16 nov: «¿Puedo pagar hasta mañana?» ×2, «¿tiene llave?» ×3, «pásame el Nequi» → el bloque entero cada vez):
+ *  · llave / Bre-B → la llave o lo que sí hay;
+ *  · valor o «para NO afiliados» → solo las líneas del valor (la tarifa pedida);
+ *  · plazo → el valor de hoy y el tramo que sigue; sin dato del plazo, lo confirma la escuela (y se le avisa);
+ *  · el número / la cuenta / el titular → la cuenta, en una línea;
+ *  · cualquier otro «sí»/«separar» → «ya te los envié».
+ * Devuelve null cuando no hay una línea honesta (sin cuentas, ya pagó): va el bloque de siempre. La misma respuesta
+ * corta dos veces en 2 minutos: silencio. Nunca lanza por la base.
+ */
+async function respuestaCortaDePago(
+    ctx: CtxVentaServicio, venta: VentaActiva, texto: string, ahora: number,
+): Promise<ResultadoVenta | null> {
+    const item = venta.item;
+    const pregunta = normalizarFrase(texto);
+    const marca = { [MARCA_VENTA]: item.id, intencion_venta: 'pago' };
+    const hoy = hoyBogota(ahora);
+    const pideValor = PIDE_VALOR.test(pregunta) || NO_AFILIADO.test(pregunta);
+    const pagado = pagoRecibidoEnVenta(ctx.recientes, venta, ahora);
+    const yaSalio = (tipo: string) => ctx.recientes.some((f) => f.direction === 'outbound' && f.payload?.corta_de_pago === tipo
+        && momento(f) >= ahora - 2 * 60_000);
+    const responder = async (tipo: string, textoCorto: string, extra: Record<string, unknown> = {}): Promise<ResultadoVenta> => {
+        if (yaSalio(tipo)) return 'venta_silencio';
+        await ctx.enviar(textoCorto, { ...marca, step: PASO_VENTA.RESPUESTA, repetible: true, corta_de_pago: tipo, ...extra });
+        return 'venta_respuesta';
+    };
+    const cuentas = await seguro(() => ctx.cuentas(motivoDeServicio(item)), [] as CuentaDePagoEmbudo[]);
+
+    if (PIDE_LLAVE.test(pregunta) && !pideValor) {
+        if (yaSalio('llave')) return 'venta_silencio';
+        const llave = textoDeLlave(cuentas);
+        await ctx.enviar(llave.texto, {
+            ...marca, step: PASO_VENTA.LLAVE, repetible: true, corta_de_pago: 'llave',
+            ...(llave.confirmaLaEscuela ? { pendiente_escuela: texto.slice(0, 300) } : {}),
+        });
+        if (llave.confirmaLaEscuela) {
+            await seguro(() => ctx.avisarEscuela(`Antes de pagar «${item.name}» pregunta si reciben por llave (Bre-B): «${texto.slice(0, 300)}».`), undefined);
+        }
+        return 'venta_respuesta';
+    }
+
+    if (pideValor) {
+        const afiliado = await afiliadoSiHaceFalta(ctx, item, texto);
+        const lineas = lineasDeValorDeVenta(precioDelServicio(item, { afiliado, hoy }));
+        if (!lineas.length) return null;
+        const cierre = cuentas.length ? 'Los datos de pago son los mismos que te envié arriba 🙌' : SIN_CUENTAS_DE_PAGO;
+        return responder(pideTarifaDeNoAfiliado(texto) ? 'valor_no_afiliado' : 'valor', `${lineas.join('\n')}\n\n${cierre}`, { afiliado });
+    }
+
+    if (PIDE_PLAZO.test(pregunta)) {
+        const afiliado = await afiliadoSiHaceFalta(ctx, item, texto);
+        const precio = precioDelServicio(item, { afiliado, hoy });
+        if (precio.hoy !== null && precio.siguiente) {
+            return responder('plazo',
+                `Hoy el valor es *${cop(precio.hoy)}* y desde el ${diaLegible(precio.siguiente.desde)} pasa a *${cop(precio.siguiente.precio)}*. `
+                + 'Cuando pagues, envíame aquí el comprobante 🙌');
+        }
+        // Sin dato del plazo: se dice y se le avisa a la escuela (no se repite el bloque ni se inventa una fecha).
+        if (yaSalio('plazo')) return 'venta_silencio';
+        await ctx.enviar('El plazo para pagar te lo confirma la escuela por aquí 🙌 Ya le pasé tu pregunta.', {
+            ...marca, step: PASO_VENTA.RESPUESTA, repetible: true, corta_de_pago: 'plazo', pendiente_escuela: texto.slice(0, 300),
+        });
+        await seguro(() => ctx.avisarEscuela(`Antes de pagar «${item.name}» pregunta por el plazo: «${texto.slice(0, 300)}».`), undefined);
+        return 'venta_respuesta';
+    }
+
+    if (PIDE_DATO_DE_CUENTA.test(pregunta) && cuentas.length) {
+        const como = comoPagar(cuentas).replace(/\n+$/, '');
+        const varias = como.includes('\n');
+        const linea = varias ? `Estos son los datos de pago:\n${como.replace(/^a una de estas cuentas:\n/, '')}` : `Claro 🙌 Transfiere ${como}.`;
+        return responder('cuenta', `${linea}${varias ? '\n\n' : ' '}Cuando pagues, envíame aquí el comprobante.`);
+    }
+
+    // «Sí», «dale», «separar mi cupo» otra vez: ya los tiene. Con un comprobante ya enviado puede ser otro cupo: bloque de siempre.
+    if (!pagado && cuentas.length) {
+        return responder('ya_enviados', 'Ya te envié los datos de pago arriba 🙌 Cuando pagues, envíame aquí el comprobante con el nombre completo de quien asiste.');
+    }
+    return null;
+}
+
+/**
+ * ¿La persona habló DEL SERVICIO en esta conversación (lo nombró, o el bot le mandó el pago, los datos o la opción
+ * porque los pidió)? Una pregunta cualquiera que el bot derivó («Ya le pasé tu pregunta») NO cuenta. Para que la
+ * cola de comprobantes no tome por del servicio un pago que no lo nombra (Marco 15-nov: $10.000 de su mensualidad
+ * → «No coincide con el valor de la Clínica»). Pura.
+ */
+export function hablaDelServicio(recientes: FilaReciente[], item: ItemConFicha, ahora = Date.now(), horas = 72): boolean {
+    const desde = ahora - horas * 3600_000;
+    const PASOS = new Set<string>([
+        PASO_VENTA.PAGO, PASO_VENTA.YA_PAGO, PASO_VENTA.ASISTENTE, PASO_VENTA.VARIOS_ASISTENTES,
+        PASO_VENTA.LLAVE, PASO_VENTA.OPCION, PASO_VENTA.DETALLES,
+    ]);
+    return recientes.some((f) => {
+        if (momento(f) < desde) return false;
+        if (f.direction === 'inbound') return f.type === 'text' && nombraElServicio(String(f.text_body ?? ''), item);
+        return f.payload?.[MARCA_VENTA] === item.id && PASOS.has(String(f.payload?.step ?? ''));
     });
 }
 
@@ -1324,21 +1481,10 @@ export async function atenderVentaDeServicio(
         case 'pago': {
             // Eligió una opción y ya hay un comprobante: se confirma la opción, sin repetir los datos de pago.
             if (eleccion && pagoRecibidoEnVenta(ctx.recientes, venta, ahora)) return responderOpcionElegida(ctx, venta, eleccion, marca, ahora);
-            // «¿Es una llave? ¿Puedo pagar por Bre-B?» con el bloque de pago recién enviado: la respuesta corta.
-            const pregunta = normalizarFrase(texto);
-            if (PIDE_LLAVE.test(pregunta) && !PIDE_VALOR.test(pregunta)
-                && pasoDeVentaReciente(ctx.recientes, PASO_VENTA.PAGO, MIN_BLOQUE_DE_PAGO_RECIENTE, ahora)) {
-                const cuentas = await seguro(() => ctx.cuentas(motivoDeServicio(item)), [] as CuentaDePagoEmbudo[]);
-                const llave = textoDeLlave(cuentas);
-                await ctx.enviar(llave.texto, {
-                    ...marca, step: PASO_VENTA.LLAVE, repetible: true,
-                    ...(llave.confirmaLaEscuela ? { pendiente_escuela: texto.slice(0, 300) } : {}),
-                });
-                if (llave.confirmaLaEscuela) {
-                    await seguro(() => ctx.avisarEscuela(
-                        `Antes de pagar «${item.name}» pregunta si reciben por llave (Bre-B): «${texto.slice(0, 300)}».`), undefined);
-                }
-                return 'venta_respuesta';
+            // El bloque de pago completo sale UNA vez: después, solo la línea con lo que pidió (llave, número, valor, plazo).
+            if (!eleccion && pasoDeVentaReciente(ctx.recientes, PASO_VENTA.PAGO, MIN_BLOQUE_DE_PAGO_ENVIADO, ahora)) {
+                const corta = await respuestaCortaDePago(ctx, venta, texto, ahora);
+                if (corta) return corta;
             }
             return enviarPagoDeServicio(ctx, item, { pregunta: texto, extra: { intencion_venta: intencion, ...payloadDeOpcion(eleccion) } });
         }
@@ -1443,7 +1589,12 @@ export async function atenderVentaDeServicio(
             }
             // Eligió una opción («3 semanas», «Del 23 al 27 nov / Del 30 al 04 dic»): se confirma con su valor.
             if (eleccion) return responderOpcionElegida(ctx, venta, eleccion, marca, ahora);
-            const afiliado = await afiliadoSiHaceFalta(ctx, item);
+            // «¿los entrenos serían normales?»: el servicio no trae los entrenamientos de siempre; no se contesta con
+            // los datos de otra pregunta (el horario del vacacional).
+            if (!eleccion && preguntaPorEntrenosRegulares(texto)) {
+                return aLaEscuela(ctx, item, marca, texto, ahora, TEXTO_ENTRENOS_SIN_DATO, { servicio_ia_motivo: 'entrenos_de_siempre' });
+            }
+            const afiliado = await afiliadoSiHaceFalta(ctx, item, texto);
             const cuentas = await seguro(() => ctx.cuentas(motivoDeServicio(item)), [] as CuentaDePagoEmbudo[]);
             const r = await seguro<RespuestaDeServicio>(() => ctx.responderPregunta({
                 schoolId: ctx.schoolId, conversationId: ctx.conversationId, item, pregunta: texto,
@@ -1484,13 +1635,7 @@ export async function atenderVentaDeServicio(
                 await ctx.enviar(TEXTO_CUPO_CON_PAGO, { ...marca, ...motivoIa, step: PASO_VENTA.RESPUESTA, repetible: true });
                 return 'venta_respuesta';
             }
-            const repetido = pasoDeVentaReciente(ctx.recientes, PASO_VENTA.A_LA_ESCUELA, 30, ahora);
-            await ctx.enviar(repetido ? TEXTO_A_LA_ESCUELA_REPETIDO : TEXTO_A_LA_ESCUELA, {
-                ...marca, ...motivoIa, step: PASO_VENTA.A_LA_ESCUELA, pendiente_escuela: texto.slice(0, 300),
-            }, repetido ? undefined : botonesDeCierre(item, ctx.recientes, ahora));
-            await seguro(() => ctx.avisarEscuela(
-                `Pregunta sobre «${item.name}» que el asistente no tiene en los datos: «${texto.slice(0, 300)}».`), undefined);
-            return 'venta_a_la_escuela';
+            return aLaEscuela(ctx, item, marca, texto, ahora, null, motivoIa);
         }
     }
 }

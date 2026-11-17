@@ -260,14 +260,15 @@ describe('7. familia sin cuenta: el aviso de la cuenta solo cuando el mensaje tr
         expect(borradores()[0].proposed_text).not.toMatch(/cuenta creada/);
     });
 
-    it('lo que sí trata de la cuenta, y un saludo suelto, siguen recibiendo el aviso', async () => {
+    it('lo que sí trata de la cuenta recibe el aviso; un saludo suelto NO (2026-11-17, Monster: Olinda)', async () => {
         await turno('No puedo entrar a la app');
         expect(pasosDe()).toEqual(['debe_registrarse']);
         expect(borradores()[0].proposed_text).toMatch(/todavía no tienes tu cuenta creada/);
         h.state.inserts = [];
         _olvidarReservasDePaso();
+        // «Hola buenas tardes» no es un pedido de cuenta: sin invitación; queda en el buzón para la escuela.
         await turno('Hola buenas tardes');
-        expect(pasosDe()).toEqual(['debe_registrarse']);
+        expect(pasosDe()).toEqual([]);
     });
 });
 
