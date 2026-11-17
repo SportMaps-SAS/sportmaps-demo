@@ -8,7 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../config/supabase', () => ({ supabase: {} }));
 
 import {
-    planificarFranjas, compararConExistentes, filaParaInsertar, esSinLimite, normalizarHora,
+    planificarFranjas, cumpleOrdinalDelMes, compararConExistentes, filaParaInsertar, esSinLimite, normalizarHora,
     CUPOS_SIN_LIMITE, type EquipoParaFranjas, type FranjaExistente,
 } from './franjas-cortesia.service';
 import { textoCupos, intercalarPorGrupo, type FranjaCortesia } from './whatsapp-clase-cortesia.service';
@@ -407,5 +407,59 @@ describe('compararConExistentes: cupos y reabrir', () => {
         expect(filaParaInsertar(f, 's', 'o', HOY, 12).max_capacity).toBe(12);
         expect(filaParaInsertar(f, 's', 'o', HOY, null).max_capacity).toBe(CUPOS_SIN_LIMITE);
         expect(filaParaInsertar(f, 's', 'o', HOY, 0).max_capacity).toBe(CUPOS_SIN_LIMITE);
+    });
+});
+
+// ─── Monster 2026-11-17: «1.er domingo del mes» y «2° a 4° domingo del mes» ─────────────────────────────────
+describe('cumpleOrdinalDelMes', () => {
+    it.each([
+        ['2026-11-01', '1.er domingo del mes: Pinar', true],
+        ['2026-11-08', '1.er domingo del mes: Pinar', false],
+        ['2026-11-22', '1.er domingo del mes: Pinar', false],
+        ['2026-11-08', 'Colegio Bilingüe La Enseñanza; 2° a 4° domingo del mes', true],
+        ['2026-11-22', 'Colegio Bilingüe La Enseñanza; 2° a 4° domingo del mes', true],
+        ['2026-11-01', 'Colegio Bilingüe La Enseñanza; 2° a 4° domingo del mes', false],
+        ['2026-11-29', 'Colegio Bilingüe La Enseñanza; 2° a 4° domingo del mes', false],
+        ['2026-11-29', 'último domingo del mes', true],
+        ['2026-11-22', 'último domingo del mes', false],
+        ['2026-11-06', '1er y 3er viernes: Pinar', true],
+        ['2026-11-13', '1er y 3er viernes: Pinar', false],
+        ['2026-11-20', '1er y 3er viernes: Pinar', true],
+        ['2026-11-15', 'primer domingo', false],
+    ])('%s con «%s» → %s', (fecha, lugar, esperado) => {
+        expect(cumpleOrdinalDelMes(fecha, lugar)).toBe(esperado);
+    });
+
+    it('sin calificador, o con un lugar normal, siempre cumple', () => {
+        for (const lugar of ['Pinar', 'Parque Oxxo Pinar', 'Liceo Fesan', '', null, undefined, 'Colegio 2 de mayo']) {
+            expect(cumpleOrdinalDelMes('2026-11-22', lugar)).toBe(true);
+        }
+    });
+});
+
+describe('planificarFranjas — el horario real de MIXTO MAYORES PROFUNDIZACION', () => {
+    const MAYORES: EquipoParaFranjas = {
+        id: 't-mayores', name: 'MIXTO MAYORES PROFUNDIZACION', active: true, admite_nuevos: true,
+        schedule: [
+            { day: 3, time: '18:00', end: '20:00', place: 'Pinar' },
+            { day: 6, time: '07:00', end: '09:00', place: 'Parque Oxxo Pinar' },
+            { day: 0, time: '07:00', end: '09:00', place: '1.er domingo del mes: Pinar' },
+            { day: 0, time: '08:00', end: '10:00', place: 'Colegio Bilingüe La Enseñanza; 2° a 4° domingo del mes' },
+        ],
+    };
+    const domingos = (desde: string, semanas: number) =>
+        planificarFranjas([MAYORES], desde, semanas).franjas
+            .filter((f) => new Date(f.slot_date + 'T12:00:00Z').getUTCDay() === 0)
+            .map((f) => `${f.slot_date} ${f.start_time}`);
+
+    it('el domingo 22 (4.º) solo ofrece las 08:00, no las 07:00 del 1.er domingo', () => {
+        expect(domingos('2026-11-22', 1)).toEqual(['2026-11-22 08:00']);
+    });
+    it('el 1.er domingo ofrece las 07:00 y el 5.º no ofrece ninguna', () => {
+        expect(domingos('2026-11-01', 5)).toEqual(['2026-11-01 07:00', '2026-11-08 08:00', '2026-11-15 08:00', '2026-11-22 08:00']);
+    });
+    it('los sábados y los miércoles no cambian', () => {
+        const otros = planificarFranjas([MAYORES], '2026-11-16', 2).franjas.filter((f) => new Date(f.slot_date + 'T12:00:00Z').getUTCDay() !== 0);
+        expect(otros.map((f) => `${f.slot_date} ${f.start_time}`)).toEqual(['2026-11-18 18:00', '2026-11-21 07:00', '2026-11-25 18:00', '2026-11-28 07:00']);
     });
 });

@@ -14,8 +14,8 @@
  *     `platform_admins` activos).
  * El personal se clasifica como `staff` (whatsapp-atencion): el bot no le habla y sus
  * adjuntos no se tratan como de una familia (solo owner/admin siguen la rama de alta
- * por foto de matrícula). Familia gana: un profe que además es acudiente se atiende
- * como familia (la clasificación por teléfono va primero).
+ * por foto de matrícula). Un profe o admin que además es acudiente (2026-11-17) sigue siendo familia
+ * para sus comprobantes, pero el bot no le conversa (`tambienFamilia`, whatsapp-atencion).
  *
  * Los teléfonos se comparan por los 10 dígitos del celular colombiano (como
  * `wa_celular_remitente_co`); un fijo o un número extranjero no cruza. Nunca lanza.

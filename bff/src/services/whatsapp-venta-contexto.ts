@@ -43,6 +43,17 @@ export const MARCA_VENTA = 'venta_servicio_id';
 
 export type OrigenVenta = 'marca' | 'texto_saliente' | 'nombrado' | 'lead';
 
+/**
+ * Pasos del bot que son una DERIVACIÓN, no información del servicio: «Eso te lo confirma la escuela», «Le aviso a la
+ * escuela», «¿Te ayudo con algo de la clínica?». Llevan la marca de venta, pero no prueban que la persona esté
+ * comprando: si sostuvieran la venta, se auto-alimentarían (Monster 2026-11-15, Marco: su «ACTIVAR» del 9 de nov fue
+ * contestado por la ruta de venta y esa marca mantuvo «la clínica» 6 días; su pago de $10.000 de mensualidad
+ * terminó como «No coincide con el valor de la Clínica»). Literales a propósito: importar PASO_VENTA crearía un ciclo.
+ */
+export const PASOS_DERIVADOS_DE_VENTA: ReadonlySet<string> = new Set([
+    'venta_servicio_a_la_escuela', 'venta_servicio_humano', 'venta_servicio_saludo',
+]);
+
 export interface VentaActiva {
     item: ItemConFicha;
     origen: OrigenVenta;
@@ -211,7 +222,14 @@ export function ventaActiva(
             continue;
         }
         if (f.direction !== 'outbound') continue;
+        // La escuela le habló del CLUB (mensualidad, matrícula, clase de prueba…) sin nombrar el servicio DESPUÉS de la
+        // última señal: el tema cambió (Marco 11-nov: la escuela le escribió su deuda de mensualidad). Como cuando la
+        // persona lo pide por texto, la venta se cierra. Solo mensajes de una persona: el bot nombra el club en sus
+        // presentaciones sin que cambie el tema.
+        const esPersona = f.ai_generated !== true && f.type !== 'template' && !f.payload?.campana_id && !f.payload?.[MARCA_VENTA];
+        if (!senal && esPersona && pideElClub(texto) && !itemNombradoEn(texto, items)) { clubDespues = true; continue; }
         const marcado = itemMarcadoEn(f, items);
+        if (marcado && PASOS_DERIVADOS_DE_VENTA.has(String(f.payload?.step ?? ''))) continue;
         if (marcado) { senal = { item: marcado, origen: 'marca', desde: iso(f) }; break; }
         // Salientes del bot SIN marca no cuentan por el texto: el bot nombra la clínica en
         // su presentación («tenemos la clínica y el vacacional») sin que sea una venta. Sí

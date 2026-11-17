@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 928,
-  "head": "20261115143758",
+  "count": 929,
+  "head": "20261117115141",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -931,6 +931,7 @@
     {"v":"20261112143719","file":"20261112143719_report_pdf_version.sql","sha256":"ef1e7d713a0ff8abf1cca5d95cc5bf9dee07ac71a1187ff6d94b03263cb60608","added":"2026-11-12","by":"Brayan Steven Lopez"},
     {"v":"20261112171236","file":"20261112171236_agendar_clase_prueba_desde_chat.sql","sha256":"dc5aff3cb63933cba17a66332145ac32fb056e9f9262459de529aa3130941a07","added":"2026-11-12","by":"Brayan Steven Lopez"},
     {"v":"20261114104111","file":"20261114104111_dreamers_vencimiento_mensualidades_noviembre.sql","sha256":"4fc1b53aad3c7ff572146bffc8b56f7ed9b2161c64901b7b7599b673b4d4c94b","added":"2026-11-14","by":"Brayan Steven Lopez"},
-    {"v":"20261115143758","file":"20261115143758_whatsapp_baja_promos_declaraciones_y_freno.sql","sha256":"bc07a0c5e3eda8434c16434b46f46b52f8b773478d24400db325382dcd18b4cb","added":"2026-11-15","by":"Brayan Steven Lopez"}
+    {"v":"20261115143758","file":"20261115143758_whatsapp_baja_promos_declaraciones_y_freno.sql","sha256":"bc07a0c5e3eda8434c16434b46f46b52f8b773478d24400db325382dcd18b4cb","added":"2026-11-15","by":"Brayan Steven Lopez"},
+    {"v":"20261117115141","file":"20261117115141_ui_usage_daily.sql","sha256":"7d9441b6ede58ad1b48b8f392b88d367361e99c8d5a09cfb5babad965e213ce5","added":"2026-11-17","by":"Brayan Steven Lopez"}
   ]
 }
