@@ -157,6 +157,43 @@ export function hoyBogota(ahora = new Date()): string {
     return ahora.toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
 }
 
+const DIA_SEMANA_RE = '(?:domingos?|lunes|martes|miercoles|jueves|viernes|sabados?)';
+
+/**
+ * ¿La `fecha` cumple el calificador de ocurrencia del lugar? «1.er domingo del mes: Pinar», «Colegio…; 2° a 4° domingo
+ * del mes», «último sábado», «1er y 3er viernes». Sin calificador, siempre true. Antes el generador lo ignoraba y creaba
+ * AMBAS franjas todos los domingos (Monster 2026-11-17: el domingo 22, 4.º del mes, ofrecía las 07:00 del «1.er domingo»
+ * junto a las 08:00 correctas; una familia quedó agendada en la hora que no era). Pura.
+ */
+export function cumpleOrdinalDelMes(fecha: string, lugar: string | null | undefined): boolean {
+    const t = String(lugar ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[°º]/g, '').replace(/\./g, ' ').replace(/\s+/g, ' ');
+    if (!t) return true;
+    const dia = +fecha.slice(8, 10);
+    const diasDelMes = new Date(Date.UTC(+fecha.slice(0, 4), +fecha.slice(5, 7), 0)).getUTCDate();
+    const n = Math.ceil(dia / 7);
+    const esUltimo = dia + 7 > diasDelMes;
+    const ORD = '(?:er|ro|do|to|o|a)?';
+    const NUM = '([1-5]|primer[oa]?|segund[oa]|tercer[oa]?|cuart[oa]|quint[oa])';
+    const aNumero = (x: string): number => ({ primer: 1, primero: 1, primera: 1, segund: 2, segundo: 2, segunda: 2, tercer: 3, tercero: 3, tercera: 3, cuart: 4, cuarto: 4, cuarta: 4, quint: 5, quinto: 5, quinta: 5 } as Record<string, number>)[x] ?? +x;
+    const permitidos = new Set<number>();
+    let ultimo = false;
+    let hay = false;
+    const rango = new RegExp(String.raw`\b${NUM}\s*${ORD}\s*(?:a|al|hasta|-)\s*${NUM}\s*${ORD}\s+${DIA_SEMANA_RE}\b`).exec(t);
+    if (rango) { hay = true; for (let i = aNumero(rango[1]); i <= aNumero(rango[2]); i++) permitidos.add(i); }
+    else {
+        const lista = new RegExp(String.raw`\b${NUM}\s*${ORD}\s*(?:y|e|,)\s*${NUM}\s*${ORD}\s+${DIA_SEMANA_RE}\b`).exec(t);
+        if (lista) { hay = true; permitidos.add(aNumero(lista[1])); permitidos.add(aNumero(lista[2])); }
+        else {
+            const uno = new RegExp(String.raw`\b${NUM}\s*${ORD}\s+${DIA_SEMANA_RE}\b`).exec(t);
+            if (uno) { hay = true; permitidos.add(aNumero(uno[1])); }
+        }
+    }
+    if (new RegExp(String.raw`\bultim[oa]s?\s+${DIA_SEMANA_RE}\b`).test(t)) { hay = true; ultimo = true; }
+    if (!hay) return true;
+    return permitidos.has(n) || (ultimo && esUltimo);
+}
+
 export const claveFranja = (teamId: string, fecha: string, hora: string) =>
     `${teamId}|${fecha.slice(0, 10)}|${normalizarHora(hora) ?? hora}`;
 
@@ -211,6 +248,8 @@ export function planificarFranjas(
             const dow = new Date(inicio + i * DIA_MS).getUTCDay();
             if (diasSemana && !diasSemana.includes(dow)) continue;
             for (const s of sesionesDelDia(t.schedule, excepciones, fecha)) {
+                // «1.er domingo del mes», «2° a 4° domingo del mes»: solo las fechas que lo cumplen (el entreno extra no).
+                if (s.origen !== 'extra' && !cumpleOrdinalDelMes(fecha, s.lugar)) continue;
                 // El subgrupo va en el label: Dynasty divide «INTERMEDIO» en
                 // Origen y Evolución con horarios y sedes distintas; sin él, la
                 // familia no sabe a cuál de los dos va.

@@ -131,8 +131,28 @@ describe('debeAtender: el personal es `staff` y el bot NO le contesta (ni como p
         expect(await debeAtender(INTEG, 'conv-1', '573017517726')).toMatchObject({ tipo: 'desconocido', atender: true });
     });
 
-    it('familia gana: un profe que también es acudiente se atiende como familia', async () => {
+    it('un profe que también es acudiente (Sebastian Hurtado, Monster): sigue siendo familia para sus comprobantes pero el bot NO le conversa', async () => {
         h.state.identify = { estado: 'identificado', parent_id: 'p-1' };
-        expect(await debeAtender(INTEG, 'conv-1', '573001113371')).toMatchObject({ tipo: 'familia', atender: true });
+        // «Es este número si? +57 311 8608641» ya no recibe «Soy Mapi… ¿para qué necesitas el número?».
+        expect(await debeAtender(INTEG, 'conv-1', '573001113371'))
+            .toMatchObject({ tipo: 'familia', atender: false, tambienFamilia: true });
+    });
+
+    it('un admin y un admin de la plataforma que también son acudientes: lo mismo', async () => {
+        h.state.identify = { estado: 'identificado', parent_id: 'p-2' };
+        expect(await debeAtender(INTEG, 'conv-1', '573001113400')).toMatchObject({ atender: false, tambienFamilia: true });
+        expect(await debeAtender(INTEG, 'conv-1', '573128463555')).toMatchObject({ atender: false, tambienFamilia: true });
+    });
+
+    it('una familia que NO es personal se atiende como siempre', async () => {
+        h.state.identify = { estado: 'identificado', parent_id: 'p-3' };
+        expect(await debeAtender(INTEG, 'conv-1', '573017517726'))
+            .toMatchObject({ tipo: 'familia', atender: true, tambienFamilia: false });
+    });
+
+    it('una familia sin cuenta que es profe tampoco recibe la invitación «Créala aquí»', async () => {
+        h.state.identify = { estado: 'debe_registrarse' };
+        expect(await debeAtender(INTEG, 'conv-1', '573001113371'))
+            .toMatchObject({ tipo: 'familia_sin_cuenta', atender: false, tambienFamilia: true });
     });
 });
