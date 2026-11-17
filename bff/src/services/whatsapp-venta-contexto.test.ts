@@ -142,3 +142,50 @@ describe('ventaActiva', () => {
         expect(v?.origen).toBe('lead');
     });
 });
+
+// ─── Monster 2026-11-15, Marco: la venta de la clínica no dura para siempre ──────────────────────────────────
+describe('ventaActiva — el arrastre de Marco', () => {
+    const DIA = 24 * 60;
+    const AHORA_M = new Date('2026-11-15T21:18:00Z').getTime(); // 16:18 hora Bogotá
+    const haceM = (min: number) => new Date(AHORA_M - min * 60_000).toISOString();
+    const ENTRANTE = (min: number, text: string): FilaReciente => ({ direction: 'inbound', type: 'text', text_body: text, created_at: haceM(min) });
+    const ESCUELA = (min: number, text: string): FilaReciente => ({ direction: 'outbound', type: 'text', text_body: text, created_at: haceM(min), ai_generated: false });
+    const PITCH = 'Pasamos a recordar que mañana cerramos la venta de entradas a nuestra clínica con valor de preventa y a partir del 11 de noviembre el valor cambia, puedes apartar tu cupo con valor de preventa abonando $150.000';
+    const MENSUALIDAD = 'Buen día Marco. Pasamos a recordar e informar que el trámite debe quedar listo hoy. En septiembre pagaste $135.000 de mensualidad. NOTA La mensualidad del club es de $145.000';
+
+    it('una derivación del bot («Eso te lo confirma la escuela») con marca NO sostiene la venta', () => {
+        const mensajes = [
+            ENTRANTE(6 * DIA - 10, 'Hola yo ya les respondí el mensaje por correo y solo debo 10mil de este mes'),
+            { direction: 'outbound', type: 'text', text_body: 'Eso te lo confirma la escuela por aquí 🙌 Ya le pasé tu pregunta.', created_at: haceM(6 * DIA), ai_generated: true,
+                payload: { [MARCA_VENTA]: CLINICA.id, step: 'venta_servicio_a_la_escuela' } } as FilaReciente,
+        ];
+        expect(ventaActiva(mensajes, ITEMS, { ahora: AHORA_M })).toBeNull();
+    });
+
+    it('la escuela ofreció la clínica el 9 y el 11 le escribió de su mensualidad: la venta está cerrada', () => {
+        const mensajes = [ESCUELA(6 * DIA - 60, PITCH), ESCUELA(4 * DIA, MENSUALIDAD),
+            ENTRANTE(6 * DIA - 10, 'Hola yo ya les respondí el mensaje por correo y solo debo 10mil de este mes')];
+        expect(ventaActiva(mensajes, ITEMS, { ahora: AHORA_M })).toBeNull();
+    });
+
+    it('sin el mensaje de mensualidad, la oferta de la escuela sí sostiene la venta (no se rompe lo de siempre)', () => {
+        expect(ventaActiva([ESCUELA(5 * DIA, PITCH)], ITEMS, { ahora: AHORA_M })?.item.id).toBe(CLINICA.id);
+    });
+
+    it('un mensaje de la escuela que nombra la clínica Y la mensualidad no cierra la venta', () => {
+        const mixto = `${PITCH} Recuerda que la mensualidad del club va aparte.`;
+        expect(ventaActiva([ESCUELA(2 * DIA, mixto)], ITEMS, { ahora: AHORA_M })?.item.id).toBe(CLINICA.id);
+    });
+
+    it('el bot que nombra el club en su presentación NO cierra la venta', () => {
+        const bot = { direction: 'outbound', type: 'text', ai_generated: true, created_at: haceM(60),
+            text_body: 'Soy Mapi. Te ayudo con la mensualidad, horarios y tu clase de prueba del club.' } as FilaReciente;
+        expect(ventaActiva([ESCUELA(2 * DIA, PITCH), bot], ITEMS, { ahora: AHORA_M })?.item.id).toBe(CLINICA.id);
+    });
+
+    it('un paso real de la venta con marca (el pago) sí la sostiene', () => {
+        const pago = { direction: 'outbound', type: 'text', ai_generated: true, created_at: haceM(3 * DIA),
+            text_body: 'Para separar tu cupo en la Clínica…', payload: { [MARCA_VENTA]: CLINICA.id, step: 'venta_servicio_pago' } } as FilaReciente;
+        expect(ventaActiva([pago], ITEMS, { ahora: AHORA_M })?.origen).toBe('marca');
+    });
+});
