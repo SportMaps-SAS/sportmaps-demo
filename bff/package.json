@@ -10,7 +10,7 @@
     "qa:embudo": "tsx scripts/qa-embudo.ts",
     "qa:replay-ventas": "tsx scripts/qa-replay-ventas.ts",
     "test:watch": "vitest",
-    "build": "tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/data', {recursive:true}); fs.copyFileSync('src/data/exercises.json', 'dist/data/exercises.json'); fs.mkdirSync('dist/assets', {recursive:true}); fs.copyFileSync('src/assets/sportmaps-logo.png', 'dist/assets/sportmaps-logo.png');\""
+    "build": "node --max-old-space-size=3072 node_modules/typescript/bin/tsc && node -e \"const fs=require('fs'); fs.mkdirSync('dist/data', {recursive:true}); fs.copyFileSync('src/data/exercises.json', 'dist/data/exercises.json'); fs.mkdirSync('dist/assets', {recursive:true}); fs.copyFileSync('src/assets/sportmaps-logo.png', 'dist/assets/sportmaps-logo.png');\""
   },
   "keywords": [],
   "author": "",
