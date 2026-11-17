@@ -231,6 +231,11 @@ export function lineasParaRpc(b: Pick<ChargeBatchRequest, 'lines'>) {
     });
 }
 
+function omitirRecibidoPor<T extends { received_by?: string }>(p: T): Omit<T, 'received_by'> {
+    const { received_by: _omitido, ...resto } = p;
+    return resto;
+}
+
 function argsComunes(schoolId: string, actor: string, b: ChargeBatchRequest) {
     const args: Record<string, unknown> = {
         p_school_id: schoolId,
@@ -239,7 +244,8 @@ function argsComunes(schoolId: string, actor: string, b: ChargeBatchRequest) {
         p_lines: lineasParaRpc(b),
         p_pending: b.pending,
         p_global_discount: b.global_discount ?? null,
-        p_payment: b.payment ?? null,
+        // `received_by` lo usa el BFF (valida y anota en notes), no la RPC: no viaja.
+        p_payment: b.payment ? omitirRecibidoPor(b.payment) : null,
     };
     // §7.2/§7.3 usan `p_new_athlete` en el texto pero no lo listan en la firma:
     // solo se manda cuando hay atleta nuevo, para no romper la llamada si F1

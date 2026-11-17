@@ -12,6 +12,9 @@ import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
 import { getSignedReceiptUrl } from '@/lib/normalizeReceiptUrl';
 import { supabase } from '@/integrations/supabase/client';
+import { todayColombia } from '@/lib/dateUtils';
+import { errorDeRecibido, type RecibidoSinComprobante } from '@/lib/payments/constanciaDeRecibido';
+import { RecibidoSinComprobanteCampos, type RecibidoDraft } from '@/components/payment/RecibidoSinComprobanteCampos';
 
 interface ApprovePaymentMethodSheetProps {
   payment: any;
@@ -69,6 +72,10 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   const [razon, setRazon] = useState('');
   // Comprobante de varios cobros: cuáles se aprueban (por defecto, todos).
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Constancia cuando se aprueba SIN comprobante: cómo, cuándo y quién lo recibió.
+  const hoy = todayColombia();
+  const [recibido, setRecibido] = useState<RecibidoDraft>({ metodo: '', fecha: hoy, por: '' });
+  const [verErrorRecibido, setVerErrorRecibido] = useState(false);
 
   // ── Grupo: este cobro + los que comparten comprobante ──
   const group: any[] = payment ? orderReceiptGroup([payment, ...(siblings ?? [])]) : [];
@@ -100,6 +107,12 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   // Hay comprobante subido pero el OCR no pudo leer el monto: avisar para que el
   // admin verifique manualmente y no apruebe el total por defecto sin querer.
   const hasReceiptNoOcr = !!payment?.receipt_url && ocrAmount == null;
+  // Sin comprobante (ni en el grupo): la aprobación exige dejar constancia.
+  const sinComprobante = !!payment && !group.some((p) => !!p.receipt_url);
+  const errorRecibido = sinComprobante ? errorDeRecibido(recibido, hoy) : null;
+  const constancia: RecibidoSinComprobante | undefined = sinComprobante && !errorRecibido
+    ? { metodo: recibido.metodo as RecibidoSinComprobante['metodo'], fecha: recibido.fecha, por: recibido.por }
+    : undefined;
 
   useEffect(() => {
     if (!open || !schoolId) return;
@@ -133,6 +146,10 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
       setSelectedIds(new Set(group.map((p) => p.id)));
       setValorPagado(String(ocrAmount != null && ocrAmount > 0 ? ocrAmount : (isGroup ? groupAllRemaining : remaining)));
       setRazon('');
+      // Si el cobro ya trae un método, se propone; la fecha arranca en hoy.
+      const m = String(payment.payment_method ?? '');
+      setRecibido({ metodo: m === 'cash' || m === 'transfer' || m === 'other' ? m : '', fecha: todayColombia(), por: '' });
+      setVerErrorRecibido(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, payment?.id, canAbono, groupKey]);
@@ -203,6 +220,7 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
         notify: false,
         confirmedAmount: editable && first ? valorNum : undefined,
         confirmedReason: editable && first && valorCambiado ? razon.trim() : undefined,
+        recibido: constancia,
       });
       if ('reason' in r) fails.push(`${itemLabel(p)}: ${r.message}`);
       else ok.push({ payment: p, label: itemLabel(p) });
@@ -241,6 +259,11 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
       return;
     }
     if (nothingSelected) return;
+    if (sinComprobante && errorRecibido) {
+      setVerErrorRecibido(true);
+      toast({ title: 'Falta la constancia del pago', description: errorRecibido, variant: 'destructive' });
+      return;
+    }
     if (!editable && mode === 'abono' && !canAbono) return;
     if (mode === 'full' && needsFullConfirm && !confirmFull) return;
     if (!isGroup && mode === 'abono' && (abonoNum <= 0 || abonoNum > remaining)) {
@@ -264,6 +287,7 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
         abonoAmount: editable ? (editAbono ? valorNum : undefined) : (mode === 'abono' ? abonoNum : undefined),
         confirmedAmount: editable ? valorNum : undefined,
         confirmedReason: editable && valorCambiado ? razon.trim() : undefined,
+        recibido: constancia,
       });
       if ('reason' in r) {
         toast({
@@ -423,6 +447,17 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
               {viewingReceipt ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <FileText className="h-4 w-4 mr-2" />}
               Ver comprobante
             </Button>
+          )}
+
+          {/* Sin comprobante: no se aprueba a ciegas, se deja constancia de cómo se recibió. */}
+          {sinComprobante && (
+            <RecibidoSinComprobanteCampos
+              value={recibido}
+              onChange={(v) => setRecibido(v)}
+              hoy={hoy}
+              idPrefix="aprobar-recibido"
+              error={verErrorRecibido ? errorRecibido : null}
+            />
           )}
 
           {/* Escuela sin abonos y el monto no cuadra: no hay abono que registrar. */}

@@ -8,8 +8,8 @@
  * si `esPosibleRespuestaDeCampana` (gratis: el prefijo `smc:` o la frase). Lo
  * demás sigue por el camino de siempre.
  *
- *  - «No recibir más» → opt-out (`wa_register_optin`, p_opt_out), fuera de la
- *    audiencia, envío 'baja' y confirmación. La confirmación sale SIEMPRE, aun
+ *  - «No recibir más» → baja de PROMOCIONES (`wa_registrar_baja_promos`; no corta
+ *    cobranza ni avisos), fuera de la audiencia, envío 'baja' y confirmación. La confirmación sale SIEMPRE, aun
  *    con la escuela escribiendo (es una instrucción al sistema, no una charla).
  *  - «Más adelante» → 'respondio_luego' y un texto corto.
  *  - «Sí» → 'respondio_si'; el texto que la escuela aprobó (`respuesta_si`)
@@ -29,6 +29,7 @@
 import { supabase } from '../config/supabase';
 import { sendInteractiveButtons, sendTextMessage, type ParsedInboundMessage, type WhatsAppIntegration } from './whatsapp.service';
 import { conversacionTomada } from './whatsapp-tomada.service';
+import { registrarBajaDePromos } from './whatsapp-optin.service';
 import { escuelaActiva, modoDiscreto } from './whatsapp-modo-discreto';
 import { modoDiscretoEfectivo } from './whatsapp-ajustes-escuela.service';
 import { registrarLeadDeProspecto } from './whatsapp-prospecto-lead.service';
@@ -60,7 +61,8 @@ export const TEXTO_LUEGO = '¡Entendido! 🙌 Cuando quieras, escríbenos por aq
 export const TEXTO_NO_INTERESA = 'Entendido, no te escribiremos más sobre esto. ¡Gracias por avisarnos! 🙏';
 export const TEXTO_QUE_QUIERES = '¿Qué quieres hacer? 👇';
 export const textoBaja = (escuela: string) =>
-    `Listo, no volverás a recibir mensajes automáticos de ${escuela} por este medio. `
+    `Listo, no volverás a recibir promociones de ${escuela} por este medio. `
+    + 'Si tienes pagos con la escuela, esos avisos sí te siguen llegando. '
     + 'Si cambias de opinión, escríbenos *ACTIVAR*. 👋';
 
 /** `smc:<uuid>:si|luego|baja` → partes; lo demás null. Pura. */
@@ -220,15 +222,9 @@ async function atenderBoton(
     if (boton.accion === 'baja') {
         // La baja vale aunque la campaña no se encuentre: pedir que no le
         // escriban se respeta siempre.
-        await supabase.rpc('wa_register_optin', {
-            p_integration_id: integration.id,
-            p_school_id: integration.school_id,
-            p_contact_wa_id: msg.contactWaId,
-            p_source: 'baja_directa',
-            p_source_ref: msg.waMessageId,
-            p_parent_id: null,
-            p_opt_out: true,
-        });
+        // Baja de PROMOCIONES, no baja total: sigue recibiendo sus avisos de pago
+        // (spec whatsapp-autoservicio D4). La baja total es escribir BAJA.
+        await registrarBajaDePromos(integration, msg.contactWaId, msg.waMessageId);
         await excluirDeAudiencia(integration.id, msg.contactWaId, 'baja');
         const envio = campana ? await envioDe(campana.id, msg.contactWaId) : null;
         if (envio?.estado === 'baja') return 'repetido';

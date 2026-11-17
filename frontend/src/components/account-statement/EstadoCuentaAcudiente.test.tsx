@@ -50,6 +50,39 @@ describe('EstadoCuentaAcudienteView', () => {
     expect(screen.queryByText(/overdue|paid|awaiting/)).toBeNull();
   });
 
+  describe('procedencia del pago (solo la escuela)', () => {
+    // Un mes por cobro; los meses pagados llegan cerrados y se abren con un clic.
+    const base = { status: 'paid', amount_paid: 210_000, payment_date: '2026-07-06' };
+    const migrado = c({ ...base, id: 'xls', period_month: 7, due_date: '2026-07-10', reference: 'XLS-NOV-12' });
+    const sinSoporte = c({ ...base, id: 'cash', period_month: 8, due_date: '2026-08-10', reference: 'CASH-AB1', payment_method: 'cash' });
+    const conSoporte = c({ ...base, id: 'cmp', period_month: 9, due_date: '2026-09-10', reference: 'TRF-1', payment_method: 'transfer', receipt_url: 'u/x.png' });
+    const abrirMeses = () => screen.getAllByRole('button', { name: /de 2026/ })
+      .filter((b) => b.getAttribute('aria-expanded') === 'false')
+      .forEach((b) => fireEvent.click(b));
+
+    it('la escuela ve «Migrado del Excel» y «Sin comprobante», y nada en el pago con comprobante', () => {
+      pintar({ modo: 'escuela', cobros: [migrado, sinSoporte, conSoporte] });
+      abrirMeses();
+      expect(screen.getAllByText('Migrado del Excel')).toHaveLength(1);
+      expect(screen.getAllByText('Sin comprobante').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByTestId(/^pago-origen-/)).toHaveLength(2);
+    });
+
+    it('la familia no ve ninguna de las dos', () => {
+      pintar({ modo: 'familia', cobros: [migrado, sinSoporte] });
+      abrirMeses();
+      expect(screen.getAllByText(/Pagado el/).length).toBe(2);
+      expect(screen.queryByText('Migrado del Excel')).toBeNull();
+      expect(screen.queryAllByTestId(/^pago-origen-/)).toHaveLength(0);
+    });
+
+    it('la página pública (sin sesión) tampoco', () => {
+      pintar({ modo: 'publica', cobros: [migrado] });
+      abrirMeses();
+      expect(screen.queryByText('Migrado del Excel')).toBeNull();
+    });
+  });
+
   it('Imprimir es secundario y llama al callback', () => {
     const { onPrint } = pintar({ cobros: [c({})] });
     fireEvent.click(screen.getByRole('button', { name: /Imprimir/ }));

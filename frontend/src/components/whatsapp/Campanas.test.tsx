@@ -63,12 +63,47 @@ describe('puras', () => {
 });
 
 describe('Campanas', () => {
-    it('apagadas: un aviso y nada más', async () => {
-        bff.get.mockResolvedValue({ disponible: true, habilitadas: false });
+    it('apagadas: la escuela las activa sola aceptando la declaración (ya no «escríbele a SportMaps»)', async () => {
+        bff.get.mockResolvedValue({
+            disponible: true, habilitadas: false,
+            activacion: { version: 'activacion_v1', texto: 'En nombre de Monster declaro que el contenido será verídico…' },
+        });
+        bff.post.mockResolvedValue({});
         render(<Campanas schoolId="s1" />);
-        expect(await screen.findByText(/apagadas para tu escuela/)).toBeTruthy();
+        expect(await screen.findByText(/En nombre de Monster declaro/)).toBeTruthy();
+        expect(screen.queryByText(/Escríbele a SportMaps/)).toBeNull();
         expect(screen.queryByText(/Aprobar y enviar/)).toBeNull();
         expect(bff.get).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas');
+
+        const activar = screen.getByRole('button', { name: 'Aceptar y activar campañas' }) as HTMLButtonElement;
+        expect(activar.disabled).toBe(true);
+        fireEvent.click(screen.getByLabelText('Acepto la declaración de responsabilidad'));
+        expect(activar.disabled).toBe(false);
+        fireEvent.click(activar);
+        await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas/activar', { declaracion_aceptada: true }));
+    });
+
+    it('sin la migración: «todavía no están disponibles», sin botón de activar', async () => {
+        bff.get.mockResolvedValue({ disponible: false });
+        render(<Campanas schoolId="s1" />);
+        expect(await screen.findByText(/Todavía no están disponibles/)).toBeTruthy();
+        expect(screen.queryByRole('button', { name: 'Aceptar y activar campañas' })).toBeNull();
+    });
+
+    it('prendidas sin declaración de activación: no deja aprobar hasta aceptarla', async () => {
+        bff.get.mockResolvedValue(encendidas([borrador], {
+            falta_activacion: true, activacion: { version: 'activacion_v1', texto: 'En nombre de Monster declaro…' },
+        }));
+        render(<Campanas schoolId="s1" />);
+        expect(await screen.findByTestId('falta-activacion')).toBeTruthy();
+        expect((screen.getByRole('button', { name: 'Aprobar y enviar' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('freno global de SportMaps: aviso y no se puede aprobar', async () => {
+        bff.get.mockResolvedValue(encendidas([borrador], { pausa_global: true }));
+        render(<Campanas schoolId="s1" />);
+        expect(await screen.findByText(/detenidas por SportMaps/)).toBeTruthy();
+        expect((screen.getByRole('button', { name: 'Aprobar y enviar' }) as HTMLButtonElement).disabled).toBe(true);
     });
 
     it('borrador: «Lista: 120 personas»; aprobar exige la declaración y manda declaracion_aceptada', async () => {
@@ -111,16 +146,47 @@ describe('Campanas', () => {
         await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas/c1/pausar', {}));
     });
 
-    it('en pausa por el freno: el motivo y Reanudar', async () => {
-        bff.get.mockResolvedValue(encendidas([{
-            ...borrador, estado: 'pausada', pausa_motivo: 'numero_marcado', conteo_previsto: null, destinatarios: 120,
-            avance: avance({ total: 120, enviado: 20 }),
-        }], { ajustes: { base_consentimiento: 'contacto_previo_declarado', tope_diario: 200, lote_piloto: 50, pausada: true, pausa_motivo: 'numero_marcado' } }));
+    const pausada = {
+        ...borrador, estado: 'pausada', pausa_motivo: 'numero_marcado', conteo_previsto: null, destinatarios: 120,
+        avance: avance({ total: 120, enviado: 20 }),
+    };
+    const ajustesEnPausa = (x: Record<string, unknown>) => ({
+        base_consentimiento: 'contacto_previo_declarado', tope_diario: 200, lote_piloto: 50, pausada: true,
+        pausa_motivo: 'numero_marcado', ...x,
+    }) as ResumenCampanas['ajustes'];
+
+    it('en pausa por el freno: se ve el motivo y la escuela la levanta ACEPTÁNDOLO; la campaña no se reanuda antes', async () => {
+        bff.get.mockResolvedValue(encendidas([pausada], {
+            ajustes: ajustesEnPausa({ pausa_origen: 'freno', aceptacion: 'Vi que mis campañas se pausaron porque Meta marcó tu número… acepto reanudarlas.' }),
+        }));
         bff.post.mockResolvedValue({});
         render(<Campanas schoolId="s1" />);
         expect(await screen.findByText(/Tus campañas están en pausa/)).toBeTruthy();
         expect(screen.getAllByText(/Meta marcó tu número/).length).toBeGreaterThan(0);
-        fireEvent.click(screen.getByRole('button', { name: /Reanudar/ }));
+        // Con la escuela en pausa, «Reanudar» de la campaña está apagado.
+        expect((screen.getByRole('button', { name: 'Reanudar' }) as HTMLButtonElement).disabled).toBe(true);
+
+        const levantar = screen.getByRole('button', { name: /Levantar la pausa/ }) as HTMLButtonElement;
+        expect(levantar.disabled).toBe(true);
+        fireEvent.click(screen.getByLabelText('Vi el motivo de la pausa'));
+        expect(levantar.disabled).toBe(false);
+        fireEvent.click(levantar);
+        await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas/reanudar-escuela', { acepto_motivo: true }));
+    });
+
+    it('pausa de plataforma (emergencia o freno repetido): la escuela no tiene botón para levantarla', async () => {
+        bff.get.mockResolvedValue(encendidas([pausada], { ajustes: ajustesEnPausa({ pausa_origen: 'plataforma', aceptacion: null }) }));
+        render(<Campanas schoolId="s1" />);
+        expect(await screen.findByText(/solo la puede levantar SportMaps/)).toBeTruthy();
+        expect(screen.queryByRole('button', { name: /Levantar la pausa/ })).toBeNull();
+        expect((screen.getByRole('button', { name: 'Reanudar' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('campaña en pausa con la escuela activa: Reanudar llama al BFF', async () => {
+        bff.get.mockResolvedValue(encendidas([{ ...pausada, pausa_motivo: 'manual' }]));
+        bff.post.mockResolvedValue({});
+        render(<Campanas schoolId="s1" />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Reanudar' }));
         await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas/c1/reanudar', {}));
     });
 
@@ -150,6 +216,7 @@ describe('Campanas', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Crear borrador' }));
         await waitFor(() => expect(bff.post).toHaveBeenCalledWith('/api/v1/whatsapp/s1/campanas', {
             nombre: 'Clínica noviembre', plantilla: 'monster_cierre_2026', filtro: { intereses: ['clinica'] }, respuesta_si: null,
+            servicio_id: null, vence_at: null,
         }));
     });
 });

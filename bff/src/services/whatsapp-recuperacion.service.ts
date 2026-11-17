@@ -1119,6 +1119,12 @@ export const DECISIONES_REPROCESABLES = [
     'familia_sin_cuenta', 'varios_cobros', 'monto_distinto', 'sin_pendientes', 'sin_familia',
 ] as const;
 export const MOTIVOS_DEL_WORKER_REPROCESABLES = ['sin pagos pendientes'] as const;
+/**
+ * (2026-11-16) La cola ahora cierra un comprobante REAL sin cobros abiertos como `sin_pendientes: pagó $X y no tiene cobros
+ * abiertos…` (con propuesta). Mismo caso que arriba: con `--reprocesar` se vuelve a leer. NO entra el `sin_pendientes:`
+ * de «la familia contestó de qué mes es» (ya tiene su propuesta armada): ese lo decide la escuela.
+ */
+export const PREFIJOS_DEL_WORKER_REPROCESABLES = ['sin_pendientes: pagó '] as const;
 
 /** ¿Esta fila de la cola le toca a la recuperación? */
 export function esRecuperable(
@@ -1132,6 +1138,7 @@ export function esRecuperable(
     if ((MOTIVOS_RECUPERABLES as readonly string[]).includes(em)) return true;
     if (!reprocesar) return false;
     if ((MOTIVOS_DEL_WORKER_REPROCESABLES as readonly string[]).includes(em)) return true;
+    if (PREFIJOS_DEL_WORKER_REPROCESABLES.some((p) => em.startsWith(p))) return true;
     // El worker cerró «monto_no_cuadra» ANTES de que existiera el recargo por
     // link (2026-10-13): un 157.500 de un link al 5 % quedó en el buzón. Las
     // reglas actuales lo leen; si no cuadra de verdad, vuelve al buzón igual.

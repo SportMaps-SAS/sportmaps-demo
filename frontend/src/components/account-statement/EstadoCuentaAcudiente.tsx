@@ -15,6 +15,7 @@
  * Montos: el saldo es summary.total_open de la RPC; los valores por cobro son
  * los de la base, para mostrar. Nada se calcula aquí para cobrar.
  */
+import { PagoOrigenInsignia } from '@/components/payment/PagoOrigenInsignia';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -47,7 +48,7 @@ export type ModoEstadoCuenta = 'familia' | 'escuela' | 'publica';
 /** Columnas de `payments` que usa esta pantalla (incluye las que dicen cómo se pagó). */
 const COLUMNAS_COBRO =
   'id, status, amount, amount_paid, concept, due_date, payment_date, period_year, period_month, created_at, '
-  + 'payment_method, payment_channel, payment_provider, receipt_url, wompi_reference, wompi_transaction_id, provider_transaction_id';
+  + 'payment_method, payment_channel, payment_provider, receipt_url, wompi_reference, wompi_transaction_id, provider_transaction_id, reference';
 
 export interface EstadoCuentaAcudienteViewProps {
   state: 'loading' | 'error' | 'ready';
@@ -276,6 +277,7 @@ function FilaCobro({ cobro, nombre, now, modo, conFechas }: { cobro: CobroCuenta
         <span className="flex flex-col items-end gap-1">
           <span className="whitespace-nowrap text-sm font-bold">{formatCurrency(valorCobro(cobro))}</span>
           <ChipEstado {...estado} />
+          {escuela && <PagoOrigenInsignia payment={cobro} />}
         </span>
       </div>
       {punt && <p className={cn('mt-1.5 text-xs font-semibold', COLOR_PUNTUALIDAD[punt.tono])}>{punt.label}</p>}

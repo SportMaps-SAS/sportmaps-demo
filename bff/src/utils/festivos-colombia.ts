@@ -31,6 +31,16 @@
  * a medianoche hora Colombia se consultaría el día SIGUIENTE. Un string
  * 'YYYY-MM-DD' se toma como fecha calendario tal cual, sin zona.
  *
+ * UNA SOLA FUENTE (2026-11-15)
+ *
+ * La fuente de los festivos es la tabla `co_holidays` de la base, cargada con
+ * la función `co_festivos_del_anio(año)` (la misma regla, en SQL). El BFF la
+ * lee al arrancar y una vez al día (`services/festivos-fuente.service.ts`) y
+ * la deja aquí con `fijarFestivosDeLaBase`. El cálculo de este archivo queda
+ * solo como red de seguridad: responde por un año que la tabla no tenga, o si
+ * la base no contesta al arrancar. Así nunca se cobra un 1.º de enero por una
+ * tabla vacía, y nunca hay dos calendarios distintos.
+ *
  * Fuentes verificadas el 2026-10-04: listados 2025/2026/2027 de prensa
  * nacional (El País Cali, Caracol, El Universal) y la Ley 2578 de 2026.
  */
@@ -79,6 +89,41 @@ function aISO(f: Date): string {
 }
 
 const cache = new Map<number, Set<string>>();
+/** Años leídos de `co_holidays` (la fuente). Lo que esté aquí manda sobre el cálculo. */
+const deLaBase = new Map<number, Set<string>>();
+
+/**
+ * Deja en memoria los festivos leídos de `co_holidays` ('YYYY-MM-DD'). Un año
+ * solo entra si trae al menos 15 fechas (una carga a medias no reemplaza al
+ * cálculo). Devuelve los años cargados y las fechas en que la tabla y el
+ * cálculo NO coinciden, para dejarlo en el log.
+ */
+export function fijarFestivosDeLaBase(fechas: string[]): { anios: number[]; diferencias: string[] } {
+    const porAnio = new Map<number, Set<string>>();
+    for (const f of fechas) {
+        const iso = String(f ?? '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) continue;
+        const anio = Number(iso.slice(0, 4));
+        if (!porAnio.has(anio)) porAnio.set(anio, new Set());
+        porAnio.get(anio)!.add(iso);
+    }
+    const anios: number[] = [];
+    const diferencias: string[] = [];
+    for (const [anio, set] of porAnio) {
+        if (set.size < 15) continue;
+        const calculado = calcularFestivos(anio);
+        for (const d of set) if (!calculado.has(d)) diferencias.push(`${d} (solo en la tabla)`);
+        for (const d of calculado) if (!set.has(d)) diferencias.push(`${d} (solo en el cálculo)`);
+        deLaBase.set(anio, set);
+        anios.push(anio);
+    }
+    return { anios: anios.sort(), diferencias: diferencias.sort() };
+}
+
+/** Solo para pruebas: olvida lo leído de la base. */
+export function olvidarFestivosDeLaBase(): void {
+    deLaBase.clear();
+}
 
 /** Festivos nacionales del año como 'YYYY-MM-DD', ordenados. */
 export function festivosColombia(anio: number): string[] {
@@ -86,6 +131,10 @@ export function festivosColombia(anio: number): string[] {
 }
 
 function festivosDelAnio(anio: number): Set<string> {
+    return deLaBase.get(anio) ?? calcularFestivos(anio);
+}
+
+function calcularFestivos(anio: number): Set<string> {
     const enCache = cache.get(anio);
     if (enCache) return enCache;
 

@@ -223,6 +223,43 @@ describe('validación (422 en español)', () => {
     });
 });
 
+describe('pago sin comprobante deja constancia (quién lo recibió)', () => {
+    const conPago = (pago: Record<string, unknown>) => crear({ lines: [torneo({ pay_amount: 80000 })], payment: { method: 'cash', payment_date: HOY, ...pago } });
+
+    it('sin comprobante y sin received_by → 422 y no se crea nada', async () => {
+        const r = await llamar('POST', '/', DUENO, conPago({}));
+        expect(r.status).toBe(422);
+        expect(r.body.code).toBe('RECIBIDO_POR_OBLIGATORIO');
+        expect(rpcLlamadas('create_charge_batch')).toHaveLength(0);
+    });
+
+    it('received_by de una letra o solo signos → 422', async () => {
+        expect((await llamar('POST', '/', DUENO, conPago({ received_by: 'A' }))).status).toBe(422);
+        expect((await llamar('POST', '/', DUENO, conPago({ received_by: '[·]' }))).status).toBe(422);
+        expect(rpcLlamadas('create_charge_batch')).toHaveLength(0);
+    });
+
+    it('con received_by → crea y la RPC recibe el pago', async () => {
+        const r = await llamar('POST', '/', DUENO, conPago({ received_by: 'Alejandra L.' }));
+        expect(r.status).toBe(200);
+        expect(rpcLlamadas('create_charge_batch')).toHaveLength(1);
+        // received_by lo usa el BFF; a la RPC no viaja.
+        const pago = (rpcLlamadas('create_charge_batch')[0] as any).args.p_payment;
+        expect(pago).toMatchObject({ method: 'cash', payment_date: HOY });
+        expect('received_by' in pago).toBe(false);
+    });
+
+    it('con comprobante no se exige received_by', async () => {
+        const r = await llamar('POST', '/', DUENO, conPago({ method: 'transfer', receipt_url: 'u1/soporte.png' }));
+        expect(r.status).toBe(200);
+    });
+
+    it('la vista previa NO exige received_by (el dato se pide al confirmar)', async () => {
+        const r = await llamar('POST', '/preview', DUENO, pedido({ lines: [torneo({ pay_amount: 80000 })], payment: { method: 'cash', payment_date: HOY } }));
+        expect(r.status).toBe(200);
+    });
+});
+
 describe('pertenencia a la escuela (404 antes de la RPC)', () => {
     it('atleta de otra escuela → 404', async () => {
         const r = await llamar('POST', '/preview', DUENO, pedido({ athletes: [{ type: 'child', id: NINO_OTRA }] }));

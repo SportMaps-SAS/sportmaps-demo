@@ -346,13 +346,13 @@ describe('comprobante en la venta de un servicio (regla 5)', { timeout: 30_000 }
         const f1 = comprobante(300000, { caption: null, quien: null });
         await runWhatsAppQueue();
         expect(enviados()).not.toMatch(PADRON);
-        expect(enviados()).toMatch(/nombre completo de quien asiste/i);
+        expect(enviados()).toMatch(/datos de quien asiste:\s+1\. Nombre completo/i); // 2026-11-16: pide los datos que faltan, no solo el nombre
         expect(['waiting_user', 'done']).toContain(filaDeCola(f1)?.status);
         // Otra foto del mismo pago: la pregunta no se repite.
-        const antes = h.enviados.filter((t) => /nombre completo de quien asiste/i.test(t)).length;
+        const antes = h.enviados.filter((t) => /datos de quien asiste:\s+1\. Nombre completo/i.test(t)).length;
         comprobante(300000, { caption: null, quien: null });
         await runWhatsAppQueue();
-        expect(h.enviados.filter((t) => /nombre completo de quien asiste/i.test(t)).length).toBe(antes);
+        expect(h.enviados.filter((t) => /datos de quien asiste:\s+1\. Nombre completo/i.test(t)).length).toBe(antes);
         expect(enviados()).not.toMatch(PADRON);
     });
 

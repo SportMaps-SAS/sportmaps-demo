@@ -22,8 +22,27 @@
  *     único de la migración 20261006084303 hace que el segundo reciba 23505.
  *   · Cierra (is_open=false, NUNCA borra) las franjas que ÉL generó y que ya no
  *     corresponden a ningún entrenamiento (horario cambiado, grupo cerrado o
- *     dado de baja), siempre que no tengan reservas. Una familia que ya
- *     reservó tiene que ver su clase; eso se le avisa a la escuela por reporte.
+ *     dado de baja).
+ *
+ * FRANJA CON RESERVAS EN UN HORARIO QUE YA NO EXISTE (Monster, 2026-11-16)
+ *
+ *   Antes se dejaba abierta «para no dejar plantada a la familia», y el efecto
+ *   era el contrario: el bot seguía ofreciendo la hora vieja a gente nueva. Ahora
+ *   también se cierra (`is_open = false`, `cerrada_por = 'horario'`), y la
+ *   sincronización devuelve la lista (`conReservaSinHorario`) para que la
+ *   escuela avise a quienes ya estaban. Cerrar NO borra ni mueve reservas:
+ *     · `is_open` solo lo miran los que OFRECEN o TOMAN un cupo nuevo
+ *       (`franjasDeSupabase`, `franjasDeEquipo`, `tomar_cupo_clase_prueba`,
+ *       `submit_school_lead`, el diálogo «Agendar»). El recordatorio, la
+ *       asistencia, «Mi semana» y el listado de clases de cortesía llegan a la
+ *       franja por la llave del lead (`trial_slot_id`) y no miran `is_open`.
+ *     · Quien solo tenía el cupo SEPARADO (sin pagar) y paga después recibe
+ *       `sin_cupo` de `confirmar_cupo_clase_prueba`: el bot le dice que elija
+ *       otro horario sin volver a pagar. Es lo correcto: esa hora ya no existe.
+ *     · Si la escuela devuelve el horario, la franja se reabre sola (es de las
+ *       cerradas por el horario) con sus reservas intactas.
+ *   Sin la columna `cerrada_por` (antes de M1) no se cierra: no habría forma de
+ *   reabrirla, y se deja como estaba.
  *
  * DECISIONES (y por qué)
  *
@@ -238,7 +257,12 @@ export function planificarFranjas(
  *             cerró una a mano, no se reabre ni se duplica).
  *   cerrar  = generadas por este servicio, abiertas, futuras dentro de la
  *             ventana, SIN reservas, que ya no están en el plan.
- *   conservadasConReserva = las mismas pero con reservas: no se tocan.
+ *   conservadasConReserva = las mismas pero con reservas: se cierran a gente
+ *             NUEVA (is_open = false, cerrada_por = 'horario') sin tocar las
+ *             reservas que ya tienen. Ver «FRANJA CON RESERVAS» arriba.
+ *   conReservaSinHorario = las anteriores más las que ya se cerraron así en
+ *             una corrida pasada y siguen con gente: es la lista que se le
+ *             muestra a la escuela («avísales la hora nueva»).
  *   reabrir = generadas, CERRADAS POR EL HORARIO (`cerrada_por = 'horario'`),
  *             que vuelven a estar en el plan (el profe deshizo la cancelación).
  *             Las que cerró la escuela o las de antes de la migración, nunca.
@@ -254,6 +278,7 @@ export function compararConExistentes(
     opciones: { cupos?: number | null } = {},
 ): {
     crear: FranjaPlaneada[]; yaExistian: number; cerrar: FranjaExistente[]; conservadasConReserva: FranjaExistente[];
+    conReservaSinHorario: FranjaExistente[];
     reabrir: FranjaExistente[]; ajustarCupo: FranjaExistente[];
 } {
     const hay = new Set(existentes.filter((e) => e.team_id)
@@ -272,11 +297,20 @@ export function compararConExistentes(
         e.generated_from_schedule === true && (e.is_open || reabrir.includes(e)) && enVentana(e) && planeada(e)
         && e.max_capacity != null && Number(e.max_capacity) !== cupos && (e.reserved_count ?? 0) <= cupos);
 
+    // Ya cerradas por el horario en una corrida anterior y todavía con gente
+    // adentro: se siguen reportando hasta que la clase pase o la muevan.
+    const yaCerradasConReserva = existentes.filter((e) =>
+        e.generated_from_schedule === true && !e.is_open && e.cerrada_por === 'horario' && e.team_id
+        && enVentana(e) && !planeada(e) && (e.reserved_count ?? 0) > 0);
+    const conservadasConReserva = obsoletas.filter((e) => (e.reserved_count ?? 0) > 0);
+
     return {
         crear,
         yaExistian: plan.length - crear.length,
         cerrar: obsoletas.filter((e) => (e.reserved_count ?? 0) === 0),
-        conservadasConReserva: obsoletas.filter((e) => (e.reserved_count ?? 0) > 0),
+        conservadasConReserva,
+        conReservaSinHorario: [...conservadasConReserva, ...yaCerradasConReserva]
+            .sort((a, b) => (a.slot_date + a.start_time).localeCompare(b.slot_date + b.start_time)),
         reabrir,
         ajustarCupo,
     };
@@ -321,12 +355,58 @@ export interface ReporteFranjas {
     /** Franjas abiertas a las que se les puso `cupos_por_sesion`. */
     cuposAjustados: number;
     conservadasConReserva: { id: string; label?: string; slot_date: string; start_time: string }[];
+    /** De las anteriores, cuántas se cerraron a gente nueva (sin aplicar: «se cerrarían»). */
+    cerradasConReserva: number;
+    /** Con reservas en un horario que ya no existe: a quiénes debe avisar la escuela. */
+    conReservaSinHorario: FranjaSinHorario[];
     errores: string[];
     /** Lo que se crearía/creó, para el reporte por grupo. */
     nuevas: FranjaPlaneada[];
 }
 
+/** Franja con reservas cuyo horario ya no existe (cerrada a gente nueva). */
+export interface FranjaSinHorario {
+    id: string;
+    team_id: string | null;
+    /** Nombre del grupo como lo ve la familia (label de la franja). */
+    grupo: string;
+    fecha: string;       // YYYY-MM-DD
+    /** La hora VIEJA, HH:MM. */
+    hora: string;
+    /** `reserved_count`: agendadas + cupos separados sin pagar. */
+    reservas: number;
+    /** Quiénes son (sin teléfono). Vacío si no se pudo leer: `reservas` manda. */
+    personas: { nombre: string; estado: 'agendada' | 'separada' }[];
+}
+
 const esDuplicado = (e: any) => e?.code === '23505' || /duplicate key/i.test(String(e?.message ?? ''));
+
+/**
+ * Nombres de quienes tienen la clase agendada o el cupo separado en esas
+ * franjas. Dos lecturas por lote (`.in`), nunca una por franja. Nunca lanza:
+ * sin la columna `cupo_separado_slot_id` quedan solo los agendados.
+ */
+async function personasDeFranjas(schoolId: string, slotIds: string[]): Promise<Map<string, FranjaSinHorario['personas']>> {
+    const porFranja = new Map<string, FranjaSinHorario['personas']>();
+    if (!slotIds.length) return porFranja;
+    try {
+        const leer = (columna: 'trial_slot_id' | 'cupo_separado_slot_id') => supabase.from('school_signup_leads')
+            .select(`id, full_name, status, ${columna}`).eq('school_id', schoolId).in(columna, slotIds).limit(500);
+        const [agendados, separados] = await Promise.all([leer('trial_slot_id'), leer('cupo_separado_slot_id')]);
+        const sumar = (r: any, columna: string, estado: 'agendada' | 'separada') => {
+            if (r?.error || !Array.isArray(r?.data)) return;
+            for (const l of r.data as any[]) {
+                const slot = l?.[columna];
+                const nombre = String(l?.full_name ?? '').trim();
+                if (!slot || !nombre || l.status === 'discarded') continue;
+                porFranja.set(slot, [...(porFranja.get(slot) ?? []), { nombre, estado }]);
+            }
+        };
+        sumar(agendados, 'trial_slot_id', 'agendada');
+        sumar(separados, 'cupo_separado_slot_id', 'separada');
+    } catch { /* sin nombres: la escuela igual ve cuántas son */ }
+    return porFranja;
+}
 
 /**
  * `cupos_por_sesion` y `dias_semana` de la escuela (migración M1). Sin las
@@ -365,7 +445,7 @@ export async function sincronizarFranjasDeEscuela(
         schoolId, escuela: schoolId, aplicado: !!opciones.aplicar, ventana: { desde: hoy, hasta },
         plan: { franjas: [], festivosOmitidos: [], excluidos: [], choques: [] },
         creadas: 0, yaExistian: 0, duplicadasEnCarrera: 0, cerradas: 0, reabiertas: 0, cuposAjustados: 0,
-        conservadasConReserva: [], errores: [], nuevas: [],
+        conservadasConReserva: [], cerradasConReserva: 0, conReservaSinHorario: [], errores: [], nuevas: [],
     };
 
     // `recibe_clase_prueba` llega con la migración M1: sin ella, todos reciben.
@@ -433,9 +513,24 @@ export async function sincronizarFranjasDeEscuela(
     reporte.conservadasConReserva = cmp.conservadasConReserva.map((e: any) => ({
         id: e.id, label: e.label, slot_date: e.slot_date, start_time: e.start_time,
     }));
+    // Sin `cerrada_por` (antes de M1) no se cierran: nadie podría reabrirlas.
+    const cerrarConReserva = conCerradaPor && !sinMigracion ? cmp.conservadasConReserva : [];
+    if (cmp.conReservaSinHorario.length) {
+        const personas = await personasDeFranjas(schoolId, cmp.conReservaSinHorario.map((e) => e.id));
+        reporte.conReservaSinHorario = cmp.conReservaSinHorario.map((e: any) => ({
+            id: e.id,
+            team_id: e.team_id ?? null,
+            grupo: String(e.label ?? '').trim(),
+            fecha: String(e.slot_date).slice(0, 10),
+            hora: normalizarHora(e.start_time) ?? String(e.start_time).slice(0, 5),
+            reservas: Number(e.reserved_count ?? 0),
+            personas: personas.get(e.id) ?? [],
+        }));
+    }
 
     if (!opciones.aplicar) {
         // «se cerrarían / se reabrirían / se ajustarían»
+        reporte.cerradasConReserva = cerrarConReserva.length;
         reporte.cerradas = cmp.cerrar.length;
         reporte.reabiertas = cmp.reabrir.length;
         reporte.cuposAjustados = cmp.ajustarCupo.length;
@@ -482,6 +577,20 @@ export async function sincronizarFranjasDeEscuela(
             .select('id');
         if (error) reporte.errores.push(`cerrar obsoletas: ${error.message}`);
         else reporte.cerradas = (data ?? []).length;
+    }
+
+    if (cerrarConReserva.length) {
+        // Con reservas en un horario que ya no existe: se cierran a gente nueva.
+        // Solo `is_open` y `cerrada_por`: `reserved_count` y los leads no se
+        // tocan (quien ya reservó sigue con su recordatorio y su asistencia).
+        const { data, error } = await supabase.from('school_trial_slots')
+            .update({ is_open: false, cerrada_por: 'horario' })
+            .in('id', cerrarConReserva.map((e) => e.id))
+            .eq('generated_from_schedule', true)
+            .eq('is_open', true)
+            .select('id');
+        if (error) reporte.errores.push(`cerrar obsoletas con reserva: ${error.message}`);
+        else reporte.cerradasConReserva = (data ?? []).length;
     }
 
     if (conCerradaPor && cmp.reabrir.length) {
@@ -541,8 +650,8 @@ export async function runFranjasCortesia(): Promise<{ escuelas: number; creadas:
             total.cerradas += r.cerradas;
             total.errores += r.errores.length;
             if (r.errores.length) console.warn('[franjas-cortesia]', r.escuela, r.errores);
-            if (r.conservadasConReserva.length) {
-                console.warn(`[franjas-cortesia] ${r.escuela}: ${r.conservadasConReserva.length} franja(s) con reserva ya no coinciden con el horario; quedan abiertas para no dejar plantada a la familia.`);
+            if (r.conReservaSinHorario.length) {
+                console.warn(`[franjas-cortesia] ${r.escuela}: ${r.conReservaSinHorario.length} franja(s) con reserva ya no coinciden con el horario; quedan cerradas a gente nueva (${r.cerradasConReserva} en esta corrida) y la escuela debe avisar a quienes ya reservaron.`);
             }
         } catch (e: any) {
             total.errores++;

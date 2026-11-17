@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../config/supabase', () => ({ supabase: {} }));
 vi.mock('./whatsapp.service', () => ({ decryptToken: () => 't' }));
 
-import { evaluarFreno, type SenalesDeCalidad } from './whatsapp-campanas-freno';
+import { bajasQueFaltanParaElFreno, evaluarFreno, type SenalesDeCalidad } from './whatsapp-campanas-freno';
 
 const APROBADA = '2026-11-03T12:00:00Z';
 const despues = '2026-11-03T14:00:00Z';
@@ -61,11 +61,19 @@ describe('evaluarFreno', () => {
     });
 
     it('bajas > 5 % o fallos > 20 % de lo enviado en 24 h (con base mínima de 20)', () => {
-        expect(evaluarFreno(base({ enviados24h: 50, bajas24h: 3 }))).toMatchObject({ frenar: true, motivo: 'muchas_bajas' });
-        expect(evaluarFreno(base({ enviados24h: 50, bajas24h: 2 }))).toEqual({ frenar: false });
-        // Una sola baja entre los primeros 10 no pausa el piloto; dos sí.
-        expect(evaluarFreno(base({ enviados24h: 10, bajas24h: 1 }))).toEqual({ frenar: false });
-        expect(evaluarFreno(base({ enviados24h: 10, bajas24h: 2 }))).toMatchObject({ frenar: true, motivo: 'muchas_bajas' });
+        // Las bajas solo frenan con evidencia: 100 envíos o 5 bajas. El lote piloto de 50 con 3 bajas (6 %) NO frena.
+        expect(evaluarFreno(base({ enviados24h: 50, bajas24h: 3 }))).toEqual({ frenar: false });
+        expect(evaluarFreno(base({ enviados24h: 50, bajas24h: 4 }))).toEqual({ frenar: false });
+        expect(evaluarFreno(base({ enviados24h: 50, bajas24h: 5 }))).toMatchObject({ frenar: true, motivo: 'muchas_bajas' });
+        expect(evaluarFreno(base({ enviados24h: 10, bajas24h: 2 }))).toEqual({ frenar: false });
+        // Con muestra plena manda el 5 %.
+        expect(evaluarFreno(base({ enviados24h: 100, bajas24h: 5 }))).toEqual({ frenar: false });
+        expect(evaluarFreno(base({ enviados24h: 100, bajas24h: 6 }))).toMatchObject({ frenar: true, motivo: 'muchas_bajas' });
+        expect(evaluarFreno(base({ enviados24h: 122, bajas24h: 6 }))).toEqual({ frenar: false });
+        expect(evaluarFreno(base({ enviados24h: 122, bajas24h: 7 }))).toMatchObject({ frenar: true, motivo: 'muchas_bajas' });
+        expect(bajasQueFaltanParaElFreno(50, 3)).toBe(2);
+        expect(bajasQueFaltanParaElFreno(200, 4)).toBe(7);
+        expect(bajasQueFaltanParaElFreno(50, 9)).toBe(0);
         expect(evaluarFreno(base({ enviados24h: 50, fallidos24h: 11 }))).toMatchObject({ frenar: true, motivo: 'muchos_fallos' });
         expect(evaluarFreno(base({ enviados24h: 50, fallidos24h: 10 }))).toEqual({ frenar: false });
     });

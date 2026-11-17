@@ -349,6 +349,8 @@ const CONCEPTOS_GENERICOS: Record<string, RegExp> = {
     precio: /\b(precios?|valor(es)?|costos?|tarifas?|cuanto (cuesta|vale|cobran))\b/,
     horario: /\bhorarios?\b/,
     informacion: /\b(informacion|info)\b/,
+    // «cursos de vacaciones, niña de 10 años»: la edad o la temporada también cuentan como concepto de escuela.
+    edad: /\b\d{1,2} anos\b|\bvacaciones\b|\bvacacional\w*/,
 };
 const CONCEPTOS_DE_ESCUELA: Record<string, RegExp> = {
     actividad: /\b(clases?|cursos?|entrenamientos?|entrenar|entrenan|practicas?|practias?)\b/,
@@ -393,6 +395,9 @@ export function temaEscolar(
     const genericos = Object.values(CONCEPTOS_GENERICOS).filter((re) => re.test(t)).length;
     const deEscuela = Object.values(CONCEPTOS_DE_ESCUELA).filter((re) => re.test(t)).length;
     if (deEscuela >= 1 && genericos + deEscuela >= 2) return 'inscripcion';
+    // «Horarios, costos», «horarios, valores y pagos»: horario + precio juntos y corto es un pedido de información
+    // (WhatsApp 2026-11, prospectos que quedaron sin respuesta). Con más de 14 palabras ya es otra conversación.
+    if (CONCEPTOS_GENERICOS.horario.test(t) && CONCEPTOS_GENERICOS.precio.test(t) && t.split(' ').length <= 14) return 'inscripcion';
 
     // Regla 4. Con `sinFamiliaImplicita` (el DESCONOCIDO, 2026-10-24) no se
     // supone que «mi hija» + escuela sea una familia: «mi hija se quiere meter
@@ -546,6 +551,8 @@ const PROSPECTO_VERBO: RegExp[] = [
     /\b(quiero|quisiera|queremos|deseo|me gustaria)\s+(entrenar|practicar (voley|volley|voleibol)\w*|jugar (voley|volley|voleibol)\w*)\b/,
     /\b(quiero|quisiera|queria|queremos|quisieramos|deseo|deseamos|necesito|necesitamos|busco|buscamos|buscando|me gustaria|nos gustaria|me encantaria|nos encantaria|ando buscando|estamos buscando)\b(\s+\w+){0,5}\s+(entrenar\w*|practicar|jugar|aprender|participar|formar parte|hacer parte|ser parte|pertenecer|unirme|unirnos|integrarme|integrarnos|matricular\w*)\b/,
     /\b(hay|tienen|tendran|quedan|manejan)\b(\s+\w+){0,2}\s+(cupos?|vacantes?|plazas?)\b/,
+    // «Quiero saber si tienes cursos de vacaciones niña de 10 años», «¿hay clases para niñas?»
+    /\b(tienen|tienes|tendran|hay|manejan|manejas|ofrecen|ofreces)\b(\s+\w+){0,3}\s+(cursos?|clases?|vacacional\w*|programas?)\b/,
     /\b(cupos?|vacantes?|plazas?)\s+(disponibles?|libres?|abiertos?|para (ninos?|ninas?|adultos?|menores|jovenes|mi hij[oa]|nuevos?))\b/,
     // Tercera persona y «que mi hijo + subjuntivo»: «mi hijo quiere entrenar con ustedes», «quiero que mi hijo juegue».
     /\b(mi|mis|nuestr[oa]s?) (hij[oa]s?|nin[oa]s?|sobrin[oa]s?|niet[oa]s?)\b(\s+\w+){0,3}\s+(quiere|quieren|necesita|necesitan|desea|desean|se quiere|le gustaria|les gustaria)\s+(entrenar\w*|practicar|jugar|aprender|participar|unirse|ingresar|entrar|meterse)\b/,
@@ -657,10 +664,14 @@ export function intencionDeProspecto(texto: string | null | undefined): boolean 
     if (CONCEPTOS_GENERICOS.precio.test(t) && CONTEXTO_PROSPECTO.test(t) && !NO_ES_ALUMNO.test(t)) return true;
     // «horarios … para pasar», «horarios para niñas»
     if (CONCEPTOS_GENERICOS.horario.test(t)
-        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes)\b/.test(t)
+        && /\b(conocer|mirar|visitar|pasar|instalaciones|iniciar|empezar|inscrib\w*|edad(es)?|ninos?|ninas?|adultos?|principiantes|entre semana|fin de semana|sabados?|domingos?)\b/.test(t)
         && !NO_ES_ALUMNO.test(t)) {
         return true;
     }
+
+    // «Hola buenas tardes hoy tienen juego?»: pregunta por el juego de hoy (quien escribe desde un número sin ficha).
+    if (/\b(hay|tienen|tendran|tendremos|tenemos)\b(\s+\w+){0,2}\s+(juego|juegos)\b/.test(t)
+        && /\b(hoy|manana|este (sabado|domingo)|esta (tarde|noche))\b/.test(t)) return true;
 
     // Lo que ya abría la puerta de siempre por inscripción («información de la academia»).
     return temaEscolar(texto) === 'inscripcion' && !NO_ES_ALUMNO.test(t);

@@ -32,6 +32,9 @@ import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.s
 import type { BotonInteractivo } from './whatsapp.service';
 import { categoriaDelCobro, etiquetaCortaDelCobro } from './tipo-de-cobro';
 import { normalizarFrase } from './whatsapp-reglas-turno';
+import {
+    datosFaltantes, elegirEntreNombres, nombresDeAsistentesEn, textoPidiendoDatos, textoVariosAsistentes, type DatosDeRegistro,
+} from './whatsapp-datos-de-registro';
 
 /** Las fichas de una familia en `payments` cuando no hay `parent_id`. */
 export interface LlavesDeFicha { childIds: string[]; unregisteredIds: string[] }
@@ -356,10 +359,46 @@ const NO_NOMBRE = new Set(('hola buenas buenos buen dia dias tardes tarde noches
     'alumna listos ninguno nada otro otra tambien igual entonces pero ademas todo bien mal super genial excelente ' +
     'disculpa disculpe perdon senor senora don dona profe profesor profesora entrenador pregunta preguntar pregunto ' +
     'consulta duda club equipo escuela torneos clinicas oye aun todavia voley voleibol futbol playa piso partido ' +
-    'partidos entreno entrenos entrenamiento entrenamientos grupo femenino masculino mixto trayectoria').split(' '));
+    'partidos entreno entrenos entrenamiento entrenamientos grupo femenino masculino mixto trayectoria ' +
+    // (auditoría 8–16 nov 2026) interrogativos y verbos de pedido que abrían un «nombre», y «Interesadísimas en la clínica».
+    'cuales cuantas quienes quisiera quisieramos podrias podria podrian puedes pueden manejan manejas tendran en desde ' +
+    'hasta entre sobre interesado interesada interesados interesadas interes interesa').split(' '));
 
-/** Prefijos con los que se contesta el nombre: «Se llama…», «Es para mi hijo…», «Nombre: …». */
-const PREFIJO_NOMBRE = /^(?:(?:hola|bueno|buenas(?: tardes| noches| dias)?|buen dia|buenos dias)\b[\s,.!:;-]*|(?:el )?nombre(?: completo)?(?: es| de)?\s*:?\s+|se llama\s+|me llamo\s+|mi (?:hijo|hija|nino|nina|sobrino|sobrina|nieto|nieta)(?: se llama| es)?\s+|es para\s+|es\s+|soy\s+|para\s+|a nombre de\s+|asiste\s+|(?:el|la) (?:jugador|jugadora|deportista|participante)(?: es)?\s*:?\s+)/i;
+/** Un enlace o un correo: nunca es un nombre («Https Portaldepago Segurosdelestado Com Pago-agil» quedó de asistente). */
+const ENLACE_O_CORREO = /:\/\/|www\.|\.(?:com|co|net|org)\b|@/i;
+/** Un trozo (sin espacios) que es un enlace o un correo. */
+const TROZO_DE_ENLACE = /\S*(?::\/\/|www\.|\.(?:com|co|net|org)\b|@)\S*/gi;
+
+/** ¿El texto trae un enlace o un correo? Pura. */
+export function traeEnlaceOCorreo(texto: string | null | undefined): boolean {
+    return ENLACE_O_CORREO.test(String(texto ?? ''));
+}
+
+/**
+ * Tipos de documento: cortan el nombre y lo que les siga («a nombre de Mariana Isabel la Rotta Robles Ti» metió
+ * «Ti» en el nombre). El documento nunca se pide ni se guarda.
+ */
+const TIPO_DE_DOCUMENTO = new Set(['ti', 'cc', 'ce', 'rc', 'nuip', 'tarjeta', 'cedula', 'identidad', 'documento', 'pasaporte',
+    'doc', 'identificacion', 'nit']);
+/** «T.I.», «C.C.», «R.C.», «C.E.» llegan partidos en dos letras. */
+const SIGLA_DE_DOCUMENTO = new Set(['ti', 'cc', 'rc', 'ce']);
+/** Lo que sigue al tipo de documento y sigue siendo «el documento»: «de identidad», «No.», «número», los dígitos. */
+const COLA_DE_DOCUMENTO = /^(?:de|no|n|nro|num|numero|identidad|ciudadania|extranjeria|civil|registro|\d[\d.]*)$/;
+
+/** Superlativos («interesadísimas», «muchísimas»): no son de un nombre. */
+const SUPERLATIVO = /isim[oa]s?$/;
+
+/** ¿La palabra puede ser de un nombre de persona? (ni saludo, ni pago, ni servicio, ni documento). Pura. */
+export function puedeSerPalabraDeNombre(palabra: string | null | undefined): boolean {
+    const n = String(palabra ?? '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[’']/g, '');
+    return /^[a-zñ][a-zñ-]+$/.test(n) && !NO_NOMBRE.has(n) && !CONECTORES.has(n) && !TIPO_DE_DOCUMENTO.has(n) && !SUPERLATIVO.test(n);
+}
+
+/**
+ * Prefijos con los que se contesta el nombre: «Se llama…», «Es para mi hijo…», «Nombre: …»,
+ * «La niña…», «El joven…» (2026-11-15: «La niña Gabriela Reina Fonseca» no se leía).
+ */
+const PREFIJO_NOMBRE = /^(?:(?:hola|bueno|buenas(?: tardes| noches| dias)?|buen dia|buenos dias)\b[\s,.!:;-]*|(?:el )?nombre(?: completo)? de (?:mi |la |el )(?:hijo|hija|ni[ñn]o|ni[ñn]a|nena|nene|sobrino|sobrina|nieto|nieta)(?: es)?\s*:?\s+|(?:el )?nombre(?: completo)?(?: es| de)?\s*:?\s+|se llama\s+|me llamo\s+|mi (?:hijo|hija|ni[ñn]o|ni[ñn]a|nena|nene|sobrino|sobrina|nieto|nieta)(?: se llama| es)?\s*:?\s+|(?:el|la) (?:ni[ñn]o|ni[ñn]a|nena|nene|joven|chico|chica|muchacho|muchacha)(?: se llama| es)?\s*:?\s+|(?:jugador|jugadora|deportista|participante|asistente|alumno|alumna)\s*(?:n[°ºo]?\.?\s*|#\s*)?\d{1,2}\s*[:.)-]?\s+|es para\s+|es\s+|soy\s+|para\s+|a nombre de\s*:?\s+|asiste\s+|(?:el|la) (?:jugador|jugadora|deportista|participante)(?: es)?\s*:?\s+)/i;
 
 const plano1 = (w: string) => w.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
 const capital = (w: string) => w.charAt(0).toLocaleUpperCase('es-CO') + w.slice(1).toLocaleLowerCase('es-CO');
@@ -373,8 +412,18 @@ const capital = (w: string) => w.charAt(0).toLocaleUpperCase('es-CO') + w.slice(
  * entero tiene que ser el nombre (para un pie o un texto suelto, sin pregunta).
  */
 export function nombreDeAsistente(texto: string | null | undefined, o: { entero?: boolean } = {}): string | null {
-    let t = String(texto ?? '').replace(/[\u200b-\u200d\ufeff]/g, '').trim();
+    const r = nombreAlComienzo(texto);
+    if (r) return o.entero && r.resto.length ? null : r.nombre;
+    return o.entero ? null : nombreEnOtraLinea(texto);
+}
+
+/** El nombre al comienzo del texto, lo que escribió (sin partículas) y lo que sigue después. Pura. */
+function nombreAlComienzo(texto: string | null | undefined): { nombre: string; escritas: string[]; resto: string[] } | null {
+    let t =String(texto ?? '').replace(/[\u200b-\u200d\ufeff]/g, '').trim();
     if (!t || t.length > 160 || t.includes('?') || t.includes('¿')) return null;
+    // Un enlace o un correo en la línea del nombre: no es un nombre. En otra línea, corta (no es parte del nombre).
+    if (ENLACE_O_CORREO.test(t.split(/\r?\n/)[0])) return null;
+    t = t.replace(TROZO_DE_ENLACE, ' § ');
     for (let i = 0; i < 4; i++) {
         const sin = t.replace(PREFIJO_NOMBRE, '').trim();
         if (sin === t) break;
@@ -387,19 +436,62 @@ export function nombreDeAsistente(texto: string | null | undefined, o: { entero?
         const w = tokens[i];
         if (!/^[\p{L}][\p{L}'’-]*$/u.test(w)) break;
         const n = plano1(w).replace(/[’']/g, '');
-        if (NO_NOMBRE.has(n)) break;
+        if (NO_NOMBRE.has(n) || SUPERLATIVO.test(n)) break;
         if (CONECTORES.has(n) && !nombre.length) break;
+        // «… Robles Ti 1034…», «… T.I. 1034…», «… cédula 1.012…»: el documento y lo que le siga no son del nombre.
+        const sigla = w.length === 1 && tokens[i + 1]?.length === 1 && SIGLA_DE_DOCUMENTO.has(n + plano1(tokens[i + 1]));
+        if (TIPO_DE_DOCUMENTO.has(n) || sigla) {
+            let j = i + (sigla ? 2 : 1);
+            while (j < tokens.length && COLA_DE_DOCUMENTO.test(plano1(tokens[j]))) j++;
+            i = j;
+            break;
+        }
         nombre.push(w);
     }
     while (nombre.length && CONECTORES.has(plano1(nombre[nombre.length - 1]))) nombre.pop();
     const palabras = nombre.filter((w) => !CONECTORES.has(plano1(w)));
     if (palabras.length < 2 || palabras.length > 6 || palabras.some((w) => w.length < 2)) return null;
-    if (o.entero && i < tokens.length) return null;
-    return nombre.map((w) => (CONECTORES.has(plano1(w)) ? plano1(w) : capital(w))).join(' ').slice(0, 80);
+    return {
+        nombre: nombre.map((w) => (CONECTORES.has(plano1(w)) ? plano1(w) : capital(w))).join(' ').slice(0, 80),
+        escritas: palabras,
+        resto: tokens.slice(i),
+    };
+}
+
+/** Tope del mensaje de varias líneas en el que se busca el nombre. */
+const MAX_TEXTO_CON_NOMBRE_EN_OTRA_LINEA = 400;
+
+/**
+ * El nombre en una línea que NO es la primera (Monster 2026-11-15: «Comparto soporte pago vacacional 2 semanas
+ * (…)\nGabriela Covaleda García\n13 años 6 meses» → null, y el pago no se registró). La línea tiene que ser
+ * ENTERA el nombre, y un nombre firme: tres palabras o más, o dos escritas con mayúscula inicial (así «sede suba»
+ * o «muchas gracias» en la segunda línea no se vuelven una persona). Pura.
+ */
+function nombreEnOtraLinea(texto: string | null | undefined): string | null {
+    const crudo = String(texto ?? '');
+    if (crudo.length > MAX_TEXTO_CON_NOMBRE_EN_OTRA_LINEA || crudo.includes('?') || crudo.includes('¿')) return null;
+    const lineas = crudo.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lineas.length < 2) return null;
+    for (const linea of lineas.slice(1)) {
+        const r = nombreAlComienzo(linea);
+        if (!r || r.resto.length) continue;
+        if (r.escritas.length >= 3 || r.escritas.every((w) => /^\p{Lu}/u.test(w))) return r.nombre;
+    }
+    return null;
+}
+
+/** Lo que puede seguir al nombre en la nota de un comprobante: «… Posición: Armador Año de nacimiento: 22/06/2007». */
+const DATO_TRAS_EL_NOMBRE = /^(?:posicion|ano de nacimiento|fecha de nacimiento|nacimiento|nacio|nacid[oa]|edad|categoria|\d{1,2} anos|\d{1,2} \d{1,2} (?:19|20)\d{2}|armador|armadora|opuesto|opuesta|central|libero|punta|atacante|receptor|receptora|levantador|levantadora)\b/;
+
+/** El nombre al comienzo, seguido de un dato de registro (posición, nacimiento, edad). Pura. */
+function nombreSeguidoDeDato(texto: string): string | null {
+    const r = nombreAlComienzo(texto);
+    if (!r || !r.resto.length) return null;
+    return DATO_TRAS_EL_NOMBRE.test(r.resto.slice(0, 5).map((w) => plano1(w)).join(' ')) ? r.nombre : null;
 }
 
 /** Marcas con las que se dice el nombre de quien asiste en un pie o en la descripción del pago. */
-const MARCA_DE_NOMBRE = /\b(?:a nombre de|nombre(?: completo)?(?: es)?\s*:|se llama|asiste|participante\s*:|jugador(?:a)?\s*:|deportista\s*:|alumn[oa]\s*:)\s+(.+)$/i;
+const MARCA_DE_NOMBRE = /\b(?:a nombre de|nombre(?: completo)?(?: es)?\s*:|(?:nombre(?: completo)? de )?mi (?:hij[oa]|ni[ñn][oa])\s*:|se llama|asiste|participante\s*:|jugador(?:a)?\s*:|deportista\s*:|alumn[oa]\s*:)\s+(.+)$/i;
 
 /**
  * El nombre de quien asiste si ya viene con el archivo. Nunca el titular de la
@@ -440,7 +532,10 @@ export function nombreDeAsistenteEnTextos(
         const palabras = texto.split(/\s+/);
         let k = 0;
         while (k < palabras.length && ruido(palabras[k])) k++;
-        const n = nombreDeAsistente(palabras.slice(k).join(' '), { entero: true });
+        const resto = palabras.slice(k).join(' ');
+        // SOLO el nombre, o el nombre seguido de un dato de registro (Monster 2026-11-15: la nota del Nequi traía
+        // «Jesús Giovanni Solarte Chala Posición: Armador Año de nacimiento: 22/06/2007 …» y se preguntó igual).
+        const n = nombreDeAsistente(resto, { entero: true }) ?? nombreSeguidoDeDato(resto);
         if (n) return n;
     }
     return null;
@@ -454,15 +549,139 @@ export function nombreDeAsistenteEnTextos(
  * repregunta: la pregunta va UNA vez.
  */
 export async function resolverRespuestaDeAsistente(
-    fila: { id: string; school_id: string },
+    fila: { id: string; school_id: string; pregunta_ocr?: any },
     texto: string,
     responder: (texto: string, paso: string, botones?: BotonInteractivo[], linea?: unknown, payload?: Record<string, unknown>) => Promise<unknown>,
 ): Promise<boolean> {
-    const nombre = nombreDeAsistente(texto);
-    if (!nombre) return false;
+    const reg = await import('./wa-registro-de-venta.service');
+    const { hoyBogota } = await import('./wa-cobro-desde-comprobante.service');
+    const hoy = hoyBogota(Date.now());
+    const venta = (fila.pregunta_ocr?.venta ?? {}) as Record<string, any>;
+    const guardarEnLaFila = async (cambios: Record<string, unknown>, extra: Record<string, unknown> = {}) => {
+        if (!fila.pregunta_ocr) return;
+        await supabase.from('whatsapp_inbound_queue')
+            .update({ pregunta_ocr: { ...fila.pregunta_ocr, venta: { ...venta, ...cambios } }, ...extra })
+            .eq('id', fila.id).eq('status', 'waiting_user');
+    };
+
+    // (R4) «¿Es para *Nombre*, como la vez pasada?»: sí → los datos de la ficha; otra persona → se piden los datos.
+    const confirmar = typeof venta.confirmar?.nombre === 'string' ? venta.confirmar.nombre as string : null;
+    if (confirmar) {
+        const r = respuestaDeMismoAsistente(texto);
+        if (r === 'si') {
+            await guardarEnLaFila({ confirmar: null, confirmado: true });
+            const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
+            await aplicarComprobanteDeVenta(fila.id, confirmar, responder);
+            return true;
+        }
+        const dicho = reg.leerRespuestaDeDatos(texto, { hoy });
+        const otroNombre = dicho.nombre && !reg.mismaPersona(dicho.nombre, confirmar) ? dicho.nombre : null;
+        if (r !== 'otra' && !otroNombre) {
+            // Escribió el mismo nombre («sí, para Gabriela Covaleda»): es un sí. Lo demás sigue al bot.
+            if (!dicho.nombre) return false;
+            await guardarEnLaFila({ confirmar: null, confirmado: true });
+            const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
+            await aplicarComprobanteDeVenta(fila.id, confirmar, responder);
+            return true;
+        }
+        if (!otroNombre) {
+            // «Es para otra persona», sin decir quién: se piden los datos (los de la ficha no sirven).
+            const item = String(venta.itemNombre ?? 'el servicio');
+            await guardarEnLaFila({ confirmar: null, otraPersona: true, registro: null },
+                { pregunta_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+            await responder(preguntaDeDatosDeServicio(null, item, reg.SIN_REGISTRO, hoy), PASO_PREGUNTA_ASISTENTE, undefined, undefined,
+                { faltan_datos: reg.faltantesDe(reg.SIN_REGISTRO, hoy), ...(venta.itemId ? { venta_servicio_id: venta.itemId } : {}) });
+            return true;
+        }
+        await guardarEnLaFila({ confirmar: null, otraPersona: true, registro: { ...dicho, nombre: otroNombre } });
+        const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
+        await aplicarComprobanteDeVenta(fila.id, otroNombre, responder);
+        return true;
+    }
+
+    // (auditoría 8–16 nov 2026) «Jugador 1: VALENTINA… / Jugador 2: MARIA ALEJANDRA…»: dos personas y un comprobante.
+    // El cobro es por persona: no se elige una en silencio. Se pregunta UNA vez de quién es; la respuesta («Valentina»,
+    // «la segunda») aplica el comprobante a ese nombre; «son dos cupos» sigue al bot, que se lo pasa a la escuela.
+    const sinPregunta = !/[?¿]/.test(texto);
+    const ofrecidos = (Array.isArray(venta.variosNombres) ? venta.variosNombres : [])
+        .filter((n: unknown): n is string => typeof n === 'string' && !!n.trim());
+    if (ofrecidos.length >= 2 && sinPregunta) {
+        const elegido = elegirEntreNombres(texto, ofrecidos);
+        if (elegido === 'todos') return false;
+        if (elegido) {
+            await guardarEnLaFila({ variosNombres: null });
+            const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
+            await aplicarComprobanteDeVenta(fila.id, elegido, responder);
+            return true;
+        }
+    }
+    // Dos nombres sin marca en dos líneas NO son dos asistentes acá: son quien asiste y su persona responsable.
+    const varios = sinPregunta ? nombresDeAsistentesEn(texto, { sinLineasSueltas: true }) : [];
+    if (varios.length >= 2) {
+        if (ofrecidos.length >= 2) return false; // ya se preguntó una vez: no se repregunta
+        await guardarEnLaFila({ variosNombres: varios }, { pregunta_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+        await responder(textoVariosAsistentes(varios, { pagado: true }), PASO_PREGUNTA_ASISTENTE, undefined, undefined,
+            { asistentes_dichos: varios, ...(venta.itemId ? { venta_servicio_id: venta.itemId } : {}) });
+        return true;
+    }
+
+    // Lo que ya se sabía al preguntar (ficha, nota del comprobante, chat de la venta) + lo que acaba de decir.
+    const conocido = venta.registro ? reg.registroGuardado(venta.registro) : null;
+    const datos = reg.combinarConRespuesta(conocido, reg.leerRespuestaDeDatos(texto, { hoy }));
+    if (!datos.nombre) return false;
+    // La fecha, el acudiente y la posición viajan en la fila: la cola los guarda en la ficha al crear el cobro.
+    if (reg.traeOtroDato(datos)) await guardarEnLaFila({ registro: datos });
     const { aplicarComprobanteDeVenta } = await import('../jobs/whatsapp-queue.job');
-    await aplicarComprobanteDeVenta(fila.id, nombre, responder);
+    await aplicarComprobanteDeVenta(fila.id, datos.nombre, responder);
     return true;
+}
+
+// ─── (e-bis) Los datos de registro en la venta (2026-11-16) ─────────────────
+
+/** La cola preguntó «¿Es para *Nombre*, como la vez pasada?» (segunda compra desde el mismo chat). */
+export const PASO_CONFIRMAR_ASISTENTE = 'ask_asistente_confirmar';
+/** La cola recibió una captura sin fecha ni número de comprobante y pidió la pantalla completa. */
+export const PASO_VENTA_INCOMPLETO = 'venta_comprobante_incompleto';
+
+export const BOTONES_MISMO_ASISTENTE: BotonInteractivo[] = [
+    { id: 'sm_asiste_si', title: 'Sí' },
+    { id: 'sm_asiste_otra', title: 'Es para otra persona' },
+];
+
+/** «Recibí tu comprobante de *$140.000* 📄 ¿Es para *Gabriela Covaleda García*, como la vez pasada?» Pura. */
+export function preguntaMismoAsistente(monto: number | null, nombre: string): string {
+    return `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} 📄 ¿Es para *${nombre}*, como la vez pasada?`;
+}
+
+/** La respuesta a «¿Es para X, como la vez pasada?»: el botón o lo mismo escrito. Pura. */
+export function respuestaDeMismoAsistente(texto: string | null | undefined): 'si' | 'otra' | null {
+    const t = normalizarFrase(texto);
+    if (!t) return null;
+    if (/^(si|sip|sii+|si senor|si senora|si claro|claro|claro que si|correcto|exacto|asi es|el mismo|la misma|si es|si es para (el|ella)|si para (el|ella)|si el mismo|si la misma|es para (el|ella))$/.test(t)) return 'si';
+    if (/^(no|nop|no es|no es para (el|ella)|otra|otro|otra persona|es otra persona|es para otra persona|para otra persona|no es para otra persona|no es otra persona)$/.test(t)) return 'otra';
+    return null;
+}
+
+/**
+ * La pregunta de los datos que FALTAN, en un solo mensaje (la escribe `textoPidiendoDatos`), con el valor del
+ * comprobante. `registro`: lo que ya se sabe (no se vuelve a pedir). Pura.
+ */
+export function preguntaDeDatosDeServicio(
+    monto: number | null, servicio: string, registro: DatosDeRegistro, hoy: string,
+): string {
+    const faltan = datosFaltantes(registro, { hoy });
+    const texto = textoPidiendoDatos(faltan, { servicio, conComprobante: true, anotado: { ...registro, nombre: null } });
+    if (!texto) return preguntaAsistenteDeServicio(monto, servicio);
+    return monto ? texto.replace(/^Recibí tu comprobante 📄/, `Recibí tu comprobante de *${pesos(monto)}* 📄`) : texto;
+}
+
+/**
+ * La respuesta a una captura a la que le faltan la fecha y el número del comprobante (la pantalla «¡Transferencia
+ * exitosa!» recortada): que llegó, qué le falta y, de una vez, los datos de registro que falten. Pura.
+ */
+export function textoCapturaIncompleta(monto: number | null, pedido: string): string {
+    return `Recibí tu captura${monto ? ` de *${pesos(monto)}*` : ''} 📄 Le faltan la fecha y el número del comprobante. `
+        + `Envíame la pantalla completa del pago, por favor.${pedido ? `\n\n${pedido}` : ''}`;
 }
 
 // ─── La respuesta a «¿De qué deportista es este pago?» ──────────────────────

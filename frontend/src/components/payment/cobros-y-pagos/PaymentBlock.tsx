@@ -11,7 +11,8 @@ import { cn } from '@/lib/utils';
 import { formatPesos } from '@/lib/cobrosYPagos';
 import { mensajeDeComprobante, type DecisionComprobante } from '@/lib/separarHoras';
 import type { PaymentChargeCategory } from '@/lib/payment-accounts';
-import type { PaymentDraft } from './drafts';
+import { sinComprobante, type PaymentDraft } from './drafts';
+import { RecibidoSinComprobanteCampos } from '@/components/payment/RecibidoSinComprobanteCampos';
 
 
 type PayerDianState = 'complete' | 'no_dane' | 'incomplete';
@@ -125,6 +126,17 @@ export function PaymentBlock({
                             <Input id="cyp-pay-ref" value={p.reference} onChange={(e) => set({ reference: e.target.value })} className="h-10" maxLength={80} />
                         </div>
                     </div>
+
+                    {sinComprobante(p) && (
+                        <RecibidoSinComprobanteCampos
+                            value={{ metodo: p.method, fecha: p.date, por: p.receivedBy }}
+                            onChange={(v) => set({ receivedBy: v.por })}
+                            hoy={today}
+                            mostrarMetodo={false}
+                            mostrarFecha={false}
+                            idPrefix="cyp-recibido"
+                        />
+                    )}
 
                     {p.method === 'transfer' && (
                         <div className="space-y-2">

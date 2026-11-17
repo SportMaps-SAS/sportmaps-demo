@@ -144,13 +144,16 @@ describe('CobrosYPagosModal — separar las horas', () => {
         expect(screen.queryByTestId('cyp-result')).toBeNull();
         expect(screen.queryByTestId('cyp-horas-aparte')).toBeNull();
         expect(screen.getByRole('radio', { name: /Efectivo/ })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.change(await screen.findByLabelText('¿Quién lo recibió?'), { target: { value: 'Alejandra L.' } });
         await waitFor(() => expect(screen.getByTestId('cyp-primary')).toBeEnabled(), { timeout: 3000 });
         fireEvent.click(screen.getByTestId('cyp-primary'));
         await waitFor(() => expect(api.create).toHaveBeenCalledTimes(2));
         const segunda = api.create.mock.calls[1][0];
         expect(segunda.lines).toEqual([expect.objectContaining({ extra_hours: 2, enrollment_id: 'enr-1', pay_amount: 64_500 })]);
         expect(segunda.pending ?? []).toHaveLength(0);
-        expect(segunda.payment).toMatchObject({ method: 'cash' });
+        expect(segunda.payment).toMatchObject({ method: 'cash', received_by: 'Alejandra L.' });
+        // La primera (con comprobante) no lleva received_by.
+        expect(primera.payment.received_by).toBeUndefined();
         expect(segunda.payment.receipt_url).toBeUndefined();
         expect(segunda.client_request_id).not.toBe(primera.client_request_id);
     }, 20_000);

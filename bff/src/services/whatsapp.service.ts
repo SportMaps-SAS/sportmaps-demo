@@ -173,6 +173,8 @@ export interface SendTextResult {
     ok: boolean;
     waMessageId?: string;
     error?: string;
+    /** Código numérico del error de Graph (131026, 190…), si Meta lo mandó. */
+    errorCode?: number;
 }
 
 /**
@@ -232,7 +234,11 @@ async function postearMensaje(
 
         const json: any = await res.json().catch(() => ({}));
         if (!res.ok) {
-            return { ok: false, error: json?.error?.message || `graph_${res.status}` };
+            const codigo = Number(json?.error?.code);
+            return {
+                ok: false, error: json?.error?.message || `graph_${res.status}`,
+                ...(Number.isInteger(codigo) && codigo > 0 ? { errorCode: codigo } : {}),
+            };
         }
         return { ok: true, waMessageId: json?.messages?.[0]?.id };
     } catch (err: any) {

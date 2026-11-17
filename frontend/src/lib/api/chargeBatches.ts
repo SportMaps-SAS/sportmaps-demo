@@ -108,6 +108,8 @@ export interface PaymentPayload {
     receipt_url?: string;
     receipt_sha256?: string;
     ocr?: Record<string, unknown>;
+    /** Quién del equipo recibió la plata: obligatorio cuando no hay `receipt_url` (el BFF lo exige y lo anota en notes). */
+    received_by?: string;
     /** Pide factura electrónica del pago (hoy el modal viejo la dispara al quedar paid). */
     wants_e_invoice?: boolean;
 }

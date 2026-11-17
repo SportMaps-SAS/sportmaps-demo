@@ -235,9 +235,24 @@ export default function MessageTemplatesPage() {
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Plantillas de Mensajes</h1>
           <p className="text-muted-foreground text-sm">
-            Personaliza los mensajes automáticos de cobro y recordatorio.
+            Personaliza los textos de cobro y recordatorio que envías a mano.
           </p>
         </div>
+      </div>
+
+      {/* Qué cambia y qué NO cambia esta pantalla (spec whatsapp-autoservicio F0, 2026-11-15). */}
+      <div
+        role="note"
+        data-testid="aviso-alcance-plantillas"
+        className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm"
+      >
+        <p className="font-medium">Estos textos solo cambian el enlace manual de WhatsApp y el correo.</p>
+        <p className="text-muted-foreground mt-1">
+          Sirven cuando envías un recordatorio a mano desde Recordatorios de pago. Los mensajes que WhatsApp
+          envía solo (recordatorios automáticos de cobro, avisos de vencimiento) usan las plantillas aprobadas
+          por Meta y <strong>no cambian aquí</strong>: se ven en{' '}
+          <a href="/whatsapp?tab=plantillas" className="underline font-medium">WhatsApp › Plantillas</a>.
+        </p>
       </div>
 
       {loading ? (

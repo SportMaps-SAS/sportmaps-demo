@@ -15,6 +15,7 @@ import { todayColombia } from '@/lib/dateUtils';
 import { formatCurrency } from '@/lib/utils';
 import { isOneTimeCategory } from '@/lib/payment-accounts';
 import { joinSpanish, dueOf, remainingOf } from '@/lib/receiptReview';
+import { notasConRecibido, type RecibidoSinComprobante } from '@/lib/payments/constanciaDeRecibido';
 
 export interface ApprovablePayment {
   id: string;
@@ -53,6 +54,13 @@ export interface ApproveOptions {
    * notifyGroupApproved). Por defecto avisa.
    */
   notify?: boolean;
+  /**
+   * Constancia cuando el cobro se aprueba SIN comprobante (cómo, cuándo y quién
+   * lo recibió). Con ella se guardan payment_method / payment_date reales y la
+   * línea `[Recibido: …]` al inicio de notes. Sin ella (aprobación con
+   * comprobante) nada cambia.
+   */
+  recibido?: RecibidoSinComprobante;
 }
 
 export type ApproveResult =
@@ -107,15 +115,24 @@ export async function approvePayment(payment: ApprovablePayment, opts: ApproveOp
   const { remaining, abono, isAbono, saldoPendiente, amountPaid } = approvalMath(payment, opts.abonoAmount);
 
   // Conserva el método si ya viene (no se re-pregunta); default transfer.
-  const method = payment.payment_method || 'transfer';
+  // Con constancia de «recibido sin comprobante» manda lo que dijo la escuela.
+  const method = opts.recibido?.metodo ?? (payment.payment_method || 'transfer');
   const nowIso = new Date().toISOString();
+
+  // Las notas del cobro se conservan: la constancia se antepone, no las pisa.
+  let notasNuevas: string | undefined;
+  if (opts.recibido) {
+    const { data: previas } = await supabase.from('payments').select('notes').eq('id', payment.id).maybeSingle();
+    notasNuevas = notasConRecibido((previas as { notes?: string | null } | null)?.notes, opts.recibido);
+  }
 
   const { data: updated, error } = await supabase.from('payments').update({
     // Abono → 'partial' (queda saldo); pago completo → 'paid'.
     status: isAbono ? 'partial' : 'paid',
     payment_method: method,
-    payment_channel: method === 'cash' ? 'cash' : 'transfer',
-    payment_date: todayColombia(),
+    payment_channel: method === 'cash' ? 'cash' : method === 'other' ? 'manual' : 'transfer',
+    payment_date: opts.recibido?.fecha ?? todayColombia(),
+    ...(notasNuevas !== undefined ? { notes: notasNuevas } : {}),
     approved_by: opts.userId,
     approved_at: nowIso,
     // amount_paid ACUMULA los abonos previos; en pago completo, lo debido

@@ -22,6 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { bffClient } from '@/lib/api/bffClient';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -87,6 +88,55 @@ function leerFranjas(raw: unknown): Franja[] {
         }));
 }
 
+/** Franja con reservas cuyo horario ya no existe (la devuelve `sincronizar-franjas`). */
+export interface FranjaSinHorario {
+    id: string;
+    grupo: string;
+    fecha: string;   // YYYY-MM-DD
+    hora: string;    // HH:MM, la hora vieja
+    reservas: number;
+    personas?: { nombre: string; estado: 'agendada' | 'separada' }[];
+}
+
+interface RespuestaSincronizar {
+    ok: boolean;
+    /** null = la escuela no saca los cupos de clase de prueba de sus entrenamientos. */
+    franjas: { creadas: number; cerradas: number; errores: number; sinHorarioConReserva?: FranjaSinHorario[] } | null;
+}
+
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+/** «7:00 a. m.» a partir de «07:00». */
+function hora12(h: string): string {
+    const [hh, mm] = h.split(':').map(Number);
+    return `${hh % 12 === 0 ? 12 : hh % 12}:${String(mm || 0).padStart(2, '0')} ${hh >= 12 ? 'p. m.' : 'a. m.'}`;
+}
+
+/** «domingo 22 de noviembre» a partir de «2026-11-22» (sin pasar por la zona horaria del navegador). */
+function fechaLarga(iso: string): string {
+    const [a, m, d] = iso.slice(0, 10).split('-').map(Number);
+    const dia = new Date(Date.UTC(a, m - 1, d)).getUTCDay();
+    return `${nombreDia(dia).toLowerCase()} ${d} de ${MESES[m - 1] ?? ''}`.trim();
+}
+
+/** La frase que le dice a la escuela a quiénes debe avisar. Pura. */
+export function textoSinHorario(f: FranjaSinHorario, equipo: string): string {
+    const n = f.reservas;
+    const quienes = n === 1 ? 'Hay 1 persona' : `Hay ${n} personas`;
+    const nombres = (f.personas ?? []).map((p) => p.nombre).filter(Boolean);
+    return `${quienes} con clase de prueba el ${fechaLarga(f.fecha)} a las ${hora12(f.hora)} en ${f.grupo || equipo}`
+        + `${nombres.length ? ` (${nombres.join(', ')})` : ''}; ese horario ya no existe. `
+        + `${n === 1 ? 'Avísale' : 'Avísales'} la hora nueva.`;
+}
+
+/** Lo que dice el aviso al guardar, según cómo le fue a los cupos de clase de prueba. */
+function textoDeGuardado(franjas: RespuestaSincronizar['franjas'] | undefined, fallo: boolean): string {
+    if (fallo) return 'El bot ya responde con este horario. Los cupos de clase de prueba se actualizan en la madrugada.';
+    // La escuela no genera cupos desde sus entrenamientos: no hay nada más que decir.
+    if (!franjas) return 'El bot ya responde con este horario.';
+    return 'El bot ya responde con este horario y los cupos de clase de prueba ya quedaron con el horario nuevo.';
+}
+
 export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
     const { toast } = useToast();
     const [equipos, setEquipos] = useState<Equipo[]>([]);
@@ -96,6 +146,8 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
     const [conClasePrueba, setConClasePrueba] = useState(false);
     const [cargando, setCargando] = useState(true);
     const [guardando, setGuardando] = useState<string | null>(null);
+    // Por equipo: clases de prueba ya reservadas en un horario que dejó de existir.
+    const [avisos, setAvisos] = useState<Record<string, FranjaSinHorario[]>>({});
 
     const cargar = useCallback(async () => {
         setCargando(true);
@@ -152,13 +204,30 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
                 ...(conClasePrueba ? { recibe_clase_prueba: equipo.recibe_clase_prueba } : {}),
             })
             .eq('id', equipo.id);
-        setGuardando(null);
 
         if (error) {
+            setGuardando(null);
             toast({ title: 'No se pudo guardar', description: error.message, variant: 'destructive' });
             return;
         }
-        toast({ title: `${equipo.name} actualizado`, description: 'El bot ya responde con este horario.' });
+
+        // El horario ya quedó guardado. Ahora los cupos de clase de prueba que
+        // ofrece el bot: salen de este horario, y sin esto seguirían con la hora
+        // vieja hasta la madrugada. Si falla, el horario NO se pierde.
+        let franjas: RespuestaSincronizar['franjas'] | undefined;
+        try {
+            const r = await bffClient.post<RespuestaSincronizar>(
+                `/api/v1/whatsapp/${schoolId}/cortesias/sincronizar-franjas`, { teamId: equipo.id });
+            franjas = r?.franjas ?? null;
+        } catch {
+            franjas = undefined;
+        }
+        setGuardando(null);
+
+        const fallo = franjas === undefined || (franjas !== null && franjas.errores > 0);
+        const sinHorario = (franjas?.sinHorarioConReserva ?? []).filter((f) => f.reservas > 0);
+        if (!fallo) setAvisos((prev) => ({ ...prev, [equipo.id]: sinHorario }));
+        toast({ title: `${equipo.name} actualizado`, description: textoDeGuardado(franjas, fallo) });
     }
 
     if (cargando) {
@@ -220,6 +289,25 @@ export function HorariosDeEntrenamiento({ schoolId }: { schoolId: string }) {
                     </CardHeader>
 
                     <CardContent className="space-y-3">
+                        {/* Gente que ya tenía clase de prueba a una hora que acaba de
+                            cambiar. El bot dejó de ofrecer esa hora, pero a ellos nadie
+                            les ha dicho nada: eso le toca a la escuela. */}
+                        {(avisos[equipo.id] ?? []).length > 0 && (
+                            <div
+                                role="alert"
+                                className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900/50 dark:bg-amber-950/30"
+                            >
+                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                                <div className="space-y-1">
+                                    {avisos[equipo.id].map((f) => (
+                                        <p key={f.id}>{textoSinHorario(f, equipo.name)}</p>
+                                    ))}
+                                    <a href="/whatsapp?tab=cortesias" className="inline-block text-primary hover:underline">
+                                        Ver las clases de prueba agendadas
+                                    </a>
+                                </div>
+                            </div>
+                        )}
                         {/* Cerrar admisiones NO es dar de baja: los inscritos siguen
                             exactamente igual. Es lo que permite decir «esta categoria no
                             la ofertamos este ano» sin romperle la inscripcion a nadie. */}

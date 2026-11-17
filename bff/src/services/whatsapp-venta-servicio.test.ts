@@ -109,7 +109,11 @@ describe('intencionEnVenta', () => {
             'Me gustaría saber qué trayectoria llevar teniendo en cuenta que acabo de pagar la clínica', 'Esa ya está acabada de pagar',
         ],
         otra_fecha: ['ese día tenemos torneo, ¿hay otra fecha?', 'no puedo ese día', 'habrá otra fecha?', 'se me cruza con un partido'],
-        saludo: ['Hola', 'Ok', '.', 'Buenas', '👍', 'Buenas tardes', 'holaaa', 'Buenas, tengo una pregunta', '?'],
+        saludo: ['Hola', 'Ok', '.', 'Buenas', '👍', 'Buenas tardes', 'holaaa', '?'],
+        // (auditoría 8–16 nov 2026) «Buenas, tengo una pregunta» era 'saludo' (la línea del servicio con botones); ahora
+        // es 'anuncio': se contesta «Claro, dime» y se espera. Igual que «Profe una pregunta» o «Me puedes confirmar».
+        anuncio: ['Buenas, tengo una pregunta', 'Profe una pregunta', 'Me puedes confirmar', 'Seria?'],
+        desiste: ['Estoy en otra ciudad', 'no puedo', 'no me queda'],
         cierre: ['Gracias', 'Okey muchas gracias quedo atento', 'Quedo atento', 'listo', 'Perfecto, gracias', '🙏', 'Sí gracias'],
         detalle: [
             'Solo una confirmacion antes de pagar incluye grupo femenino ??', '¿Con el pago ya tengo el cupo?', 'mi hija tiene 12',
@@ -440,9 +444,14 @@ describe('caso 6: conversación 932fcd83 — dos dudas seguidas tras los datos d
         });
         expect(reg.avisos[0]).toContain('incluye grupo femenino');
         // Una segunda pregunta sin dato en los 30 min: otro texto (no se repite), también pendiente.
-        const segunda = ctxDe({ recientes: [sal(1, TEXTO_A_LA_ESCUELA, { payload: { step: PASO_VENTA.A_LA_ESCUELA } }), ...recientes] });
+        const segunda = ctxDe({ recientes: [sal(10, TEXTO_A_LA_ESCUELA, { payload: { step: PASO_VENTA.A_LA_ESCUELA } }), ...recientes] });
         await atenderVentaDeServicio(segunda.ctx, VENTA, '¿y llevan hidratación?');
         expect(segunda.reg.enviados[0].texto).toBe(TEXTO_A_LA_ESCUELA_REPETIDO);
+        // (Monster 14–16 nov) Dentro de los 3 minutos NO sale un segundo mensaje: la escuela igual se entera.
+        const pegada = ctxDe({ recientes: [sal(1, TEXTO_A_LA_ESCUELA, { payload: { step: PASO_VENTA.A_LA_ESCUELA } }), ...recientes] });
+        expect(await atenderVentaDeServicio(pegada.ctx, VENTA, '¿y llevan hidratación?')).toBe('venta_a_la_escuela');
+        expect(pegada.reg.enviados).toEqual([]);
+        expect(pegada.reg.avisos).toHaveLength(1);
     });
 
     it('«Me confima los datos del titular de la cuenta y la cc» → los datos con el titular; la cédula queda pendiente para la escuela', async () => {

@@ -76,6 +76,24 @@ const ETIQUETAS: Record<string, string> = {
     sin_integracion: 'El canal ya no existe',
     duplicado: 'Comprobante repetido (misma imagen)',
     fuera_de_sportmaps: 'Pago por fuera de SportMaps',
+    // Venta de un servicio por WhatsApp (clínica, vacacional, torneo): el pago llegó y falta que la escuela lo registre.
+    venta_servicio: 'Pago de un servicio por registrar',
+    venta_faltan_datos: 'Pago de un servicio: faltan los datos de quien asiste',
+    venta_incompleto: 'Pago de un servicio: captura sin fecha ni número',
+    escuela_tomo: 'La escuela escribió en el chat: aplicarlo a mano',
+    // Auditoría 1–16 nov 2026: 22 filas con plata caían en «Sin clasificar» / «revisar».
+    sin_pendientes_con_pago: 'Pagó y no tiene cobros abiertos',
+    saldo_de_parcial: 'Es el saldo de un cobro abonado',
+    excedente_de_parcial: 'Pagó más que el saldo del cobro',
+    prospecto_sin_concepto: 'Pago de un prospecto: falta saber de qué es',
+    limite_ocr: 'No se leyó (tope de lecturas): revisarlo a mano',
+    archivo_no_leido: 'No se pudo abrir el archivo (muy grande o formato raro)',
+    torneo_o_club: 'Pago de torneo o de un club',
+    pago_partido: 'Pago partido en varios comprobantes',
+    monto_distinto_aplicado: 'Se aplicó, pero el monto no es el del cobro',
+    reclamo_del_cliente: 'La familia corrigió o reclamó el resultado',
+    motivo_esperado: 'Pago de un prospecto que no coincide con lo esperado',
+    ocr_omitido: 'No se leyó: ráfaga de imágenes de un número sin ficha',
     otro: 'Sin clasificar',
 };
 
@@ -89,6 +107,23 @@ const GRUPO_DE: Record<string, GrupoBandeja> = {
     otro_concepto: 'accion',
     fallido: 'accion',
     pregunta_vencida: 'accion',
+    venta_servicio: 'accion',
+    venta_faltan_datos: 'accion',
+    venta_incompleto: 'accion',
+    escuela_tomo: 'accion',
+    // Hay plata por aplicar (auditoría 1–16 nov 2026).
+    sin_pendientes_con_pago: 'accion',
+    saldo_de_parcial: 'accion',
+    excedente_de_parcial: 'accion',
+    prospecto_sin_concepto: 'accion',
+    limite_ocr: 'accion',
+    archivo_no_leido: 'accion',
+    torneo_o_club: 'accion',
+    pago_partido: 'accion',
+    monto_distinto_aplicado: 'accion',
+    reclamo_del_cliente: 'accion',
+    motivo_esperado: 'accion',
+    ocr_omitido: 'revisar',
     sin_pendientes: 'revisar',
     esperando_familia: 'revisar',
     archivo_no_disponible: 'revisar',
@@ -107,10 +142,39 @@ const GRUPO_DE: Record<string, GrupoBandeja> = {
     fuera_de_sportmaps: 'informativo',
 };
 
+/**
+ * `error_message` de la pregunta que se cerró porque una persona de la escuela escribió (lo escribe
+ * whatsapp-respuesta-de-cobro: `MOTIVO_ESCUELA_TOMO`; acá va el texto para no importar ese servicio).
+ */
+export const MOTIVO_ESCUELA_TOMO_EN_BANDEJA = 'la escuela tomó la conversación';
+
 /** Códigos que escribe la recuperación (`recuperado: <código> — <motivo>`). */
 const ALIAS_RECUPERACION: Record<string, string> = {
     numero_ambiguo: 'numero_ambiguo',
 };
+
+/**
+ * Prefijos de `error_message` que traen plata por aplicar y su motivo en la bandeja. El orden importa: gana el
+ * primero. Los escriben whatsapp-queue.job, whatsapp-cobro-por-texto, wa-limite-comprobantes y
+ * whatsapp-respuesta-de-cobro (los códigos viven en wa-cola-reglas; acá va el texto para no importar esos módulos).
+ */
+const PREFIJOS_CON_PLATA: [string, string][] = [
+    ['reclamo_del_cliente', 'reclamo_del_cliente'],
+    ['monto_distinto_aplicado', 'monto_distinto_aplicado'],
+    ['abono_en_revision', 'monto_distinto_aplicado'],
+    ['pago_partido', 'pago_partido'],
+    ['torneo_o_club', 'torneo_o_club'],
+    ['excedente_de_parcial', 'excedente_de_parcial'],
+    ['saldo_de_parcial', 'saldo_de_parcial'],
+    ['prospecto_sin_concepto', 'prospecto_sin_concepto'],
+    ['prospecto_con_cantidad', 'prospecto_sin_concepto'],
+    ['monto_con_cantidad', 'monto_distinto'],
+    ['motivo_esperado_no_coincide', 'motivo_esperado'],
+    ['motivo_esperado_sin_precio', 'motivo_esperado'],
+    ['cobro_no_creado', 'motivo_esperado'],
+    ['limite_ocr', 'limite_ocr'],
+    ['ocr_omitido', 'ocr_omitido'],
+];
 
 /** El motivo «crudo» de la fila: código + detalle, sin mirar el contacto. */
 export function motivoDeFila(fila: FilaCruda): { motivo: string; detalle: string | null } {
@@ -131,6 +195,31 @@ export function motivoDeFila(fila: FilaCruda): { motivo: string; detalle: string
     if (em.startsWith('monto_no_cuadra')) return { motivo: 'monto_distinto', detalle: em.replace(/^monto_no_cuadra:\s*/, '') || null };
     if (em.startsWith('sin_familia:')) return { motivo: 'sin_familia', detalle: em.replace(/^sin_familia:\s*/, '') || null };
     if (em.startsWith('comprobante ya recibido')) return { motivo: 'duplicado', detalle: null };
+    // ── Códigos con plata que caían en «Sin clasificar» (auditoría 1–16 nov 2026, 22 filas) ──
+    // El reclamo del cliente va primero: conserva detrás lo que la fila decía antes.
+    for (const [prefijo, motivo] of PREFIJOS_CON_PLATA) {
+        if (em.startsWith(prefijo)) return { motivo, detalle: em.slice(prefijo.length).replace(/^[:\s]+/, '') || null };
+    }
+    // «sin_pendientes: …» (la familia eligió el mes, o pagó y no tiene cobros abiertos): antes solo se reconocía
+    // el texto exacto «sin pagos pendientes». Trae monto y propuesta: es acción.
+    if (em.startsWith('sin_pendientes:')) return { motivo: 'sin_pendientes_con_pago', detalle: em.replace(/^sin_pendientes:\s*/, '') || null };
+    if (em.startsWith('familia_sin_cuenta:')) return { motivo: 'familia_sin_cuenta', detalle: em.replace(/^familia_sin_cuenta:\s*/, '') || null };
+    // «ya registrado: <concepto>» (lo escribe el worker con `result_ref_id`): informativo, y el barrido lo cierra solo.
+    if (em.startsWith('ya registrado:')) return { motivo: 'ya_registrado', detalle: em.replace(/^ya registrado:\s*/, '') || null };
+    if (em.startsWith('numero_sin_verificar: comprobante repetido')) return { motivo: 'duplicado', detalle: em };
+    if (em.startsWith('varios_cobros:')) return { motivo: 'varios_cobros', detalle: em.replace(/^varios_cobros:\s*/, '') || null };
+    if (/^(archivo_muy_grande|mime_no_soportado)\b/.test(em)) return { motivo: 'archivo_no_leido', detalle: em };
+    // Venta de un servicio (2026-11-16): los `venta_*` caían en «Sin clasificar» y nadie los veía como pendientes.
+    // Un comprobante repetido no pide nada; los demás son plata recibida que falta registrar.
+    if (em.startsWith('venta_comprobante_repetido')) return { motivo: 'duplicado', detalle: em.replace(/^venta_comprobante_repetido:\s*/, '') || null };
+    const venta = /^(venta_[a-z_]+):\s*/.exec(em);
+    if (venta) {
+        const motivo = venta[1] === 'venta_comprobante_incompleto' ? 'venta_incompleto'
+            : venta[1] === 'venta_falta_nombre' ? 'venta_faltan_datos' : 'venta_servicio';
+        return { motivo, detalle: em.slice(venta[0].length) || null };
+    }
+    // La escuela escribió mientras el asistente esperaba una respuesta: el comprobante quedó guardado sin aplicar.
+    if (em === MOTIVO_ESCUELA_TOMO_EN_BANDEJA) return { motivo: 'escuela_tomo', detalle: em };
     if (em.startsWith('consulta_no_comprobante')
         || ['no es un comprobante', 'no_es_comprobante_sin_contexto', 'ni comprobante ni matrícula'].includes(em)) {
         return { motivo: 'no_es_comprobante', detalle: null };
@@ -158,6 +247,9 @@ export function motivoDeFila(fila: FilaCruda): { motivo: string; detalle: string
 const MOTIVOS_DE_COBRO = new Set([
     'varios_cobros', 'monto_distinto', 'familia_sin_cuenta', 'numero_ambiguo', 'destino_ajeno',
     'otro_concepto', 'pregunta_vencida', 'esperando_familia',
+    'venta_servicio', 'venta_faltan_datos', 'venta_incompleto', 'escuela_tomo',
+    'sin_pendientes_con_pago', 'saldo_de_parcial', 'excedente_de_parcial', 'pago_partido', 'monto_distinto_aplicado',
+    'reclamo_del_cliente',
 ]);
 
 /** ¿La fila es (o puede ser) el pago de un hijo? Pura. */

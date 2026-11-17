@@ -47,6 +47,7 @@ import type { CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { hoyBogota } from './wa-cobro-desde-comprobante.service';
 import { bloqueDeCatalogoParaIa } from './whatsapp-catalogo-para-ia';
 import { permitidosDeTextoLibre } from './whatsapp-coherencia-ficha';
+import { hayValoresFijos, montosDeValoresFijos, valoresFijosDeEscuela, type ValoresFijos } from './whatsapp-precios.service';
 import {
     conNumerosIgnorados, describirViolaciones, permitidosDeTexto, permitidosDelCatalogo, unirPermitidos, verificarSalida,
     type Permitidos, type Violacion,
@@ -176,6 +177,11 @@ export function promptDeProspecto(p: {
      * prompt queda letra por letra como antes.
      */
     catalogo?: string | null;
+    /**
+     * <precios> trae la matrícula o artículos leídos de los campos de la escuela
+     * (`catalogoParaProspecto`). Sin ellos el prompt queda letra por letra como antes.
+     */
+    valoresDeCampos?: boolean;
 }): string {
     const t = p.textos ?? TEXTOS_POR_DEFECTO;
     const regla = reglaDeClaseParaPrompt(t);
@@ -198,6 +204,10 @@ export function promptDeProspecto(p: {
         conCatalogo
             ? '- Precios: solo los de <precios>, <catalogo> o la ficha, con el nombre del plan o del servicio tal cual.'
             : '- Precios: solo los de <precios> o la ficha, con el nombre del plan tal cual.',
+        ...(p.valoresDeCampos ? [
+            '- Matrícula y artículos (uniformes, kits): los valores de <precios> son los que la escuela tiene cargados y MANDAN sobre la ficha. Si la ficha trae otra cifra para la matrícula o para un artículo, usa SIEMPRE la de <precios>, con el nombre del artículo tal cual.',
+            '- Si te preguntan cuánto se paga para empezar, puedes sumar la matrícula con UN artículo de <precios> y decir el total. No sumes otras cosas, no multipliques cantidades y no des un total que mezcle la cifra de la ficha con la de <precios>.',
+        ] : []),
         ...(conCatalogo ? [
             '- Servicios (clínica, torneo, vacacional, campamento…): los datos de <catalogo> MANDAN sobre la ficha. Si la ficha y <catalogo> no coinciden en un valor, una fecha de preventa, un abono o una cuenta, usa SIEMPRE <catalogo>.',
             '- Fechas de precio de un servicio: tal cual las dice <catalogo> (p. ej. «hasta el martes 10 de noviembre; desde el miércoles 11»). Nunca las recalcules ni uses otra fecha.',
@@ -260,7 +270,7 @@ export async function redactarRespuestaDeProspecto(p: {
         const catalogo = await catalogoParaProspecto(p.schoolId, ficha, { precios: p.precios, grupos: p.grupos, atencion, textos });
         const system = promptDeProspecto({
             escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion, textos,
-            catalogo: catalogo.bloque,
+            catalogo: catalogo.bloque, valoresDeCampos: catalogo.valoresDeCampos,
         });
         // Lo que escribió después de la última respuesta ya viene en `nuevo`:
         // se saca de la transcripción para no duplicarlo.
@@ -301,7 +311,7 @@ async function redactarSeguimiento(p: Parameters<typeof redactarRespuestaDeProsp
     const catalogo = await catalogoParaProspecto(p.schoolId, ficha, { precios: p.precios, grupos: p.grupos, atencion, textos });
     const system = promptDeProspecto({
         escuela: p.escuela, ficha, estilo, grupos: p.grupos, precios: p.precios, enlace: p.enlace, atencion, textos,
-        catalogo: catalogo.bloque,
+        catalogo: catalogo.bloque, valoresDeCampos: catalogo.valoresDeCampos,
     });
     const mensajes: LlmMessage[] = [{ role: 'user', content: `<conversacion>\n${historial}\n</conversacion>\n\n<instruccion_de_la_escuela>${instruccionSeguimiento(textos)}</instruccion_de_la_escuela>` }];
     const r = await pedirAlModelo(p, system, mensajes);
@@ -328,6 +338,15 @@ export interface CatalogoParaProspecto {
     bloque: string;
     /** Montos y fechas de precio que puede decir la respuesta. */
     permitidos: Permitidos;
+    /** La escuela tiene matrícula o artículos cargados y `<precios>` los trae (solo con `wa_responder_precios`). */
+    valoresDeCampos: boolean;
+}
+
+/** Lo permitido por la matrícula y los artículos: cada valor y la suma matrícula + un artículo. Pura. */
+export function permitidosDeValoresFijos(v: ValoresFijos | null | undefined): Permitidos {
+    const out = permitidosDeTexto();
+    for (const m of montosDeValoresFijos(v)) out.montos.add(m);
+    return out;
 }
 
 /**
@@ -337,6 +356,11 @@ export interface CatalogoParaProspecto {
  * atención y la clase de prueba. Las cuentas no cuentan como montos. Una
  * lectura del catálogo y una de cuentas por tipo de servicio, solo si hay
  * servicios. Nunca lanza.
+ *
+ * Matrícula y artículos (2026-11-16): solo si llegan `extras.precios` (quien los
+ * arma ya respetó `wa_responder_precios`; apagado, llegan null y no se lee ni se
+ * permite nada nuevo). Pasan la matrícula, cada artículo y la suma matrícula + un
+ * artículo.
  */
 export async function catalogoParaProspecto(
     schoolId: string,
@@ -355,6 +379,10 @@ export async function catalogoParaProspecto(
             cuentasPorMotivo.set(motivo, []);
         }
     }));
+    let fijos: ValoresFijos | null = null;
+    if (extras.precios?.trim()) {
+        try { fijos = await valoresFijosDeEscuela(schoolId); } catch { fijos = null; }
+    }
     const bloque = items.length
         ? bloqueDeCatalogoParaIa(items, { hoy, afiliado: false, cuentas: (it) => cuentasPorMotivo.get(motivoDeServicio(it)) ?? [] })
         : '';
@@ -364,10 +392,11 @@ export async function catalogoParaProspecto(
             permitidosDeTextoLibre(ficha, items, { hoy }),
             ...items.map((it) => permitidosDeTextoLibre(it.description, items, { hoy, itemFijo: it })),
             permitidosDeTexto(extras.precios, extras.grupos, extras.atencion, extras.textos?.precio),
+            permitidosDeValoresFijos(fijos),
         ),
         [...cuentasPorMotivo.values()].flat().map((c) => c.numero),
     );
-    return { bloque, permitidos };
+    return { bloque, permitidos, valoresDeCampos: hayValoresFijos(fijos) };
 }
 
 /** La corrección que se le pide al modelo cuando su respuesta trae montos o fechas que no están. Pura. */

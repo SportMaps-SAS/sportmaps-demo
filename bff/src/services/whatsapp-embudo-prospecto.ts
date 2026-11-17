@@ -44,6 +44,7 @@ import { supabase } from '../config/supabase';
 import { enCortafuegos } from '../config/cortafuegos-simulacion';
 import {
     normalizar, leerNumeroOpcion, quiereSalirDelFlujo, fechaLegible, horaLegible, leerDia, esPreguntaDeOtroTema,
+    pareceConsultaNoNombre,
 } from './whatsapp-clase-cortesia.service';
 import { BOTON_PUERTA, leerNombreDeDeportista, leerOpcionDePuerta, leerVariosDeportistas } from './whatsapp-puerta-desconocido';
 import { quierePagarMensualidad } from './whatsapp-pagar-mensualidad';
@@ -112,6 +113,10 @@ export const PASO_EMBUDO = {
     MATRICULA: 'embudo_matricula',
     /** «¿Dónde queda?» con la clase elegida. */
     DONDE: 'embudo_donde',
+    /** «Me equivoqué de sede»: se vuelve a ofrecer la sede (o se avisa a la escuela si ya tiene cupo). */
+    CAMBIO_SEDE: 'embudo_cambio_de_sede',
+    /** Recordatorio del paso pendiente, tras contestar una pregunta a mitad del registro. */
+    RECORDATORIO: 'embudo_recordar_paso',
 } as const;
 
 export type PasoEmbudo =
@@ -149,6 +154,12 @@ export interface DatosEmbudo {
     matriculaAvisada?: boolean;
     /** La clase ya está pagada (la confirmó B4 al recibir el comprobante). */
     pagada?: boolean;
+    /** Paso (y pregunta) que ya se le recordó tras una pregunta a mitad del registro: una vez por paso. */
+    recordado?: string | null;
+    /** Instante (ms) de la última vez que el embudo habló en el paso de horarios (lista o recordatorio): frena repetir la lista y el doble envío del mismo turno. */
+    listaEn?: number;
+    /** «Solo en la mañana»: la lista se ofrece filtrada por franja del día (se conserva con «Ver más»). */
+    preferencia?: 'manana' | 'tarde' | null;
 }
 
 export interface EstadoEmbudo { paso: PasoEmbudo; datos: DatosEmbudo }
@@ -288,11 +299,58 @@ export interface CtxEmbudo {
     lugarDeLaClase?: (slotId: string) => Promise<LugarDeClase | null>;
     leerEstado?: (conversationId: string) => Promise<EstadoEmbudo | null>;
     ahora?: () => Date;
+    /**
+     * El embudo tenía una pregunta pendiente y SOLTÓ el turno porque lo que llegó es otra cosa (una
+     * pregunta de precio u horario, un comentario). Quien llama contesta por el camino de siempre y
+     * después recuerda el paso una vez (`recordatorioDePasoEmbudo`).
+     */
+    alSoltar?: (estado: EstadoEmbudo) => void;
 }
 
 // ─── Utilidades puras ────────────────────────────────────────────────────────
 
 const MAX_INTENTOS = 2;
+/** La lista de horarios no se vuelve a mandar antes de esto: se recuerda en texto, sin la lista. */
+const LISTA_REPETIR_MS = 10 * 60 * 1000;
+/** Dos mensajes sin elección dentro de esto son el MISMO turno (ráfaga / doble procesamiento): se responde una sola vez. */
+const MISMO_TURNO_MS = 2000;
+
+/** «Solo en la mañana», «por la tarde», «temprano». «Mañana» a secas es el día de mañana: no cuenta. */
+export function leerPreferenciaHoraria(texto: string | null | undefined): 'manana' | 'tarde' | null {
+    const n = normalizar(texto);
+    if (/\b(en|por|de|a) la manana\b|\bsolo (en )?(las )?mananas\b|\btemprano\b|\bhorario (de )?la manana\b/.test(n)) return 'manana';
+    if (/\b(en|por|de|a) la tarde\b|\bsolo (en )?(las )?tardes\b|\bhorario (de )?la tarde\b/.test(n)) return 'tarde';
+    return null;
+}
+
+const PALABRAS_DE_CORTESIA = new Set([
+    'gracias', 'muchas', 'mil', 'ok', 'okay', 'oki', 'okis', 'listo', 'vale', 'dale', 'perfecto', 'genial', 'bueno', 'super',
+    'entendido', 'de', 'acuerdo', 'ya', 'si', 'claro', 'chao', 'adios', 'hasta', 'luego', 'ahorita', 'despues', 'mas', 'tarde',
+    'te', 'confirmo', 'aviso', 'bien', 'amable', 'por', 'favor', 'jaja', 'jajaja', 'jeje', 'jejeje', 'hola', 'buenas', 'noches', 'dias',
+]);
+/** «Gracias», «ok», «ya te confirmo», «listo», «👍»: cortesías que no eligen nada y no merecen la lista otra vez. Pura. */
+export function esCortesiaSimple(texto: string | null | undefined): boolean {
+    const n = normalizar(texto);
+    if (!n) return /\p{Extended_Pictographic}/u.test(String(texto ?? ''));
+    const w = n.split(' ');
+    return w.length <= 5 && w.every((x) => PALABRAS_DE_CORTESIA.has(x));
+}
+
+/**
+ * Una pregunta por un evento o servicio activo del club (clínica, vacacional, torneo…): no es del embudo de la
+ * clase de prueba. Se suelta para que la conteste la rama de venta de servicio (o una persona). Pura.
+ */
+export function pideEventoOServicio(texto: string | null | undefined): boolean {
+    return /\b(clinicas?|vacacional(es)?|torneos?|campamentos?|cuadrangular(es)?|festival)\b/.test(normalizar(texto));
+}
+
+/** «21 y 22», «el 22», «dom 22 de noviembre»: días del mes escritos como elección de horario. [] si no es eso. Pura. */
+export function leerDiasDelMes(texto: string | null | undefined): number[] {
+    const n = normalizar(texto);
+    if (!n || n.split(' ').length > 8) return [];
+    if (!/^((el|los|dia|dias|dom|sab|sabado|domingo|lun|mar|mie|jue|vie|para|quiero|seria|serian) )*\d{1,2}( (y|o|al|-|,) \d{1,2})*( (de )?(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre))?$/.test(n)) return [];
+    return (n.match(/\b\d{1,2}\b/g) ?? []).map(Number).filter((x) => x >= 1 && x <= 31);
+}
 /** Filas de una lista de WhatsApp (límite de Meta). Con «Ver más» van 9 franjas. */
 const MAX_FILAS = 10;
 const MAX_FRANJAS = 45;
@@ -490,6 +548,9 @@ export function leerVarias(texto: string | null | undefined, pendientes: Pregunt
         }
         if (usado) continue;
         if (pend('nombre')) {
+            // «Me equivoqué de sede», «cuánto vale», «qué horarios manejan» no son un nombre
+            // (auditoría 8–16 nov 2026: «¡Mucho gusto, Me!»). «Me llamo …» sí lo trae.
+            if (pareceConsultaNoNombre(seg) && !/^\s*me llamo\b/i.test(seg)) continue;
             const varios = leerVariosDeportistas(seg);
             if (varios) {
                 r.respuestas.nombre = varios[0]; r.nombre = varios[0];
@@ -735,10 +796,38 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
 
     const aj = await ajustesDe(ctx);
     if (!embudoActivo(aj)) return false;
+    // «Me equivoqué de sede», «era Norte» (auditoría 8–16 nov 2026: se leía como el nombre del
+    // deportista). Es un cambio de sede: se vuelve a ofrecer conservando lo que ya contó.
+    if (!boton && estado.datos.branchId && (aj.botonesSede?.length ?? 0) > 1) {
+        const botonesSede = aj.botonesSede ?? [];
+        const sedes = (await seguro(() => ctx.sedes(botonesSede.map((b) => b.branchId)))) ?? [];
+        // En una pregunta de texto libre («¿dónde ha entrenado?» → «en otra sede del club») solo
+        // vale lo inequívoco («me equivoqué de sede», «cambiar de sede»).
+        const actual = (aj.preguntasProspecto ?? [])[estado.datos.i ?? 0];
+        const textoLibre = estado.paso === 'detalle'
+            || (estado.paso === 'pregunta' && actual?.tipo === 'texto' && actual.clave !== 'nombre');
+        const cambio = leerCambioDeSede(texto, botonesSede, sedes, estado.datos.branchId, { estricto: textoLibre });
+        if (cambio) return cambiarDeSede(ctx, aj, estado, cambio.branchId, texto);
+    }
     // «Y para matricularla qué tengo que hacer?» con el flujo abierto (Monster 2026-11-03):
     // caía al bot general, que contestaba con el modelo («paga ya la matrícula») o se
     // quedaba callado. Se contesta acá, sin perder el paso en que va.
     if (!boton && pideMatricula(texto) && await responderMatricula(ctx, aj, estado, texto)) return true;
+    const atendido = await despacharPaso(ctx, aj, estado, texto, boton);
+    // Soltó el turno con una pregunta pendiente (lo que llegó es otra conversación): quien llama lo
+    // contesta por su camino y después recuerda el paso, una vez.
+    if (!atendido && !boton && texto && PASOS_QUE_PREGUNTAN.has(estado.paso)) {
+        try { ctx.alSoltar?.(estado); } catch { /* el aviso al que llama nunca tumba el turno */ }
+    }
+    return atendido;
+}
+
+/** Pasos en los que el embudo espera un dato de la persona (los que tiene sentido recordar). */
+const PASOS_QUE_PREGUNTAN: ReadonlySet<PasoEmbudo> = new Set<PasoEmbudo>(['sede', 'pregunta', 'detalle', 'elegir_franja']);
+
+async function despacharPaso(
+    ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: EstadoEmbudo, texto: string, boton: string | null,
+): Promise<boolean> {
     switch (estado.paso) {
         case 'sede': return pasoSede(ctx, aj, estado, texto, boton);
         case 'pregunta': return pasoPregunta(ctx, aj, estado, texto, boton);
@@ -760,6 +849,108 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
     }
 }
 
+// ── Recordar el paso pendiente ──────────────────────────────────────────────
+
+/**
+ * Lo que se le recuerda a quien preguntó otra cosa a mitad del registro, para que siga donde iba.
+ * UNA vez por paso y pregunta (`datos.recordado`). null = nada que recordar. Pura.
+ */
+export function recordatorioDePasoEmbudo(
+    aj: Pick<AjustesWhatsAppEscuela, 'preguntasProspecto' | 'botonesSede'>, estado: EstadoEmbudo,
+): { texto: string; botones?: BotonInteractivo[]; enTexto?: string; clave: string } | null {
+    const d = estado.datos ?? {};
+    const preguntas = aj.preguntasProspecto ?? [];
+    const i = Math.min(Math.max(d.i ?? 0, 0), Math.max(preguntas.length - 1, 0));
+    const clave = estado.paso === 'pregunta' || estado.paso === 'detalle' ? `${estado.paso}:${i}` : estado.paso;
+    if (d.recordado === clave) return null;
+    const cabeza = 'Cuando quieras seguimos con tu registro 🙌';
+    if (estado.paso === 'sede') {
+        const botones = aj.botonesSede ?? [];
+        if (!botones.length) return null;
+        const m = mensajeDeBienvenida(null, botones, [], '');
+        return { texto: `${cabeza} Elige la sede que te queda más cerca 👇`, botones: m.botones, enTexto: m.enTexto, clave };
+    }
+    if (estado.paso === 'pregunta' && preguntas[i]) {
+        const b = botonesDePregunta(preguntas[i]);
+        return { texto: `${cabeza}\n\n${textoPregunta(preguntas, i)}`, botones: b.botones, enTexto: b.enTexto, clave };
+    }
+    if (estado.paso === 'detalle' && preguntas[i]?.detalle) return { texto: `${cabeza}\n\n${preguntas[i].detalle!.texto}`, clave };
+    if (estado.paso === 'elegir_franja' && d.lista?.length) {
+        return { texto: `${cabeza} Elige tu horario en la lista de arriba 👆 o escríbeme su número.`, clave };
+    }
+    return null;
+}
+
+// ── Cambio de sede ──────────────────────────────────────────────────────────
+
+const CAMBIO_DE_SEDE = new RegExp([
+    String.raw`\b(me equivoque|nos equivocamos|me confundi|equivocad[oa]) (de|con la|en la) sede\b`,
+    String.raw`\b(la )?otra sede\b`,
+    String.raw`\b(cambiar|cambio|cambiame|cambiemos|cambia|cambien) (de |la |a la |a otra )?sede\b`,
+    String.raw`\bsede equivocada\b`,
+    String.raw`\bno (era|es) (esa|esta|la) sede\b`,
+].join('|'));
+/** «era Norte», «no, mejor Suba», «perdón, quise decir la del norte»: corrige lo que eligió. */
+const CORRIGE_LA_SEDE = /^((no|ay|uy|upa|ups|perdon|disculpa|disculpe|mentira) )*(era|es|mejor|prefiero|queria|quise decir|me equivoque|quiero|que sea)\b/;
+
+/**
+ * ¿Pide cambiar de sede? `branchId`: la sede que nombró entre las OTRAS, la otra si solo hay dos, o
+ * null si hay que preguntarle cuál. null (el resultado) = no es un cambio de sede. Pura.
+ */
+export function leerCambioDeSede(
+    texto: string | null | undefined, botones: BotonSede[], sedes: SedeEmbudo[], actual: string | null | undefined,
+    o: { estricto?: boolean } = {},
+): { branchId: string | null } | null {
+    const n = normalizar(texto);
+    if (!n || !actual || n.split(' ').length > 14) return null;
+    const otras = botones.filter((b) => b.branchId !== actual);
+    if (!otras.length) return null;
+    const nombrada = leerSede(texto, otras, sedes);
+    const inequivoco = /\bequivo\w+ (de|con la|en la) sede\b|\bcambi\w+ (de |la |a la |a otra )?sede\b|\bsede equivocada\b/.test(n);
+    if (o.estricto && !inequivoco) return null;
+    if (CAMBIO_DE_SEDE.test(n)) return { branchId: nombrada ?? (otras.length === 1 ? otras[0].branchId : null) };
+    if (nombrada && CORRIGE_LA_SEDE.test(n) && n.split(' ').length <= 6) return { branchId: nombrada };
+    return null;
+}
+
+/**
+ * Cambia la sede conservando lo ya contestado (nombre, fecha, respuestas). Con la sede nombrada sigue
+ * de una; sin ella, vuelve a mostrar las sedes. Si ya tiene un cupo separado o la clase agendada, el
+ * cambio lo hace una persona (el cupo es de un grupo de la otra sede) y el flujo no se toca.
+ */
+async function cambiarDeSede(
+    ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: EstadoEmbudo, branchId: string | null, texto: string,
+): Promise<boolean> {
+    const botones = aj.botonesSede ?? [];
+    const preguntas = aj.preguntasProspecto!;
+    const conCupo = ['consentimiento', 'esperando_pago', 'agendada', 'reprogramar'].includes(estado.paso);
+    if (conCupo) {
+        await ctx.enviar('Claro 🙌 Como ya tienes un horario elegido, le pasé tu mensaje a la escuela para cambiarte de sede. Te responden por aquí.',
+            PASO_EMBUDO.CAMBIO_SEDE, { paso: estado.paso, datos: estado.datos });
+        await seguro(() => ctx.avisarEscuela('pide_persona',
+            [estado.datos.nombre ? `Interesado: ${estado.datos.nombre}.` : '', `Pide cambiar de sede con el horario ya elegido: «${recortar(texto, 160)}».`]
+                .filter(Boolean).join(' ')));
+        return true;
+    }
+    // Lo del grupo y la lista de horarios era de la sede anterior: se vuelve a calcular.
+    const base: DatosEmbudo = {
+        ...estado.datos, teamId: null, grupo: null, profe: null, lista: undefined, desde: undefined, intentos: 0, recordado: null,
+    };
+    const nuevo = branchId ? botones.find((b) => b.branchId === branchId) : null;
+    if (!nuevo) {
+        const otras = botones.filter((b) => b.branchId !== estado.datos.branchId);
+        const opciones: BotonInteractivo[] = otras.map((b) => ({ id: `${BOTON_EMBUDO.SEDE}${b.branchId}`, title: b.titulo }));
+        await ctx.enviar('Sin problema 🙌 ¿Cuál sede prefieres?', PASO_EMBUDO.CAMBIO_SEDE, { paso: 'sede', datos: base }, opciones,
+            `Responde ${otras.map((b) => `*${sinEmojis(b.titulo)}*`).join(', ').replace(/, ([^,]*)$/, ' o $1')}.`);
+        return true;
+    }
+    const d: DatosEmbudo = { ...base, branchId: nuevo.branchId, sedeTitulo: nuevo.titulo, respuestas: base.respuestas ?? {} };
+    const cabeza = `Listo, te cambio a la *${sinEmojis(nuevo.titulo)}* 🙌`;
+    const siguiente = siguientePendiente(preguntas, d.respuestas!, 0);
+    if (siguiente == null) return terminarPreguntas(ctx, aj, d, cabeza);
+    return preguntar(ctx, preguntas, { ...d, i: siguiente }, cabeza);
+}
+
 // ── Sede ────────────────────────────────────────────────────────────────────
 
 async function pasoSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: EstadoEmbudo, texto: string, boton: string | null): Promise<boolean> {
@@ -771,7 +962,9 @@ async function pasoSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: Esta
     if (branchId) return elegirSede(ctx, aj, branchId, estado.datos);
     // Una pregunta (también sin «?»: «cuanto vale la mensualidad») o una frase larga es
     // otra conversación: la contesta el bot general.
-    if (texto.includes('?') || texto.split(/\s+/).length > 7 || esOtroTema(texto)) return false;
+    // «Dame información», «Horarios, costos» (auditoría 8–16 nov 2026: recibían «Elige la sede…»):
+    // también son otra conversación.
+    if (texto.includes('?') || texto.split(/\s+/).length > 7 || esOtroTema(texto) || pareceConsultaNoNombre(texto) || pideEventoOServicio(texto)) return false;
     const intentos = (estado.datos.intentos ?? 0) + 1;
     if (intentos >= MAX_INTENTOS) return aPersona(ctx, estado.datos, 'no_entendio', 'No eligió sede.');
     const m = mensajeDeBienvenida(null, botones, [], '');
@@ -861,7 +1054,10 @@ async function pasoPregunta(
     // «cuanto vale la mensualidad» en la pregunta del nombre se leía como nombre («¡Mucho
     // gusto, Cuanto!»). Una pregunta de otro tema sin «?» de la que no salió más que un
     // «nombre» es otra conversación: la contesta el bot y el paso queda donde iba.
-    if (!boton && esOtroTema(texto) && Object.keys(leidas.respuestas).every((k) => k === 'nombre')) return false;
+    if (!boton && (esOtroTema(texto) || pideEventoOServicio(texto)) && Object.keys(leidas.respuestas).every((k) => k === 'nombre')) return false;
+    // En la pregunta del nombre, una consulta o un pedido («quiero saber algo», «me regalas los
+    // horarios») de la que no salió ningún dato tampoco es un intento fallido: la contesta el bot.
+    if (!boton && p.clave === 'nombre' && !Object.keys(leidas.respuestas).length && pareceConsultaNoNombre(texto)) return false;
     const d = aplicar(estado.datos, leidas, preguntas);
     if (!(p.clave in leidas.respuestas)) {
         // Un mensaje que es otra conversación («¿cuánto vale?») no gasta un intento: lo contesta el bot.
@@ -869,7 +1065,8 @@ async function pasoPregunta(
         // Pidiendo la fecha de nacimiento, otro NOMBRE completo es el segundo deportista que quiere
         // inscribir (Monster 2026-11-09: el segundo nombre recibía «necesito la fecha»): se anota para después
         // y se sigue con el primero, sin gastar un intento.
-        if (!boton && p.tipo === 'fecha' && !Object.keys(leidas.respuestas).length && d.nombre && !esOtroTema(texto)) {
+        if (!boton && p.tipo === 'fecha' && !Object.keys(leidas.respuestas).length && d.nombre && !esOtroTema(texto)
+            && !pareceConsultaNoNombre(texto)) {
             const otro = leerNombreDeDeportista(texto);
             if (otro && otro.nombre.split(' ').length >= 2 && normalizar(otro.nombre) !== normalizar(d.nombre)) {
                 const previos = String(d.respuestas?.otros_deportistas ?? '').split(', ').filter(Boolean);
@@ -1012,12 +1209,33 @@ async function pasoOtraSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: 
     return terminarPreguntas(ctx, aj, { ...estado.datos, branchId: b.branchId, sedeTitulo: b.titulo }, '');
 }
 
-async function ofrecerFranjas(ctx: CtxEmbudo, d: DatosEmbudo, encabezado: string): Promise<boolean> {
+async function ofrecerFranjas(
+    ctx: CtxEmbudo, d: DatosEmbudo, encabezado: string,
+    o: { intentos?: number; soloDias?: number[] } = {},
+): Promise<boolean> {
     if (!d.teamId) return aPersona(ctx, d, 'sin_grupo', 'Sin grupo asignado.');
     const clase = await claseDe(ctx);
-    const todas = franjasOfrecibles((await seguro(() => ctx.franjas(d.teamId!))) ?? [], {
+    const abiertas = franjasOfrecibles((await seguro(() => ctx.franjas(d.teamId!))) ?? [], {
         ahora: hoyDe(ctx), diasSemana: clase?.diasSemana ?? null, excluir: d.cambio ? d.slotId : null,
     }).map((f) => ({ ...f, profe: f.profe ?? d.profe ?? null }));
+    // Preferencia de franja del día o días del mes pedidos: filtra si hay horarios que la cumplan; si no, lo dice y
+    // muestra los que hay.
+    const cumple = (f: FranjaEmbudo): boolean => {
+        const h = Number(f.horaInicio.split(':')[0]);
+        if (d.preferencia === 'manana' && h >= 12) return false;
+        if (d.preferencia === 'tarde' && h < 12) return false;
+        if (o.soloDias?.length && !o.soloDias.includes(partesFecha(f.fecha).d)) return false;
+        return true;
+    };
+    const filtrando = Boolean(d.preferencia || o.soloDias?.length);
+    let todas = filtrando ? abiertas.filter(cumple) : abiertas;
+    let datosLista = d;
+    if (filtrando && !todas.length && abiertas.length) {
+        const que = o.soloDias?.length ? `esos días (${o.soloDias.join(' y ')})` : d.preferencia === 'manana' ? 'la mañana' : 'la tarde';
+        encabezado = `Para ${que} no tengo horarios abiertos para *${d.grupo ?? 'ese grupo'}* 😕 Estos son los que hay:`;
+        todas = abiertas;
+        datosLista = { ...d, preferencia: null };
+    }
     if (!todas.length) {
         return aPersona(ctx, d, 'sin_horarios', `Sin horarios abiertos para ${d.grupo ?? 'su grupo'}.`,
             `${encabezado ? `${encabezado}\n\n` : ''}Por ahora no tengo horarios abiertos para *${d.grupo ?? 'ese grupo'}*. ` +
@@ -1032,7 +1250,7 @@ async function ofrecerFranjas(ctx: CtxEmbudo, d: DatosEmbudo, encabezado: string
     const enTexto = pagina.map((f, k) => `${k + 1}. ${filaDeFranja(f, null).title}${f.lugar ? ` (${f.lugar})` : ''}`).join('\n') +
         '\nResponde con el número del horario.';
     await ctx.enviar(`${encabezado ? `${encabezado}\n\n` : ''}Estos son los próximos horarios 👇`, PASO_EMBUDO.HORARIOS,
-        { paso: 'elegir_franja', datos: { ...d, lista: pagina.map((f) => f.id), desde, intentos: 0 } }, filas, enTexto);
+        { paso: 'elegir_franja', datos: { ...datosLista, lista: pagina.map((f) => f.id), desde, intentos: o.intentos ?? 0, listaEn: hoyDe(ctx).getTime() } }, filas, enTexto);
     return true;
 }
 
@@ -1056,13 +1274,54 @@ async function pasoFranja(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: string, b
             }
         }
     }
+    if (!slotId && !boton) {
+        // Un evento o servicio activo (clínica, vacacional…) no es de la clase de prueba: no se sigue
+        // empujando horarios, lo contesta la venta de servicio o una persona.
+        if (pideEventoOServicio(texto)) return false;
+        // «Solo en la mañana»: filtra la lista (o dice que no hay) en vez de repetirla igual.
+        const pref = leerPreferenciaHoraria(texto);
+        if (pref) return ofrecerFranjas(ctx, { ...d, desde: 0, preferencia: pref, intentos: 0 }, '');
+        // «21 y 22», «el 22»: uno solo se toma; varios se muestran; ninguno, se dice.
+        const dias = leerDiasDelMes(texto);
+        if (dias.length) {
+            const enLista = ((await seguro(() => ctx.franjas(d.teamId ?? ''))) ?? []).filter((f) => lista.includes(f.id) && dias.includes(partesFecha(f.fecha).d));
+            if (enLista.length === 1) return tomar(ctx, d, enLista[0].id);
+            return ofrecerFranjas(ctx, { ...d, desde: 0, intentos: 0 }, enLista.length ? 'Para esos días tengo estos horarios.' : '', { soloDias: dias });
+        }
+    }
     if (!slotId) {
         // Otra conversación («cuanto vale la mensualidad», sin «?»): la contesta el bot sin
         // gastar un intento, como en la sede y en las preguntas.
         if (texto.includes('?') || texto.split(/\s+/).length > 7 || esOtroTema(texto)) return false;
+        // «Y son principiantes», «Que cuesta», «Oye una pregunta», «Tiene 13 años» (auditoría 8–16 nov
+        // 2026: la misma lista 6 veces en 4 minutos). Lo que no es una elección no se contesta
+        // repitiendo la lista: lo contesta el bot y el paso se recuerda una vez.
+        if (!esCortesiaSimple(texto) && (pareceConsultaNoNombre(texto) || (texto.match(/\p{L}{2,}/gu) ?? []).length >= 3)) return false;
+        const ahoraMs = hoyDe(ctx).getTime();
+        const desdeLista = d.listaEn != null ? ahoraMs - d.listaEn : Infinity;
+        // Mismo turno: dos mensajes sin elección pegados (ráfaga o doble procesamiento) → una sola respuesta.
+        if (desdeLista >= 0 && desdeLista < MISMO_TURNO_MS) return true;
+        // Gracias / ok / «ya te confirmo»: una cortesía no es una elección ni un intento fallido. Se agradece
+        // UNA vez y la lista no se vuelve a mandar (auditoría 14–17 nov 2026, Mariana: «Gracias» → la lista otra vez).
+        if (esCortesiaSimple(texto)) {
+            if (d.recordado === 'elegir_franja') return true;
+            await ctx.enviar('¡Con gusto! 🙌 Cuando quieras, elige tu horario en la lista de arriba 👆 o escríbeme su número.',
+                PASO_EMBUDO.RECORDATORIO, { paso: 'elegir_franja', datos: { ...d, recordado: 'elegir_franja', listaEn: ahoraMs } });
+            return true;
+        }
         const intentos = (d.intentos ?? 0) + 1;
-        if (intentos >= MAX_INTENTOS) return aPersona(ctx, d, 'no_entendio', 'No eligió horario.');
-        return ofrecerFranjas(ctx, { ...d, intentos }, 'Elige uno de los horarios de la lista 👇');
+        // Segundo texto seguido sin elegir: una persona de la escuela lo atiende y se le avisa.
+        if (intentos >= MAX_INTENTOS) {
+            return aPersona(ctx, d, 'no_entendio', 'No eligió horario.',
+                'Listo, ya le pasé tus datos a la escuela y alguien te escribe por aquí 🙌 Si prefieres seguir tú, elige tu horario en la lista de arriba 👆');
+        }
+        // La lista no se repite si salió hace poco: se recuerda en texto. El intento QUEDA contado.
+        if (desdeLista < LISTA_REPETIR_MS) {
+            await ctx.enviar('Para agendar, elige tu horario en la lista de arriba 👆 o escríbeme su número. Si prefieres que te ayude una persona, dímelo 🙌',
+                PASO_EMBUDO.RECORDATORIO, { paso: 'elegir_franja', datos: { ...d, intentos, recordado: 'elegir_franja', listaEn: ahoraMs } });
+            return true;
+        }
+        return ofrecerFranjas(ctx, { ...d, intentos }, 'Elige uno de los horarios de la lista 👇', { intentos });
     }
     return tomar(ctx, d, slotId);
 }
@@ -1101,7 +1360,7 @@ async function tomar(ctx: CtxEmbudo, d: DatosEmbudo, slotId: string): Promise<bo
         return aPersona(ctx, d, 'error', 'No se pudo tomar el cupo.',
             'Ya le pasé tus datos a la escuela para que te confirme el horario por aquí 🙌');
     }
-    const datos: DatosEmbudo = { ...d, slotId, hasta: r?.hasta ?? null, lista: undefined, desde: undefined, intentos: 0 };
+    const datos: DatosEmbudo = { ...d, slotId, hasta: r?.hasta ?? null, lista: undefined, desde: undefined, intentos: 0, listaEn: undefined, preferencia: null };
     if (estado === 'agendada') {
         const c = await seguro(() => ctx.confirmarAgenda({ leadId: d.leadId!, slotId, evento: d.cambio ? 'cambiada' : 'agendada' }));
         await ctx.enviar(c?.texto ?? 'Tu clase quedó agendada 🎉 La escuela te confirma los detalles por aquí.',

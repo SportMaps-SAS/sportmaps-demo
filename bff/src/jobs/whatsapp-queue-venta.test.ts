@@ -456,7 +456,14 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
-const TEXTO_PREGUNTA = 'Recibí tu comprobante de *$300.000* 📄 ¿Cuál es el nombre completo de quien asiste a la *Clínica de armadores y atacantes*?';
+// (2026-11-16) Los datos de registro son obligatorios: la pregunta pide, en UN mensaje, lo que falta (antes solo el
+// nombre: «¿Cuál es el nombre completo de quien asiste a la *Clínica…*?»).
+const TEXTO_PREGUNTA = 'Recibí tu comprobante de *$300.000* 📄 Para completar la inscripción a *Clínica de armadores y atacantes* '
+    + 'necesito estos datos de quien asiste:\n1. Nombre completo\n2. Fecha de nacimiento (día/mes/año)\n'
+    + 'Si es menor de edad, también el nombre de la persona responsable.\nPuedes escribirlos en un solo mensaje.';
+/** (2026-11-16) El pago se registra con el nombre; lo que falta para la inscripción se pide en la MISMA respuesta. */
+const PIDE_FECHA = '\n\nPara completar la inscripción a *Clínica de armadores y atacantes* solo me falta la fecha de nacimiento (día/mes/año).\n'
+    + 'Si es menor de edad, también el nombre de la persona responsable.';
 const TEXTO_RECIBIDO_NICOLAS = 'Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
     + '*Nicolás Cubides Ávila*. La escuela lo valida y te confirma el cupo por aquí.';
 
@@ -554,7 +561,7 @@ describe('(a) Nicolás, Clínica de armadores (ficha pegada por la escuela 4 dí
         await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00', { media_caption: 'Pago clínica a nombre de Nicolás Cubides Ávila' }),
             comprobante(300000), 'A');
         expect(crearLlamadas()).toEqual([expect.objectContaining({ p_concepto: 'Clínica de armadores y atacantes — Nicolás Cubides Ávila' })]);
-        expect(textosEnviados()).toEqual([TEXTO_RECIBIDO_NICOLAS]);
+        expect(textosEnviados()).toEqual([TEXTO_RECIBIDO_NICOLAS + PIDE_FECHA]);
     });
 
     it('lo que no es un nombre («¿a qué hora es?») no consume la respuesta: la pregunta sigue abierta', async () => {
@@ -621,7 +628,7 @@ describe('(b) abono de $150.000 → cobro parcial; el saldo de $150.000 va al MI
         expect(pago).toMatchObject({ amount: 300000, status: 'awaiting_approval', ocr_amount: 150000 });
         expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled(); // un abono lo aprueba una persona
         expect(textosEnviados()).toEqual(['Recibí tu abono de *$150.000* para la *Clínica de armadores y atacantes* a nombre de '
-            + '*Sara Gómez*. Quedan *$150.000* para completar *$300.000*. La escuela lo valida y te confirma el cupo por aquí.']);
+            + '*Sara Gómez*. Quedan *$150.000* para completar *$300.000*. La escuela lo valida y te confirma el cupo por aquí.' + PIDE_FECHA]);
         expect(fila('f1').error_message).toMatch(/^abono_en_revision: Clínica de armadores y atacantes — abono de \$150\.000 de \$300\.000/);
 
         // La escuela aprueba el abono.
@@ -637,7 +644,7 @@ describe('(b) abono de $150.000 → cobro parcial; el saldo de $150.000 va al MI
         // El saldo pasa por la evaluación de siempre (como el saldo por el enlace /p/:token).
         expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pago.id, undefined);
         expect(textosEnviados()[1]).toBe('Recibí el saldo de *$150.000* para la *Clínica de armadores y atacantes* a nombre de '
-            + '*Sara Gómez*: con esto completas *$300.000*. La escuela lo valida y te confirma el cupo por aquí.');
+            + '*Sara Gómez*: con esto completas *$300.000*. La escuela lo valida y te confirma el cupo por aquí.' + PIDE_FECHA);
     });
 
     it('el saldo llega con el abono todavía en revisión: no se estampa encima; a la escuela con la propuesta', async () => {
@@ -704,7 +711,7 @@ describe('(d) pagó $300.000 el 10-nov (preventa) y se procesa el 11-nov (ya rig
         await procesar(foto('f1', 'pre', '2026-11-11T09:59:00-05:00'), comprobante(300000, { reference: 'PV1', date: '2026-11-10' }), 'pre');
         expect(crearLlamadas()).toHaveLength(0); // la RPC cobraría el precio de HOY (y lo dejaría como abono)
         expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
-            + '*Ana Torres*. La escuela lo valida y te confirma el cupo por aquí.']);
+            + '*Ana Torres*. La escuela lo valida y te confirma el cupo por aquí.' + PIDE_FECHA]);
         expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
         expect(fila('f1').error_message).toMatch(/^venta_tramo_por_fecha_de_pago: \$300\.000 pagados el 2026-11-10 para Clínica de armadores y atacantes: era el valor de ese día \(\$300\.000\); hoy es \$350\.000/);
         expect(fila('f1').error_message).toContain('crear el cobro por $300.000 y aplicar este comprobante');
@@ -855,9 +862,9 @@ describe('PRIVACIDAD — número sin verificar (Ethann, bd8a1532): nunca nombres
     const PROHIBIDO_DE_OTRA_FAMILIA = /laura|sof[ií]a|sanchez|155\.000/i;
 
     /** Las fotos y el texto del 05-nov 18:33. */
-    async function comprobanteDeEthann() {
+    async function comprobanteDeEthann(texto = 'Envío el comprobante de pago de Ethann Pedraza.') {
         enHora('2026-11-05T18:34:00-05:00');
-        mensaje('inbound', 'Envío el comprobante de pago de Ethann Pedraza.', '2026-11-05T18:33:45-05:00');
+        mensaje('inbound', texto, '2026-11-05T18:33:45-05:00');
         mensaje('inbound', null, '2026-11-05T18:33:49-05:00');
         await procesar(foto('e1', 'ethann-117750', '2026-11-05T18:33:49-05:00'), OCR_ETHANN(), 'ethann-117750');
     }
@@ -880,8 +887,10 @@ describe('PRIVACIDAD — número sin verificar (Ethann, bd8a1532): nunca nombres
         h.tabla('unregistered_athletes').push({ ...LAURA });
         h.tabla('children').push({ ...ETHANN });
         h.tabla('payments').push({ ...COBRO_LAURA }, { ...COBRO_ETHANN });
-        await comprobanteDeEthann();
-        // «Ethann Pedraza» es parcial (2 de 4 palabras): no liga nada, pregunta escrita.
+        // (R5, auditoría 1–16 nov 2026) El primer texto ya no nombra a «Ethann Pedraza»: con nombre + apellido y un
+        // cobro abierto por ese monto la regla nueva NO pregunta (va a la bandeja con la propuesta; caso de abajo).
+        // Acá se sigue probando lo de siempre: sin nombre se pregunta, y SOLO el nombre completo liga el comprobante.
+        await comprobanteDeEthann('Envío el comprobante de pago.');
         expect(textosEnviados()).toEqual(['Recibí tu comprobante 📄 ¿De qué deportista es este pago? Escríbeme su nombre completo.']);
         sendTextMessageMock.mockClear();
         enHora('2026-11-05T18:55:10-05:00');
@@ -899,12 +908,31 @@ describe('PRIVACIDAD — número sin verificar (Ethann, bd8a1532): nunca nombres
         h.state.accion = 'approved';
         h.tabla('children').push({ ...ETHANN });
         h.tabla('payments').push({ ...COBRO_ETHANN });
-        await comprobanteDeEthann();
+        // Sin nombre en el primer texto (ver el caso anterior): la pregunta sale y el nombre completo liga.
+        await comprobanteDeEthann('Envío el comprobante de pago.');
         enHora('2026-11-05T18:55:10-05:00');
         const bot = responderDelBot();
         await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'ETHANN MATÍAS PEDRAZA PINTO', bot.fn as any);
         expect(evaluatePaymentReceiptMock).toHaveBeenCalledTimes(1);
         expect(bot.enviados.map((e) => e.texto)).toEqual(['¡Listo! ✅ Quedó registrado tu pago de *$117.750*. Gracias.']);
+    });
+
+    it('(R5) «…comprobante de pago de Ethann Pedraza» (nombre + apellido, única coincidencia) con un cobro abierto de $117.750: NO se pregunta ni se aplica solo → ACCIÓN con la propuesta exacta; a él, nada del menor', async () => {
+        h.tabla('unregistered_athletes').push({ ...LAURA });
+        h.tabla('children').push({ ...ETHANN });
+        h.tabla('payments').push({ ...COBRO_LAURA }, { ...COBRO_ETHANN });
+        await comprobanteDeEthann();
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+        expect(pagos().find((p) => p.id === COBRO_ETHANN.id)).toMatchObject({ status: 'pending' });
+        expect(pagos().find((p) => p.id === COBRO_LAURA.id)).toMatchObject({ status: 'pending' });
+        expect(textosEnviados()).toEqual(['Gracias 🙏 Le paso tu comprobante a la escuela para que lo revise y te confirme por aquí.']);
+        for (const t of textosEnviados()) expect(t).not.toMatch(/ethann|pedraza|noviembre|mensualidad|laura/i);
+        const f = fila('e1');
+        expect(f).toMatchObject({ status: 'ignored', result_type: 'escalated', matched_child_id: ETHANN.id });
+        expect(f.error_message).toMatch(/^sin_familia: numero_fuera_de_la_ficha — parece el pago de noviembre de Ethann Matías Pedraza Pinto: \$117\.750; el número no está en su ficha/);
+        expect(f.error_message).toContain(`aplicar al cobro ${COBRO_ETHANN.id}`);
+        expect(f.error_message).toContain('ligar el número');
+        expect(f.pregunta_ocr).toMatchObject({ sha: expect.any(String), ocr: { amount: 117750, originName: 'JOHN PEDRAZA' } });
     });
 
     it('nombre completo pero el monto no es el de UN cobro abierto suyo → a la bandeja LIGADA al deportista y con la propuesta (nunca huérfana); a él, nada del menor', async () => {
@@ -954,7 +982,7 @@ describe('aprobación automática: cada camino de comprobante del bot pasa por e
         const pago = pagos()[0];
         expect(evaluatePaymentReceiptMock).toHaveBeenCalledWith(pago.id, undefined);
         expect(textosEnviados()).toEqual(['¡Listo! ✅ Quedó registrado tu pago de *$300.000* para la *Clínica de armadores y atacantes* '
-            + 'a nombre de *Nicolás Cubides Ávila*. Tu cupo está confirmado.']);
+            + 'a nombre de *Nicolás Cubides Ávila*. Tu cupo está confirmado.' + PIDE_FECHA]);
     });
 
     it('venta de un servicio, la respuesta al nombre de quien asiste: también se evalúa', async () => {
@@ -989,7 +1017,7 @@ describe('aprobación automática: cada camino de comprobante del bot pasa por e
         conversacionDeNicolas();
         enHora('2026-11-08T11:57:30-05:00');
         await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
-        expect(textosEnviados()).toEqual([TEXTO_RECIBIDO_NICOLAS]);
+        expect(textosEnviados()).toEqual([TEXTO_RECIBIDO_NICOLAS + PIDE_FECHA]);
         expect(crearLlamadas()).toEqual([expect.objectContaining({ p_signup_lead_id: 'lead-nico', p_concepto: 'Clínica de armadores y atacantes — Nicolás Cubides Ávila' })]);
     });
 
@@ -1088,5 +1116,566 @@ describe('el nombre de quien asiste (puro)', () => {
         expect(ficha.paraElServicio('Monster Cup')).toBe('para *Monster Cup*');
         expect(job.textoVentaNoCuadra(15000, 'Vacacional de verano', [200000, 380000], null))
             .toBe('Recibí tu comprobante de *$15.000* 📄 No coincide con el valor del *Vacacional de verano* (*$200.000* o *$380.000*); la escuela lo revisa y te confirma por aquí.');
+    });
+});
+
+// ─── Datos de registro en la venta (2026-11-16): memoria por chat, la escuela en el chat, captura incompleta ───
+//
+// Tres ventas perdidas en Monster el 15-nov (ver services/caso-*.test.ts). Reglas: ningún comprobante de una venta
+// se descarta en silencio (R1); nombre + fecha de nacimiento (+ responsable si es menor) son obligatorios para la
+// inscripción pero no retienen el pago (R2); lo que ya se sabe no se vuelve a pedir (R3); segunda compra →
+// confirmación (R4); la escuela escribiendo no pierde el pago (R5); captura sin fecha ni número → acción (R7).
+
+describe('datos de registro en la venta (R1–R7)', () => {
+    const NOTA = 'Jesús Giovanni Solarte Chala Posición: Armador Año de nacimiento: 22/06/2007 Pago: apartar el cupo';
+    const reg = () => import('../services/wa-registro-de-venta.service');
+    const lead = () => h.tabla('school_signup_leads')[0];
+
+    it('(R3b) la nota del comprobante trae nombre, posición y fecha: no se pregunta nada; el cobro sale directo y la ficha guarda los datos', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000, { description: NOTA }), 'A');
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+            + '*Jesús Giovanni Solarte Chala*. La escuela lo valida y te confirma el cupo por aquí.']);
+        expect(pagos()).toHaveLength(1);
+        expect(lead()).toMatchObject({ full_name: 'Jesús Giovanni Solarte Chala', birth_date: '2007-06-22', respuestas: { posicion: 'armador' } });
+        expect(lead().source_detail.asistente_servicio).toMatchObject({ nombre: 'Jesús Giovanni Solarte Chala', servicio_id: CLINICA_ID, faltan: [] });
+    });
+
+    it('(R3c) el nombre ya venía en el primer mensaje de la venta: no se pregunta el nombre; el cobro se crea y se pide SOLO lo que falta', async () => {
+        conversacionDeNicolas();
+        mensaje('inbound', 'Hola buenas noches. Interesadísimas clínica de armadores (21 y 22 de noviembre).\nGabriela Covaleda García\n13 años 6 meses', '2026-11-08T11:50:00-05:00');
+        mensaje('inbound', 'Separar mi cupo', '2026-11-08T11:51:00-05:00');
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        expect(crearLlamadas()).toEqual([expect.objectContaining({ p_concepto: 'Clínica de armadores y atacantes — Gabriela Covaleda García' })]);
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+            + '*Gabriela Covaleda García*. La escuela lo valida y te confirma el cupo por aquí.\n\n'
+            + 'Para completar la inscripción a *Clínica de armadores y atacantes* necesito estos datos de quien asiste:\n'
+            + '1. Fecha de nacimiento (día/mes/año)\n2. Nombre de la persona responsable (mamá, papá o acudiente)\nPuedes escribirlos en un solo mensaje.']);
+        // Lo que falta queda marcado en la ficha; el pago NO se retuvo.
+        expect(lead().source_detail.asistente_servicio).toMatchObject({ nombre: 'Gabriela Covaleda García', edad: 13, solo_edad: true, faltan: ['fecha_nacimiento', 'acudiente'] });
+        expect(fila('f1')).toMatchObject({ status: 'done', result_type: 'payment_receipt' });
+    });
+
+    it('(R3a) los datos ya guardados en la ficha (misma venta): ni se pregunta ni se pide nada', async () => {
+        h.tabla('school_signup_leads').push({
+            id: 'lead-gabi', school_id: ESCUELA, phone: '3017517726', status: 'respondido', full_name: 'Gabriela Covaleda García',
+            birth_date: '2013-05-10', guardian_name: 'Brady Luz',
+            source_detail: { asistente_servicio: { nombre: 'Gabriela Covaleda García', servicio_id: CLINICA_ID } }, created_at: iso('2026-11-08T11:00:00-05:00'),
+        });
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+            + '*Gabriela Covaleda García*. La escuela lo valida y te confirma el cupo por aquí.']);
+        expect(pagos()).toHaveLength(1);
+    });
+
+    it('(R2) la respuesta trae solo el nombre: el cobro se crea igual y en la MISMA respuesta se pide la fecha; lo que falta queda en la ficha', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        expect(textosEnviados()).toEqual([TEXTO_PREGUNTA]);
+        expect(salientes()[0].payload).toMatchObject({ step: 'ask_asistente_servicio', faltan_datos: ['nombre', 'fecha_nacimiento'] });
+        enHora('2026-11-08T11:59:00-05:00');
+        const bot = responderDelBot();
+        expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Mateo Rincón Díaz', bot.fn as any)).toBe(true);
+        expect(pagos()).toHaveLength(1);
+        expect(bot.enviados).toHaveLength(1);
+        expect(bot.enviados[0].texto).toBe('Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+            + '*Mateo Rincón Díaz*. La escuela lo valida y te confirma el cupo por aquí.' + PIDE_FECHA);
+        expect(lead().source_detail.asistente_servicio).toMatchObject({ nombre: 'Mateo Rincón Díaz', faltan: ['fecha_nacimiento'] });
+    });
+
+    it('(R2) nombre en la segunda línea + fecha de un menor + «mamá: …»: cobro creado, datos en la ficha, nada pendiente', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+        enHora('2026-11-08T11:59:00-05:00');
+        const bot = responderDelBot();
+        expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL,
+            'Comparto soporte del pago de la clínica.\nGabriela Covaleda García\n10/05/2013\nMamá: Brady Luz', bot.fn as any)).toBe(true);
+        expect(bot.enviados.map((e) => e.texto)).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+            + '*Gabriela Covaleda García*. La escuela lo valida y te confirma el cupo por aquí.']);
+        expect(lead()).toMatchObject({ full_name: 'Gabriela Covaleda García', birth_date: '2013-05-10', guardian_name: 'Brady Luz' });
+    });
+
+    describe('(R5) una persona de la escuela escribe mientras el bot espera los datos', () => {
+        async function preguntaYEscuela() {
+            conversacionDeNicolas();
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+            expect(fila('f1')).toMatchObject({ status: 'waiting_user' });
+            mensaje('outbound', 'Por favor los datos puestos en el comprobante deben ser escritos por acá muchas gracias', '2026-11-08T12:37:00-05:00');
+            enHora('2026-11-08T12:53:00-05:00');
+        }
+
+        it('y después llegan datos válidos: el cobro queda creado y el bot NO le habla encima', async () => {
+            await preguntaYEscuela();
+            const bot = responderDelBot();
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL,
+                'Jesús Giovanni Solarte Chala \nPosición: Armador\nAño de nacimiento: 22/06/2007', bot.fn as any)).toBe(true);
+            expect(bot.fn).not.toHaveBeenCalled();
+            expect(textosEnviados()).toEqual([TEXTO_PREGUNTA]);        // nada nuevo salió por WhatsApp
+            expect(pagos()).toHaveLength(1);
+            expect(pagos()[0]).toMatchObject({ amount: 300000, status: 'awaiting_approval', concept: 'Clínica de armadores y atacantes — Jesús Giovanni Solarte Chala' });
+            expect(fila('f1')).toMatchObject({ status: 'done', result_type: 'payment_receipt' });
+            expect(lead()).toMatchObject({ full_name: 'Jesús Giovanni Solarte Chala', birth_date: '2007-06-22' });
+        });
+
+        it('y después llega «gracias»: la fila queda en la bandeja como ACCIÓN, con monto, servicio y propuesta', async () => {
+            await preguntaYEscuela();
+            const bot = responderDelBot();
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Buenas tardes, gracias', bot.fn as any)).toBe(true);
+            expect(bot.fn).not.toHaveBeenCalled();
+            expect(pagos()).toHaveLength(0);
+            expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+            expect(fila('f1').error_message).toMatch(/^venta_falta_nombre: comprobante de \$\s?300\.000 para Clínica de armadores y atacantes; la escuela escribió en el chat/);
+            expect(fila('f1').error_message).toContain('Propuesta → pagó: JUAN CUBIDES · asiste: sin nombre');
+            // El comprobante sigue guardado en la fila (la escuela lo aplica desde la bandeja).
+            expect(fila('f1').pregunta_ocr.ocr).toMatchObject({ amount: 300000 });
+            const { clasificarFila } = await import('../services/whatsapp-bandeja.service');
+            expect(clasificarFila(fila('f1'), 'desconocido', false)).toMatchObject({ grupo: 'accion', motivo: 'venta_faltan_datos' });
+        });
+    });
+
+    describe('(R4) segunda compra desde el mismo chat', () => {
+        const VACACIONAL_ID = 'aaaaaaaa-1111-4222-8333-444444444444';
+        function yaComproElVacacional() {
+            h.tabla('school_signup_leads').push({
+                id: 'lead-gabi', school_id: ESCUELA, phone: '3017517726', status: 'respondido', full_name: 'Gabriela Covaleda García',
+                birth_date: '2013-05-10', guardian_name: 'Brady Luz',
+                source_detail: { asistente_servicio: { nombre: 'Gabriela Covaleda García', servicio_id: VACACIONAL_ID } },
+                created_at: iso('2026-11-01T11:00:00-05:00'),
+            });
+            conversacionDeNicolas();
+        }
+        const PREGUNTA_MISMA = 'Recibí tu comprobante de *$300.000* 📄 ¿Es para *Gabriela Covaleda García*, como la vez pasada?';
+
+        it('la ficha ya tiene a quien asistió a OTRO servicio: no pide todo de nuevo, confirma con [Sí] [Es para otra persona]', async () => {
+            yaComproElVacacional();
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+            expect(textosEnviados()).toEqual([PREGUNTA_MISMA]);
+            expect(sendInteractiveButtonsMock.mock.calls[0][3]).toEqual([{ id: 'sm_asiste_si', title: 'Sí' }, { id: 'sm_asiste_otra', title: 'Es para otra persona' }]);
+            expect(fila('f1')).toMatchObject({ status: 'waiting_user', pregunta_ocr: { tipo: 'asistente_servicio', venta: { confirmar: { nombre: 'Gabriela Covaleda García' } } } });
+            expect(pagos()).toHaveLength(0);
+
+            // «Sí» (el botón o escrito): los datos guardados; nada más que pedir.
+            enHora('2026-11-08T11:59:00-05:00');
+            const bot = responderDelBot();
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Sí', bot.fn as any)).toBe(true);
+            expect(pagos()).toHaveLength(1);
+            expect(pagos()[0].concept).toBe('Clínica de armadores y atacantes — Gabriela Covaleda García');
+            expect(bot.enviados.map((e) => e.texto)).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+                + '*Gabriela Covaleda García*. La escuela lo valida y te confirma el cupo por aquí.']);
+        });
+
+        it('«Es para otra persona»: se piden los datos; con la respuesta el cobro va a nombre de la otra persona y la ficha anterior no se pisa', async () => {
+            yaComproElVacacional();
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000), 'A');
+            enHora('2026-11-08T11:59:00-05:00');
+            const bot = responderDelBot();
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Es para otra persona', bot.fn as any)).toBe(true);
+            expect(pagos()).toHaveLength(0);
+            expect(bot.enviados).toHaveLength(1);
+            expect(bot.enviados[0]).toMatchObject({ paso: 'ask_asistente_servicio', payload: { venta_servicio_id: CLINICA_ID, faltan_datos: ['nombre', 'fecha_nacimiento'] } });
+            expect(bot.enviados[0].texto).toBe('Recibí tu comprobante 📄 Para completar la inscripción a *Clínica de armadores y atacantes* necesito estos datos de quien asiste:\n'
+                + '1. Nombre completo\n2. Fecha de nacimiento (día/mes/año)\nSi es menor de edad, también el nombre de la persona responsable.\nPuedes escribirlos en un solo mensaje.');
+            expect(fila('f1')).toMatchObject({ status: 'waiting_user' });
+
+            enHora('2026-11-08T12:01:00-05:00');
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Mateo Covaleda García 03/02/2008', bot.fn as any)).toBe(true);
+            expect(pagos()).toHaveLength(1);
+            expect(pagos()[0].concept).toBe('Clínica de armadores y atacantes — Mateo Covaleda García');
+            // Es mayor de edad (18): no falta nada. La ficha sigue siendo la de Gabriela; Mateo queda aparte.
+            expect(bot.enviados[1].texto).toBe('Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes* a nombre de '
+                + '*Mateo Covaleda García*. La escuela lo valida y te confirma el cupo por aquí.');
+            expect(lead()).toMatchObject({ full_name: 'Gabriela Covaleda García', birth_date: '2013-05-10', guardian_name: 'Brady Luz' });
+            expect(lead().source_detail.otros_asistentes).toEqual([expect.objectContaining({ nombre: 'Mateo Covaleda García', fecha_nacimiento: '2008-02-03', servicio_id: CLINICA_ID })]);
+        });
+    });
+
+    describe('(R7) captura incompleta: monto y cuenta de la escuela, sin fecha ni número de comprobante', () => {
+        const captura = () => comprobante(300000, { date: null, time: null, reference: null, bank: 'Bancolombia', originName: null });
+        const TEXTO_INCOMPLETA = 'Recibí tu captura de *$300.000* 📄 Le faltan la fecha y el número del comprobante. Envíame la pantalla completa del pago, por favor.\n\n'
+            + 'Para completar la inscripción a *Clínica de armadores y atacantes* necesito estos datos de quien asiste:\n'
+            + '1. Nombre completo\n2. Fecha de nacimiento (día/mes/año)\nSi es menor de edad, también el nombre de la persona responsable.\nPuedes escribirlos en un solo mensaje.';
+
+        it('NO crea el cobro, NO se cierra en silencio: fila de ACCIÓN con la lectura guardada y UNA respuesta útil; la misma captura otra vez no duplica', async () => {
+            conversacionDeNicolas();
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'cap-1', '2026-11-08T11:57:24-05:00'), captura(), 'cap-1');
+            expect(crearLlamadas()).toHaveLength(0);
+            expect(pagos()).toHaveLength(0);
+            expect(textosEnviados()).toEqual([TEXTO_INCOMPLETA]);
+            expect(salientes()[0].payload).toMatchObject({ step: 'venta_comprobante_incompleto', venta_servicio_id: CLINICA_ID, faltan_datos: ['nombre', 'fecha_nacimiento'] });
+            expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+            expect(fila('f1').error_message).toMatch(/^venta_comprobante_incompleto: captura de \$300\.000 para Clínica de armadores y atacantes a una cuenta de la escuela, sin fecha ni número de comprobante/);
+            expect(fila('f1').error_message).toContain('Propuesta → pagó: no se leyó · asiste: sin nombre');
+            expect(fila('f1').error_message).not.toBe('contacto_no_atendido');
+            expect(fila('f1').pregunta_ocr).toMatchObject({ ocr: { amount: 300000, destination: '3194505150' } });
+            expect(fila('f1').pregunta_ocr.storagePath).toBeTruthy();
+            const { clasificarFila } = await import('../services/whatsapp-bandeja.service');
+            expect(clasificarFila(fila('f1'), 'desconocido', false)).toMatchObject({ grupo: 'accion', motivo: 'venta_incompleto' });
+
+            // La MISMA captura reenviada (otra imagen: la huella cambia): ni otra fila de acción ni otra respuesta.
+            enHora('2026-11-08T11:59:40-05:00');
+            await procesar(foto('f2', 'cap-2', '2026-11-08T11:59:32-05:00'), captura(), 'cap-2');
+            expect(fila('f2')).toMatchObject({ status: 'ignored', result_type: 'none' });
+            expect(fila('f2').error_message).toBe('venta_comprobante_repetido: misma captura incompleta que la fila f1');
+            expect(textosEnviados()).toEqual([TEXTO_INCOMPLETA]);
+            expect(h.tabla('whatsapp_inbound_queue').filter((f) => f.result_type === 'escalated')).toHaveLength(1);
+            expect(pagos()).toHaveLength(0);
+        });
+
+        it('si después manda el comprobante COMPLETO, entra por el camino normal de la venta (acá: se piden los datos y el cobro se crea)', async () => {
+            conversacionDeNicolas();
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'cap-1', '2026-11-08T11:57:24-05:00'), captura(), 'cap-1');
+            enHora('2026-11-08T12:05:00-05:00');
+            await procesar(foto('f2', 'completo', '2026-11-08T12:04:50-05:00'), comprobante(300000), 'completo');
+            expect(fila('f2')).toMatchObject({ status: 'waiting_user', pregunta_ocr: { tipo: 'asistente_servicio' } });
+            expect(textosEnviados()).toEqual([TEXTO_INCOMPLETA, TEXTO_PREGUNTA]);
+            const bot = responderDelBot();
+            expect(await resolverRespuestaDeCobro(INTEGRACION as any, TEL, 'Mateo Rincón Díaz 03/02/2001', bot.fn as any)).toBe(true);
+            expect(pagos()).toHaveLength(1);
+            expect(fila('f2')).toMatchObject({ status: 'done', result_type: 'payment_receipt' });
+        });
+
+        it('con el nombre ya dicho en el chat, la respuesta pide solo lo que falta y la propuesta de la bandeja dice quién asiste', async () => {
+            conversacionDeNicolas();
+            mensaje('inbound', 'La niña Gabriela Reina Fonseca', '2026-11-08T11:50:00-05:00');
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'cap-1', '2026-11-08T11:57:24-05:00'), captura(), 'cap-1');
+            expect(textosEnviados()).toEqual(['Recibí tu captura de *$300.000* 📄 Le faltan la fecha y el número del comprobante. Envíame la pantalla completa del pago, por favor.\n\n'
+                + 'Para completar la inscripción a *Clínica de armadores y atacantes* solo me falta la fecha de nacimiento (día/mes/año).\n'
+                + 'Si es menor de edad, también el nombre de la persona responsable.']);
+            expect(fila('f1').error_message).toContain('asiste: Gabriela Reina Fonseca · falta: fecha de nacimiento');
+            expect(lead()).toMatchObject({ full_name: 'Gabriela Reina Fonseca' });
+        });
+
+        it('sin venta viva, una imagen que no es comprobante sigue como siempre (sin respuesta, `contacto_no_atendido`)', async () => {
+            enHora('2026-11-08T11:57:30-05:00');
+            await procesar(foto('f1', 'cap-1', '2026-11-08T11:57:24-05:00'), captura(), 'cap-1');
+            expect(textosEnviados()).toEqual([]);
+            expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'none', error_message: 'contacto_no_atendido' });
+        });
+    });
+
+    it('(R1) comprobante completo a una cuenta que NO es de la escuela, en plena venta: a la bandeja y al cliente se le dice que llegó', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'A', '2026-11-08T11:57:24-05:00'), comprobante(300000, { destination: '3001112233' }), 'A');
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$300.000* para la *Clínica de armadores y atacantes*. La escuela lo valida y te confirma el cupo por aquí.']);
+        expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(fila('f1').error_message).toMatch(/^recuperado: destino_ajeno/);
+    });
+
+    it('(R1) la pregunta que vence a las 24 h deja en la bandeja el monto, quién pagó y lo que se sabe de quien asiste', async () => {
+        expect(job.motivoVentaSinNombre({ servicio: 'Vacacional', monto: '140000', pago: 'BRADY LUZ', registro: { nombre: null, edad: 13 } }))
+            .toBe('venta_falta_nombre: no dijo el nombre de quien asiste a Vacacional en 24 h; crear el cobro del servicio a mano con este comprobante'
+                + ' | Propuesta → $140.000 · pagó: BRADY LUZ · asiste: Sin nombre · 13 años (sin fecha) · falta: nombre completo, fecha de nacimiento, acudiente');
+        // Sin nada que agregar, el texto de siempre.
+        expect(job.motivoVentaSinNombre({ servicio: 'Vacacional' }))
+            .toBe('venta_falta_nombre: no dijo el nombre de quien asiste a Vacacional en 24 h; crear el cobro del servicio a mano con este comprobante');
+    });
+
+    it('la memoria une las fuentes sin mezclar personas: los datos de la ficha de otra persona no se pegan al nombre nuevo', async () => {
+        const { registroDeFicha, combinarConRespuesta, SIN_REGISTRO } = await reg();
+        const ficha = registroDeFicha({ full_name: 'Gabriela Covaleda García', birth_date: '2013-05-10', guardian_name: 'Brady Luz', source_detail: { asistente_servicio: { nombre: 'Gabriela Covaleda García' } } },
+            { hoy: '2026-11-08', conocido: true });
+        expect(ficha).toMatchObject({ nombre: 'Gabriela Covaleda García', fechaNacimiento: '2013-05-10', edad: 13, acudiente: 'Brady Luz' });
+        // Una ficha con el nombre del perfil de WhatsApp (sin confirmar) no aporta nada.
+        expect(registroDeFicha({ full_name: 'Brady Luz', birth_date: '1985-01-01' }, { hoy: '2026-11-08', conocido: false })).toEqual(SIN_REGISTRO);
+        // Ya se sabe quién asiste y llega otro nombre suelto: es la persona responsable, no otro asistente.
+        expect(combinarConRespuesta({ ...SIN_REGISTRO, nombre: 'Gabriela Covaleda García', edad: 13 }, { ...SIN_REGISTRO, nombre: 'Brady Luz' }))
+            .toMatchObject({ nombre: 'Gabriela Covaleda García', acudiente: 'Brady Luz' });
+    });
+});
+
+// ─── Clínica de Monster: abonos juzgados por la fecha de pago y la afiliación (2026-11-16) ─────────────────────────
+//
+// Caso real (verificado contra la base): «Clínica de armadores y atacantes» tiene price 300000 con precios_por_fecha
+// [{desde 2026-11-11, 350000}], precio_afiliado 250000 con precios_afiliado_por_fecha [{desde 2026-11-16, 300000}],
+// abono_minimo_pct 50, allow_installments y saldo_hasta 2026-11-20. El abono mínimo es: no afiliado $150.000 hasta el
+// 10-nov y $175.000 desde el 11-nov; afiliado $125.000 hasta el 15-nov y $150.000 desde el 16-nov. Tres comprobantes
+// reales cerraron `venta_monto_no_cuadra` sin explicación para la escuela.
+
+const CLINICA_REAL = {
+    ...CLINICA,
+    precios_por_fecha: [{ desde: '2026-11-11', precio: 350000 }],
+    precios_afiliado_por_fecha: [{ desde: '2026-11-16', precio: 300000 }],
+    saldo_hasta: '2026-11-20',
+};
+const dia = (f: string) => Date.parse(`${f}T12:00:00-05:00`);
+
+describe('(R-abonos) decidirMontoDeVenta con la clínica real: abono mínimo de la fecha del pago y afiliación', () => {
+    it('minimosEnFecha: los dos mínimos (afiliado y no afiliado) de cada fecha', () => {
+        expect(cobro.minimosEnFecha(CLINICA_REAL as any, '2026-11-10')).toEqual({
+            fecha: '2026-11-10', noAfiliado: { total: 300000, minimo: 150000 }, afiliado: { total: 250000, minimo: 125000 },
+        });
+        expect(cobro.minimosEnFecha(CLINICA_REAL as any, '2026-11-11')).toMatchObject({
+            noAfiliado: { total: 350000, minimo: 175000 }, afiliado: { total: 250000, minimo: 125000 },
+        });
+        expect(cobro.minimosEnFecha(CLINICA_REAL as any, '2026-11-15')).toMatchObject({
+            noAfiliado: { total: 350000, minimo: 175000 }, afiliado: { total: 250000, minimo: 125000 },
+        });
+        expect(cobro.minimosEnFecha(CLINICA_REAL as any, '2026-11-16')).toMatchObject({
+            noAfiliado: { total: 350000, minimo: 175000 }, afiliado: { total: 300000, minimo: 150000 },
+        });
+    });
+
+    it('(a) $150.000 pagado el 11-nov, procesado el 17-nov, NO afiliado: no cuadra ($175.000 era el mínimo ese día)', () => {
+        expect(cobro.decidirMontoDeVenta(150000, CLINICA_REAL as any, { ahora: dia('2026-11-17'), fechaPago: '2026-11-11' }))
+            .toEqual({ tipo: 'no_cuadra', precios: [350000], minimo: 175000 });
+    });
+
+    it('(a) $150.000 pagado el 10-nov, procesado el 17-nov, NO afiliado: era el mínimo de ESE día → tramo_anterior (abono)', () => {
+        expect(cobro.decidirMontoDeVenta(150000, CLINICA_REAL as any, { ahora: dia('2026-11-17'), fechaPago: '2026-11-10' }))
+            .toEqual({ tipo: 'tramo_anterior', fecha: '2026-11-10', precioDeEseDia: 300000, precioHoy: 350000, esAbono: true });
+    });
+
+    it('(a)(b) $125.000 AFILIADO pagado el 15-nov, procesado el 17-nov: el mínimo de afiliado de ese día → tramo_anterior', () => {
+        expect(cobro.decidirMontoDeVenta(125000, CLINICA_REAL as any, { ahora: dia('2026-11-17'), fechaPago: '2026-11-15', afiliado: true }))
+            .toEqual({ tipo: 'tramo_anterior', fecha: '2026-11-15', precioDeEseDia: 250000, precioHoy: 300000, esAbono: true });
+        // Sin ser afiliado, esos mismos $125.000 no alcanzan nada.
+        expect(cobro.decidirMontoDeVenta(125000, CLINICA_REAL as any, { ahora: dia('2026-11-17'), fechaPago: '2026-11-15' }).tipo).toBe('no_cuadra');
+    });
+
+    it('(b) $150.000: el afiliado sí separa el cupo (mínimo $150.000 desde el 16-nov); el no afiliado no', () => {
+        const hoy = dia('2026-11-17');
+        expect(cobro.decidirMontoDeVenta(150000, CLINICA_REAL as any, { ahora: hoy, afiliado: true }))
+            .toMatchObject({ tipo: 'abono', total: 300000, minimo: 150000 });
+        expect(cobro.decidirMontoDeVenta(150000, CLINICA_REAL as any, { ahora: hoy }).tipo).toBe('no_cuadra');
+        // $150.000 pagado el 15-nov por un afiliado, procesado el 12-nov... (el mínimo de ese día es $125.000)
+        expect(cobro.decidirMontoDeVenta(150000, CLINICA_REAL as any, { ahora: dia('2026-11-12'), afiliado: true }))
+            .toMatchObject({ tipo: 'abono', total: 250000, minimo: 125000 });
+    });
+
+    it('$100.000 no alcanza ningún mínimo, afiliado o no, a ninguna fecha', () => {
+        for (const fechaPago of ['2026-11-10', '2026-11-12', '2026-11-15']) {
+            for (const afiliado of [true, false]) {
+                expect(cobro.decidirMontoDeVenta(100000, CLINICA_REAL as any, { ahora: dia('2026-11-17'), fechaPago, afiliado }).tipo).toBe('no_cuadra');
+            }
+        }
+    });
+});
+
+describe('(R-abonos) el worker: venta_monto_no_cuadra explica los dos mínimos, el saldo_hasta y propone sumar', () => {
+    beforeEach(() => {
+        conversacionDeNicolas();
+        // La misma clínica con los precios por fecha de afiliado y el saldo_hasta (la de escuelaMonster() no los trae).
+        Object.assign(h.tabla('school_tournament_items')[0], CLINICA_REAL);
+        h.tabla('school_signup_leads').push({
+            id: 'lead-sara', school_id: ESCUELA, phone: '3017517726', status: 'contacted', full_name: 'Sara Gómez',
+            source_detail: { registro_completo_at: '2026-11-05T10:00:00Z' }, created_at: iso('2026-11-05T10:00:00Z'),
+        });
+    });
+
+    it('(c) $150.000 pagado el 11-nov (…0145): no se aplica nada; la bandeja dice los DOS mínimos de ese día y el saldo_hasta', async () => {
+        // La venta sigue viva (el bot le volvió a hablar del servicio hace poco).
+        mensaje('outbound', 'Te cuento de la clínica…', '2026-11-16T18:00:00-05:00',
+            { ai_generated: true, payload: { step: 'venta_servicio_ficha', venta_servicio_id: CLINICA_ID } });
+        enHora('2026-11-17T09:00:00-05:00');
+        await procesar(foto('f1', 'a0145', '2026-11-17T08:59:00-05:00'), comprobante(150000, { reference: 'R0145', date: '2026-11-11' }), 'a0145');
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(pagos()).toHaveLength(0);
+        const f = fila('f1');
+        expect(f).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(f.error_message).toMatch(/^venta_monto_no_cuadra: comprobante de \$150\.000 para Clínica de armadores y atacantes; el valor de hoy es \$350\.000 \(abono mínimo \$175\.000\)/);
+        expect(f.error_message).toContain('en la fecha del pago (2026-11-11) el abono mínimo era $175.000 (precio $350.000) si no es afiliado o $125.000 (precio $250.000) si es afiliado');
+        expect(f.error_message).toContain('el saldo se paga hasta el 2026-11-20');
+        // A la persona: el valor de hoy, sin decir que quedó registrado.
+        expect(textosEnviados()[0]).toContain('(*$350.000* o el abono de *$175.000*)');
+        expect(textosEnviados()[0]).toContain('la escuela lo revisa');
+    });
+
+    it('(c) $150.000 pagado el 15-nov (…0883) con un cobro previo parcial del mismo contacto: propone sumarlo al mismo cobro', async () => {
+        h.tabla('payments').push({
+            id: 'pay-prev', school_id: ESCUELA, signup_lead_id: 'lead-sara', payment_category: 'clase_extra', status: 'partial',
+            amount: 350000, amount_paid: 100000, ocr_amount: 100000, concept: 'Clínica de armadores y atacantes — Sara Gómez',
+            created_at: iso('2026-11-09T10:00:00-05:00'),
+        });
+        // La venta sigue viva (el bot le volvió a hablar del servicio hace poco).
+        mensaje('outbound', 'Te cuento de la clínica…', '2026-11-16T18:00:00-05:00',
+            { ai_generated: true, payload: { step: 'venta_servicio_ficha', venta_servicio_id: CLINICA_ID } });
+        enHora('2026-11-17T09:00:00-05:00');
+        await procesar(foto('f1', 'a0883', '2026-11-17T08:59:00-05:00'), comprobante(150000, { reference: 'R0883', date: '2026-11-15' }), 'a0883');
+        expect(crearLlamadas()).toHaveLength(0);
+        const f = fila('f1');
+        expect(f.error_message).toMatch(/^venta_monto_no_cuadra: /);
+        expect(f.error_message).toContain('en la fecha del pago (2026-11-15) el abono mínimo era $175.000 (precio $350.000) si no es afiliado o $125.000 (precio $250.000) si es afiliado');
+        expect(f.error_message).toContain('ya tiene el cobro pay-prev de $350.000 con $100.000 abonados: sumando este comprobante de $150.000 serían $250.000 (faltarían $100.000); sumarlo al mismo cobro, no crear otro');
+        expect(pagos()).toHaveLength(1);                                   // el cobro previo, intacto
+        expect(pagos()[0]).toMatchObject({ id: 'pay-prev', status: 'partial', amount_paid: 100000 });
+    });
+
+    it('(d) dos de $100.000 del mismo contacto en DÍAS distintos (10-nov y 12-nov): el segundo propone la suma ($200.000) como abono; nunca se aplica solo', async () => {
+        enHora('2026-11-10T19:15:00-05:00');
+        await procesar(foto('f1', 'p1', '2026-11-10T19:14:00-05:00'), comprobante(100000, { reference: 'P1', date: '2026-11-10' }), 'p1');
+        expect(fila('f1').error_message).toMatch(/^venta_monto_no_cuadra: /);
+        expect(fila('f1').error_message).not.toContain('sumar ');          // el primero solo: no hay nada que sumar
+
+        enHora('2026-11-12T19:21:00-05:00');
+        await procesar(foto('f2', 'p2', '2026-11-12T19:20:00-05:00'), comprobante(100000, { reference: 'P2', date: '2026-11-12' }), 'p2');
+        const f = fila('f2');
+        expect(f).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(f.error_message).toMatch(/^venta_monto_no_cuadra: comprobante de \$100\.000 para Clínica de armadores y atacantes/);
+        expect(f.error_message).toContain('sumar 2 comprobantes del mismo contacto para Clínica de armadores y atacantes ($100.000 (2026-11-10) + este = $200.000)');
+        expect(f.error_message).toContain('alcanza el abono mínimo de no afiliado ($150.000) vigente el 2026-11-10');
+        // Y la explicación de los dos mínimos no se pierde por el largo de la propuesta.
+        expect(f.error_message).toContain('hoy (2026-11-12) el abono mínimo es $175.000 (precio $350.000) si no es afiliado o $125.000');
+        expect(f.error_message).toContain('el saldo se paga hasta el 2026-11-20');
+        expect(f.error_message).toContain('filas f1');
+        expect(f.error_message).toContain('No se aplica solo');
+        // A la persona: lo que mandó antes más esto, y que la escuela lo revisa; no «quedó registrado».
+        expect(textosEnviados()[1]).toContain('Con lo que enviaste antes (*$100.000*) suman *$200.000*');
+        expect(textosEnviados()[1]).toContain('la escuela lo revisa');
+        expect(textosEnviados()[1]).not.toMatch(/registrad|aplicad/i);
+        // Nada se crea ni se aplica.
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(pagos()).toHaveLength(0);
+        expect(evaluatePaymentReceiptMock).not.toHaveBeenCalled();
+    });
+
+    it('(d) si la suma NO alcanza ningún mínimo ($100.000 + $20.000): sigue el aviso de siempre, sin propuesta de suma', async () => {
+        enHora('2026-11-10T19:15:00-05:00');
+        await procesar(foto('f1', 'p1', '2026-11-10T19:14:00-05:00'), comprobante(100000, { reference: 'P1', date: '2026-11-10' }), 'p1');
+        enHora('2026-11-12T19:21:00-05:00');
+        await procesar(foto('f2', 'p2', '2026-11-12T19:20:00-05:00'), comprobante(20000, { reference: 'P2', date: '2026-11-12' }), 'p2');
+        expect(fila('f2').error_message).not.toContain('sumar ');
+        expect(textosEnviados()[1]).toContain('No coincide con el valor');
+    });
+
+    it('(d) una fila que la escuela ya cerró, o de OTRO contacto, no cuenta para la suma', async () => {
+        enHora('2026-11-10T19:15:00-05:00');
+        await procesar(foto('f1', 'p1', '2026-11-10T19:14:00-05:00'), comprobante(100000, { reference: 'P1', date: '2026-11-10' }), 'p1');
+        fila('f1').error_message = `cerrado_escuela: resuelto — ya se registró (por admin-a) | ${fila('f1').error_message}`;
+        enHora('2026-11-12T19:21:00-05:00');
+        await procesar(foto('f2', 'p2', '2026-11-12T19:20:00-05:00'), comprobante(100000, { reference: 'P2', date: '2026-11-12' }), 'p2');
+        expect(fila('f2').error_message).not.toContain('sumar ');
+    });
+});
+
+// ─── Opción elegida del vacacional, dos nombres en el pie (2026-11-16) ──────────────────────────────────────────────
+
+describe('(opción) preferirOpcionElegida y notaDeOpcion (puras)', () => {
+    const VAC = {
+        id: 'vac-1', school_id: ESCUELA, name: 'Vacacional de diciembre', kind: 'vacacional', price: null, active: true, event_id: null,
+        starts_at: '2026-12-01T00:00:00-05:00', ends_at: '2026-12-19T23:59:00-05:00', allow_installments: false, precio_afiliado: null,
+        precios_por_fecha: null, abono_minimo_pct: null,
+        opciones: [
+            { clave: 's1', etiqueta: '1 semana', precio: 140000 }, { clave: 's1b', etiqueta: '1 semana (tarde)', precio: 140000 },
+            { clave: 's2', etiqueta: '2 semanas', precio: 250000 },
+        ],
+    };
+    const dicha = (extra: Record<string, unknown> = {}) => ({ clave: 's1b', etiqueta: '1 semana (tarde)', precio: 140000, fechas: 'del 1 al 5 de diciembre', coincide: true, ...extra });
+
+    it('dos opciones con el mismo precio (ambiguo): la que eligió gana; el precio lo sigue poniendo la RPC', () => {
+        const d = cobro.decidirMontoDeVenta(140000, VAC as any, { ahora: dia('2026-11-17') });
+        expect(d.tipo).toBe('ambiguo');
+        expect(job.preferirOpcionElegida(d, VAC as any, dicha() as any, false)).toMatchObject({ tipo: 'completo', precio: { monto: 140000, opcion: 's1b' } });
+    });
+
+    it('el monto cuadraba con OTRA opción y la elegida tiene ese precio: la elegida manda', () => {
+        const d = { tipo: 'completo', precio: { motivo: 'vacacional', monto: 140000, fuente: 'tournament_item', fuenteId: 'vac-1', etiqueta: 'x — 1 semana', opcion: 's1' } } as any;
+        expect(job.preferirOpcionElegida(d, VAC as any, dicha() as any, false)).toMatchObject({ tipo: 'completo', precio: { opcion: 's1b', monto: 140000 } });
+    });
+
+    it('no toca un abono, un saldo ni un cobro previo', () => {
+        const abono = { tipo: 'abono' } as any;
+        const saldo = { tipo: 'saldo', previo: {}, saldo: 1 } as any;
+        expect(job.preferirOpcionElegida(abono, VAC as any, dicha() as any, false)).toBe(abono);
+        expect(job.preferirOpcionElegida(saldo, VAC as any, dicha() as any, false)).toBe(saldo);
+    });
+
+    it('la nota para la escuela: la opción y las fechas dichas; si no coincide, la discrepancia', () => {
+        expect(job.notaDeOpcion(dicha() as any, 140000)).toBe(' · eligió 1 semana (tarde) ($140.000) · fechas dichas: «del 1 al 5 de diciembre»');
+        expect(job.notaDeOpcion(dicha({ coincide: false }) as any, 250000))
+            .toBe(' · eligió 1 semana (tarde) ($140.000) pero el comprobante es de $250.000: revisar cuál es · fechas dichas: «del 1 al 5 de diciembre»');
+        expect(job.notaDeOpcion(null, 140000)).toBe('');
+    });
+});
+
+describe('(opción) el worker con el vacacional: la opción que eligió manda sobre la deducción por monto', () => {
+    const VAC_ID = 'a1b2c3d4-0000-4000-8000-00000000f001';
+    const VAC = {
+        id: VAC_ID, school_id: ESCUELA, name: 'Vacacional de diciembre', kind: 'vacacional', price: null, active: true, event_id: null,
+        starts_at: '2026-12-01T00:00:00-05:00', ends_at: '2026-12-19T23:59:00-05:00', description: 'Vacacional', image_url: null,
+        allow_installments: false, precio_afiliado: null, precios_por_fecha: null, abono_minimo_pct: null, capacity: null,
+        opciones: [{ clave: 's1', etiqueta: '1 semana', precio: 140000 }, { clave: 's1b', etiqueta: '1 semana (tarde)', precio: 140000 }],
+    };
+    beforeEach(() => {
+        h.tabla('school_tournament_items').splice(0, h.tabla('school_tournament_items').length, { ...VAC });
+        h.tabla('school_signup_leads').push({
+            id: 'lead-v', school_id: ESCUELA, phone: '3017517726', status: 'contacted', full_name: 'Gabriela Covaleda García',
+            source_detail: { registro_completo_at: '2026-11-14T10:00:00Z' }, created_at: iso('2026-11-14T10:00:00Z'),
+        });
+        mensaje('outbound', 'Te cuento del Vacacional…', '2026-11-15T08:00:00-05:00',
+            { ai_generated: true, payload: { step: 'venta_servicio_ficha', venta_servicio_id: VAC_ID } });
+    });
+
+    it('«1 semana (tarde)» elegida y $140.000 (el mismo valor que «1 semana»): se pide el cobro de ESA opción, con las fechas en la nota', async () => {
+        mensaje('outbound', 'Listo, anoté 1 semana (tarde)', '2026-11-16T10:00:00-05:00', {
+            ai_generated: true,
+            payload: { step: 'venta_servicio_opcion', venta_servicio_id: VAC_ID, opcion_elegida: 's1b', opcion_etiqueta: '1 semana (tarde)', opcion_precio: 140000, fechas_dichas: 'del 1 al 5 de diciembre' },
+        });
+        enHora('2026-11-16T12:00:00-05:00');
+        await procesar(foto('f1', 'vac', '2026-11-16T11:59:00-05:00'), comprobante(140000, { reference: 'V1', date: '2026-11-16' }), 'vac');
+        // La opción elegida llega a la RPC (el precio lo sigue poniendo ella; la simulada de este archivo no conoce opciones y
+        // responde que no coincide, por eso la fila termina en la bandeja, con la opción y las fechas en la propuesta).
+        expect(crearLlamadas()).toEqual([expect.objectContaining({ p_monto: 140000, p_opcion: 's1b', p_fuente_id: VAC_ID })]);
+        expect(fila('f1').error_message).toContain('eligió 1 semana (tarde) ($140.000) · fechas dichas: «del 1 al 5 de diciembre»');
+    });
+
+    it('sin opción elegida: dos opciones del mismo valor siguen yendo a la escuela (ambiguo), como hoy', async () => {
+        enHora('2026-11-16T12:00:00-05:00');
+        await procesar(foto('f1', 'vac', '2026-11-16T11:59:00-05:00'), comprobante(140000, { reference: 'V1', date: '2026-11-16' }), 'vac');
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(fila('f1').error_message).toMatch(/^venta_monto_ambiguo: /);
+    });
+
+    it('la opción elegida NO coincide con el monto: no se fuerza; sigue la lógica de hoy y la discrepancia queda en la propuesta', async () => {
+        mensaje('outbound', 'Listo, anoté 2 semanas', '2026-11-16T10:00:00-05:00', {
+            ai_generated: true,
+            payload: { step: 'venta_servicio_opcion', venta_servicio_id: VAC_ID, opcion_elegida: 's1', opcion_etiqueta: '1 semana', opcion_precio: 100000, fechas_dichas: 'del 1 al 5 de diciembre' },
+        });
+        enHora('2026-11-16T12:00:00-05:00');
+        await procesar(foto('f1', 'vac', '2026-11-16T11:59:00-05:00'), comprobante(140000, { reference: 'V1', date: '2026-11-16' }), 'vac');
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(fila('f1').error_message).toMatch(/^venta_monto_ambiguo: /);
+        expect(fila('f1').error_message).toContain('eligió 1 semana ($100.000) pero el comprobante es de $140.000: revisar cuál es');
+        expect(fila('f1').error_message).toContain('fechas dichas: «del 1 al 5 de diciembre»');
+    });
+});
+
+describe('(dos nombres) en el pie o la nota de la foto no se elige en silencio', () => {
+    it('«Jugador 1: … / Jugador 2: …» en el pie: UNA pregunta de quién es; la fila queda esperando con los dos nombres', async () => {
+        conversacionDeNicolas();
+        const pie = 'Jugador 1: VALENTINA RODRIGUEZ PEREZ TI 1034567890\nJugador 2: MARIA ALEJANDRA MORA DIAZ TI 1098765432';
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'dos', '2026-11-08T11:57:24-05:00', { media_caption: pie }), comprobante(300000, { reference: 'D1' }), 'dos');
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(pagos()).toHaveLength(0);
+        expect(textosEnviados()).toHaveLength(1);
+        expect(textosEnviados()[0]).toContain('Recibí dos nombres:');
+        expect(textosEnviados()[0]).toContain('Valentina');
+        expect(textosEnviados()[0]).toContain('Maria Alejandra');
+        expect(textosEnviados()[0]).toContain('El cupo se paga por persona');
+        expect(salientes()[0].payload).toMatchObject({ step: 'ask_asistente_servicio', venta_servicio_id: CLINICA_ID });
+        expect(fila('f1')).toMatchObject({
+            status: 'waiting_user', pregunta_ocr: { tipo: 'asistente_servicio', venta: { itemId: CLINICA_ID, variosNombres: expect.any(Array) } },
+        });
+        expect(fila('f1').pregunta_ocr.venta.variosNombres).toHaveLength(2);
+    });
+
+    it('con UN solo nombre en el pie: sigue como siempre (no se pregunta de quién es)', async () => {
+        conversacionDeNicolas();
+        enHora('2026-11-08T11:57:30-05:00');
+        await procesar(foto('f1', 'uno', '2026-11-08T11:57:24-05:00', { media_caption: 'Jugador 1: VALENTINA RODRIGUEZ PEREZ' }), comprobante(300000, { reference: 'D2' }), 'uno');
+        expect(fila('f1').pregunta_ocr?.venta?.variosNombres).toBeUndefined();
     });
 });

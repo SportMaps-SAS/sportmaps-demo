@@ -56,6 +56,7 @@ vi.mock('./receipt-context.service', () => ({
 import {
     motivoPorMonto, decidirConEsperado, opcionesDeMotivo, clasificarDestino, destinoExactoDelComprobante,
     crearCobroDesdeComprobante, anularCobroCreado, cobroDesdeComprobanteActivo, preciosDeMotivos, pendientesDelLead,
+    textoDeCantidad,
     leadPorTelefono, conceptoDelCobroCreado, esValorMotivoElegido, preciosDeServicios, sePuedeCrearSoloPorMonto,
     type PrecioDeMotivo,
 } from './wa-cobro-desde-comprobante.service';
@@ -148,6 +149,45 @@ describe('motivoPorMonto (pura)', () => {
         const abono: PrecioDeMotivo = { ...CLINICA, monto: 150000, esAbono: true };
         expect(motivoPorMonto(150000, [abono])).toEqual({ tipo: 'uno', precio: abono });
         expect(motivoPorMonto(165000, [abono, PRUEBA])).toEqual({ tipo: 'ninguno' });
+    });
+});
+
+// 2026-11-16: «matrícula + 2 camisetas» o «3 camisetas» en un solo comprobante. La base no admite
+// dos cobros del mismo artículo con un comprobante, así que NO se crea: va a la escuela con la propuesta.
+describe('motivoPorMonto: N × un mismo artículo (con_cantidad)', () => {
+    const CAMISETA: PrecioDeMotivo = { motivo: 'articulos', monto: 30000, fuente: 'merchandise_item', fuenteId: 'art-2', etiqueta: 'Camiseta de entrenamiento' };
+    const precios = [PRUEBA, MATRICULA, CAMISETA, CLINICA];
+
+    it('matrícula + 2 × camiseta → con_cantidad, con la propuesta escrita', () => {
+        const r = motivoPorMonto(370000, precios);
+        expect(r).toEqual({ tipo: 'con_cantidad', base: MATRICULA, articulo: CAMISETA, cantidad: 2 });
+        expect(textoDeCantidad(r as any)).toBe('matrícula ($310.000) + 2 × Camiseta de entrenamiento ($30.000 c/u)');
+    });
+
+    it('N × un artículo sin matrícula, de 2 a 4; 5 ya no', () => {
+        expect(motivoPorMonto(60000, precios)).toEqual({ tipo: 'con_cantidad', base: null, articulo: CAMISETA, cantidad: 2 });
+        expect(motivoPorMonto(120000, precios)).toMatchObject({ tipo: 'con_cantidad', base: null, cantidad: 4 });
+        expect(textoDeCantidad(motivoPorMonto(90000, precios) as any)).toBe('3 × Camiseta de entrenamiento ($30.000 c/u)');
+        expect(motivoPorMonto(150000, precios)).toEqual({ tipo: 'ninguno' });
+        expect(motivoPorMonto(460000, precios)).toEqual({ tipo: 'ninguno' }); // matrícula + 5
+    });
+
+    it('no cambia lo que ya se resolvía: un precio, una suma de precios distintos, una cuota', () => {
+        expect(motivoPorMonto(30000, precios)).toEqual({ tipo: 'uno', precio: CAMISETA });
+        expect(motivoPorMonto(340000, precios)).toMatchObject({ tipo: 'varios' }); // matrícula + 1 camiseta
+        // $60.000 es el precio de los uniformes: gana el precio exacto, no «2 × camiseta».
+        expect(motivoPorMonto(60000, [...precios, UNIFORMES])).toEqual({ tipo: 'uno', precio: UNIFORMES });
+        expect(motivoPorMonto(60000, precios, { cuotas: [60000] })).toEqual({ tipo: 'es_cuota' });
+    });
+
+    it('solo artículos: un servicio o la clase de prueba nunca se multiplican', () => {
+        expect(motivoPorMonto(600000, [CLINICA, MATRICULA])).toEqual({ tipo: 'ninguno' });
+        expect(motivoPorMonto(30000, [PRUEBA, MATRICULA])).toEqual({ tipo: 'ninguno' });
+    });
+
+    it('dos artículos del mismo precio no dicen cuál es: ninguno (sigue el camino de hoy)', () => {
+        const PANTALONETA: PrecioDeMotivo = { ...CAMISETA, fuenteId: 'art-3', etiqueta: 'Pantaloneta' };
+        expect(motivoPorMonto(90000, [MATRICULA, CAMISETA, PANTALONETA])).toEqual({ tipo: 'ninguno' });
     });
 });
 

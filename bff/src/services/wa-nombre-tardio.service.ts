@@ -18,7 +18,10 @@
 import { supabase } from '../config/supabase';
 import { normalizarFrase } from './whatsapp-reglas-turno';
 import { nombreDeAsistente } from './whatsapp-comprobante-de-ficha.service';
-import { esNombreDeRelleno } from './wa-cobro-desde-comprobante.service';
+import { esNombreDeRelleno, hoyBogota } from './wa-cobro-desde-comprobante.service';
+import { leerDatosDeRegistro, type DatoFaltante } from './whatsapp-datos-de-registro';
+import { camposDeRegistro, faltantesDe, pedidoDeFaltantes, registroDeFicha, traeOtroDato } from './wa-registro-de-venta.service';
+import { unirDatosDeRegistro } from './whatsapp-datos-de-registro';
 
 /** Ventana desde el comprobante cerrado. */
 export const HORAS_NOMBRE_TARDIO = 48;
@@ -52,6 +55,10 @@ export interface NombreTardioGuardado {
     acompanante: string | null;
     paymentId: string;
     servicio: string;
+    /** (2026-11-16) No llegó un nombre sino la fecha de nacimiento o el acudiente de quien ya estaba registrado. */
+    soloDatos?: boolean;
+    /** Lo que sigue faltando para completar la inscripción. */
+    faltan?: DatoFaltante[];
 }
 
 /**
@@ -61,9 +68,15 @@ export interface NombreTardioGuardado {
 export async function registrarNombreTardio(i: {
     integrationId: string; schoolId: string; contactWaId: string; texto: string; ahora?: number;
 }): Promise<NombreTardioGuardado | null> {
-    const dicho = nombreYAcompanante(i.texto);
-    if (!dicho) return null;
     const ahora = i.ahora ?? Date.now();
+    const hoy = hoyBogota(ahora);
+    const dicho = nombreYAcompanante(i.texto);
+    // (2026-11-16) También llegan tarde la fecha de nacimiento y la persona responsable (se piden con el comprobante).
+    const datos = leerDatosDeRegistro(i.texto, { hoy, fuente: 'chat' });
+    if (!dicho) {
+        if (!datos.fechaNacimiento && !datos.acudiente) return null;
+        return registrarDatosTardios({ ...i, ahora }, { ...datos, nombre: null }, hoy);
+    }
     try {
         const { data: filas } = await supabase.from('whatsapp_inbound_queue')
             .select('id, result_ref_id')
@@ -93,12 +106,23 @@ export async function registrarNombreTardio(i: {
         const sd = (((lead as any).source_detail && typeof (lead as any).source_detail === 'object') ? (lead as any).source_detail : {}) as Record<string, any>;
         const actual = String((lead as any).full_name ?? '').trim();
         const iso = new Date(ahora).toISOString();
+        // La fecha, el acudiente o la posición que vinieron con el nombre también quedan en la ficha.
+        const conNombre = { ...datos, nombre: dicho.nombre };
+        const extra = traeOtroDato(conNombre)
+            ? camposDeRegistro({ source_detail: sd }, conNombre, { servicioId: String(sd.asistente_servicio?.servicio_id ?? ''), ahora: iso, hoy })
+            : null;
+        const { source_detail: sdExtra, ...columnas } = extra ?? { source_detail: null };
         const { error: eLead } = await supabase.from('school_signup_leads').update({
             full_name: dicho.nombre,
+            ...columnas,
             source_detail: {
                 ...sd,
                 ...(actual && normalizarFrase(actual) !== normalizarFrase(dicho.nombre) && !sd.contacto ? { contacto: actual } : {}),
-                asistente_servicio: { ...(sd.asistente_servicio ?? {}), nombre: dicho.nombre, at: iso, tardio: true },
+                asistente_servicio: {
+                    ...(sd.asistente_servicio ?? {}), ...(((sdExtra as any)?.asistente_servicio ?? {}) as Record<string, unknown>),
+                    ...(sd.asistente_servicio?.servicio_id ? { servicio_id: sd.asistente_servicio.servicio_id } : {}),
+                    nombre: dicho.nombre, at: iso, tardio: true,
+                },
                 ...(dicho.acompanante ? { acompanante: dicho.acompanante } : {}),
             },
             updated_at: iso,
@@ -122,8 +146,63 @@ export async function registrarNombreTardio(i: {
     }
 }
 
+/**
+ * La fecha de nacimiento o la persona responsable llegan DESPUÉS del comprobante, sin nombre: se guardan en la
+ * ficha del prospecto del cobro más reciente (48 h) SOLO si esa ficha ya tiene a quien asiste; el cobro no se toca.
+ * null = no corresponde (nada se tocó). Nunca lanza.
+ */
+async function registrarDatosTardios(
+    i: { integrationId: string; schoolId: string; contactWaId: string; ahora: number },
+    datos: ReturnType<typeof leerDatosDeRegistro>, hoy: string,
+): Promise<NombreTardioGuardado | null> {
+    try {
+        const { data: filas } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, result_ref_id')
+            .eq('integration_id', i.integrationId).eq('wa_phone_number', i.contactWaId)
+            .eq('status', 'done').eq('result_type', 'payment_receipt')
+            .gte('created_at', new Date(i.ahora - HORAS_NOMBRE_TARDIO * 3600_000).toISOString())
+            .order('created_at', { ascending: false }).limit(5);
+        const ids = ((Array.isArray(filas) ? filas : []) as any[]).map((f) => f.result_ref_id).filter(Boolean);
+        if (!ids.length) return null;
+        const { data: pagos } = await supabase.from('payments').select('id, concept, signup_lead_id, school_id')
+            .eq('school_id', i.schoolId).in('id', ids).not('signup_lead_id', 'is', null);
+        const porId = new Map(((pagos ?? []) as any[]).map((p) => [String(p.id), p]));
+        const pago = ids.map((id) => porId.get(String(id))).find(Boolean);
+        if (!pago) return null;
+        const { data: lead } = await supabase.from('school_signup_leads')
+            .select('id, full_name, birth_date, guardian_name, respuestas, source_detail')
+            .eq('school_id', i.schoolId).eq('id', pago.signup_lead_id).maybeSingle();
+        const l = lead as any;
+        const nombre = typeof l?.source_detail?.asistente_servicio?.nombre === 'string' ? String(l.full_name ?? '').trim() : '';
+        if (!l?.id || !nombre) return null;
+        const previo = registroDeFicha(l, { hoy, conocido: true });
+        const total = unirDatosDeRegistro({ ...datos, nombre: null }, previo);
+        const iso = new Date(i.ahora).toISOString();
+        const { error } = await supabase.from('school_signup_leads').update({
+            ...camposDeRegistro(l, total, { servicioId: String(l.source_detail?.asistente_servicio?.servicio_id ?? ''), ahora: iso, hoy }),
+            updated_at: iso,
+        }).eq('id', l.id);
+        if (error) {
+            console.warn('[wa-nombre-tardio] no se pudieron guardar los datos de registro', { leadId: l.id, msg: error.message });
+            return null;
+        }
+        return {
+            nombre, acompanante: null, paymentId: String(pago.id), servicio: partesDelConcepto(pago.concept).servicio,
+            soloDatos: true, faltan: faltantesDe(total, hoy),
+        };
+    } catch {
+        return null;
+    }
+}
+
 /** Lo que se le dice cuando YA se guardó. Pura. */
-export function textoNombreTardioGuardado(g: Pick<NombreTardioGuardado, 'nombre' | 'acompanante'>): string {
+export function textoNombreTardioGuardado(g: Pick<NombreTardioGuardado, 'nombre' | 'acompanante' | 'soloDatos' | 'faltan' | 'servicio'>): string {
+    if (g.soloDatos) {
+        const pedido = pedidoDeFaltantes(g.faltan ?? [], null, g.servicio || 'el servicio');
+        return pedido
+            ? `Gracias 🙏 Guardé ese dato de *${g.nombre}*. ${pedido}`
+            : `Gracias 🙏 Con eso quedan completos los datos de *${g.nombre}*. La escuela te confirma el cupo por aquí.`;
+    }
     return `Gracias 🙏 Quedó registrado a nombre de *${g.nombre}*`
         + `${g.acompanante ? ` (acompañante: *${g.acompanante}*)` : ''}. La escuela te confirma el cupo por aquí.`;
 }

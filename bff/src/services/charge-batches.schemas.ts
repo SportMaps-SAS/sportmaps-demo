@@ -223,6 +223,9 @@ export const Pago = z.object({
         .optional(),
     receipt_sha256: z.string().regex(/^[0-9a-f]{64}$/i, 'Huella del comprobante inválida').optional(),
     ocr: z.record(z.string(), z.unknown()).optional(),
+    // Quién del equipo recibió la plata. Obligatorio SOLO al crear sin comprobante
+    // (lo exige la ruta, no el esquema, para no romper la vista previa).
+    received_by: z.string().trim().max(80).optional(),
 }).superRefine((p, ctx) => {
     if (p.payment_date > todayInZone()) {
         ctx.addIssue({ code: 'custom', path: ['payment_date'], message: 'La fecha del pago no puede ser futura' });

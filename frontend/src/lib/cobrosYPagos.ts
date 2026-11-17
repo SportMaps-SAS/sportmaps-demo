@@ -951,7 +951,9 @@ export function buildMultiRequest(input: {
 
 /** Firma estable del formulario: si cambia, la vista previa quedó vieja. */
 export function requestSignature(body: ChargeBatchRequest): string {
-    return JSON.stringify(body);
+    // `received_by` (quién recibió la plata sin comprobante) no cambia el plan ni la vista
+    // previa: se escribe nombre en mano y no debe pedir una vista previa por cada tecla.
+    return JSON.stringify(body, (k, v) => (k === 'received_by' ? undefined : v));
 }
 
 /**

@@ -21,7 +21,9 @@ import {
     resolverRespuestaGuiada, interpretarOpcion, PASO_RESUMEN_MOTIVOS, BOTON_MOTIVOS_OK, BOTON_MOTIVOS_CAMBIAR,
     type OpcionGuiada,
 } from './whatsapp-comprobante-guiado.service';
-import { esValorMotivoElegido } from './wa-cobro-desde-comprobante.service';
+import { esValorMotivoElegido, hoyBogota } from './wa-cobro-desde-comprobante.service';
+import { motivoConPropuesta } from './whatsapp-pago-esperado.service';
+import { registroGuardado, resumenDeAsistente } from './wa-registro-de-venta.service';
 import { registrarNombreTardio, textoNombreTardioGuardado } from './wa-nombre-tardio.service';
 import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.service';
 import { soloSaludoOCortesia } from './whatsapp-atencion.service';
@@ -29,6 +31,14 @@ import { cargarRecargos, montoEsperado } from './whatsapp-excedente.service';
 import { esHumanoDeLaEscuela, normalizarFrase, type FilaReciente } from './whatsapp-reglas-turno';
 import type { BotonInteractivo, WhatsAppIntegration } from './whatsapp.service';
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
+import {
+    cuentaComoRespuesta, esCorreccionDeResultado, puedeSerCorreccion, motivoReclamo, TEXTO_RECLAMO_RECIBIDO,
+    MINUTOS_CORRECCION, CODIGO_RECLAMO,
+} from './wa-cola-reglas';
+
+// La regla pura del reclamo vive en wa-cola-reglas; se reexporta para quien atienda textos fuera de este módulo
+// (el bot general con un contacto NO identificado: ver `resolverReclamoDeResultado`).
+export { esCorreccionDeResultado } from './wa-cola-reglas';
 
 /** `error_message` de la pregunta que se cierra porque una persona de la escuela escribió. */
 export const MOTIVO_ESCUELA_TOMO = 'la escuela tomó la conversación';
@@ -71,6 +81,8 @@ export type PasarALaEscuela = (p: { resumen: string; mensajeFamilia: string | nu
 
 interface FilaEsperando {
     id: string;
+    /** Cuándo llegó el comprobante que originó la pregunta. */
+    created_at?: string | null;
     pregunta_opciones: PagoPendiente[] | null;
     pregunta_ocr: {
         ocr: any;
@@ -139,6 +151,110 @@ async function resolverNombreTardio(
     }
 }
 
+// ─── Reclamo o corrección tras el resultado (R11, auditoría 1–16 nov 2026) ───
+//
+// «Este fue octubre», «El 3 de octubre hicimos pago de octubre. Ahora estoy pagando noviembre» (tras «Listo:
+// comprobante… para octubre»); «Ahí dice estado exitoso / compra exitosa» (tras «no es un comprobante de pago»);
+// «No has revisado este pago del domingo». Cinco conversaciones en las que el cliente corrigió al asistente y
+// nadie se enteró: la fila seguía «resuelta». Ahora, si en los 30 minutos siguientes al resultado el cliente lo
+// contradice, la fila pasa a ACCIÓN con su texto y a él se le dice que la escuela lo revisa.
+
+/** Pasos del saliente que NO son un resultado (preguntas y acuses): un texto tras ellos no es una corrección. */
+const esPasoDeResultado = (paso: string) => !!paso && !paso.startsWith('ask_') && !paso.startsWith('embudo_')
+    && !['acuse', 'acuse_diferido', 'reclamo_de_resultado', 'nombre_tardio_registrado'].includes(paso);
+
+/**
+ * ¿El texto corrige o reclama el último resultado que la cola le dio a este contacto (< 30 min)? Si sí, la fila de
+ * ese comprobante queda en la bandeja como ACCIÓN con el texto del cliente (sin tocar el cobro) y se le responde.
+ * Solo lee la base si el texto tiene forma de corrección (`puedeSerCorreccion`). Nunca lanza; true = consumió el turno.
+ *
+ * Lo llama `resolverFilaAbierta` cuando no hay ninguna pregunta abierta, es decir, para todo texto que el bot le
+ * pasa a `resolverRespuestaDeCobro`. Exportada para el caso que NO pasa por acá (contacto no identificado sin
+ * pregunta abierta: el bot general no llama al resolver).
+ */
+export async function resolverReclamoDeResultado(
+    integration: WhatsAppIntegration, contactWaId: string, texto: string,
+    responder: ResponderCobro, pasarALaEscuela?: PasarALaEscuela,
+): Promise<boolean> {
+    try {
+        if (!puedeSerCorreccion(texto)) return false;
+        const { data: conv } = await supabase.from('whatsapp_conversations')
+            .select('id').eq('integration_id', integration.id).eq('contact_wa_id', contactWaId).maybeSingle();
+        const convId = (conv as any)?.id as string | undefined;
+        if (!convId) return false;
+        const { data } = await supabase.from('whatsapp_messages')
+            .select('payload, text_body, created_at')
+            .eq('conversation_id', convId).eq('direction', 'outbound')
+            .gte('created_at', new Date(Date.now() - MINUTOS_CORRECCION * 60_000).toISOString())
+            .order('created_at', { ascending: false })
+            .limit(10);
+        const ultimo = ((Array.isArray(data) ? data : []) as any[])
+            .find((m) => typeof m?.payload?.queue_id === 'string' && esPasoDeResultado(String(m.payload.step ?? '')));
+        if (!ultimo) return false;
+        const paso = String(ultimo.payload.step);
+        const minutos = (Date.now() - new Date(ultimo.created_at).getTime()) / 60_000;
+        const correccion = esCorreccionDeResultado(texto, { paso, texto: ultimo.text_body ?? null, minutos });
+        if (!correccion) return false;
+
+        const ids: string[] = [...new Set([ultimo.payload.queue_id,
+            ...(Array.isArray(ultimo.payload.queue_ids) ? ultimo.payload.queue_ids : [])].filter((x) => typeof x === 'string'))];
+        const { data: filas } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, status, result_type, error_message')
+            .eq('integration_id', integration.id).in('id', ids).limit(20);
+        const tocables = ((Array.isArray(filas) ? filas : []) as any[]).filter((f) =>
+            ['done', 'ignored', 'failed'].includes(String(f.status))
+            && !String(f.error_message ?? '').startsWith(CODIGO_RECLAMO)
+            && !String(f.error_message ?? '').startsWith('cerrado_escuela:'));
+        if (!tocables.length) return false;
+        // Una actualización por grupo (aplicadas a un cobro / el resto), no una por fila.
+        const unica = tocables.length === 1 ? tocables[0] : null;
+        for (const aplicada of [true, false]) {
+            const grupo = tocables.filter((f) => (f.result_type === 'payment_receipt') === aplicada);
+            if (!grupo.length) continue;
+            await supabase.from('whatsapp_inbound_queue')
+                .update({
+                    // `ignored` es lo que lista la bandeja; el cobro (si lo hay) no se toca y sigue enlazado.
+                    status: 'ignored',
+                    ...(aplicada ? {} : { result_type: 'escalated' }),
+                    error_message: motivoReclamo({ texto, correccion, paso, previo: unica?.error_message ?? null }).slice(0, 500),
+                })
+                .in('id', grupo.map((f) => f.id));
+        }
+        const resumen = motivoReclamo({ texto, correccion, paso });
+        if (pasarALaEscuela) await pasarALaEscuela({ resumen, mensajeFamilia: TEXTO_RECLAMO_RECIBIDO });
+        else await responder(TEXTO_RECLAMO_RECIBIDO, 'reclamo_de_resultado');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * ¿Después del comprobante de esta pregunta llegó otro archivo del mismo contacto? Nunca lanza: ante un error,
+ * false (se comporta como antes). Una sola consulta acotada por integración + teléfono.
+ */
+export async function hayComprobanteMasNuevo(
+    integrationId: string,
+    contactWaId: string,
+    fila: { id: string; created_at?: string | null },
+): Promise<boolean> {
+    if (!fila.created_at) return false;
+    try {
+        const { data } = await supabase
+            .from('whatsapp_inbound_queue')
+            .select('id')
+            .eq('integration_id', integrationId)
+            .eq('wa_phone_number', contactWaId)
+            .in('message_type', ['image', 'document'])
+            .neq('id', fila.id)
+            .gt('created_at', fila.created_at)
+            .limit(1);
+        return Array.isArray(data) && data.length > 0;
+    } catch {
+        return false;
+    }
+}
+
 async function resolverFilaAbierta(
     integration: WhatsAppIntegration,
     contactWaId: string,
@@ -148,7 +264,7 @@ async function resolverFilaAbierta(
 ): Promise<boolean> {
     const { data } = await supabase
         .from('whatsapp_inbound_queue')
-        .select('id, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id')
+        .select('id, created_at, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id')
         .eq('integration_id', integration.id)
         .eq('wa_phone_number', contactWaId)
         .eq('status', 'waiting_user')
@@ -159,7 +275,11 @@ async function resolverFilaAbierta(
     const fila = data as FilaEsperando | null;
     // Sin ninguna pregunta abierta: ¿es el nombre de quien asiste que llegó DESPUÉS del comprobante (Aleja,
     // 2026-11-11)? Solo si el texto parece un nombre y hay un comprobante cerrado reciente con nombre de relleno.
-    if (!fila) return resolverNombreTardio(integration, contactWaId, texto, responder);
+    // Y si tampoco: ¿está corrigiendo o reclamando el resultado que la cola le acaba de dar? (R11)
+    if (!fila) {
+        return (await resolverNombreTardio(integration, contactWaId, texto, responder))
+            || resolverReclamoDeResultado(integration, contactWaId, texto, responder, pasarALaEscuela);
+    }
     // Una pregunta en fila (todavía no salió) no se contesta: sale cuando se
     // resuelva la anterior, o la vence el worker y va al buzón.
     if (!fila.pregunta_at && fila.pregunta_ocr?.en_fila) return false;
@@ -170,6 +290,16 @@ async function resolverFilaAbierta(
     // de la familia volvía a sacar «¿a cuál cobro va?» encima de la escuela
     // (auditoría Dynasty 2026-10-10). El comprobante queda en la bandeja.
     if (await laEscuelaTomoLaConversacion(integration.id, contactWaId, fila.pregunta_at)) {
+        // (R5, 2026-11-16) Venta de un servicio: el pago NO se pierde porque la escuela haya escrito (Monster
+        // 2026-11-15: la clínica de $200.000 y el vacacional de $140.000 quedaron `ignored` sin cobro). Si la
+        // respuesta trae los datos que se pidieron, el cobro se crea igual, SIN hablarle encima a la persona de la
+        // escuela. Si no los trae, la fila queda en la bandeja como acción, con lo que se sabe y la propuesta.
+        if (fila.pregunta_ocr?.tipo === 'asistente_servicio') {
+            const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
+            if (edad <= VIGENCIA_H && await resolverRespuestaDeAsistente(fila, texto, RESPONDER_CALLADO)) return true;
+            await cerrarVentaConLaEscuelaEnElChat(fila);
+            return true;
+        }
         await cerrarPregunta(fila.id, MOTIVO_ESCUELA_TOMO);
         return true;
     }
@@ -179,6 +309,18 @@ async function resolverFilaAbierta(
     if (fila.pregunta_ocr?.tipo === 'mes' || fila.pregunta_ocr?.tipo === 'concepto') {
         const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
         if (edad > VIGENCIA_H) return false;
+        // (2026-11-17, Monster/Liliana) Llegó un comprobante MÁS NUEVO después del de esta pregunta: lo que la
+        // persona escribe ahora habla del nuevo. Antes «envío comprobante vacacional» (18 h después) contestó la
+        // pregunta vieja y el comprobante de $37.500 (reposición de balón) quedó como «vacacional». La pregunta
+        // vieja la vence el worker y va a la bandeja con su motivo.
+        if (await hayComprobanteMasNuevo(integration.id, contactWaId, fila)) return false;
+        // Una cortesía («gracias», «ok») dentro de la hora no es una respuesta ni merece «No te entendí».
+        if (edad <= 1 && soloSaludoOCortesia(texto)) return true;
+        // (R10) Pasada una hora, solo cuenta lo que calza con una opción o habla de pago/mes/monto.
+        if (!cuentaComoRespuesta({
+            texto, minutos: edad * 60,
+            calzaConOpcion: !!interpretarOpcion(texto, (fila.pregunta_ocr.guia?.opciones ?? []) as OpcionGuiada[]),
+        })) return false;
         // (Plan B4) Eligió un motivo con precio y el comprobante es ese precio:
         // se crea el cobro y se aplica. Si no, la bandeja de siempre.
         if (fila.pregunta_ocr.tipo === 'concepto' && await aplicarMotivoElegido(fila, texto, responder)) return true;
@@ -192,7 +334,9 @@ async function resolverFilaAbierta(
         const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
         if (edad > VIGENCIA_H) return false;
         const minutos = edad * 60;
-        if (soloSaludoOCortesia(texto) && minutos <= SALUDO_PEGADO_MIN) return true;
+        // «Sí» es la respuesta a «¿Es para X, como la vez pasada?», no una cortesía pegada al comprobante.
+        const confirmando = typeof (fila.pregunta_ocr as any)?.venta?.confirmar?.nombre === 'string';
+        if (!confirmando && soloSaludoOCortesia(texto) && minutos <= SALUDO_PEGADO_MIN) return true;
         return resolverRespuestaDeAsistente(fila, texto, responder);
     }
 
@@ -201,6 +345,10 @@ async function resolverFilaAbierta(
     if (fila.pregunta_ocr?.tipo === 'deportista') {
         const edad = fila.pregunta_at ? (Date.now() - new Date(fila.pregunta_at).getTime()) / 3_600_000 : Infinity;
         if (edad > VIGENCIA_H) return false;
+        // (R10) Pasada una hora, solo cuenta un botón/número, un nombre o algo que hable del pago.
+        if (!cuentaComoRespuesta({
+            texto, minutos: edad * 60, calzaConOpcion: /^\s*\d\s*$/.test(String(texto ?? '')), esperaNombre: true,
+        })) return false;
         return resolverRespuestaDeDeportista(fila, texto, responder);
     }
 
@@ -231,6 +379,15 @@ async function resolverFilaAbierta(
 
     const eleccion = interpretarEleccion(texto, opciones);
     const yaDichos = Array.isArray(guardado.dice_pagado) ? guardado.dice_pagado : [];
+
+    // (R10, auditoría 1–16 nov 2026) 16 h después de la pregunta la clienta le hablaba a la dueña de otra cosa y
+    // recibió dos veces «no te entendí a cuál cobro va». Pasada una hora, solo cuenta como respuesta lo que calza
+    // con una opción ofrecida o habla de pago/mes/monto; lo demás no se consume ni dispara una repregunta (la
+    // pregunta sigue abierta hasta que venza y la fila pase a la bandeja).
+    if (!cuentaComoRespuesta({
+        texto, minutos,
+        calzaConOpcion: eleccion.tipo === 'elegido' || eleccion.tipo === 'acotar' || eleccion.tipo === 'revision_escuela',
+    })) return false;
 
     // Discute el VALOR, o dice que ya está al día: no se aplica por inferencia.
     // A la escuela con un resumen, y a la familia UNA respuesta.
@@ -453,6 +610,48 @@ export function cubreVariosNoSoloElMasAntiguo(elegidos: PagoPendiente[], monto: 
     if (!Number.isFinite(m) || m <= 0) return false;
     const suma = elegidos.reduce((s, p) => s + Number(p.amount || 0), 0);
     return Math.abs(m - suma) < 1 && Math.abs(m - Number(elegidos[0].amount || 0)) >= 1;
+}
+
+// ─── La escuela escribió mientras se esperaban los datos de una venta (2026-11-16) ──
+
+/**
+ * El `responder` de cuando la escuela está en el chat: no manda nada (misma forma que el de la cola con la
+ * conversación tomada: `{ silenciado: true }`). El cobro se crea igual.
+ */
+const RESPONDER_CALLADO: ResponderCobro = async () => ({ ok: true, silenciado: true });
+
+/** `error_message` de la venta que se cerró con la escuela en el chat y sin los datos de quien asiste. */
+export const CODIGO_VENTA_ESCUELA_EN_EL_CHAT = 'venta_falta_nombre';
+
+/**
+ * El motivo que ve la escuela en la bandeja (acción): monto, servicio, lo que se sabe de quien asiste y la
+ * propuesta. Pura.
+ */
+export function motivoVentaConLaEscuelaEnElChat(guardado: FilaEsperando['pregunta_ocr'], hoy: string): string {
+    const venta = ((guardado as any)?.venta ?? {}) as Record<string, any>;
+    const monto = montoLeido(guardado?.ocr?.amount);
+    const servicio = typeof venta.itemNombre === 'string' && venta.itemNombre ? venta.itemNombre : 'el servicio';
+    const registro = venta.registro ? registroGuardado(venta.registro) : null;
+    const confirmar = typeof venta.confirmar?.nombre === 'string' ? venta.confirmar.nombre as string : null;
+    return motivoConPropuesta(
+        `${CODIGO_VENTA_ESCUELA_EN_EL_CHAT}: comprobante${monto ? ` de ${cop(monto)}` : ''} para ${servicio}; `
+        + 'la escuela escribió en el chat y la persona no dio los datos de quien asiste',
+        `Propuesta → pagó: ${guardado?.ocr?.originName ?? 'no se leyó'} · asiste: ${resumenDeAsistente(registro, hoy)}`
+        + `${confirmar ? ` (¿es para ${confirmar}, como la vez pasada?)` : ''} · `
+        + 'pedir los datos que faltan, crear el cobro del servicio y aplicar este comprobante');
+}
+
+/** Cierra la pregunta de una venta como ACCIÓN para la escuela (no «Sin clasificar»). */
+async function cerrarVentaConLaEscuelaEnElChat(fila: FilaEsperando): Promise<void> {
+    const ahora = new Date();
+    await supabase.from('whatsapp_inbound_queue')
+        .update({
+            status: 'ignored',
+            result_type: 'escalated',
+            processed_at: ahora.toISOString(),
+            error_message: motivoVentaConLaEscuelaEnElChat(fila.pregunta_ocr, hoyBogota(ahora.getTime())),
+        })
+        .eq('id', fila.id);
 }
 
 // ─── La escuela tomó la conversación (auditoría Dynasty 2026-10-10) ─────────

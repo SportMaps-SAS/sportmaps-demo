@@ -576,10 +576,43 @@ export interface PrecioDeServicio {
     deAfiliado: boolean;
     /** El próximo tramo de `precios_por_fecha` (solo sin precio de afiliado). */
     siguiente: { desde: string; precio: number } | null;
+    /**
+     * El precio que regía justo ANTES de que empezara el tramo de hoy, solo si era
+     * MAYOR que el de hoy (descuento temporal). Ausente si no hay descuento.
+     */
+    antes?: number;
     abono: number | null;
     abonoPct: number | null;
     /** Con opciones (1, 2, 3 o 4 semanas): una línea por opción. */
     opciones: { etiqueta: string; precio: number }[];
+}
+
+/**
+ * «antes $X» (2026-11-15): el precio que regía justo antes de que empezara el tramo
+ * vigente hoy, y SOLO si era mayor que el de hoy. Sale del catálogo: `price` (o
+ * `precio_afiliado`) rige hasta la víspera del primer `desde`, y cada tramo desde su
+ * `desde`; el anterior al tramo de hoy es el tramo previo o, si es el primero, el
+ * precio base. null si hoy rige el precio base (no hubo uno antes), si no bajó, o si
+ * el servicio se vende por opciones. Mismo orden que `precioVigente`. Pura.
+ */
+export function precioAntesDelTramo(item: ItemDeServicio, o: { afiliado: boolean; hoy: string }): number | null {
+    const positivo = (v: unknown) => { const n = Number(v); return v !== null && v !== undefined && Number.isFinite(n) && n > 0 ? n : null; };
+    if (opcionesDelItem(item).length) return null;
+    const de = (base: unknown, raw: unknown): { hoy: number | null; antes: number | null } => {
+        const tramos = tramosPorFecha(raw);
+        let vigente: { desde: string; precio: number } | null = null;
+        for (const t of tramos) if (t.desde <= o.hoy) vigente = t;
+        if (!vigente) return { hoy: positivo(base), antes: null };
+        // El anterior: el último tramo que empezó ANTES que el vigente (dos tramos con la misma fecha no cuentan).
+        let anterior = positivo(base);
+        for (const t of tramos) if (t.desde < vigente.desde) anterior = t.precio;
+        return { hoy: vigente.precio, antes: anterior !== null && anterior > vigente.precio ? anterior : null };
+    };
+    if (o.afiliado) {
+        const af = de(item.precio_afiliado, item.precios_afiliado_por_fecha);
+        if (af.hoy !== null) return af.antes;
+    }
+    return de(item.price, item.precios_por_fecha).antes;
 }
 
 /** El precio de hoy, el tramo que sigue, el abono y las opciones. `hoy` = 'YYYY-MM-DD' (Bogotá). Pura. */
@@ -594,8 +627,10 @@ export function precioDelServicio(item: ItemDeServicio, o: { afiliado: boolean; 
     const siguiente = deAfiliado ? null : tramosPorFecha(item.precios_por_fecha).find((t) => t.desde > o.hoy) ?? null;
     const pct = Number(item.abono_minimo_pct);
     const abono = !opciones.length && item.allow_installments === true ? abonoMinimo(hoy, item.abono_minimo_pct) : null;
+    const antes = hoy !== null ? precioAntesDelTramo(item, o) : null;
     return {
         hoy, deAfiliado, siguiente: siguiente && siguiente.precio !== hoy ? siguiente : null,
+        ...(antes !== null && hoy !== null && antes > hoy ? { antes } : {}),
         abono: abono !== null && hoy !== null && abono < hoy ? abono : null,
         abonoPct: abono !== null && Number.isFinite(pct) ? pct : null,
         opciones,
@@ -630,11 +665,13 @@ export function lineasDeValor(p: PrecioDeServicio): string[] {
     if (p.opciones.length) {
         lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*`));
     } else if (p.hoy !== null) {
-        if (p.deAfiliado) lineas.push(`Tu valor como afiliado: *${cop(p.hoy)}*`);
+        if (p.deAfiliado) lineas.push(`Tu valor como afiliado: *${cop(p.hoy)}*${p.antes ? ` (antes ${cop(p.antes)})` : ''}`);
         else {
-            const tramo = p.siguiente
-                ? ` (hasta el ${diaLegible(p.siguiente.desde, 1)}; desde el ${diaLegible(p.siguiente.desde)}, *${cop(p.siguiente.precio)}*)`
-                : '';
+            const partes = [
+                p.antes ? `antes ${cop(p.antes)}` : '',
+                p.siguiente ? `hasta el ${diaLegible(p.siguiente.desde, 1)}; desde el ${diaLegible(p.siguiente.desde)}, *${cop(p.siguiente.precio)}*` : '',
+            ].filter(Boolean);
+            const tramo = partes.length ? ` (${partes.join('; ')})` : '';
             lineas.push(`Valor hoy: *${cop(p.hoy)}*${tramo}`);
         }
     }

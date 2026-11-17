@@ -32,6 +32,7 @@ import {
     lineaDeHoras, reintentarSumaDeHoras, revertirHorasDeLote, sumarHorasAdicionales, verificarHorasAdicionales,
 } from '../services/hour-bank-extra.service';
 import { verificarComprobanteConHoras } from '../services/comprobante-horas';
+import { verificarConstanciaDeRecibido, anotarRecibido } from '../services/constancia-de-recibido';
 import { buscarCobroDuplicadoReciente, verificarCobroDuplicado } from '../services/cobro-duplicado-reciente';
 import { buscarCoincidencias } from '../services/athlete-duplicates.service';
 
@@ -119,8 +120,14 @@ router.post(
             await verificarPertenencia(req.schoolId, body);
             await verificarHorasAdicionales(req.schoolId, body);
             verificarComprobanteConHoras(body);
+            // Pago sin comprobante: exige quién lo recibió (se anota en notes tras crear).
+            verificarConstanciaDeRecibido(body);
             await verificarCobroDuplicado(req.schoolId, body);
             const data = await createChargeBatch(req.schoolId, req.user.id, body);
+            const recibidoAnotado = await anotarRecibido(req.schoolId, data.batch_id as string | undefined, data, body.payment);
+            if (!recibidoAnotado) {
+                req.log?.warn?.({ evento: 'recibido_sin_anotar', batch_id: data.batch_id ?? null, school_id: req.schoolId }, 'charge_batch: no se pudo anotar quién recibió el pago');
+            }
             // Venta de horas por adelantado: con el cobro ya creado, se suman al banco (idempotente por pago).
             const ventaDeHoras = lineaDeHoras(body);
             const horas = ventaDeHoras
@@ -142,7 +149,7 @@ router.post(
                 hour_bank_grant: horas ? (horas.ok ? 'ok' : horas.reason) : undefined,
                 ms: Date.now() - inicio,
             }, 'charge_batch_created');
-            return res.status(200).json(horas ? { ...data, hour_bank_grant: horas } : data);
+            return res.status(200).json({ ...data, ...(recibidoAnotado ? {} : { recibido_sin_anotar: true }), ...(horas ? { hour_bank_grant: horas } : {}) });
         } catch (err) {
             return responderError(req, res, err);
         }

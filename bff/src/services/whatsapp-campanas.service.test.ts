@@ -125,7 +125,8 @@ const {
     cupoDelTick, ticksRestantesDelDia, limiteDeTier, armarPayloadCampana, primerNombre, variablesDeCampana,
     validarPlantillaDeCampana, destinoTrasErrorDeEnvio, destinoTrasFalloAsincrono, leaseVencido,
     motivoParaPosponer, runCampanas, aprobarCampana, simularCampana, filtroCoincide, contarFilas,
-    ajustesCampanasDesdeFila, payloadDeBoton,
+    ajustesCampanasDesdeFila, payloadDeBoton, audienciaVigente, reanudarCampana, reanudarEscuela, activarCampanas,
+    textoDeAceptacionDePausa, RESPONSABILIDAD,
 } = svc;
 
 const cupoMod = await import('./whatsapp-campanas-cupo');
@@ -155,8 +156,10 @@ function sembrar(opts: { base?: 'optin' | 'contacto_previo_declarado'; contactos
         whatsapp_campanas_ajustes: [{
             school_id: ESC, habilitadas: true, base_consentimiento: opts.base ?? 'contacto_previo_declarado',
             tope_diario_max: 200, lote_piloto: 50, frecuencia_min_dias: 7, antiguedad_max_dias: 180, palabras_sede: [],
-            pausada_at: null, pausa_motivo: null,
+            pausada_at: null, pausa_motivo: null, pausa_origen: null,
         }],
+        schools: [{ id: ESC, name: 'Monster´s Volley Club' }],
+        whatsapp_campanas_pausas: [],
         school_whatsapp_integrations: [{
             id: INTEG, school_id: ESC, phone_number_id: 'pn-1', waba_id: WABA, display_phone_number: '573188682241',
             access_token_encrypted: 'gcm:x', status: 'active',
@@ -194,6 +197,29 @@ function sembrar(opts: { base?: 'optin' | 'contacto_previo_declarado'; contactos
             e.estado = 'enviando'; e.intentos += 1; e.lease_hasta = iso(MARTES_10AM, 10 * 60_000);
         }
         return { data: tomados.map((e) => ({ ...e })), error: null };
+    };
+    // La RPC real (20261115143758): pausa la escuela Y sus campañas en curso, deja la bitácora y,
+    // si la escuela reanudó un freno hace menos de 7 días, la pausa nace como 'plataforma'.
+    db.rpc.wa_campanas_pausar_escuela = ({ p_school_id, p_por, p_origen, p_motivo }: any) => {
+        const aj = db.t.whatsapp_campanas_ajustes.find((a) => a.school_id === p_school_id);
+        if (!aj) return { data: null, error: { code: 'P0002', message: 'SIN_AJUSTES' } };
+        if (p_origen === 'freno' && p_por != null) return { data: null, error: { code: '22023', message: 'EL_FRENO_ES_AUTOMATICO' } };
+        if (aj.pausada_at && !(p_origen === 'plataforma' && aj.pausa_origen !== 'plataforma')) {
+            return { data: { ok: true, ya_en_pausa: true, origen: aj.pausa_origen ?? 'freno' }, error: null };
+        }
+        const hace7Dias = Date.now() - 7 * 24 * 3600_000;
+        const reincidente = p_origen === 'freno' && (db.t.whatsapp_campanas_pausas ?? []).some((b) => b.school_id === p_school_id
+            && b.origen === 'freno' && b.levantada_at && new Date(b.levantada_at).getTime() > hace7Dias);
+        const origen = reincidente ? 'plataforma' : p_origen;
+        const ahora = new Date().toISOString();
+        Object.assign(aj, { pausada_at: ahora, pausa_motivo: p_motivo ?? origen, pausa_origen: origen });
+        for (const c of db.t.whatsapp_campanas) {
+            if (c.school_id === p_school_id && ['aprobada', 'enviando'].includes(c.estado)) {
+                Object.assign(c, { estado: 'pausada', pausa_motivo: p_motivo ?? origen });
+            }
+        }
+        (db.t.whatsapp_campanas_pausas ??= []).push({ school_id: p_school_id, origen, motivo: p_motivo, reincidente, levantada_at: null });
+        return { data: { ok: true, origen, reincidente }, error: null };
     };
 }
 
@@ -505,6 +531,26 @@ describe('runCampanas', () => {
         expect(db.t.whatsapp_audiencia[0].excluido).toBe('baja');
     });
 
+    it('el motivo del fallo guarda el código de Meta, `(#código) título`, al enviar y por el webhook', async () => {
+        sembrar({ contactos: 2 });
+        // Síncrono: Graph rechaza el POST con su código.
+        meta.respuesta = (p) => (p.to === '573000000000'
+            ? { ok: false, error: 'Something went wrong', errorCode: 131000 } as any
+            : { ok: true, waMessageId: 'wamid.ok' });
+        const ultimoTick = new Date('2026-11-03T23:55:00Z');
+        await runCampanas(ultimoTick);
+        expect(db.t.whatsapp_campana_envios[0]).toMatchObject({ estado: 'pendiente', motivo: '(#131000) Something went wrong' });
+
+        // Asíncrono: el webhook de estados ya dejó `(#código) título` en whatsapp_messages.error_detail.
+        db.t.whatsapp_messages = [{
+            integration_id: INTEG, wa_message_id: 'wamid.ok', status: 'failed', created_at: iso(ultimoTick, -60_000),
+            error_detail: '(#131026) Message undeliverable', payload: { campana_id: CAMP },
+        }];
+        db.t.whatsapp_campanas[0].estado = 'enviando';
+        await runCampanas(ultimoTick);
+        expect(db.t.whatsapp_campana_envios[1]).toMatchObject({ estado: 'fallido', motivo: '(#131026) Message undeliverable' });
+    });
+
     it('freno: número en amarillo pausa la escuela y avisa; nada sale', async () => {
         sembrar({ contactos: 2 });
         meta.calidad = 'YELLOW';
@@ -513,8 +559,67 @@ describe('runCampanas', () => {
         expect(meta.enviados).toHaveLength(0);
         expect(db.t.whatsapp_campanas[0]).toMatchObject({ estado: 'pausada', pausa_motivo: 'calidad_del_numero' });
         expect(db.t.whatsapp_campanas_ajustes[0].pausada_at).toBeTruthy();
+        expect(db.t.whatsapp_campanas_ajustes[0].pausa_origen).toBe('freno');
+        // La pausa la hace la RPC (valida el origen y deja la bitácora), no un UPDATE suelto del BFF.
+        expect(db.rpcLlamadas.filter((l) => l.fn === 'wa_campanas_pausar_escuela').map((l) => l.args)).toEqual([
+            { p_school_id: ESC, p_por: null, p_origen: 'freno', p_motivo: 'calidad_del_numero' },
+        ]);
+        expect(db.llamadas.some((l) => l.tabla === 'whatsapp_campanas_ajustes' && l.op !== 'select')).toBe(false);
         expect(db.t.notifications).toHaveLength(1);
         expect(db.t.notifications[0]).toMatchObject({ user_id: 'admin-1', link: '/whatsapp?tab=campanas', category: 'support' });
+        // Primera vez: la escuela puede reanudar sola.
+        expect(db.t.notifications[0].message).toMatch(/Meta bajó la calidad de tu número/);
+        expect(db.t.notifications[0].message).toMatch(/puedes reanudar cuando lo hayas visto/);
+        expect(db.t.notifications[0].message).not.toMatch(/SportMaps/);
+    });
+
+    it('freno reincidente (la escuela reanudó un freno hace menos de 7 días): la pausa nace de plataforma y el aviso dice que SportMaps la revisa', async () => {
+        sembrar({ contactos: 2 });
+        db.t.whatsapp_campanas_pausas = [{ school_id: ESC, origen: 'freno', motivo: 'calidad_del_numero', levantada_at: new Date(Date.now() - 3600_000).toISOString() }];
+        meta.calidad = 'RED';
+        const r = await runCampanas(MARTES_10AM);
+        expect(r.pausadas).toBe(1);
+        expect(meta.enviados).toHaveLength(0);
+        expect(db.t.whatsapp_campanas_ajustes[0].pausa_origen).toBe('plataforma');
+        expect(db.t.notifications).toHaveLength(1);
+        expect(db.t.notifications[0].message).toMatch(/segunda pausa en menos de 7 días/);
+        expect(db.t.notifications[0].message).toMatch(/SportMaps/);
+        expect(db.t.notifications[0].message).not.toMatch(/puedes reanudar/);
+    });
+
+    it('baja de promociones (`promos_out_at`, botón «No recibir más»): no recibe y queda omitido «baja», con las dos bases', async () => {
+        for (const base of ['contacto_previo_declarado', 'optin'] as const) {
+            sembrar({ base, contactos: 2 });
+            meta.enviados = [];
+            db.t.whatsapp_optins = [
+                // Tiene opt-in vigente y NO tiene baja total: solo apagó las promociones.
+                { integration_id: INTEG, contact_wa_id: '573000000000', opted_in_at: iso(MARTES_10AM, -9e8), opted_out_at: null, promos_out_at: iso(MARTES_10AM, -864e5) },
+                { integration_id: INTEG, contact_wa_id: '573000000001', opted_in_at: iso(MARTES_10AM, -9e8), opted_out_at: null, promos_out_at: null },
+            ];
+            const r = await runCampanas(new Date('2026-11-03T23:55:00Z'));
+            expect(meta.enviados.map((p) => p.to)).toEqual(['573000000001']);
+            expect(r).toMatchObject({ enviados: 1, omitidos: 1 });
+            expect(db.t.whatsapp_campana_envios[0]).toMatchObject({ estado: 'omitido', motivo: 'baja', lease_hasta: null });
+        }
+    });
+
+    it('lunes festivo 16-nov-2026 10:00 y martes 17 a las 06:59: no sale nada; a las 07:00 sí', async () => {
+        sembrar({ contactos: 3 });
+        const festivo = await runCampanas(new Date('2026-11-16T15:00:00Z')); // lunes festivo (Independencia de Cartagena) 10:00 COT
+        expect(festivo.saltadas.fuera_de_horario).toBe(1);
+        const temprano = await runCampanas(new Date('2026-11-17T11:59:00Z')); // martes 06:59 COT
+        expect(temprano.saltadas.fuera_de_horario).toBe(1);
+        expect(festivo.enviados + temprano.enviados).toBe(0);
+        expect(meta.enviados).toHaveLength(0);
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_campana_tomar_lote')).toBe(false);
+        expect(db.t.whatsapp_campana_envios.every((e) => e.estado === 'pendiente')).toBe(true);
+        // Ni pausa ni cierre: la campaña sigue lista para el primer tick hábil.
+        expect(db.t.whatsapp_campanas[0].estado).toBe('aprobada');
+
+        const siete = await runCampanas(new Date('2026-11-17T12:00:00Z')); // martes 07:00 COT
+        expect(siete.saltadas.fuera_de_horario).toBeUndefined();
+        expect(siete.enviados).toBeGreaterThan(0);
+        expect(meta.enviados).toHaveLength(siete.enviados);
     });
 
     it('freno: ACCOUNT_DELETED y ONBOARDING no frenan', async () => {
@@ -576,6 +681,8 @@ describe('aprobar', () => {
     beforeEach(() => {
         sembrar();
         db.t.whatsapp_campanas[0].estado = 'borrador';
+        // Con la base «contacto previo» toda campaña filtra por al menos un interés.
+        db.t.whatsapp_campanas[0].filtro = { intereses: ['clinica', 'clase_prueba'], branch_ids: [] };
         db.t.whatsapp_audiencia = [
             { integration_id: INTEG, contact_wa_id: 'a', intereses: ['clinica'], branch_id: null, excluido: null, ultimo_entrante_at: iso(MARTES_10AM, -864e5) },
             { integration_id: INTEG, contact_wa_id: 'b', intereses: ['clase_prueba'], branch_id: null, excluido: null, ultimo_entrante_at: iso(MARTES_10AM, -864e5) },
@@ -599,7 +706,73 @@ describe('aprobar', () => {
         const r = await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true });
         expect(r).toEqual({ ok: true, destinatarios: 2 });
         const llamada = db.rpcLlamadas.find((l) => l.fn === 'wa_campana_aprobar')!;
-        expect(llamada.args).toEqual({ p_campana_id: CAMP, p_por: 'admin-1', p_declaracion: 'contacto_previo_v1' });
+        // Queda registrado QUÉ se declaró (versión + texto con el nombre de la escuela) y QUÉ mensaje se aprobó.
+        expect(llamada.args).toEqual({
+            p_campana_id: CAMP, p_por: 'admin-1',
+            p_declaracion_version: 'campana_v1',
+            p_declaracion_texto: RESPONSABILIDAD.textoCampana('Monster´s Volley Club', 'contacto_previo_declarado', 90),
+        });
+        expect(llamada.args.p_declaracion_texto).toMatch(/Monster´s Volley Club/);
+        expect(llamada.args.p_declaracion_texto).toMatch(/le escribieron a Monster´s Volley Club por WhatsApp en los últimos 90 días/);
+    });
+
+    it('con base opt-in TAMBIÉN exige la declaración (toda aprobación la pide), y el texto es el de opt-in', async () => {
+        db.t.whatsapp_campanas_ajustes[0].base_consentimiento = 'optin';
+        const sin = await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: false });
+        expect(sin).toMatchObject({ ok: false, status: 400, error: 'falta_declaracion' });
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_campana_aprobar')).toBe(false);
+        expect(db.t.whatsapp_campanas[0].estado).toBe('borrador');
+
+        await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true });
+        const llamada = db.rpcLlamadas.find((l) => l.fn === 'wa_campana_aprobar')!;
+        expect(llamada.args).toMatchObject({
+            p_por: 'admin-1', p_declaracion_version: 'campana_v1',
+            p_declaracion_texto: RESPONSABILIDAD.textoCampana('Monster´s Volley Club', 'optin', 180),
+        });
+        expect(llamada.args.p_declaracion_texto).toMatch(/aceptaron recibir novedades/);
+        expect(llamada.args.p_declaracion_texto).not.toMatch(/le escribieron/);
+    });
+
+    it('los errores de la RPC salen con la clave que entiende la pantalla', async () => {
+        const casos: [{ message: string; code?: string }, number, string][] = [
+            [{ message: 'DECLARACION_DE_ACTIVACION_REQUERIDA', code: 'P0001' }, 409, 'falta_activacion'],
+            [{ message: 'permission denied for function wa_campana_aprobar', code: '42501' }, 403, 'solo_la_escuela'],
+            [{ message: 'Forbidden' }, 403, 'solo_la_escuela'],
+            [{ message: 'DECLARACION_REQUERIDA', code: '22023' }, 400, 'falta_declaracion'],
+            [{ message: 'CAMPANAS_EN_PAUSA_GLOBAL', code: 'P0001' }, 409, 'pausa_global'],
+            // La pausa de plataforma llega con 42501: gana su clave, no «solo_la_escuela».
+            [{ message: 'PAUSA_DE_PLATAFORMA', code: '42501' }, 409, 'pausa_de_plataforma'],
+        ];
+        for (const [error, status, clave] of casos) {
+            db.rpc.wa_campana_aprobar = () => ({ data: null, error });
+            const r = await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true });
+            expect(r, error.message).toMatchObject({ ok: false, status, error: clave });
+        }
+        expect(db.t.whatsapp_campanas[0].estado).toBe('borrador');
+    });
+
+    it('con la escuela en pausa no se aprueba (409) y la RPC ni se llama', async () => {
+        Object.assign(db.t.whatsapp_campanas_ajustes[0], { pausada_at: iso(MARTES_10AM), pausa_motivo: 'calidad_del_numero', pausa_origen: 'freno' });
+        expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
+            .toMatchObject({ ok: false, status: 409, error: 'escuela_en_pausa', detalle: 'calidad_del_numero' });
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_campana_aprobar')).toBe(false);
+    });
+
+    it('audiencia vigente: quien tiene baja de promociones (`promos_out_at`) no cuenta, aunque tenga opt-in y no tenga baja total', async () => {
+        const ajustes = ajustesCampanasDesdeFila(db.t.whatsapp_campanas_ajustes[0])!;
+        const antes = await audienciaVigente(INTEG, ajustes, MARTES_10AM.getTime());
+        expect(antes.map((f) => f.contact_wa_id)).toEqual(['a', 'b']);
+        db.t.whatsapp_optins.push({
+            integration_id: INTEG, contact_wa_id: 'a', opted_in_at: iso(MARTES_10AM, -10 * 864e5), opted_out_at: null,
+            promos_out_at: iso(MARTES_10AM, -864e5),
+        });
+        const despues = await audienciaVigente(INTEG, ajustes, MARTES_10AM.getTime());
+        expect(despues.map((f) => f.contact_wa_id)).toEqual(['b']);
+        expect(await simularCampana(ESC, CAMP)).toMatchObject({ ok: true, conteo: { total: 1 } });
+        // Con base opt-in igual: su opt-in no lo devuelve a la lista.
+        db.t.whatsapp_optins.push({ integration_id: INTEG, contact_wa_id: 'b', opted_in_at: iso(MARTES_10AM, -864e5), opted_out_at: null, promos_out_at: null });
+        const conOptin = await audienciaVigente(INTEG, { ...ajustes, baseConsentimiento: 'optin' }, MARTES_10AM.getTime());
+        expect(conOptin.map((f) => f.contact_wa_id)).toEqual(['b']);
     });
 
     it('campañas apagadas → 409; plantilla en revisión → 409; ya aprobada → 409', async () => {
@@ -645,9 +818,155 @@ describe('aprobar', () => {
         expect(await simularCampana(ESC, CAMP)).toMatchObject({ ok: true, conteo: { total: 1 } });
     });
 
+    it('con la base de contacto previo, una campaña sin interés no se aprueba (ni llega a la base)', async () => {
+        db.t.whatsapp_campanas[0].filtro = { intereses: [], branch_ids: [] };
+        expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
+            .toMatchObject({ ok: false, status: 400, error: 'falta_interes' });
+        expect(db.rpcLlamadas.find((l) => l.fn === 'wa_campana_aprobar')).toBeUndefined();
+        // Con base opt-in sí puede ir a toda la lista con consentimiento.
+        db.t.whatsapp_campanas_ajustes[0].base_consentimiento = 'optin';
+        expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
+            .toMatchObject({ ok: true });
+    });
+
+    it('la base rechaza por plantilla sin aprobar o sin interés: salen con la clave de la pantalla', async () => {
+        db.rpc.wa_campana_aprobar = () => ({ data: null, error: { message: 'PLANTILLA_NO_APROBADA', code: '55000' } });
+        expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
+            .toMatchObject({ ok: false, status: 409, error: 'plantilla_no_lista' });
+        db.rpc.wa_campana_aprobar = () => ({ data: null, error: { message: 'INTERES_REQUERIDO', code: '22023' } });
+        expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
+            .toMatchObject({ ok: false, status: 400, error: 'falta_interes' });
+    });
+
     it('nadie cumple el filtro: la RPC devuelve 0 y la aprobación no es un éxito', async () => {
         for (const f of db.t.whatsapp_audiencia) f.excluido = 'familia';
         expect(await aprobarCampana({ schoolId: ESC, campanaId: CAMP, por: 'admin-1', declaracionAceptada: true }))
             .toMatchObject({ ok: false, status: 409, error: 'sin_destinatarios' });
+    });
+});
+
+// ─── Autoservicio (2026-11-15): activar, pausas y reanudar ───────────────────
+
+describe('reanudar una campaña ya no levanta la pausa de la escuela', () => {
+    beforeEach(() => {
+        sembrar();
+        Object.assign(db.t.whatsapp_campanas[0], { estado: 'pausada', pausa_motivo: 'calidad_del_numero' });
+    });
+
+    it('escuela en pausa por el freno → 409 escuela_en_pausa; la campaña y la pausa quedan como estaban', async () => {
+        Object.assign(db.t.whatsapp_campanas_ajustes[0], { pausada_at: iso(MARTES_10AM), pausa_motivo: 'calidad_del_numero', pausa_origen: 'freno' });
+        expect(await reanudarCampana(ESC, CAMP)).toEqual({ ok: false, status: 409, error: 'escuela_en_pausa', detalle: 'calidad_del_numero' });
+        expect(db.t.whatsapp_campanas[0]).toMatchObject({ estado: 'pausada', pausa_motivo: 'calidad_del_numero' });
+        expect(db.t.whatsapp_campanas_ajustes[0]).toMatchObject({ pausada_at: iso(MARTES_10AM), pausa_origen: 'freno' });
+        expect(db.llamadas.some((l) => l.op === 'update')).toBe(false);
+        expect(db.rpcLlamadas).toHaveLength(0);
+    });
+
+    it('pausa de plataforma → 409 pausa_de_plataforma', async () => {
+        Object.assign(db.t.whatsapp_campanas_ajustes[0], { pausada_at: iso(MARTES_10AM), pausa_motivo: 'revisión', pausa_origen: 'plataforma' });
+        expect(await reanudarCampana(ESC, CAMP)).toMatchObject({ ok: false, status: 409, error: 'pausa_de_plataforma' });
+        expect(db.t.whatsapp_campanas[0].estado).toBe('pausada');
+    });
+
+    it('sin pausa de la escuela: la campaña vuelve a «enviando»', async () => {
+        expect(await reanudarCampana(ESC, CAMP)).toEqual({ ok: true });
+        expect(db.t.whatsapp_campanas[0]).toMatchObject({ estado: 'enviando', pausa_motivo: null });
+    });
+});
+
+describe('reanudarEscuela (levantar la pausa de la escuela)', () => {
+    const pausar = (origen: string | null, motivo = 'calidad_del_numero') => Object.assign(
+        db.t.whatsapp_campanas_ajustes[0], { pausada_at: iso(MARTES_10AM), pausa_motivo: motivo, pausa_origen: origen });
+    const llamadas = () => db.rpcLlamadas.filter((l) => l.fn === 'wa_campanas_reanudar_escuela');
+    beforeEach(() => { sembrar(); });
+
+    it('pausa del freno sin aceptar el motivo → 400 falta_aceptacion, sin llamar la RPC', async () => {
+        pausar('freno');
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: false }))
+            .toEqual({ ok: false, status: 400, error: 'falta_aceptacion' });
+        expect(llamadas()).toHaveLength(0);
+        expect(db.t.whatsapp_campanas_ajustes[0].pausada_at).toBeTruthy();
+    });
+
+    it('aceptando → la RPC recibe quién y el texto de aceptación con el motivo legible', async () => {
+        pausar('freno');
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true })).toEqual({ ok: true });
+        expect(llamadas().map((l) => l.args)).toEqual([{
+            p_school_id: ESC, p_por: 'admin-1', p_aceptacion: textoDeAceptacionDePausa('calidad_del_numero'),
+        }]);
+        expect(llamadas()[0].args.p_aceptacion).toMatch(/Meta bajó la calidad de tu número/);
+        expect(llamadas()[0].args.p_aceptacion).toMatch(/solo SportMaps podrá levantarla/);
+        // La RPC exige ≥ 20 caracteres de aceptación; un motivo desconocido también da un texto válido.
+        expect(textoDeAceptacionDePausa(null)).toMatch(/el sistema detectó un riesgo para el número/);
+        expect(textoDeAceptacionDePausa('algo_que_no_existe')).toMatch(/el sistema detectó un riesgo para el número/);
+    });
+
+    it('pausa anterior a la bitácora (sin origen) se trata como la del freno: exige aceptar', async () => {
+        pausar(null);
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: false }))
+            .toMatchObject({ ok: false, status: 400, error: 'falta_aceptacion' });
+    });
+
+    it('pausa de plataforma → 409 pausa_de_plataforma sin llamar la RPC, aunque acepte', async () => {
+        pausar('plataforma', 'revisión de SportMaps');
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true }))
+            .toEqual({ ok: false, status: 409, error: 'pausa_de_plataforma' });
+        expect(llamadas()).toHaveLength(0);
+    });
+
+    it('pausa de la propia escuela: no pide aceptación y la RPC va sin texto', async () => {
+        pausar('escuela', 'manual');
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: false })).toEqual({ ok: true });
+        expect(llamadas().map((l) => l.args)).toEqual([{ p_school_id: ESC, p_por: 'admin-1', p_aceptacion: null }]);
+    });
+
+    it('sin pausa: ok sin llamar la RPC; campañas apagadas → 409', async () => {
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true })).toEqual({ ok: true });
+        db.t.whatsapp_campanas_ajustes[0].habilitadas = false;
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true }))
+            .toMatchObject({ ok: false, status: 409, error: 'campanas_apagadas' });
+        expect(llamadas()).toHaveLength(0);
+    });
+
+    it('los errores de la RPC se traducen (la plataforma endureció la pausa entre la lectura y la RPC; no administra la escuela)', async () => {
+        pausar('freno');
+        db.rpc.wa_campanas_reanudar_escuela = () => ({ data: null, error: { code: '42501', message: 'PAUSA_DE_PLATAFORMA' } });
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true }))
+            .toMatchObject({ ok: false, status: 409, error: 'pausa_de_plataforma' });
+        db.rpc.wa_campanas_reanudar_escuela = () => ({ data: null, error: { code: '42501', message: 'Forbidden' } });
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'intruso', aceptada: true }))
+            .toMatchObject({ ok: false, status: 403, error: 'solo_la_escuela' });
+        db.rpc.wa_campanas_reanudar_escuela = () => ({ data: null, error: { code: '22023', message: 'ACEPTACION_REQUERIDA' } });
+        expect(await reanudarEscuela({ schoolId: ESC, por: 'admin-1', aceptada: true }))
+            .toMatchObject({ ok: false, status: 400, error: 'falta_aceptacion' });
+    });
+});
+
+describe('activarCampanas (la escuela las prende aceptando la declaración)', () => {
+    beforeEach(() => { sembrar(); });
+
+    it('sin aceptar → 400 falta_declaracion y la RPC no se llama', async () => {
+        expect(await activarCampanas({ schoolId: ESC, por: 'admin-1', declaracionAceptada: false }))
+            .toEqual({ ok: false, status: 400, error: 'falta_declaracion' });
+        expect(db.rpcLlamadas).toHaveLength(0);
+    });
+
+    it('aceptando → wa_campanas_activar con quien actúa, la versión y el texto con el nombre de la escuela', async () => {
+        expect(await activarCampanas({ schoolId: ESC, por: 'admin-9', declaracionAceptada: true })).toEqual({ ok: true });
+        expect(db.rpcLlamadas).toEqual([{
+            fn: 'wa_campanas_activar',
+            args: {
+                p_school_id: ESC, p_por: 'admin-9', p_version: 'activacion_v1',
+                p_texto: RESPONSABILIDAD.textoActivacion('Monster´s Volley Club'),
+            },
+        }]);
+        expect(db.rpcLlamadas[0].args.p_texto).toMatch(/^En nombre de Monster´s Volley Club declaro que/);
+        expect(db.rpcLlamadas[0].args.p_texto).toMatch(/Ley 2300 de 2023/);
+    });
+
+    it('el administrador de plataforma no activa por la escuela: 42501 → 403 solo_la_escuela', async () => {
+        db.rpc.wa_campanas_activar = () => ({ data: null, error: { code: '42501', message: 'Forbidden' } });
+        expect(await activarCampanas({ schoolId: ESC, por: 'admin-plataforma', declaracionAceptada: true }))
+            .toMatchObject({ ok: false, status: 403, error: 'solo_la_escuela' });
     });
 });

@@ -28,6 +28,7 @@ import { ImportarChatExportado } from '@/components/whatsapp/ImportarChatExporta
 import { BandejaComprobantes, type ResumenBandeja } from '@/components/whatsapp/BandejaComprobantes';
 import { Campanas } from '@/components/whatsapp/Campanas';
 import { Anuncios } from '@/components/whatsapp/Anuncios';
+import { PreciosDelBot } from '@/components/whatsapp/PreciosDelBot';
 import { CoherenciaFicha } from '@/components/whatsapp/CoherenciaFicha';
 import { SeguimientoConversaciones } from '@/components/whatsapp/SeguimientoConversaciones';
 import { useToast } from '@/hooks/use-toast';
@@ -44,6 +45,7 @@ import {
     Megaphone,
     Target,
     ListChecks,
+    Tag,
 } from 'lucide-react';
 
 // ─── Tipos que devuelve el BFF ──────────────────────────────────────────────
@@ -440,6 +442,9 @@ export default function WhatsAppPage() {
                     <TabsTrigger value="anuncios" className="h-full">
                         <Target className="h-4 w-4 mr-1" /> Anuncios
                     </TabsTrigger>
+                    <TabsTrigger value="precios" className="h-full">
+                        <Tag className="h-4 w-4 mr-1" /> Precios
+                    </TabsTrigger>
                     <TabsTrigger value="metricas" className="h-full">
                         <BarChart3 className="h-4 w-4 mr-1" /> Métricas
                     </TabsTrigger>
@@ -548,6 +553,11 @@ export default function WhatsAppPage() {
                 {/* ── Anuncios: qué pasa después del clic en un anuncio con botón de WhatsApp ── */}
                 <TabsContent value="anuncios">
                     {schoolId && <Anuncios schoolId={schoolId} />}
+                </TabsContent>
+
+                {/* ── Precios: los valores con los que el bot reconoce pagos y responde cuánto cuesta algo ── */}
+                <TabsContent value="precios">
+                    {schoolId && <PreciosDelBot schoolId={schoolId} />}
                 </TabsContent>
 
                 {/* ── Seguimiento: quién escribió, si respondió la escuela o el bot, quién espera ── */}
