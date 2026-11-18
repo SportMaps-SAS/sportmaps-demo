@@ -40,6 +40,7 @@ import { todayColombia, formatDayCO, daysDiffFromToday } from '@/lib/dateUtils';
 import { SportMapsPaySettings } from '@/components/settings/SportMapsPaySettings';
 import { PaymentProvidersAdmin } from '@/components/admin/PaymentProvidersAdmin';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
+import { PorClasificarCard } from '@/components/payment/PorClasificarCard';
 import { claveAtleta, juntarPorAtleta, marcarGrupos, ordenarPagosRecibidos } from '@/lib/pagosRecibidosOrden';
 import { ClasesDePruebaDialog } from '@/components/payment/ClasesDePruebaDialog';
 import { OperacionesTab } from '@/components/payment/OperacionesTab';
@@ -1771,6 +1772,7 @@ export default function PaymentsAutomationPage() {
 
         {/* ── Tab: Validación de cobros ────────────────────────────────── */}
         <TabsContent value="recurrent">
+          {schoolId && <PorClasificarCard schoolId={schoolId} onCambio={() => fetchPayments()} />}
           <Card className="border-amber-200 bg-amber-50/10">
             <CardHeader className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
               <div>

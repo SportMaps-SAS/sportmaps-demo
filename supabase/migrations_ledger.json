@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 930,
+  "count": 931,
   "head": "20261118131559",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -933,6 +933,7 @@
     {"v":"20261114104111","file":"20261114104111_dreamers_vencimiento_mensualidades_noviembre.sql","sha256":"4fc1b53aad3c7ff572146bffc8b56f7ed9b2161c64901b7b7599b673b4d4c94b","added":"2026-11-14","by":"Brayan Steven Lopez"},
     {"v":"20261115143758","file":"20261115143758_whatsapp_baja_promos_declaraciones_y_freno.sql","sha256":"bc07a0c5e3eda8434c16434b46f46b52f8b773478d24400db325382dcd18b4cb","added":"2026-11-15","by":"Brayan Steven Lopez"},
     {"v":"20261117115141","file":"20261117115141_ui_usage_daily.sql","sha256":"7d9441b6ede58ad1b48b8f392b88d367361e99c8d5a09cfb5babad965e213ce5","added":"2026-11-17","by":"Brayan Steven Lopez"},
-    {"v":"20261118131559","file":"20261118131559_admin_ui_usage_resumen.sql","sha256":"216576529f485bb19ef5b248199b65987243a91a06f8bc9242117116520cb0f0","added":"2026-11-18","by":"Brayan Steven Lopez"}
+    {"v":"20261118131559","file":"20261118131559_admin_ui_usage_resumen.sql","sha256":"216576529f485bb19ef5b248199b65987243a91a06f8bc9242117116520cb0f0","added":"2026-11-18","by":"Brayan Steven Lopez"},
+    {"v":"20261118124124","file":"20261118124124_wa_comprobantes_por_clasificar.sql","sha256":"85aceedd3c11f875f3ce2ac0973bb2369826b3015bb01ac0c11867138256cdc0","added":"2026-11-18","by":"Brayan Steven Lopez"}
   ]
 }

@@ -1,0 +1,128 @@
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('../config/supabase', () => ({ supabase: { rpc: vi.fn() } }));
+
+import { decidirPorClasificar, MOTIVOS_CON_PLATA } from './wa-comprobante-por-clasificar.service';
+
+const ocr = (o: Record<string, unknown> = {}) => ({
+    amount: 150000, reference: 'M20540656', date: '2026-11-15', bank: 'Nequi', destination: '319 450 5150', isReceipt: true, ...o,
+});
+
+describe('decidirPorClasificar', () => {
+    it('un comprobante de venta con monto que no cuadra pasa a «servicio nuevo»', () => {
+        const d = decidirPorClasificar({
+            errorMessage: 'venta_monto_no_cuadra: comprobante de $150.000 para Clínica de armadores y atacantes; el valor de hoy es $350.000',
+            ocr: ocr(), texto: 'Isaac zaidman',
+        });
+        expect(d).not.toBeNull();
+        expect(d!.etiqueta).toBe('servicio_nuevo');
+        expect(d!.monto).toBe(150000);
+        expect(d!.referencia).toBe('M20540656');
+        expect(d!.fecha).toBe('2026-11-15');
+    });
+
+    it('un número que no es de ninguna ficha queda «por identificar»', () => {
+        const d = decidirPorClasificar({ errorMessage: 'sin_familia: el número no está en ninguna ficha de la escuela', ocr: ocr({ amount: 174900 }) });
+        expect(d?.etiqueta).toBe('por_identificar');
+    });
+
+    it('la clase de prueba se reconoce por el detalle', () => {
+        const d = decidirPorClasificar({
+            errorMessage: 'otro_concepto: clase de prueba (chat: «De la clase de prueba y tienen carrera deportiva»)',
+            ocr: ocr({ amount: 30000, reference: null }),
+        });
+        expect(d?.etiqueta).toBe('clase_de_prueba');
+        expect(d?.referencia).toBeNull();
+    });
+
+    it('un excedente y un saldo tienen su propia etiqueta', () => {
+        expect(decidirPorClasificar({ errorMessage: 'excedente_de_parcial: pagó más', ocr: ocr() })?.etiqueta).toBe('exceso');
+        expect(decidirPorClasificar({ errorMessage: 'saldo_de_parcial: es el saldo', ocr: ocr() })?.etiqueta).toBe('saldo_de_cobro');
+    });
+
+    it('«contacto no atendido» con un comprobante leído es plata (los 3 × $140.000 del 15-nov)', () => {
+        const d = decidirPorClasificar({ errorMessage: 'contacto_no_atendido', ocr: ocr({ amount: 140000 }) });
+        expect(d?.etiqueta).toBe('por_identificar');
+    });
+
+    it('sin monto leído no hay nada que clasificar', () => {
+        expect(decidirPorClasificar({ errorMessage: 'contacto_no_atendido', ocr: ocr({ amount: null }) })).toBeNull();
+        expect(decidirPorClasificar({ errorMessage: 'sin_familia: x', ocr: null })).toBeNull();
+    });
+
+    it('no es comprobante / listado de movimientos: no entra aunque traiga un número', () => {
+        expect(decidirPorClasificar({ errorMessage: 'sin_familia: x', ocr: ocr({ isReceipt: false }) })).toBeNull();
+        expect(decidirPorClasificar({ errorMessage: 'sin_familia: x', ocr: ocr({ isTransactionList: true }) })).toBeNull();
+    });
+
+    it('lo que ya está resuelto o no es de la escuela nunca entra', () => {
+        for (const em of [
+            'abono_en_revision: Clínica — abono de $150.000', // el abono YA quedó en revisión en un cobro
+            'comprobante ya recibido (misma imagen)',
+            'referencia ya usada: M0001',
+            'ya registrado: Mensualidad',
+            'destino no es de la escuela',
+            'pago por fuera de SportMaps',
+            'no es un comprobante',
+            'listado de movimientos',
+            'admin no acudiente',
+            'venta_comprobante_repetido: x',
+        ]) {
+            expect(decidirPorClasificar({ errorMessage: em, ocr: ocr() }), em).toBeNull();
+        }
+    });
+
+    it('una fila ya cerrada por la escuela no vuelve a entrar', () => {
+        expect(decidirPorClasificar({
+            errorMessage: 'cerrado_escuela: resuelto — ya aplicado | sin_familia: x', ocr: ocr(),
+        })).toBeNull();
+    });
+
+    it('la propuesta no arrastra el texto crudo del comprobante ni datos de más', () => {
+        const d = decidirPorClasificar({
+            errorMessage: 'sin_familia: el número no está en ninguna ficha', ocr: { ...ocr(), rawText: 'TEXTO CRUDO CON CUENTA 4810' } as any,
+        });
+        expect(JSON.stringify(d!.propuesta)).not.toContain('TEXTO CRUDO');
+    });
+
+    it('MOTIVOS_CON_PLATA cubre los motivos de acción de la bandeja', () => {
+        for (const m of ['varios_cobros', 'monto_distinto', 'sin_familia', 'otro_concepto', 'venta_servicio', 'escuela_tomo', 'excedente_de_parcial']) {
+            expect(MOTIVOS_CON_PLATA).toContain(m);
+        }
+        expect(MOTIVOS_CON_PLATA).not.toContain('monto_distinto_aplicado');
+    });
+});
+
+import { registrarPorClasificar } from './wa-comprobante-por-clasificar.service';
+import { supabase } from '../config/supabase';
+
+describe('registrarPorClasificar', () => {
+    const base = () => ({
+        schoolId: 's1', queueId: 'q1', storagePath: null, telefono: '573001112233', nombre: null, motivoBot: 'sin_familia: x',
+        decision: decidirPorClasificar({ errorMessage: 'sin_familia: x', ocr: ocr() })!,
+    });
+
+    it('devuelve el id y manda los parámetros de la RPC tal cual', async () => {
+        (supabase.rpc as any).mockResolvedValueOnce({ data: { ok: true, id: 'abc', ya_existia: false }, error: null });
+        const r = await registrarPorClasificar(base());
+        expect(r).toEqual({ ok: true, id: 'abc', yaExistia: false, repetido: false });
+        const [nombre, args] = (supabase.rpc as any).mock.calls.at(-1);
+        expect(nombre).toBe('wa_crear_comprobante_por_clasificar');
+        expect(args).toMatchObject({ p_school_id: 's1', p_queue_id: 'q1', p_etiqueta: 'por_identificar', p_monto: 150000 });
+    });
+
+    it('sin la migración aplicada no rompe: devuelve migracion_pendiente', async () => {
+        (supabase.rpc as any).mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.wa_crear_comprobante_por_clasificar' } });
+        expect(await registrarPorClasificar(base())).toEqual({ ok: false, codigo: 'migracion_pendiente' });
+    });
+
+    it('una referencia ya usada por un pago devuelve el pago, no crea nada', async () => {
+        (supabase.rpc as any).mockResolvedValueOnce({ data: { ok: false, codigo: 'referencia_ya_usada', payment_id: 'p9' }, error: null });
+        expect(await registrarPorClasificar(base())).toEqual({ ok: false, codigo: 'referencia_ya_usada', paymentId: 'p9' });
+    });
+
+    it('si la RPC lanza, no lanza el worker', async () => {
+        (supabase.rpc as any).mockRejectedValueOnce(new Error('red'));
+        expect(await registrarPorClasificar(base())).toEqual({ ok: false, codigo: 'error' });
+    });
+});
