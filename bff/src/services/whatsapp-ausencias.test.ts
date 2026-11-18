@@ -260,3 +260,98 @@ describe('atenderAusenciaEnBot', () => {
         expect(enviar).not.toHaveBeenCalled();
     });
 });
+
+// ─── Segundo lector (Decisions API) ─────────────────────────────────────────
+import { decidirConSegundoLector, type SegundoLector, type LecturaFamilia } from './whatsapp-ausencias.service';
+
+const lectura = (probabilidades: Record<string, number>): LecturaFamilia => ({
+    opcion: Object.entries(probabilidades).sort((a, b) => b[1] - a[1])[0][0], probabilidades, confianza: 0.9,
+});
+
+describe('decidirConSegundoLector (puro)', () => {
+    it('sin lectura (API caída, sin llave, tardó): sigue exactamente como antes', () => {
+        expect(decidirConSegundoLector(true, null)).toBe('seguir');
+        expect(decidirConSegundoLector(false, null)).toBe('seguir');
+    });
+    it('la regex dijo «ausencia» y la API lo ve como condicional/horario fijo: no se confirma', () => {
+        expect(decidirConSegundoLector(true, lectura({ condicional_o_horario_fijo: 1, ausencia_proxima: 0 }))).toBe('no_confirmar');
+    });
+    it('la regex dijo «ausencia» y la API está de acuerdo (o dudosa): se confirma', () => {
+        expect(decidirConSegundoLector(true, lectura({ ausencia_proxima: 0.95, otro: 0.05 }))).toBe('seguir');
+        expect(decidirConSegundoLector(true, lectura({ ausencia_proxima: 0.25, otro: 0.75 }))).toBe('seguir');
+    });
+    it('la regex calló y la API ve una ausencia larga o de evento con mucha seguridad: va a la escuela', () => {
+        expect(decidirConSegundoLector(false, lectura({ ausencia_larga_o_evento: 0.99 }))).toBe('escalar_larga');
+    });
+    it('la regex calló y la API duda o ve otra cosa: no se hace nada', () => {
+        expect(decidirConSegundoLector(false, lectura({ ausencia_larga_o_evento: 0.7, otro: 0.3 }))).toBe('seguir');
+        expect(decidirConSegundoLector(false, lectura({ llegada_tarde_o_en_camino: 0.9, ausencia_proxima: 0.1 }))).toBe('seguir');
+        expect(decidirConSegundoLector(false, lectura({ ausencia_proxima: 0.99 }))).toBe('seguir'); // NUNCA confirma por su cuenta
+    });
+});
+
+describe('atenderAusenciaEnBot con segundo lector', () => {
+    beforeEach(() => {
+        h.state.inserts = [];
+        h.sendToUser.mockReset();
+        h.sendToUser.mockResolvedValue({ enabled: true, sent: 1, failed: 0, revoked: 0 });
+        delete process.env.AUSENCIAS_SEGUNDO_LECTOR;
+    });
+    const lector = (l: LecturaFamilia | null): SegundoLector & { leer: ReturnType<typeof vi.fn>; escalarLarga: ReturnType<typeof vi.fn> } => ({
+        leer: vi.fn(async () => l), escalarLarga: vi.fn(async () => {}),
+    });
+
+    it('caso real «quiere el nacional pero no puede asistir a todas las clases»: la regex dispara y la API lo frena', async () => {
+        datosFamilia([{ id: SOFIA.childId, full_name: 'SOFIA PEREZ', is_active: true }], [{ child_id: SOFIA.childId, user_id: null, team_id: 't1' }]);
+        const enviar = vi.fn(async () => {});
+        const sl = lector(lectura({ condicional_o_horario_fijo: 1 }));
+        const ok = await atenderAusenciaEnBot(turno('mi hija no puede ir hoy'), enviar, HOY, sl);
+        expect(ok).toBe(false);
+        expect(enviar).not.toHaveBeenCalled();
+        expect(h.state.inserts.some((i) => i.table === 'athlete_absence_notices')).toBe(false);
+    });
+
+    it('la API confirma lo que dijo la regex: se registra como siempre', async () => {
+        datosFamilia([{ id: SOFIA.childId, full_name: 'SOFIA PEREZ', is_active: true }], [{ child_id: SOFIA.childId, user_id: null, team_id: 't1' }]);
+        const enviar = vi.fn(async () => {});
+        const ok = await atenderAusenciaEnBot(turno('mi hija no puede ir hoy, está con gripa'), enviar, HOY,
+            lector(lectura({ ausencia_proxima: 0.98 })));
+        expect(ok).toBe(true);
+        expect(h.state.inserts.some((i) => i.table === 'athlete_absence_notices')).toBe(true);
+    });
+
+    it('ausencia larga que la regex deja pasar («no puede ir del 1 al 3 de diciembre»): va a la escuela, no se registra', async () => {
+        const enviar = vi.fn(async () => {});
+        const sl = lector(lectura({ ausencia_larga_o_evento: 0.99 }));
+        const ok = await atenderAusenciaEnBot(turno('Y no puede ir del 1 al 3 de diciembre'), enviar, HOY, sl);
+        expect(ok).toBe(true);
+        expect(sl.escalarLarga).toHaveBeenCalledWith('Y no puede ir del 1 al 3 de diciembre');
+        expect(enviar).not.toHaveBeenCalled();
+        expect(h.state.inserts.some((i) => i.table === 'athlete_absence_notices')).toBe(false);
+    });
+
+    it('minimiza datos: un texto que no habla de no ir ni dispara la regex NO se manda a la API', async () => {
+        const sl = lector(lectura({ ausencia_larga_o_evento: 0.99 }));
+        expect(await atenderAusenciaEnBot(turno('¿cuánto debo?'), vi.fn(async () => {}), HOY, sl)).toBe(false);
+        expect(await atenderAusenciaEnBot(turno('Hola buen día'), vi.fn(async () => {}), HOY, sl)).toBe(false);
+        expect(sl.leer).not.toHaveBeenCalled();
+    });
+
+    it('la API falla (null) o lanza: el turno sigue como antes', async () => {
+        datosFamilia([{ id: SOFIA.childId, full_name: 'SOFIA PEREZ', is_active: true }], [{ child_id: SOFIA.childId, user_id: null, team_id: 't1' }]);
+        const enviar = vi.fn(async () => {});
+        const ok = await atenderAusenciaEnBot(turno('mi hija no puede ir hoy'), enviar, HOY, lector(null));
+        expect(ok).toBe(true);
+        const roto: SegundoLector = { leer: vi.fn(async () => { throw new Error('boom'); }), escalarLarga: vi.fn(async () => {}) };
+        datosFamilia([{ id: SOFIA.childId, full_name: 'SOFIA PEREZ', is_active: true }], [{ child_id: SOFIA.childId, user_id: null, team_id: 't1' }]);
+        expect(await atenderAusenciaEnBot(turno('mi hija no puede ir hoy'), vi.fn(async () => {}), HOY, roto)).toBe(true);
+    });
+
+    it('interruptor AUSENCIAS_SEGUNDO_LECTOR=off: ni se consulta', async () => {
+        process.env.AUSENCIAS_SEGUNDO_LECTOR = 'off';
+        datosFamilia([{ id: SOFIA.childId, full_name: 'SOFIA PEREZ', is_active: true }], [{ child_id: SOFIA.childId, user_id: null, team_id: 't1' }]);
+        const sl = lector(lectura({ condicional_o_horario_fijo: 1 }));
+        expect(await atenderAusenciaEnBot(turno('mi hija no puede ir hoy'), vi.fn(async () => {}), HOY, sl)).toBe(true);
+        expect(sl.leer).not.toHaveBeenCalled();
+    });
+});

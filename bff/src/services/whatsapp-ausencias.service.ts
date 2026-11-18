@@ -422,6 +422,49 @@ async function avisarAlEquipo(
     return coaches.length > 0;
 }
 
+// ─── 4b. Segundo lector (Decisions API de Google) ───────────────────────────
+
+/**
+ * Lo que la regex no distingue bien, lo lee un segundo lector (Decisions API,
+ * misma GEMINI_API_KEY del OCR). Solo puede hacer DOS cosas, las dos en la
+ * dirección segura: (1) frenar una confirmación falsa y (2) pasar a la escuela
+ * una ausencia larga o de evento. NUNCA confirma una ausencia por su cuenta.
+ * Si falla, se apaga (`AUSENCIAS_SEGUNDO_LECTOR=off`) o no responde: todo sigue
+ * exactamente como antes.
+ */
+export interface LecturaFamilia {
+    opcion: string;
+    probabilidades: Record<string, number>;
+    confianza: number;
+}
+
+export interface SegundoLector {
+    /** Clasifica el texto; null si no hay llave, falla o tarda de más. */
+    leer: (texto: string) => Promise<LecturaFamilia | null>;
+    /** Pasa el aviso a la escuela (buzón + push) y le dice a la familia que lo recibió. */
+    escalarLarga: (texto: string) => Promise<void>;
+}
+
+export const UMBRAL_FRENAR_CONFIRMACION = 0.2;   // regex dijo «ausencia» y la API da menos → no se confirma
+export const UMBRAL_ESCALAR_LARGA = 0.85;        // la regex calló y la API ve una ausencia larga/evento → a la escuela
+export const SEGUNDO_LECTOR_APAGADO = () => (process.env.AUSENCIAS_SEGUNDO_LECTOR || '').toLowerCase() === 'off';
+
+const CATEGORIAS_DE_AUSENCIA = ['ausencia_proxima', 'ausencia_larga_o_evento'];
+
+/** Prefiltro barato: solo se consulta a la API si el texto puede hablar de no ir. */
+const PUEDE_SER_AUSENCIA = /\b(no (puede|puedo|podemos|podra|podre|va|voy|vamos|vaya|vayamos|asist\w*|alcanz\w*|iremos|ira|ire)|nos (toca|va a tocar) faltar|faltar\w*|falt[oa]\w*|ausen\w*|viaj\w*|vacacion\w*|incapacid\w*|no podra|no podran)\b/;
+
+export type DecisionSegundoLector = 'seguir' | 'no_confirmar' | 'escalar_larga';
+
+/** Pura: decide qué hace el segundo lector con lo que dijo la regex y lo que leyó la API. */
+export function decidirConSegundoLector(regexDetecto: boolean, lectura: LecturaFamilia | null): DecisionSegundoLector {
+    if (!lectura) return 'seguir';
+    const p = lectura.probabilidades ?? {};
+    const pAusencia = CATEGORIAS_DE_AUSENCIA.reduce((a, k) => a + (Number(p[k]) || 0), 0);
+    if (regexDetecto) return pAusencia < UMBRAL_FRENAR_CONFIRMACION ? 'no_confirmar' : 'seguir';
+    return (Number(p.ausencia_larga_o_evento) || 0) >= UMBRAL_ESCALAR_LARGA ? 'escalar_larga' : 'seguir';
+}
+
 // ─── 5. El turno ─────────────────────────────────────────────────────────────
 
 export type EnviarAusencia = (texto: string, paso: string, botones?: BotonInteractivo[] | null) => Promise<void>;
@@ -442,7 +485,9 @@ export interface TurnoAusencia {
  * va?»). Devuelve true si respondió; false para que el turno siga su curso.
  * Nunca lanza.
  */
-export async function atenderAusenciaEnBot(t: TurnoAusencia, enviar: EnviarAusencia, hoy: string = todayInZone()): Promise<boolean> {
+export async function atenderAusenciaEnBot(
+    t: TurnoAusencia, enviar: EnviarAusencia, hoy: string = todayInZone(), segundoLector?: SegundoLector,
+): Promise<boolean> {
     try {
         if (!t.parentId) return false;
 
@@ -463,6 +508,23 @@ export async function atenderAusenciaEnBot(t: TurnoAusencia, enviar: EnviarAusen
 
         // b) El mensaje (o la ráfaga) avisa una ausencia.
         const a = detectaAusencia(t.texto, hoy) ?? (t.rafaga !== t.texto ? detectaAusencia(t.rafaga, hoy) : null);
+        const sl = segundoLector && !SEGUNDO_LECTOR_APAGADO() ? segundoLector : null;
+        const textoLeido = (t.rafaga || t.texto || '').trim();
+        if (sl && textoLeido && textoLeido.length <= 400) {
+            // Solo se consulta si la regex disparó o el texto puede hablar de no ir.
+            if (a || PUEDE_SER_AUSENCIA.test(normalizarFrase(textoLeido))) {
+                const decision = decidirConSegundoLector(!!a, await sl.leer(textoLeido).catch(() => null));
+                if (decision === 'no_confirmar') {
+                    console.info('[ausencias] segundo lector: no es un aviso de ausencia; no se confirma', { conversationId: t.conversationId });
+                    return false;
+                }
+                if (decision === 'escalar_larga') {
+                    console.info('[ausencias] segundo lector: ausencia larga o de evento; va a la escuela', { conversationId: t.conversationId });
+                    await sl.escalarLarga(textoLeido);
+                    return true;
+                }
+            }
+        }
         if (a) {
             const candidatos = await candidatosDeLaFamilia(t.schoolId, t.parentId);
             if (!candidatos.length) return false; // sin deportista activo: que lo vea el modelo / la escuela
