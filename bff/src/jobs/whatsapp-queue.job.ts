@@ -20,7 +20,7 @@
  */
 
 import {
-    decidirPorClasificar, registrarPorClasificar, porClasificarApagado, type LecturaParaClasificar,
+    decidirPorClasificar, registrarPorClasificar, porClasificarActivoPara, type LecturaParaClasificar,
 } from '../services/wa-comprobante-por-clasificar.service';
 import crypto from 'node:crypto';
 import { supabase } from '../config/supabase';
@@ -488,12 +488,12 @@ async function cerrar(
 /**
  * Si la fila cerrada trae plata (monto leído, comprobante real, destino de la escuela), la registra en
  * `wa_comprobantes_por_clasificar`. Misma decisión que el barrido (`decidirPorClasificar`). Con
- * `WA_POR_CLASIFICAR_OFF=1` no hace nada.
+ * solo corre en las escuelas de `WA_POR_CLASIFICAR_ESCUELAS` (y no con `WA_POR_CLASIFICAR_OFF=1`).
  */
 async function pasarAPorClasificar(
     fila: FilaCola, ocr: Awaited<ReturnType<typeof extractReceipt>>, errorMessage: string,
 ): Promise<void> {
-    if (porClasificarApagado() || !ocr) return;
+    if (!ocr || !porClasificarActivoPara(fila.school_id)) return;
     const decision = decidirPorClasificar({ errorMessage, ocr: ocr as LecturaParaClasificar, texto: fila.media_caption ?? null });
     if (!decision) return;
     // El dinero tiene que haber ido a una cuenta de la escuela (y no a una «por fuera de SportMaps»).

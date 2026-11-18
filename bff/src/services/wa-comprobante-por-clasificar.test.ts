@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../config/supabase', () => ({ supabase: { rpc: vi.fn() } }));
 
-import { decidirPorClasificar, MOTIVOS_CON_PLATA } from './wa-comprobante-por-clasificar.service';
+import { decidirPorClasificar, MOTIVOS_CON_PLATA, porClasificarActivoPara } from './wa-comprobante-por-clasificar.service';
 
 const ocr = (o: Record<string, unknown> = {}) => ({
     amount: 150000, reference: 'M20540656', date: '2026-11-15', bank: 'Nequi', destination: '319 450 5150', isReceipt: true, ...o,
@@ -124,5 +124,25 @@ describe('registrarPorClasificar', () => {
     it('si la RPC lanza, no lanza el worker', async () => {
         (supabase.rpc as any).mockRejectedValueOnce(new Error('red'));
         expect(await registrarPorClasificar(base())).toEqual({ ok: false, codigo: 'error' });
+    });
+});
+
+describe('porClasificarActivoPara (solo las escuelas de la lista)', () => {
+    const MONSTER = 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c';
+    const DYNASTY = '2d509571-3238-4c04-ac3f-6dfe20539226';
+    const env = (o: Record<string, string>) => o as unknown as NodeJS.ProcessEnv;
+
+    it('sin la variable, nadie (lo seguro)', () => {
+        expect(porClasificarActivoPara(MONSTER, env({}))).toBe(false);
+        expect(porClasificarActivoPara(MONSTER, env({ WA_POR_CLASIFICAR_ESCUELAS: '' }))).toBe(false);
+    });
+    it('solo las escuelas listadas', () => {
+        const e = env({ WA_POR_CLASIFICAR_ESCUELAS: `${MONSTER}, ${DYNASTY.toUpperCase()}` });
+        expect(porClasificarActivoPara(MONSTER, e)).toBe(true);
+        expect(porClasificarActivoPara(DYNASTY, e)).toBe(true);
+        expect(porClasificarActivoPara('00000000-0000-0000-0000-000000000000', e)).toBe(false);
+    });
+    it('el interruptor de emergencia apaga todo, aunque esté en la lista', () => {
+        expect(porClasificarActivoPara(MONSTER, env({ WA_POR_CLASIFICAR_ESCUELAS: MONSTER, WA_POR_CLASIFICAR_OFF: '1' }))).toBe(false);
     });
 });

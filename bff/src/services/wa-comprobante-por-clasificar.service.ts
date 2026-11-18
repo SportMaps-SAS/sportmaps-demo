@@ -205,3 +205,14 @@ export async function registrarPorClasificar(i: {
 
 /** Interruptor de emergencia: `WA_POR_CLASIFICAR_OFF=1` devuelve el worker al comportamiento anterior. */
 export const porClasificarApagado = (): boolean => process.env.WA_POR_CLASIFICAR_OFF === '1';
+
+/**
+ * ¿Esta escuela usa «Por clasificar»? Solo las de `WA_POR_CLASIFICAR_ESCUELAS` (ids separados por coma).
+ * Vacía o sin definir = NADIE (lo seguro): las demás escuelas siguen con la bandeja de siempre.
+ * Hoy: Monster´s Volley y Dynasty. Para sumar o quitar una escuela se cambia la variable, sin código ni base.
+ */
+export function porClasificarActivoPara(schoolId: string, env: NodeJS.ProcessEnv = process.env): boolean {
+    if (env.WA_POR_CLASIFICAR_OFF === '1') return false;
+    const ids = (env.WA_POR_CLASIFICAR_ESCUELAS ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    return ids.includes(String(schoolId).toLowerCase());
+}

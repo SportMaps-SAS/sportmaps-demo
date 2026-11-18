@@ -80,3 +80,13 @@ Job diario (sin N+1: lote con `.in()`) que avisa por WhatsApp/correo al administ
 - La escuela aprueba. El bot nunca aprueba ni aplica.
 - No se le escribe a nadie por el backfill.
 - Los motivos «no es comprobante», «contacto no atendido sin monto», «ráfaga de imágenes de otros números» siguen sin crear cobros.
+
+## Alcance por escuela (decidido 2026-11-18)
+
+Solo **Monster´s Volley** y **Dynasty** usan «Por clasificar»; las demás escuelas siguen con la bandeja de siempre.
+
+- El bot registra en «Por clasificar» únicamente para los ids de `WA_POR_CLASIFICAR_ESCUELAS` (separados por coma). **Vacía o sin definir = nadie.**
+- `WA_POR_CLASIFICAR_OFF=1` apaga todo, aunque la escuela esté en la lista.
+- Monster `eb3ebc77-4ea4-4992-96c8-3c8ec574578c` · Dynasty `2d509571-3238-4c04-ac3f-6dfe20539226`.
+- La tarjeta de Cobros solo se pinta si hay filas: en escuelas fuera de la lista no aparece.
+- Sumar o quitar una escuela = cambiar la variable en Render (BFF), sin código ni migración.
