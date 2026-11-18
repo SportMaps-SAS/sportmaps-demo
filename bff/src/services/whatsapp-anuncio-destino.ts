@@ -584,7 +584,7 @@ export interface PrecioDeServicio {
     abono: number | null;
     abonoPct: number | null;
     /** Con opciones (1, 2, 3 o 4 semanas): una línea por opción. */
-    opciones: { etiqueta: string; precio: number }[];
+    opciones: { etiqueta: string; precio: number; precioAfiliado?: number }[];
 }
 
 /**
@@ -618,8 +618,14 @@ export function precioAntesDelTramo(item: ItemDeServicio, o: { afiliado: boolean
 /** El precio de hoy, el tramo que sigue, el abono y las opciones. `hoy` = 'YYYY-MM-DD' (Bogotá). Pura. */
 export function precioDelServicio(item: ItemDeServicio, o: { afiliado: boolean; hoy: string }): PrecioDeServicio {
     const opciones = opcionesDelItem(item)
-        .map((op) => ({ etiqueta: op.etiqueta, precio: precioVigente(item, { afiliado: o.afiliado, hoy: o.hoy, opcion: op }) }))
-        .filter((x): x is { etiqueta: string; precio: number } => x.precio !== null);
+        .map((op) => {
+            const precio = precioVigente(item, { afiliado: o.afiliado, hoy: o.hoy, opcion: op });
+            // (2026-11-18, Monster: vacacional) A quien no es afiliado también se le dice el valor de afiliado de la opción
+            // (sale de la ficha): así quien ya entrena en el club paga lo suyo y el comprobante cuadra.
+            const pa = !o.afiliado ? precioVigente(item, { afiliado: true, hoy: o.hoy, opcion: op }) : null;
+            return { etiqueta: op.etiqueta, precio, ...(pa !== null && precio !== null && pa < precio && Number(op.precio_afiliado) > 0 ? { precioAfiliado: pa } : {}) };
+        })
+        .filter((x): x is { etiqueta: string; precio: number; precioAfiliado?: number } => x.precio !== null);
     const hoy = precioVigente(item, { afiliado: o.afiliado, hoy: o.hoy });
     // Con precio de afiliado (del ítem o de sus opciones) el afiliado paga ese, sin importar la fecha.
     const deAfiliado = o.afiliado && (Number(item.precio_afiliado) > 0
@@ -663,7 +669,7 @@ function descripcion(t: string | null | undefined): string | null {
 export function lineasDeValor(p: PrecioDeServicio): string[] {
     const lineas: string[] = [];
     if (p.opciones.length) {
-        lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*`));
+        lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*${o.precioAfiliado ? ` (afiliados *${cop(o.precioAfiliado)}*)` : ''}`));
     } else if (p.hoy !== null) {
         if (p.deAfiliado) lineas.push(`Tu valor como afiliado: *${cop(p.hoy)}*${p.antes ? ` (antes ${cop(p.antes)})` : ''}`);
         else {

@@ -103,7 +103,7 @@ import {
     conceptoDelCobroCreado, valorDePrecio, yaTieneCobroDelMotivo, hoyBogota,
     type PrecioDeMotivo, type ValorMotivoElegido, type DuenoDelCobro, type DestinoExacto, type MotivoPorMonto,
     decidirMontoDeVenta, cobroPrevioDelServicio, cobroDeServicioPorId, leadDeVenta, asegurarLeadDeVenta, motivoDelItem,
-    hayPrecioDeAfiliado, abonoMinimo, type MontoDeVenta, type LeadDeVenta, guardarDatosDeRegistro,
+    hayPrecioDeAfiliado, valorDeAfiliadoQueCoincide, abonoMinimo, type MontoDeVenta, type LeadDeVenta, guardarDatosDeRegistro,
     textoDeCantidad, type MotivoConCantidad, preciosDeServicios, opcionesDelItem, minimosEnFecha, saldoHastaDelItem, fechaDePagoParaPrecio, type CobroPrevioDeServicio,
 } from '../services/wa-cobro-desde-comprobante.service';
 import {
@@ -2173,6 +2173,16 @@ export function textoVentaRecibida(e: {
     return `Recibí tu comprobante${valor} ${para}${aNombre}. ${cierre}`;
 }
 
+/**
+ * El monto es el valor de afiliado de la venta y el número no está reconocido como afiliado (2026-11-18). Pura.
+ * «Recibí tu comprobante de *$120.000* 📄 Ese es el valor de afiliado de *…2 semanas*; la escuela confirma que ya
+ * entrenas en el club y te confirma el cupo por aquí.»
+ */
+export function textoVentaAfiliadoSinVerificar(monto: number, etiqueta: string): string {
+    return `Recibí tu comprobante de *${pesos(monto)}* 📄 Ese es el valor de afiliado de *${etiqueta}*; `
+        + 'la escuela confirma que ya entrenas en el club y te confirma el cupo por aquí.';
+}
+
 /** «*$300.000* o el abono de *$150.000*» (o las opciones). Pura. */
 function valoresDelServicio(precios: number[], minimo: number | null): string {
     const unicos = [...new Set(precios.filter((p) => p > 0))];
@@ -2331,9 +2341,21 @@ async function abonosPreviosDeVenta(fila: FilaCola, servicio: string): Promise<P
  */
 async function ventaMontoNoCuadra(
     v: ArgsVenta, monto: number, precios: number[], minimo: number | null, nombre: string | null, por = 'catálogo',
-    o: { previo?: CobroPrevioDeServicio | null; afiliado?: boolean } = {},
+    o: { previo?: CobroPrevioDeServicio | null; afiliado?: boolean; afiliadoCoincide?: { etiqueta: string; monto: number } | null } = {},
 ): Promise<void> {
     const item = v.venta.item;
+    // El monto es el valor de afiliado de la ficha y el número no figura como afiliado: se reconoce la venta (también
+    // cuando la RPC lo devolvió como `monto_no_coincide`, que es por donde entra quien eligió la opción).
+    const afiliadoCoincide = o.afiliado === true ? null : (o.afiliadoCoincide ?? valorDeAfiliadoQueCoincide(item as any, monto));
+    if (afiliadoCoincide) {
+        await ventaALaEscuela(v, {
+            codigo: 'venta_afiliado_sin_verificar',
+            detalle: `comprobante de ${pesos(monto)} para ${item.name}: es el valor de afiliado de «${afiliadoCoincide.etiqueta}» pero el número no figura como afiliado (la base cobraría el de lista)`,
+            propuesta: propuestaDeVenta(v, nombre, 'verificar si ya entrena en el club; si lo es, crear el cobro con el valor de afiliado y aplicar este comprobante'),
+            texto: textoVentaAfiliadoSinVerificar(monto, afiliadoCoincide.etiqueta),
+        });
+        return;
+    }
     const servicio = item.name;
     const valores = precios.length ? precios.map((p) => pesos(p)).join(' / ') : 'sin precio';
     const hoy = hoyBogota();
@@ -2512,7 +2534,7 @@ async function ejecutarVenta(plan: PlanDeVenta, d: MontoDeVenta): Promise<void> 
             });
             return;
         default:
-            await ventaMontoNoCuadra(v, monto, d.tipo === 'no_cuadra' ? d.precios : [], d.tipo === 'no_cuadra' ? d.minimo : null, nombre, 'catálogo', { afiliado: plan.afiliado });
+            await ventaMontoNoCuadra(v, monto, d.tipo === 'no_cuadra' ? d.precios : [], d.tipo === 'no_cuadra' ? d.minimo : null, nombre, 'catálogo', { afiliado: plan.afiliado, afiliadoCoincide: d.tipo === 'no_cuadra' ? d.afiliadoCoincide : null });
     }
 }
 
@@ -2871,7 +2893,7 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
     if (fam && await repetido()) return true;
     const nombreConocido = duenoFam?.tipo === 'uno' ? duenoFam.nombre : (v.nombre ?? (lead?.conocido ? lead.nombre : null));
     if (decision.tipo === 'no_cuadra') {
-        await ventaMontoNoCuadra(v, monto, decision.precios, decision.minimo, nombreConocido, 'catálogo', { previo, afiliado });
+        await ventaMontoNoCuadra(v, monto, decision.precios, decision.minimo, nombreConocido, 'catálogo', { previo, afiliado, afiliadoCoincide: decision.afiliadoCoincide ?? null });
         return true;
     }
     if (decision.tipo === 'ambiguo') {
