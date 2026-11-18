@@ -123,6 +123,7 @@ import {
     type FilaReciente, type ComprobanteAnunciado, type HorarioDeAtencion,
 } from './whatsapp-reglas-turno';
 import { atenderAusenciaEnBot } from './whatsapp-ausencias.service';
+import { clasificarMensajeFamilia } from './gemini-decisions.service';
 import { modoDiscreto, escuelaActiva, escuelaActivaEn, revisarPendientesSinRespuesta } from './whatsapp-modo-discreto';
 import {
     ajustesWhatsAppDeEscuela, atencionPresencialDeEscuela, embudoActivo, modoDiscretoDeEscuela, temasAPersonaDeEscuela,
@@ -781,6 +782,20 @@ async function cuerpoDelTurno(
             texto: text, rafaga, botonId, recientes },
         (texto, paso, botones) => deliver(integration, conversationId, contactWaId, texto, { step: paso },
             botones ? { botones } : undefined),
+        undefined,
+        // Segundo lector (Decisions API): solo frena confirmaciones falsas y pasa a la
+        // escuela las ausencias largas o de evento. Sin llave o si falla, no hace nada.
+        {
+            leer: async (texto) => {
+                if (!process.env.GEMINI_API_KEY) return null;
+                const r = await clasificarMensajeFamilia(texto, 4000);
+                return r ? { opcion: r.opcion, probabilidades: r.probabilidades, confianza: r.confianza } : null;
+            },
+            escalarLarga: (texto) => escalate(integration, conversationId, contactWaId, 'ausencia_larga_o_evento', {
+                texto,
+                mensaje: 'Gracias por avisar 🙌 Le paso tu mensaje a la escuela para que lo tengan en cuenta y te confirmen.',
+            }),
+        },
     )) {
         return;
     }
