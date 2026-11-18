@@ -29,6 +29,7 @@ import { runWhatsAppQueue } from './whatsapp-queue.job';
 import { runWhatsAppPaymentOutcome } from './whatsapp-payment-outcome.job';
 import { runReceiptReviewAlerts } from './receipt-review-alerts.job';
 import { runPagosPorValidar, pagosPorValidarActivo, type Tramo as TramoPagosPorValidar } from './pagos-por-validar.job';
+import { runResumenCuentas, resumenCuentasActivo } from './resumen-cuentas.job';
 import { runAcuerdosRecordatorios, correrMantenimientoAcuerdos } from './acuerdos-de-pago-recordatorios.job';
 import { runBienvenidaEscuelas } from './bienvenida-escuelas.job';
 import { runWhatsAppMantenimiento } from './whatsapp-mantenimiento.job';
@@ -691,6 +692,31 @@ export function initMaintenanceJobs() {
     console.log(pagosPorValidarActivo()
         ? '[CRON] Resumen de pagos por validar registrado (07:30 y 17:00 COT).'
         : '[CRON] Resumen de pagos por validar APAGADO en este servidor (solo NODE_ENV=production; o DISABLE_PAGOS_POR_VALIDAR=true).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Resumen de cuentas cada 4 horas (07:00, 11:00, 15:00 y 19:00 COT) para las escuelas de
+    // RESUMEN_CUENTAS_ESCUELAS (hoy Monster y Dynasty): por validar + por clasificar, con el valor por cuenta
+    // (Nequi, Daviplata…). Lunes, miércoles y viernes a las 07:00 es el informe completo de la revisión.
+    // Esas escuelas NO reciben además el resumen de arriba. Solo producción; kill-switch
+    // DISABLE_RESUMEN_CUENTAS=true. Idempotente por escuela + día + hora (reserva en email_sends).
+    // ────────────────────────────────────────────────────────────────────────
+    const correrResumenCuentas = async () => {
+        if (!resumenCuentasActivo()) return;
+        try {
+            const r = await runResumenCuentas({});
+            if (r.enviadas || r.fallosCorreo) {
+                console.log(`[CRON] Resumen de cuentas (${r.hora}:00${r.esInforme ? ', informe' : ''}): ${r.enviadas} enviada(s), `
+                    + `${r.fallosCorreo} fallida(s), ${r.sinCorreo} sin correo, ${r.duplicadas} ya enviada(s).`);
+            }
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error en el resumen de cuentas:', err?.message || err);
+        }
+    };
+    cron.schedule('0 7,11,15,19 * * *', () => correrResumenCuentas(), { timezone: 'America/Bogota' });
+    console.log(resumenCuentasActivo()
+        ? '[CRON] Resumen de cuentas registrado (07:00, 11:00, 15:00 y 19:00 COT).'
+        : '[CRON] Resumen de cuentas APAGADO en este servidor (sin RESUMEN_CUENTAS_ESCUELAS, o fuera de producción).');
 
     // ────────────────────────────────────────────────────────────────────────
     // Acuerdos de pago por plazos (docs/specs/campanas-descuento-referidos-y-plazos-por-whatsapp.md §5).

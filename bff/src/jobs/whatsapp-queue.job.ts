@@ -19,6 +19,9 @@
  * Plan: docs/specs/whatsapp-cola-de-comprobantes-plan.md §4.3 y §4.4
  */
 
+import {
+    decidirPorClasificar, registrarPorClasificar, porClasificarActivoPara, type LecturaParaClasificar,
+} from '../services/wa-comprobante-por-clasificar.service';
 import crypto from 'node:crypto';
 import { supabase } from '../config/supabase';
 import {
@@ -474,6 +477,36 @@ async function cerrar(
     // vence el lease. Que al menos quede en el log (así pasó con el
     // result_type 'enrollment_form', que el CHECK rechaza).
     if (error) console.error('[wa-queue] no se pudo cerrar la fila', { id, status, err: error.message });
+    // Un comprobante con dinero real no se queda en la bandeja: pasa a «Por clasificar» en Cobros (spec 2026-11-18).
+    // Nunca rompe el cierre: si algo falla, la fila queda en la bandeja como antes.
+    else if (leida && status !== 'done' && typeof extra.error_message === 'string') {
+        await pasarAPorClasificar(leida.fila, leida.ocr, extra.error_message).catch((e) =>
+            console.warn('[wa-queue] por clasificar: no se pudo registrar', { id, err: e?.message }));
+    }
+}
+
+/**
+ * Si la fila cerrada trae plata (monto leído, comprobante real, destino de la escuela), la registra en
+ * `wa_comprobantes_por_clasificar`. Misma decisión que el barrido (`decidirPorClasificar`). Con
+ * solo corre en las escuelas de `WA_POR_CLASIFICAR_ESCUELAS` (y no con `WA_POR_CLASIFICAR_OFF=1`).
+ */
+async function pasarAPorClasificar(
+    fila: FilaCola, ocr: Awaited<ReturnType<typeof extractReceipt>>, errorMessage: string,
+): Promise<void> {
+    if (!ocr || !porClasificarActivoPara(fila.school_id)) return;
+    const decision = decidirPorClasificar({ errorMessage, ocr: ocr as LecturaParaClasificar, texto: fila.media_caption ?? null });
+    if (!decision) return;
+    // El dinero tiene que haber ido a una cuenta de la escuela (y no a una «por fuera de SportMaps»).
+    if (!(await destinoEsDeLaEscuela(fila.school_id, ocr))) return;
+    if (await destinoFueraDeSportmaps(fila.school_id, ocr)) return;
+    const nombre = await nombreDePerfilDe(await conversacionDeLaFila(fila)).catch(() => null);
+    const r = await registrarPorClasificar({
+        schoolId: fila.school_id, queueId: fila.id, decision, storagePath: fila.storage_path ?? null,
+        telefono: fila.wa_phone_number, nombre, motivoBot: errorMessage,
+    });
+    if (!r.ok && r.codigo !== 'migracion_pendiente') {
+        console.warn('[wa-queue] por clasificar: no se registró', { queueId: fila.id, codigo: r.codigo });
+    }
 }
 
 /**

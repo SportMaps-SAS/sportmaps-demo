@@ -77,6 +77,7 @@ import { avisarPagosPorValidarPorPlataforma } from '../services/plataforma-wa-av
 import { saldoPorCobrar } from '../utils/saldo-cobro';
 import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { formatoEspera } from './receipt-review-alerts.job';
+import { idsConResumenDeCuentas } from '../services/resumen-cuentas.config';
 
 export const TIPO_CORREO = 'pagos_por_validar';
 /** Origen fijo de producción. Nunca `env.FRONTEND_URL`. */
@@ -492,10 +493,10 @@ async function escuelasConAutoAprobacion(ids: readonly string[]): Promise<Set<st
     return new Set(((data ?? []) as any[]).filter((s) => s.auto_approve_enabled === true).map((s) => s.school_id));
 }
 
-interface Destinatarios { perfiles: string[]; correos: string[] }
+export interface Destinatarios { perfiles: string[]; correos: string[] }
 
 /** Owner + admins activos de varias escuelas, en dos lecturas (miembros y perfiles). */
-async function destinatariosEnLote(escuelas: readonly { id: string; owner_id: string | null }[]): Promise<Map<string, Destinatarios>> {
+export async function destinatariosEnLote(escuelas: readonly { id: string; owner_id: string | null }[]): Promise<Map<string, Destinatarios>> {
     const out = new Map<string, Destinatarios>();
     if (!escuelas.length) return out;
     const { data: miembros, error } = await supabase.from('school_members')
@@ -680,7 +681,9 @@ export async function runPagosPorValidar(opts: OpcionesCorrida): Promise<Resulta
         .select('id, name, owner_id, account_type, is_demo')
         .in('id', [...porEscuela.keys()]);
     if (errEscuelas) throw new Error(`schools: ${errEscuelas.message}`);
-    const elegibles = ((escuelas ?? []) as any[]).filter(escuelaElegible);
+    // Las escuelas con el resumen de cuentas cada 4 h (resumen-cuentas.job) no reciben además este (sería el mismo correo dos veces).
+    const conResumenDeCuentas = idsConResumenDeCuentas();
+    const elegibles = ((escuelas ?? []) as any[]).filter((e) => escuelaElegible(e) && !conResumenDeCuentas.has(e.id));
     res.omitidas.noElegible = porEscuela.size - elegibles.length;
     if (!elegibles.length) return res;
 
