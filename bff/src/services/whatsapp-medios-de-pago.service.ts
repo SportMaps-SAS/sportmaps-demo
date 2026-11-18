@@ -19,7 +19,7 @@
 import { supabase } from '../config/supabase';
 import { normalizeDestination } from './receipt-verdict';
 import {
-    AVISO_LINK_DE_PAGO, TEXTO_BOTON_LINK_DE_PAGO, cuentaAplicaA, linkDePago, parseCuentasDePago, type CategoriaCobro,
+    AVISO_LINK_DE_PAGO, textoBotonLinkDePago, cuentaAplicaA, linkDePago, parseCuentasDePago, type CategoriaCobro,
 } from './payment-accounts';
 
 const TIPO_LEGIBLE: Record<string, string> = {
@@ -154,7 +154,7 @@ export async function mediosDePago(
         cuentas,
         enlace_para_pagar: link,
         link_de_pago: link,
-        instrucciones_del_enlace: link ? `${TEXTO_BOTON_LINK_DE_PAGO}. ${AVISO_LINK_DE_PAGO}.` : null,
+        instrucciones_del_enlace: link ? `${textoBotonLinkDePago(link)}. ${AVISO_LINK_DE_PAGO}.` : null,
         puede_enviar_comprobante_por_whatsapp: true,
     };
 }

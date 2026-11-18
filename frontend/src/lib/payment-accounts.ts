@@ -27,6 +27,15 @@ export const PAYMENT_LINK_TYPE = 'payment_link' as const;
 
 /** Texto del botón y aviso que acompañan al link (iguales en BFF: payment-accounts.ts). */
 export const PAYMENT_LINK_BUTTON_TEXT = 'Pagar con tarjeta, PSE o Nequi (Wompi)';
+
+/** Texto del botón según la pasarela del link (Bold de Monster, 2026-11-18). Espejo de textoBotonLinkDePago del BFF. */
+export function textoBotonLinkDePago(url?: string | null): string {
+    let host = '';
+    try { host = new URL(String(url ?? '')).hostname.toLowerCase(); } catch { /* sin url */ }
+    if (host === 'bold.co' || host.endsWith('.bold.co')) return 'Pagar en línea con Bold';
+    if (!host || host.includes('wompi')) return PAYMENT_LINK_BUTTON_TEXT;
+    return 'Pagar en línea';
+}
 export const PAYMENT_LINK_NOTICE =
     'Escribe el valor de tu cobro y, al terminar, manda el comprobante por WhatsApp o súbelo en la app para que la escuela lo aplique.';
 
@@ -217,7 +226,7 @@ export const PAYMENT_ACCOUNT_TYPES: { value: PaymentAccountType; label: string; 
     { value: 'nequi',        label: 'Nequi',                  placeholder: 'Celular' },
     { value: 'daviplata',    label: 'Daviplata',              placeholder: 'Celular' },
     { value: 'transfer_key', label: 'Llave de transferencia', placeholder: 'Celular, correo o alias' },
-    { value: 'payment_link', label: 'Link de pago (Wompi)',   placeholder: 'https://checkout.wompi.co/l/…' },
+    { value: 'payment_link', label: 'Link de pago (Wompi, Bold)', placeholder: 'https://checkout.wompi.co/l/… o https://checkout.bold.co/payment/…' },
 ];
 
 export function accountTypeLabel(type: string): string {

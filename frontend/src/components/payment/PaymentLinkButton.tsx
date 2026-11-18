@@ -11,7 +11,7 @@
 
 import { ExternalLink } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { PAYMENT_LINK_BUTTON_TEXT, PAYMENT_LINK_NOTICE } from '@/lib/payment-accounts';
+import { textoBotonLinkDePago, PAYMENT_LINK_NOTICE } from '@/lib/payment-accounts';
 
 interface Props {
     url: string;
@@ -24,7 +24,7 @@ export function PaymentLinkButton({ url, className }: Props) {
             <Button asChild className="w-full">
                 {/* stopPropagation: el bloque padre es una tarjeta clicable que cambia el método. */}
                 <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                    <ExternalLink className="mr-2 h-4 w-4" /> {PAYMENT_LINK_BUTTON_TEXT}
+                    <ExternalLink className="mr-2 h-4 w-4" /> {textoBotonLinkDePago(url)}
                 </a>
             </Button>
             <p className="mt-2 text-xs text-muted-foreground">{PAYMENT_LINK_NOTICE}</p>
