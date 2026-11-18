@@ -404,6 +404,8 @@ function cmdCheck() {
         errores.push(`El head del ledger (${ledger.head}) no coincide con la versión máxima registrada (${maxVersion(ledger.migrations)}). → npm run migrations:sync`);
     }
 
+    errores.push(...lintPoliciesSinEnvolver(disk));
+
     if (dupsBaseline.length) {
         console.warn(
             `${C.yellow}⚠️  ${dupsBaseline.length} colisiones de versión históricas (línea base, aceptadas).${C.off}`,
@@ -420,6 +422,54 @@ function cmdCheck() {
     console.log(
         `${C.green}✅ Migraciones: ${disk.length} archivos, ${ledger.migrations.length} registrados, head ${ledger.head}. Sin colisiones, ediciones ni borrados.${C.off}`,
     );
+}
+
+// ---------------------------------------------------------------------------
+// Policies sin envolver (rendimiento de RLS). Solo desde LINT_RLS_DESDE: lo
+// anterior se corrige por lotes (plan de arquitectura §11, R2.1), no se reescribe.
+//
+// En un USING / WITH CHECK, auth.uid() y los helpers sin argumentos se evalúan
+// UNA VEZ POR FILA si van pelados. Envueltos en (SELECT …) Postgres los vuelve
+// InitPlan y los calcula una vez por consulta. Para helpers que devuelven uuid[]
+// la forma correcta es = ANY ((SELECT public.f())::uuid[]); sin el ::uuid[] da
+// 42883. Escape puntual (justificarlo): un comentario «rls-lint: ok» dentro de
+// la sentencia.
+// ---------------------------------------------------------------------------
+
+const LINT_RLS_DESDE = process.env.LINT_RLS_DESDE || '20261118163548';
+
+function lintPoliciesSinEnvolver(disk) {
+    const errores = [];
+    for (const d of disk) {
+        if (!d.standardName || d.version < LINT_RLS_DESDE) continue;
+        // Comentarios fuera ANTES de partir en sentencias (un «ALTER POLICY» en un
+        // comentario no es una sentencia); el escape «rls-lint: ok» queda como marca.
+        const sql = readFileSync(join(MIGRATIONS_DIR, d.file), 'utf8')
+            .replace(/\r\n/g, '\n')
+            .replace(/--[^\n]*/g, (c) => (/rls-lint:\s*ok/i.test(c) ? ' __RLS_LINT_OK__ ' : ''));
+        const sentencias = sql.match(/\b(?:CREATE|ALTER)\s+POLICY\b[\s\S]*?;/gi) || [];
+        for (const s of sentencias) {
+            if (s.includes('__RLS_LINT_OK__')) continue;
+            const cuerpo = s;
+            const nombre = (cuerpo.match(/POLICY\s+("[^"]+"|\S+)/i) || [])[1] || '?';
+            const hallazgos = [];
+            if (/(?<!SELECT\s{0,3})\bauth\.(uid|jwt|role|email)\(\)/i.test(cuerpo))
+                hallazgos.push('auth.uid()/auth.jwt() pelado → (SELECT auth.uid())');
+            const anyPelado = cuerpo.match(/ANY\s*\(\s*(?:public\.)?([a-z_]+)\(\)\s*\)/i);
+            if (anyPelado)
+                hallazgos.push(`ANY (${anyPelado[1]}()) pelado → = ANY ((SELECT public.${anyPelado[1]}())::uuid[])`);
+            const boolPelado = cuerpo.match(/(?<!SELECT\s{0,3}(?:public\.)?)\b(is_platform_admin|is_super_admin)\(\)/i);
+            if (boolPelado) hallazgos.push(`${boolPelado[1]}() pelado → (SELECT public.${boolPelado[1]}())`);
+            if (hallazgos.length) {
+                errores.push(
+                    `Policy sin envolver en ${d.file} — ${nombre}:\n` +
+                        hallazgos.map((h) => `        - ${h}`).join('\n') +
+                        `\n      Se evalúa una vez POR FILA. Ver CLAUDE.md y docs/plan-arquitectura-robusta-2026-10.md §11.`,
+                );
+            }
+        }
+    }
+    return errores;
 }
 
 function maxVersion(entries) {

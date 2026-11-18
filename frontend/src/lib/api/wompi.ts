@@ -7,6 +7,8 @@
 // firma de otro lado mandaba el pago al comercio sandbox 11981889. Si el BFF no las
 // entrega, el checkout no abre (falla cerrado con un mensaje claro).
 
+import { cargarWidgetWompi } from '@/lib/wompiWidget';
+
 /**
  * Genera una referencia única para iniciar un checkout de Wompi.
  * Prefijo `SCH-` indica pago de escuela (ver bff/src/routes/wompi.ts:128).
@@ -125,13 +127,16 @@ export async function openWompiCheckout(
     // El monto también viene del servidor (create-session / tienda lo calculan).
     const effectiveAmountInCents = amountInCents;
 
+    // El script del Widget ya no va en index.html: se carga aquí, bajo demanda.
+    await cargarWidgetWompi();
+
     return new Promise((resolve) => {
         try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const WidgetCheckout = (window as any).WidgetCheckout;
 
             if (!WidgetCheckout) {
-                console.error('❌ Wompi WidgetCheckout no cargado. Verifica el script en index.html.');
+                console.error('❌ Wompi WidgetCheckout no cargó (red o bloqueador). Ver lib/wompiWidget.ts.');
                 resolve(null);
                 return;
             }

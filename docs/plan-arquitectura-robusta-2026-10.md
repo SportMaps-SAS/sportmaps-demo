@@ -543,6 +543,20 @@ Consultas de la app que más pesan:
 
 **R4 — Trabajo de fondo (= F3).** Sondeos por eventos. `extract-receipt` (7,6 s): evaluar responder al instante y procesar en la cola, si el flujo del acudiente lo permite (decisión de producto).
 
+**Avance 2026-11-18.**
+- **R2.1, lote 1:** migración `20261118163548_rls_initplan_lote1_tablas_calientes`.
+  - Alcance: 43 policies en 9 tablas (children, enrollments, payments, attendance_records, teams, school_members, profiles, unregistered_athletes, wa_comprobantes_por_clasificar) y los 3 índices duplicados del linter.
+  - Generada desde `pg_policies` vivo.
+  - Verificada así:
+    - prueba textual (deshacer el envoltorio devuelve la expresión vieja exacta);
+    - prueba en vivo de solo lectura (34 sesiones, 0 diferencias);
+    - ensayo en el gemelo local.
+- **Gate:** `migrations:check` rechaza policies nuevas sin envolver.
+- **Lote 2 pendiente:**
+  - Las ~130 tablas restantes con el mismo generador.
+  - Una función gemela de `is_school_admin(school_id)` que devuelva `uuid[]`, para envolverla. `user_admin_school_ids()` NO es equivalente: incluye `super_admin` y `schools.owner_id`.
+- **R3.1 y R3.2:** el widget de Wompi se carga al pagar (`frontend/src/lib/wompiWidget.ts`) y Poppins ya no bloquea el render (preload).
+
 ### 11.3 Verificación
 
 - Repetir con los mismos scripts: logs de Render (p50/p95 por endpoint), diferencia de `pg_stat_statements` contra la foto del 11-07, Lighthouse móvil y el recorrido con la cuenta demo.
