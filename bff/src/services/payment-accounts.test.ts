@@ -6,10 +6,23 @@ import { describe, it, expect } from 'vitest';
 import {
     categoriaDeCobro, cuentaAplicaA, parseCuentasDePago, describirCategorias, linkDePago, esUrlDeLinkDePago,
     esCobroUnico, etiquetaDeCobro, CATEGORIAS_COBRO, ETIQUETA_COBRO,
-    esMensualidadPorCategoria, FILTRO_SOLO_MENSUALIDAD,
+    esMensualidadPorCategoria, FILTRO_SOLO_MENSUALIDAD, textoBotonLinkDePago, TEXTO_BOTON_LINK_DE_PAGO,
 } from './payment-accounts';
 import { readFileSync } from 'fs';
 import path from 'path';
+
+// Monster usa un link ABIERTO de Bold (2026-11-18): el botón no se rotula Wompi.
+describe('textoBotonLinkDePago', () => {
+    it('Bold → «Bold»; Wompi y sin URL → texto de siempre; otra pasarela → genérico', () => {
+        expect(textoBotonLinkDePago('https://checkout.bold.co/payment/LNK_QCWY6XCZSV')).toBe('Pagar en línea con Bold');
+        expect(textoBotonLinkDePago('https://checkout.wompi.co/l/Hj5s7R')).toBe(TEXTO_BOTON_LINK_DE_PAGO);
+        expect(textoBotonLinkDePago(null)).toBe(TEXTO_BOTON_LINK_DE_PAGO);
+        expect(textoBotonLinkDePago('https://pagos.ejemplo.co/x')).toBe('Pagar en línea');
+    });
+    it('el link de Bold pasa como link de pago', () => {
+        expect(esUrlDeLinkDePago('https://checkout.bold.co/payment/LNK_QCWY6XCZSV')).toBe(true);
+    });
+});
 
 // Link de pago de Wompi de Dynasty (2026-10-06): vive en payment_accounts pero
 // no es una cuenta para transferir.

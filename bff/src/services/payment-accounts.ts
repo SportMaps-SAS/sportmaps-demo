@@ -84,6 +84,20 @@ export const AVISO_LINK_DE_PAGO =
 
 export const TEXTO_BOTON_LINK_DE_PAGO = 'Pagar con tarjeta, PSE o Nequi (Wompi)';
 
+/**
+ * Texto del botón según la pasarela del link (2026-11-18, Monster usa un link
+ * abierto de Bold: https://checkout.bold.co/payment/LNK_…). El de Wompi se queda
+ * como estaba; cualquier otra pasarela no se rotula como Wompi. Espejo en el
+ * frontend: textoBotonLinkDePago de lib/payment-accounts.ts.
+ */
+export function textoBotonLinkDePago(url?: string | null): string {
+    let host = '';
+    try { host = new URL(String(url ?? '')).hostname.toLowerCase(); } catch { /* sin url */ }
+    if (host === 'bold.co' || host.endsWith('.bold.co')) return 'Pagar en línea con Bold';
+    if (!host || host.includes('wompi')) return TEXTO_BOTON_LINK_DE_PAGO;
+    return 'Pagar en línea';
+}
+
 /** Filas crudas del jsonb (sin esquema garantizado), con su valor ya recortado. */
 function filasCrudas(raw: unknown): { row: Record<string, unknown>; value: string }[] {
     if (!Array.isArray(raw)) return [];

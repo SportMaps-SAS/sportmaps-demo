@@ -721,6 +721,7 @@ export function getNavigationByRole(
         items: [
           { title: 'Dashboard',           href: '/admin',                icon: Home },
           { title: 'Logs y actividad',    href: '/admin/activity-logs',  icon: BarChart3 },
+          { title: 'Uso de la app',       href: '/admin/uso',            icon: BarChart3 },
           { title: 'Analítica',           href: '/admin/analytics',      icon: BarChart3 }
         ]
       },
@@ -751,6 +752,7 @@ export function getNavigationByRole(
         items: [
           { title: 'Dashboard', href: '/admin', icon: Home },
           { title: 'Logs y actividad', href: '/admin/activity-logs', icon: BarChart3 },
+          { title: 'Uso de la app', href: '/admin/uso', icon: BarChart3 },
           { title: 'Analítica', href: '/admin/analytics', icon: BarChart3 }
         ]
       },
