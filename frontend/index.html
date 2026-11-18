@@ -180,11 +180,12 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <!-- Poppins sin bloquear el render (~1 s en el login, plan §11 R3.2): se pide como
+       preload y se aplica al llegar; mientras tanto se ve la fuente del sistema (display=swap). -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet"></noscript>
 
-
-  <!-- Wompi Payment Widget -->
-  <script type="text/javascript" src="https://checkout.wompi.co/widget.js"></script>
+  <!-- Widget de Wompi: se carga al pagar (src/lib/wompiWidget.ts), no aquí: bloqueaba ~1,1 s cada página. -->
 
   <title>SportMaps - Revolucionando el sistema deportivo</title>
   <meta name="description"

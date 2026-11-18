@@ -91,7 +91,8 @@ export function abrirWidgetWompi(
     c: CheckoutCobroPublico,
     redirectUrl: string,
 ): Promise<{ status?: string } | null> | null {
-    // Devuelve null SIN abrir si el script del Widget no cargó (index.html).
+    // Devuelve null SIN abrir si el script del Widget no cargó (el llamador lo
+    // carga antes con cargarWidgetWompi, lib/wompiWidget.ts).
     // Si abre, la promesa resuelve solo cuando hay transacción: si la familia
     // cierra el Widget sin pagar, Wompi no llama al callback y la promesa queda
     // pendiente — por eso el llamador no bloquea la UI esperándola.

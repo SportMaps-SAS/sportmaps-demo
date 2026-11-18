@@ -49,6 +49,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { BFFError } from '@/lib/api/bffClient';
 import { textoBotonLinkDePago } from '@/lib/payment-accounts';
+import { cargarWidgetWompi } from '@/lib/wompiWidget';
 import {
     abrirWidgetWompi, guardarFacturaPublica, iniciarPagoCobroPublico, obtenerCobroPublico, obtenerFacturaPublica,
     subirComprobanteCobroPublico, type EstadoCobro, type VistaCobroPublico,
@@ -144,6 +145,8 @@ export default function CobroPublicoPage() {
                 window.location.assign(`${url}&redirect-url=${encodeURIComponent(vuelta)}`);
                 return;
             }
+            // El script del Widget ya no va en index.html: se carga al pagar.
+            await cargarWidgetWompi();
             resultado = abrirWidgetWompi(checkout, vuelta);
             if (!resultado) {
                 setAviso('No pudimos abrir la pasarela de pago. Intenta de nuevo o paga por transferencia.');
