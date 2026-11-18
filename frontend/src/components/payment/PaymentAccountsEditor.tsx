@@ -64,8 +64,8 @@ export function PaymentAccountsEditor({ accounts, onChange, showSensitive, onRev
                 <p className="text-xs text-muted-foreground max-w-[62ch]">
                     Bre-B, Nequi, Daviplata o llaves de otros bancos. Los acudientes las verán en
                     este orden, y solo se aceptan comprobantes girados a alguna de ellas. Si tienes un
-                    link de pago de Wompi, agrégalo como «Link de pago (Wompi)»: los acudientes lo verán
-                    como botón para pagar con tarjeta, PSE o Nequi.
+                    link de pago de Wompi o Bold, agrégalo como «Link de pago»: los acudientes lo verán
+                    como botón para pagar en línea.
                 </p>
             </div>
 

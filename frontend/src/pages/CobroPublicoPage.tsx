@@ -48,6 +48,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BFFError } from '@/lib/api/bffClient';
+import { textoBotonLinkDePago } from '@/lib/payment-accounts';
 import {
     abrirWidgetWompi, guardarFacturaPublica, iniciarPagoCobroPublico, obtenerCobroPublico, obtenerFacturaPublica,
     subirComprobanteCobroPublico, type EstadoCobro, type VistaCobroPublico,
@@ -294,7 +295,7 @@ export default function CobroPublicoPage() {
                         </h2>
                         <Button asChild variant={v.enLinea ? 'outline' : 'default'} className="mt-3 h-12 w-full text-base">
                             <a href={v.transferencia.linkDePago} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="mr-2 h-5 w-5" /> Pagar con tarjeta, PSE o Nequi (Wompi)
+                                <ExternalLink className="mr-2 h-5 w-5" /> {textoBotonLinkDePago(v.transferencia.linkDePago)}
                             </a>
                         </Button>
                         <p className="mt-2 text-xs text-gray-600">

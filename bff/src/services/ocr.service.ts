@@ -92,6 +92,9 @@ Reglas:
 - destination: el numero DESTINO (a quien le llego la plata), NO el de quien envia.
   Busca etiquetas como "Llave", "Para", "Cuenta destino", "Banco destino", "Numero Nequi".
   En envios por llave (Bre-B/Nequi), destination es el numero de la llave.
+- Recibos de Bold (logo "bold", "¡Completaste el pago!", "ID transaccion Bold"): NO traen cuenta destino.
+  destination = null (el "Comercio" NO es una cuenta: ponlo en destination_name), reference = "ID transaccion Bold",
+  bank = "Otro", description = el campo "Descripcion". Ignora "Metodo de pago": con Apple Pay no es la tarjeta real.
 - is_receipt: false si la imagen no es un comprobante de pago individual.
 - is_transaction_list: true si es un pantallazo de lista de movimientos, no un comprobante individual.
 - missing_fields: lista todo campo del schema que no aparece o no es legible.
