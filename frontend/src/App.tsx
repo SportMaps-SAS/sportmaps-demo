@@ -1287,7 +1287,7 @@ const App = () => (
                         </ProtectedRoute>
                       } />
                       <Route path="admin/uso" element={
-                        <ProtectedRoute allowedRoles={['admin', 'super_admin']} strictRoleCheck>
+                        <ProtectedRoute allowedRoles={['super_admin']} strictRoleCheck>
                           <AdminUsagePage />
                         </ProtectedRoute>
                       } />
