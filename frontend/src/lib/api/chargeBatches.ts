@@ -217,6 +217,8 @@ export interface PreviewLine {
     adjustments?: AdjustmentTag[];
     amount_after: number;
     pay_amount?: number;
+    /** Mora con la que NACE una mensualidad nueva (vencimiento ya pasado y mora activa en la escuela). */
+    late_fee?: number;
     resulting_status?: 'pending' | 'paid' | 'partial' | 'cancelled';
     tags?: AdjustmentTag[];
     warnings?: string[];
@@ -251,6 +253,8 @@ export interface ChargeBatchPreview {
     duplicates?: AthleteDuplicate[];
     /** Otra pantalla registró lo mismo hace pocos minutos (aviso, no bloqueo). */
     recent_duplicates?: CobroRecienteAviso[];
+    /** Dueños de las líneas nuevas (sin pago) con saldo a favor: se descuenta solo al crear. Informativo; no entra al hash. */
+    saldo_a_favor?: { dueno: string; disponible: number }[];
     errors?: { ref?: string; code: string; message?: string }[];
 }
 
@@ -842,11 +846,17 @@ export function normalizePreview(r: any): ChargeBatchPreview {
             adjustments: (Array.isArray(it.adjustments) ? it.adjustments : []).map(normalizeTag),
             amount_after: num(it.amount_after ?? it.amount),
             pay_amount: num(it.pay_amount),
+            late_fee: num(it.late_initial),
             resulting_status: it.resulting_status ?? it.status,
             warnings: Array.isArray(it.warnings) ? it.warnings : [],
         })),
         duplicates: Array.isArray(r?.duplicates) ? r.duplicates.map(normalizeDuplicate) : undefined,
         recent_duplicates: normalizeCobrosRecientes(r?.recent_duplicates),
+        saldo_a_favor: Array.isArray(r?.saldo_a_favor)
+            ? r.saldo_a_favor
+                .map((s: any) => ({ dueno: String(s?.dueno ?? ''), disponible: num(s?.disponible) }))
+                .filter((s: { dueno: string; disponible: number }) => s.dueno && s.disponible > 0)
+            : undefined,
         errors: errors.map((e) => ({ ref: e.ref, code: e.code, message: e.message ?? previewErrorMessage(e) })),
     };
 }

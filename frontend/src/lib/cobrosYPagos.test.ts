@@ -137,6 +137,30 @@ describe('descuentos automáticos del servidor en una línea nueva (Q17)', () =>
     });
 });
 
+describe('mora con la que nace una mensualidad nueva vencida', () => {
+    it('suma la mora al monto, no la toca el descuento y el pago cuadra', () => {
+        const lines = [line({ category: 'mensualidad', amount: 100_000, period: { year: 2026, month: 9 }, discount: pct(10, 'pronto_pago'), pay: true })];
+        const r = computeSingle({ pending: [], lines, global: null, paymentOn: true, autoLateFees: { 'new:0': 5_000 } });
+        expect(r.lines[0].lateFee).toBe(5_000);
+        expect(r.lines[0].lineDiscount).toBe(10_000); // sobre 100.000, sin el recargo
+        expect(r.lines[0].amountAfter).toBe(95_000);
+        expect(r.lines[0].payAmount).toBe(95_000);
+        expect(r.toCreate.total).toBe(95_000);
+    });
+    it('exonerar la mensualidad condona la mora', () => {
+        const lines = [line({ category: 'mensualidad', amount: 100_000, period: { year: 2026, month: 9 }, exonerate: { reason_text: 'Beca' } })];
+        const r = computeSingle({ pending: [], lines, global: null, paymentOn: false, autoLateFees: { 'new:0': 5_000 } });
+        expect(r.lines[0].amountAfter).toBe(0);
+        expect(r.lines[0].waived).toBe(5_000);
+    });
+    it('sin mora del servidor todo sigue igual', () => {
+        const lines = [line({ category: 'mensualidad', amount: 100_000, period: { year: 2026, month: 11 } })];
+        const r = computeSingle({ pending: [], lines, global: null, paymentOn: false });
+        expect(r.lines[0].lateFee).toBe(0);
+        expect(r.lines[0].amountAfter).toBe(100_000);
+    });
+});
+
 describe('caso mixto del wireframe (T20)', () => {
     const sep = charge({ id: 'p-sep', concept: 'Mensualidad Septiembre 2026', status: 'overdue', amount: 759_150, late_fee_amount: 36_150 });
     const oct = charge({ id: 'p-oct', amount: 723_000 });

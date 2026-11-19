@@ -50,6 +50,7 @@ import {
   findActiveInsurance,
   conceptoDePlan,
 } from '../services/enrollmentBilling';
+import { suggestSibling, quoteSiblingDiscount } from '../services/sibling-suggestion.service';
 import {
   resolverAtleta, verCobrosUnicos, cobrarUnicosDespues, CobroUnicoError, type AthleteType,
 } from '../services/enrollment-fees-edit.service';
@@ -107,6 +108,9 @@ const EnrollmentBase = z.object({
   // plan en ESTA alta (la mensualidad sí se cobra). Ausente = como hoy.
   waive_registration_fee: z.boolean().optional(),
   waive_insurance_fee:    z.boolean().optional(),
+  // F2 hermanos: hermano ya inscrito que el staff confirmó en el alta (acudiente
+  // sin cuenta). Solo aplica a menores; la RPC crea el vínculo 'alta'.
+  sibling_of_child_id:    z.string().uuid().optional(),
 });
 
 const feeWaiversOf = (d: { waive_registration_fee?: boolean; waive_insurance_fee?: boolean }): EnrollmentFeeWaivers => ({
@@ -508,6 +512,8 @@ async function altaConCobros(req: AuthenticatedRequest, p: {
   personName: string;
   /** La escuela no cobra inscripción / seguro en esta alta. */
   feeWaivers?: EnrollmentFeeWaivers;
+  /** Hermano confirmado por el staff (solo menores): la RPC lo vincula antes de cobrar. */
+  siblingOfChildId?: string | null;
 }): Promise<{ enrollmentsCreated: number; paymentCreated: boolean; paymentIds: string[] }> {
   const hasPlan = !!(p.offeringPlanId && p.offeringId);
   const shouldEnroll = !!(p.teamId || hasPlan);
@@ -525,6 +531,10 @@ async function altaConCobros(req: AuthenticatedRequest, p: {
     if (hasPlan) { enrollment.offering_plan_id = p.offeringPlanId; enrollment.offering_id = p.offeringId; }
     if (p.enrollmentMonthlyFee != null && p.enrollmentMonthlyFee > 0) enrollment.monthly_fee = p.enrollmentMonthlyFee;
     if (p.firstPaymentMode) enrollment.first_payment_mode = p.firstPaymentMode;
+    if (p.siblingOfChildId && p.athleteCol === 'child_id') {
+      enrollment.sibling_of_child_id = p.siblingOfChildId;
+      if (req.user?.id) enrollment.actor_id = req.user.id;
+    }
   }
 
   // Inscripción + seguro (F-B): solo en un alta NUEVA con plan (D18).
@@ -791,6 +801,15 @@ router.post(
           if (dup) return res.status(409).json(duplicateResponse(dup));
         }
 
+        // F2 hermanos: el hermano elegido debe ser un menor de ESTA escuela.
+        if (data.sibling_of_child_id) {
+          const { data: sib } = await supabase
+            .from('children').select('id').eq('id', data.sibling_of_child_id).eq('school_id', schoolId).maybeSingle();
+          if (!sib) {
+            return res.status(400).json({ error: 'El hermano elegido no pertenece a esta escuela.', code: 'HERMANO_INVALIDO' });
+          }
+        }
+
         // 2. INSERT children
         const { data: child, error: childErr } = await supabase
           .from('children')
@@ -849,6 +868,7 @@ router.post(
         // (dos con clases restantes) + inscripción/seguro, en una transacción.
         const alta = await altaConCobros(req, {
           feeWaivers: feeWaiversOf(data),
+          siblingOfChildId: data.sibling_of_child_id ?? null,
           schoolId: schoolId!, athleteCol: 'child_id', athleteId: childId,
           branchId: data.branch_id || null, teamId: data.team_id || null,
           offeringPlanId: hasPlan ? data.offering_plan_id : null,
@@ -1390,6 +1410,10 @@ const PreviewSchema = z.object({
   user_id:                 z.string().uuid().optional(),
   child_id:                z.string().uuid().optional(),
   unregistered_athlete_id: z.string().uuid().optional(),
+  // F2 hermanos: hermano elegido en el alta y contacto del acudiente (para proponer hermano).
+  sibling_of_child_id:     z.string().uuid().optional(),
+  parent_email:            z.string().max(200).optional(),
+  parent_phone:            z.string().max(30).optional(),
 });
 
 router.post(
@@ -1451,7 +1475,25 @@ router.post(
       const chargedFees = (body.waive_registration_fee ? 0 : fees.registration_fee)
         + (body.waive_insurance_fee || insuranceActiveSince ? 0 : fees.insurance_fee);
 
+      // F2 hermanos: propuesta por correo/teléfono del acudiente + cotización del
+      // descuento con el hermano elegido (o el que ya tiene el menor).
+      const planPrice = Number((plan as any).price) || 0;
+      const feeForSibling = body.monthly_fee && body.monthly_fee > 0 ? body.monthly_fee : planPrice;
+      const feeAfterManual = body.discount_pct && body.discount_pct > 0
+        ? feeForSibling - Math.round(feeForSibling * body.discount_pct / 100)
+        : feeForSibling;
+      const [siblingSuggestion, sibling] = await Promise.all([
+        body.sibling_of_child_id
+          ? Promise.resolve(null)
+          : suggestSibling(schoolId!, { email: body.parent_email, phone: body.parent_phone }, body.child_id ?? null),
+        quoteSiblingDiscount(schoolId!, {
+          childId: body.child_id ?? null, siblingOfChildId: body.sibling_of_child_id ?? null, fee: feeAfterManual,
+        }),
+      ]);
+
       const base = {
+        sibling,
+        sibling_suggestion: siblingSuggestion,
         eligible: elig.eligible,
         reason: elig.eligible ? null : elig.reason,
         classes_per_period: cpp?.classes ?? null,

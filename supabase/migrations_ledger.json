@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 934,
-  "head": "20261119121205",
+  "count": 936,
+  "head": "20261119164527",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -937,6 +937,8 @@
     {"v":"20261118131559","file":"20261118131559_admin_ui_usage_resumen.sql","sha256":"216576529f485bb19ef5b248199b65987243a91a06f8bc9242117116520cb0f0","added":"2026-11-18","by":"Brayan Steven Lopez"},
     {"v":"20261118163548","file":"20261118163548_rls_initplan_lote1_tablas_calientes.sql","sha256":"0d9acfaaad822fa1e7a9bc35a96c1d73720dc3864560871910f1239d92f08d32","added":"2026-11-18","by":"Brayan Steven Lopez"},
     {"v":"20261119120806","file":"20261119120806_dreamers_ventana_comprobante_10_dias.sql","sha256":"e6176b473dc2d24fa949ef3ac857375e7331f40a871e8f1a5232220ed76160e4","added":"2026-11-19","by":"Brayan Steven Lopez"},
-    {"v":"20261119121205","file":"20261119121205_saldo_a_favor_lectura_escuela_y_familia.sql","sha256":"dee16403116b304bbb60bd3ae89dabf9224fc1e9ae6f02b607dd1a015ba3ee0a","added":"2026-11-19","by":"Brayan Steven Lopez"}
+    {"v":"20261119121205","file":"20261119121205_saldo_a_favor_lectura_escuela_y_familia.sql","sha256":"dee16403116b304bbb60bd3ae89dabf9224fc1e9ae6f02b607dd1a015ba3ee0a","added":"2026-11-19","by":"Brayan Steven Lopez"},
+    {"v":"20261119141319","file":"20261119141319_mora_nace_en_cobro_manual.sql","sha256":"ef1bccc9fdc96e92520314f2706602c035e187988b9f3ae720daf1d3dd2b2dce","added":"2026-11-19","by":"Brayan Steven Lopez"},
+    {"v":"20261119164527","file":"20261119164527_saldo_a_favor_en_cobro_manual.sql","sha256":"d77273e734cc971553f2e8a329e0fb8ddc416cae93b31d05dc91aff9ac454ebf","added":"2026-11-19","by":"Brayan Steven Lopez"}
   ]
 }

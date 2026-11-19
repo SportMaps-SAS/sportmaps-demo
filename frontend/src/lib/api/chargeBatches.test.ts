@@ -107,4 +107,12 @@ describe('normalización de las respuestas reales del BFF (F2)', () => {
         expect(p.skipped?.[0]).toMatchObject({ athlete: { id: 'child:a', name: 'Ana' }, overridable: true });
         expect(p.errors?.[0].message).toMatch(/saldo/);
     });
+    it('vista previa: saldo_a_favor (informativo) se normaliza y descarta lo vacío', () => {
+        const p = normalizePreview({
+            preview_hash: 'h', rows_to_create: 1, total_amount: 50000,
+            saldo_a_favor: [{ dueno: 'c:abc', disponible: '30000' }, { dueno: 'c:def', disponible: 0 }, { dueno: '', disponible: 5 }],
+        });
+        expect(p.saldo_a_favor).toEqual([{ dueno: 'c:abc', disponible: 30000 }]);
+        expect(normalizePreview({ preview_hash: 'h', rows_to_create: 0, total_amount: 0 }).saldo_a_favor).toBeUndefined();
+    });
 });

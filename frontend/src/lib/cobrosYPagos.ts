@@ -403,6 +403,12 @@ export interface SingleInput {
      * la línea saldría como sobrepago.
      */
     autoDiscounts?: Record<string, { amount: number; labels: string[] }>;
+    /**
+     * Mora con la que la RPC hace NACER una mensualidad nueva (vencimiento ya pasado,
+     * mora activa), por ref 'new:<idx>', leída de la última vista previa. Se suma al
+     * monto de la línea; los descuentos se siguen calculando sin ella.
+     */
+    autoLateFees?: Record<string, number>;
 }
 
 export function computeSingle(input: SingleInput): OperationCalc {
@@ -493,6 +499,7 @@ export function computeSingle(input: SingleInput): OperationCalc {
         const auto = input.autoDiscounts?.[`new:${idx}`];
         const autoAmt = Math.min(Math.max(0, Math.round(auto?.amount ?? 0)), amount);
         const base = amount - autoAmt;
+        const bornLate = Math.max(0, Math.round(input.autoLateFees?.[`new:${idx}`] ?? 0));
         let lineDiscount = 0;
         if (exonerated) {
             if (l.exonerate!.reason_text.trim().length < 3) errors.push('Escribe el motivo de «No cobrar».');
@@ -513,9 +520,9 @@ export function computeSingle(input: SingleInput): OperationCalc {
         }
         work.push({
             calc: {
-                ref: `new:${idx}`, kind: 'new', category: l.category, list: amount, existingDiscount: autoAmt, lateFee: 0,
-                amountBefore: base, lineDiscount, generalShare: 0, waived: 0, closingDiscount: 0,
-                amountAfter: base, floor: 0, balance: 0, payAmount: 0, status: 'pending', exonerated,
+                ref: `new:${idx}`, kind: 'new', category: l.category, list: amount, existingDiscount: autoAmt, lateFee: bornLate,
+                amountBefore: base + bornLate, lineDiscount, generalShare: 0, waived: 0, closingDiscount: 0,
+                amountAfter: base + bornLate, floor: 0, balance: 0, payAmount: 0, status: 'pending', exonerated,
                 hasAdjustment: false, tags, discountRatio: 0, over50: false, errors,
             },
             baseAfterLine: Math.max(0, base - lineDiscount),
