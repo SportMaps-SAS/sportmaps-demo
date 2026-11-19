@@ -727,7 +727,10 @@ const PIDE_LLAVE = /\b(llave|llaves|bre b|breb)\b/;
 /** (auditoría Monster 14–16 nov 2026) El bloque de pago completo sale UNA vez; después, la línea con lo que pidió. */
 export const MIN_BLOQUE_DE_PAGO_ENVIADO = 48 * 60;
 /** «¿Puedo pagar hasta mañana?», «Puedo pagar mañana?», «¿hay plazo?»: pregunta por el plazo, no pide el bloque. */
-const PIDE_PLAZO = /\b(hasta (manana|hoy|cuando|que (dia|fecha|hora)|el (lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}))|plazo|fecha limite|ultimo dia|a mas tardar|(puedo|podemos|podria|podriamos|puede|pueden) (pagar|abonar|consignar|transferir) (manana|despues|luego|mas tarde|otro dia|la proxima semana)|pagar (manana|despues|luego|mas tarde))\b/;
+const PIDE_PLAZO = /\b(hasta (manana|hoy|cuando|que (dia|fecha|hora)|el (lunes|martes|miercoles|jueves|viernes|sabado|domingo|\d{1,2}))|plazo|fecha limite|ultimo dia|a mas tardar|(puedo|podemos|podria|podriamos|puede|pueden) (pagar|abonar|consignar|transferir) (manana|despues|luego|mas tarde|otro dia|la proxima semana)|pagar (manana|despues|luego|mas tarde)|(manana|pasado manana|hoy|esta semana|la proxima semana|el (lunes|martes|miercoles|jueves|viernes|sabado|domingo))\b[a-z0-9 ]{0,30}\b(puedo|podemos|podria|podriamos|puede|pueden) (pagar|abonar|consignar|transferir)|(puedo|podemos|podria|podriamos|puede|pueden) (pagar|abonar|consignar|transferir) (el (lunes|martes|miercoles|jueves|viernes|sabado|domingo)|hoy|pasado manana|esta semana))\b/;
+/** «Ya me sale en la aplicación que estoy al día»: avisa que está al día; solo merece un acuse corto. */
+const DICE_ESTAR_AL_DIA = /\b(estoy|estamos|quede|quedo|aparece|sale|figura)\b[a-z0-9 ]{0,40}\bal dia\b/;
+const TEXTO_ACUSE_AL_DIA = '¡Qué bueno! 🙌 Gracias por avisarme. Si necesitas algo más, me escribes por aquí.';
 /** «¿Me pasas el número de Nequi?», «¿a dónde consigno?», «los datos»: pide el dato de la cuenta. */
 const PIDE_DATO_DE_CUENTA = /\b(nequi|daviplata|bancolombia|numero|cuenta|cuentas|titular|a nombre|nombre de quien|donde (pago|consigno|transfiero|se paga|puedo pagar)|a donde|datos)\b/;
 /** «¿Y para NO afiliados?», «el vacacional para no afiliados»: pide la tarifa de quien no es del club. */
@@ -1430,6 +1433,15 @@ export async function atenderVentaDeServicio(
     const ruta: IntencionVenta = conDatosDeAsistente && !colaEnYaPago ? 'detalle' : intencion;
     // «3 semanas», «Pago 2 semanas», «Del 23 al 27 nov / Del 30 al 04 dic»: eligió una opción del servicio.
     const eleccion = intencion === 'detalle' || intencion === 'pago' || intencion === 'ya_pago' ? opcionElegidaEnVenta(texto, item) : null;
+
+    // «Ya me sale en la aplicación que estoy al día»: un acuse corto (antes caía en «detalle» y no recibía nada).
+    if (intencion === 'detalle' && !/[?¿]/.test(texto) && DICE_ESTAR_AL_DIA.test(normalizarFrase(texto))) {
+        if (await colaContesta()) return 'venta_silencio';
+        if (ctx.recientes.some((f) => f.direction === 'outbound' && f.payload?.corta_de_pago === 'al_dia'
+            && momento(f) >= ahora - 2 * 60_000)) return 'venta_silencio';
+        await ctx.enviar(TEXTO_ACUSE_AL_DIA, { ...marca, step: PASO_VENTA.RESPUESTA, repetible: true, corta_de_pago: 'al_dia' });
+        return 'venta_respuesta';
+    }
 
     switch (ruta) {
         case 'cierre':

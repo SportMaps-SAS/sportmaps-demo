@@ -458,6 +458,16 @@ async function cuerpoDelTurno(
         return;
     }
 
+    // 0a. [Sí, acepto] / [No, gracias] de «¿Quieres que te envíe por aquí los recordatorios de pago…?»: SIEMPRE tiene
+    //     respuesta (Monster 18-nov: …0261 y …4561 lo tocaron y no pasó nada; sin fila en whatsapp_optins). Antes llegaba
+    //     al paso 2, DESPUÉS del silencio por la escuela, de la identificación (que callaba si la conversación no quedaba
+    //     vinculada, o con el aviso de «crea tu cuenta» ya dado en 24 h) y de los flujos abiertos: cualquiera se lo tragaba.
+    //     Es la respuesta a una pregunta del propio bot; no depende de quién más esté escribiendo.
+    if (botonId === BOTON.CONSENTIR_SI || botonId === BOTON.CONSENTIR_NO) {
+        await atenderBotonDeConsentimiento(integration, conversationId, contactWaId, botonId, waMessageId, recientes);
+        return;
+    }
+
     // 0b. P4 — La escuela está atendiendo: silencio.
     //     Medido el 06-oct: en 6 de 10 conversaciones Milena escribía desde su
     //     celular mientras el bot respondía; en `8f9e500b` mandó 5 estados de
@@ -5975,6 +5985,62 @@ async function leerRespuestaDeConsentimiento(
     return false;
 }
 
+/**
+ * El botón del consentimiento tiene SIEMPRE una respuesta: con la ficha vinculada (o que el teléfono reconoce) se
+ * registra el opt-in y se confirma; sin ficha, la respuesta de `respuestaConsentimientoSinCuenta`; si ya estaba
+ * activo o de baja, se dice. Nunca deja el toque sin contestar.
+ */
+export async function atenderBotonDeConsentimiento(
+    integration: WhatsAppIntegration,
+    conversationId: string,
+    contactWaId: string,
+    botonId: string,
+    waMessageId: string,
+    recientes: FilaReciente[],
+): Promise<void> {
+    let parentId: string | null = null;
+    try {
+        const { data: conv } = await supabase
+            .from('whatsapp_conversations')
+            .select('id, parent_id, identified')
+            .eq('id', conversationId)
+            .maybeSingle();
+        parentId = (conv as any)?.parent_id ?? null;
+        if (!parentId) {
+            // Sin vínculo todavía (el teléfono la reconoce, pero nadie la había vinculado): la RPC la vincula.
+            const { data: id } = await supabase.rpc('wa_identify_by_phone', {
+                p_integration_id: integration.id, p_contact_wa_id: contactWaId,
+            });
+            if ((id as any)?.estado === 'identificado') {
+                const { data: vinculada } = await supabase
+                    .from('whatsapp_conversations').select('parent_id').eq('id', conversationId).maybeSingle();
+                parentId = (vinculada as any)?.parent_id ?? null;
+            }
+        }
+    } catch (err) {
+        console.warn('[whatsapp-bot] consentimiento: no se pudo leer el vínculo; se responde como sin ficha',
+            err instanceof Error ? err.message : err);
+    }
+
+    if (!parentId) {
+        await deliver(integration, conversationId, contactWaId,
+            respuestaConsentimientoSinCuenta(botonId, '') as string, { step: PASO_CONSENTIMIENTO_SIN_CUENTA });
+        return;
+    }
+    const atendido = await leerRespuestaDeConsentimiento(
+        integration, conversationId, contactWaId, parentId, '', waMessageId, botonId, recientes);
+    if (atendido) return;
+
+    // Ya había aceptado, o está de baja: el botón era de una pregunta vieja. Se le dice dónde queda.
+    const optin = await leerOptinDeContacto(integration.id, contactWaId);
+    const deBaja = !!(optin as any)?.opted_out_at;
+    await deliver(integration, conversationId, contactWaId,
+        deBaja
+            ? 'Tienes los avisos por WhatsApp desactivados. Si quieres recibirlos otra vez, escríbeme *ACTIVAR*. 🙌'
+            : '👍 Ya tenías los avisos activados. (Si algún día no quieres recibirlos, me escribes *BAJA*.)',
+        { step: 'opt_in_ya_activo' });
+}
+
 /** El texto de la pregunta del consentimiento (igual al pie o como mensaje). */
 export const textoPreguntaConsentimiento = (escuela: string) =>
     `Una cosa más 🙂 ¿Quieres que *${escuela}* te envíe por aquí los recordatorios de pago ` +
@@ -7520,14 +7586,15 @@ async function hayPreguntaDeCobroAbierta(integration: WhatsAppIntegration, conta
     try {
         const { data } = await supabase
             .from('whatsapp_inbound_queue')
-            .select('id')
+            .select('id, error_message')
             .eq('integration_id', integration.id)
             .eq('wa_phone_number', contactWaId)
             .eq('status', 'waiting_user')
             .gte('pregunta_at', new Date(Date.now() - 24 * 3600_000).toISOString())
             .limit(1)
             .maybeSingle();
-        return !!(data as any)?.id;
+        // Una fila que ya pasó a «Por clasificar» (`cerrado_escuela:`) no es una pregunta abierta.
+        return !!(data as any)?.id && !String((data as any)?.error_message ?? '').startsWith('cerrado_escuela:');
     } catch {
         return false;
     }

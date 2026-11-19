@@ -20,7 +20,7 @@ import { normalizarFrase } from './whatsapp-reglas-turno';
 import { nombreDeAsistente } from './whatsapp-comprobante-de-ficha.service';
 import { esNombreDeRelleno, hoyBogota } from './wa-cobro-desde-comprobante.service';
 import { leerDatosDeRegistro, type DatoFaltante } from './whatsapp-datos-de-registro';
-import { camposDeRegistro, faltantesDe, pedidoDeFaltantes, registroDeFicha, traeOtroDato } from './wa-registro-de-venta.service';
+import { camposDeRegistro, faltantesDe, pedidoDeFaltantes, registroDeFicha, resumenDeAsistente, traeOtroDato } from './wa-registro-de-venta.service';
 import { unirDatosDeRegistro } from './whatsapp-datos-de-registro';
 
 /** Ventana desde el comprobante cerrado. */
@@ -59,6 +59,8 @@ export interface NombreTardioGuardado {
     soloDatos?: boolean;
     /** Lo que sigue faltando para completar la inscripción. */
     faltan?: DatoFaltante[];
+    /** (2026-11-18) Los datos se adjuntaron a un comprobante de venta que la cola escaló (no hay cobro ni ficha todavía). */
+    aComprobanteEscalado?: boolean;
 }
 
 /**
@@ -85,7 +87,8 @@ export async function registrarNombreTardio(i: {
             .gte('created_at', new Date(ahora - HORAS_NOMBRE_TARDIO * 3600_000).toISOString())
             .order('created_at', { ascending: false }).limit(5);
         const ids = ((Array.isArray(filas) ? filas : []) as any[]).map((f) => f.result_ref_id).filter(Boolean);
-        if (!ids.length) return null;
+        // (2026-11-18) Sin comprobante cerrado con cobro: ¿el comprobante de una venta quedó ESCALADO a la escuela?
+        if (!ids.length) return adjuntarAComprobanteEscalado(i, dicho, datos, hoy, ahora);
 
         const [{ data: pagos }, { data: conv }] = await Promise.all([
             supabase.from('payments').select('id, concept, signup_lead_id, school_id')
@@ -97,7 +100,7 @@ export async function registrarNombreTardio(i: {
         // El más reciente de los cobros cuyo concepto es de relleno (el orden de `ids` es el de la cola).
         const porId = new Map(((pagos ?? []) as any[]).map((p) => [String(p.id), p]));
         const pago = ids.map((id) => porId.get(String(id))).find((p) => p && esNombreDeRelleno(partesDelConcepto(p.concept).nombre, perfil));
-        if (!pago || !partesDelConcepto(pago.concept).servicio) return null;
+        if (!pago || !partesDelConcepto(pago.concept).servicio) return adjuntarAComprobanteEscalado(i, dicho, datos, hoy, ahora);
         if (normalizarFrase(partesDelConcepto(pago.concept).nombre) === normalizarFrase(dicho.nombre)) return null;
 
         const { data: lead } = await supabase.from('school_signup_leads')
@@ -141,6 +144,70 @@ export async function registrarNombreTardio(i: {
             return null;
         }
         return { nombre: dicho.nombre, acompanante: dicho.acompanante, paymentId: String(pago.id), servicio };
+    } catch {
+        return null;
+    }
+}
+
+/** Ventana para adjuntar los datos a un comprobante escalado. */
+export const HORAS_DATOS_A_COMPROBANTE_ESCALADO = 48;
+const MAX_ERROR_MESSAGE = 1500;
+
+/**
+ * (2026-11-18, Monster, María José Zabala) El comprobante de una VENTA (vacacional, clínica…) no cuadró y la cola lo
+ * escaló a «Por clasificar» (`ignored / escalated / venta_*`, sin cobro ni ficha todavía, «asiste: sin nombre»). Minutos
+ * después la clienta mandó el texto con quien asiste, la fecha de nacimiento y las semanas, tal como se le pidió, y no
+ * había ninguna fila a la que pegarlo: cayó al bot general sin respuesta y la escuela tuvo que unirlo a mano.
+ *
+ * Se adjunta a ESA fila, con lo que ya existe: `pregunta_ocr.datos_tardios` (jsonb, junto a las huellas del comprobante) y
+ * el `error_message` que la bandeja muestra (se le agrega la línea «Datos que llegaron después…»). No toca montos, cobros
+ * ni estado: la escuela decide. null = no corresponde o no se pudo guardar (no se promete nada). Nunca lanza.
+ */
+async function adjuntarAComprobanteEscalado(
+    i: { integrationId: string; contactWaId: string; texto: string },
+    dicho: { nombre: string; acompanante: string | null },
+    datos: ReturnType<typeof leerDatosDeRegistro>, hoy: string, ahora: number,
+): Promise<NombreTardioGuardado | null> {
+    try {
+        const { data: filas } = await supabase.from('whatsapp_inbound_queue')
+            .select('id, error_message, pregunta_ocr, created_at')
+            .eq('integration_id', i.integrationId).eq('wa_phone_number', i.contactWaId)
+            .eq('status', 'ignored').eq('result_type', 'escalated')
+            .gte('created_at', new Date(ahora - HORAS_DATOS_A_COMPROBANTE_ESCALADO * 3600_000).toISOString())
+            .order('created_at', { ascending: false }).limit(5);
+        const fila = ((Array.isArray(filas) ? filas : []) as any[])
+            .find((f) => String(f.error_message ?? '').startsWith('venta_'));
+        if (!fila) return null;
+        const previo = (fila.pregunta_ocr && typeof fila.pregunta_ocr === 'object' ? fila.pregunta_ocr : {}) as Record<string, any>;
+        // El mismo texto otra vez (o el mismo nombre ya adjunto): no se duplica ni se vuelve a acusar.
+        if (previo.datos_tardios && normalizarFrase(String(previo.datos_tardios.nombre ?? '')) === normalizarFrase(dicho.nombre)
+            && normalizarFrase(String(previo.datos_tardios.texto ?? '')) === normalizarFrase(String(i.texto ?? '').slice(0, 400))) return null;
+
+        const registro = { ...datos, nombre: dicho.nombre };
+        const resumen = resumenDeAsistente(registro, hoy);
+        const iso = new Date(ahora).toISOString();
+        const dijo = String(i.texto ?? '').replace(/\s+/g, ' ').replace(/\|/g, '/').trim().slice(0, 400);
+        const linea = `Datos que llegaron después del comprobante → asiste: ${resumen}`
+            + `${dicho.acompanante ? ` · acompañante: ${dicho.acompanante}` : ''} · dijo: «${dijo}»`;
+        const motivo = String(fila.error_message ?? '').replace(/ \| Datos que llegaron después del comprobante.*$/s, '');
+        const { error } = await supabase.from('whatsapp_inbound_queue').update({
+            error_message: `${motivo} | ${linea}`.slice(0, MAX_ERROR_MESSAGE),
+            pregunta_ocr: {
+                ...previo,
+                datos_tardios: {
+                    nombre: dicho.nombre, acompanante: dicho.acompanante, fecha_nacimiento: datos.fechaNacimiento,
+                    acudiente: datos.acudiente, texto: String(i.texto ?? '').slice(0, 400), at: iso,
+                },
+            },
+        }).eq('id', fila.id).eq('integration_id', i.integrationId);
+        if (error) {
+            console.warn('[wa-nombre-tardio] no se pudieron adjuntar los datos al comprobante escalado', { queueId: fila.id, msg: error.message });
+            return null;
+        }
+        return {
+            nombre: dicho.nombre, acompanante: dicho.acompanante, paymentId: '', servicio: '',
+            aComprobanteEscalado: true, faltan: faltantesDe(registro, hoy),
+        };
     } catch {
         return null;
     }
@@ -196,7 +263,12 @@ async function registrarDatosTardios(
 }
 
 /** Lo que se le dice cuando YA se guardó. Pura. */
-export function textoNombreTardioGuardado(g: Pick<NombreTardioGuardado, 'nombre' | 'acompanante' | 'soloDatos' | 'faltan' | 'servicio'>): string {
+export function textoNombreTardioGuardado(g: Pick<NombreTardioGuardado, 'nombre' | 'acompanante' | 'soloDatos' | 'faltan' | 'servicio' | 'aComprobanteEscalado'>): string {
+    if (g.aComprobanteEscalado) {
+        const pedido = pedidoDeFaltantes(g.faltan ?? [], null, 'el servicio');
+        return `Recibí los datos de *${g.nombre}*${g.acompanante ? ` (acompañante: *${g.acompanante}*)` : ''} 🙏 `
+            + `Ya se los pasé a la escuela junto con tu comprobante; ella confirma el cupo por aquí.${pedido ? ` ${pedido}` : ''}`;
+    }
     if (g.soloDatos) {
         const pedido = pedidoDeFaltantes(g.faltan ?? [], null, g.servicio || 'el servicio');
         return pedido
