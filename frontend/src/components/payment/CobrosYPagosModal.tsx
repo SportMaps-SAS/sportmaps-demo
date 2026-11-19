@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Loader2, Users, User } from 'lucide-react';
+import { AlertTriangle, Info, Loader2, Users, User } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -10,6 +10,7 @@ import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useEntitlements } from '@/hooks/useEntitlements';
 import { useToast } from '@/hooks/use-toast';
 import { todayColombia } from '@/lib/dateUtils';
+import { formatCurrency } from '@/lib/utils';
 import { chargeCategoryOf, type PaymentChargeCategory } from '@/lib/payment-accounts';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
 import { formatHourBankMinutes } from '@/lib/hourBank';
@@ -844,6 +845,14 @@ export function CobrosYPagosDialog({
                                         <p className="rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 p-2 text-xs flex items-start gap-1.5" data-testid="cyp-aviso-duplicado">
                                             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-amber-600" />
                                             Ojo: este mismo cobro ya se registró {textoCobroReciente(preview.recent_duplicates[0])}. Si lo confirmas te pediremos una confirmación más.
+                                        </p>
+                                    ) : null}
+                                    {previewFresh && preview?.saldo_a_favor?.length ? (
+                                        <p className="rounded-lg border border-emerald-500/40 bg-emerald-50 dark:bg-emerald-950/30 p-2 text-xs flex items-start gap-1.5" data-testid="cyp-aviso-saldo-a-favor">
+                                            <Info className="h-3.5 w-3.5 mt-0.5 shrink-0 text-emerald-600" />
+                                            {preview.saldo_a_favor.length === 1
+                                                ? `Tiene ${formatCurrency(preview.saldo_a_favor[0].disponible)} de saldo a favor: se descuenta solo del cobro pendiente más antiguo al generar. El total final puede quedar menor que el que ves.`
+                                                : `${preview.saldo_a_favor.length} atletas tienen saldo a favor (${formatCurrency(preview.saldo_a_favor.reduce((s, x) => s + x.disponible, 0))} en total): se descuenta solo de su cobro pendiente más antiguo al generar. El total final puede quedar menor.`}
                                         </p>
                                     ) : null}
                                     <PreviewSummary
