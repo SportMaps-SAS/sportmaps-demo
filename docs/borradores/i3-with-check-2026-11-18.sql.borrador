@@ -1,0 +1,287 @@
+-- =============================================================================
+-- *** BORRADOR — SIN APLICAR — NO ESTÁ EN supabase/migrations ***
+-- I3: WITH CHECK explícito en 27 policies FOR ALL. Ver docs/auditoria-i3-i6-2026-11-18.md
+--
+-- Para aplicar (cuando el usuario lo apruebe, una sola sesión):
+--   1. npm run migrations:new -- i3_with_check_explicito   (reserva versión; pegar el cuerpo de abajo)
+--   2. Medir el radio (sección 0) y simular sesiones (sección 4) ANTES.
+--   3. Aplicar por CLI/apply_migration (que deje rastro). Una sola sesión: cada DDL recarga PostgREST.
+--   4. npm run seguridad:invariantes  → I3 debe bajar de 27 a 0.
+--   No cambia esquema: NO regenerar types.ts.
+--
+-- Nota: ALTER POLICY no admite IF EXISTS; si una policy no existe, falla toda la migración
+-- (bien: es transaccional). Las 15 policies sin migración en el repo se leyeron de la base viva el 2026-11-18.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+-- 0. MEDICIÓN DE RADIO (solo SELECT; correr antes, no es parte de la migración)
+-- -----------------------------------------------------------------------------
+-- a) Políticas con CHECK = USING: radio 0 por construcción (hoy ya se valida con el USING).
+-- b) Políticas estrictas:
+--
+-- select count(*) from cash_sessions;                                    -- hoy 0
+-- select count(*) from cash_session_entries;                             -- hoy 0
+-- select status, role, count(*) from school_members
+--  where role in ('owner','admin','school_admin') and status is distinct from 'active' group by 1,2; -- hoy inactive/owner=2
+-- select count(*) from children_stats;                                   -- hoy 3
+-- -- trainers que perderían acceso a stats de un niño por la regla nueva:
+-- select distinct tsp.trainer_id, tsp.client_id, tsp.school_id as school_plan, c.school_id as school_nino
+--   from trainer_session_plans tsp join children c on c.id = tsp.client_id
+--  where c.school_id is distinct from tsp.school_id;                      -- hoy 8 planes
+-- -- escuelas sin nadie con el permiso tras exigir status='active' en caja:
+-- select s.id from schools s where not exists (
+--   select 1 from school_members m where m.school_id = s.id and m.status = 'active' and m.role in ('owner','admin'));
+--   -- cruzar con miembros activos antes de concluir (lección 303 → 302)
+-- select count(*) from event_delegations;                                -- hoy 1 (confirmed)
+-- select count(*) from event_delegation_payments;                        -- hoy 0
+-- select count(*) from attendance_records a join children c on c.id = a.child_id
+--  where c.school_id is distinct from a.school_id;                        -- hoy 1
+
+-- -----------------------------------------------------------------------------
+-- 1. GRUPO A — CHECK = USING (comportamiento idéntico; solo explicita). 20 policies.
+-- -----------------------------------------------------------------------------
+BEGIN;
+
+ALTER POLICY academic_progress_admin_all ON public.academic_progress
+  WITH CHECK (EXISTS (SELECT 1 FROM public.children
+                       WHERE children.id = academic_progress.child_id
+                         AND public.is_school_admin(children.school_id)));
+
+ALTER POLICY activities_access ON public.activities
+  WITH CHECK ((user_id = auth.uid()) OR public.is_platform_admin());
+
+ALTER POLICY attendance_admin_all ON public.attendance
+  WITH CHECK (EXISTS (SELECT 1 FROM public.children
+                       WHERE children.id = attendance.child_id
+                         AND public.is_school_admin(children.school_id)));
+
+ALTER POLICY "Admins can manage all sessions" ON public.attendance_sessions
+  WITH CHECK (public.is_school_admin(school_id));
+
+ALTER POLICY "Attendance sessions: manage staff" ON public.attendance_sessions
+  WITH CHECK (school_id = ANY (public.user_staff_school_ids()));
+
+ALTER POLICY classes_admin_all ON public.classes
+  WITH CHECK (public.is_school_admin(school_id));
+
+ALTER POLICY coach_profiles_admin_all ON public.coach_profiles
+  WITH CHECK (public.is_platform_admin());
+
+ALTER POLICY coach_profiles_self_all ON public.coach_profiles
+  WITH CHECK (id = auth.uid());
+
+ALTER POLICY "platform admins manage demo links" ON public.demo_links
+  WITH CHECK (EXISTS (SELECT 1 FROM public.platform_admins
+                       WHERE platform_admins.profile_id = auth.uid()));
+
+ALTER POLICY categories_organizer_manage ON public.event_categories_config
+  WITH CHECK (event_id IN (SELECT events.id FROM public.events WHERE events.creator_id = auth.uid()));
+
+ALTER POLICY del_payments_organizer_manage ON public.event_delegation_payments
+  WITH CHECK (event_id IN (SELECT events.id FROM public.events WHERE events.creator_id = auth.uid()));
+
+ALTER POLICY price_phases_organizer_manage ON public.event_price_phases
+  WITH CHECK (event_id IN (SELECT events.id FROM public.events WHERE events.creator_id = auth.uid()));
+
+ALTER POLICY coaches_school_manage ON public.event_team_coaches
+  WITH CHECK (delegation_id IN (
+    SELECT d.id FROM public.event_delegations d
+      JOIN public.school_members sm ON sm.school_id = d.school_id
+     WHERE sm.profile_id = auth.uid()
+       AND sm.role = ANY (ARRAY['owner','admin','school_admin'])
+       AND sm.status = 'active'));
+
+ALTER POLICY mp_shipping_rates_owner ON public.marketplace_shipping_rates
+  WITH CHECK (vendor_profile_id IN (SELECT vendor_profiles.id FROM public.vendor_profiles
+                                     WHERE vendor_profiles.user_id = auth.uid()));
+
+ALTER POLICY "School manages own templates" ON public.payment_message_templates
+  WITH CHECK (school_id IN (
+    SELECT school_members.school_id FROM public.school_members
+     WHERE school_members.profile_id = auth.uid()
+       AND school_members.role = ANY (ARRAY['owner','admin','school_admin','super_admin'])
+       AND school_members.status = 'active'));
+
+ALTER POLICY sa_school_manage ON public.school_availability
+  WITH CHECK (EXISTS (SELECT 1 FROM public.school_members sm
+                       WHERE sm.school_id = school_availability.school_id
+                         AND sm.profile_id = auth.uid()
+                         AND sm.role = ANY (ARRAY['owner','admin','staff','school_admin'])
+                         AND sm.status = 'active'));
+
+ALTER POLICY "Staff: manage admin" ON public.school_staff
+  WITH CHECK (public.is_school_admin(school_id));
+
+ALTER POLICY training_sessions_admin_all ON public.training_slots
+  WITH CHECK (EXISTS (SELECT 1 FROM public.teams
+                       WHERE teams.id = training_slots.team_id
+                         AND public.is_school_admin(teams.school_id)));
+
+ALTER POLICY school_owner_manage_unregistered_athletes ON public.unregistered_athletes
+  WITH CHECK (
+    school_id IN (SELECT schools.id FROM public.schools WHERE schools.owner_id = auth.uid())
+    OR school_id IN (SELECT school_members.school_id FROM public.school_members
+                      WHERE school_members.profile_id = auth.uid()
+                        AND school_members.status = 'active'
+                        AND school_members.role = ANY (ARRAY['admin','coach','staff'])));
+
+-- school_members_admin_crud: duplicada con "Members: manage admin" (que ya tiene CHECK).
+-- Opción conservadora: explicitar. Opción limpia: DROP POLICY (decisión del usuario; ver informe fila 24).
+ALTER POLICY school_members_admin_crud ON public.school_members
+  WITH CHECK (public.is_school_admin(school_id));
+
+-- -----------------------------------------------------------------------------
+-- 2. GRUPO B — CHECK más estricto que el USING (cambia comportamiento; medir antes)
+-- -----------------------------------------------------------------------------
+
+-- 2.1 Caja: exigir membresía ACTIVA (hoy un owner/admin inactive conserva escritura).
+ALTER POLICY "owner and admin can manage cash sessions" ON public.cash_sessions
+  USING (school_id IN (SELECT m.school_id FROM public.school_members m
+                        WHERE m.profile_id = auth.uid() AND m.status = 'active'
+                          AND m.role = ANY (ARRAY['owner','admin'])))
+  WITH CHECK (school_id IN (SELECT m.school_id FROM public.school_members m
+                             WHERE m.profile_id = auth.uid() AND m.status = 'active'
+                               AND m.role = ANY (ARRAY['owner','admin'])));
+
+ALTER POLICY "owner and admin can manage cash entries" ON public.cash_session_entries
+  USING (school_id IN (SELECT m.school_id FROM public.school_members m
+                        WHERE m.profile_id = auth.uid() AND m.status = 'active'
+                          AND m.role = ANY (ARRAY['owner','admin'])))
+  WITH CHECK (
+    school_id IN (SELECT m.school_id FROM public.school_members m
+                   WHERE m.profile_id = auth.uid() AND m.status = 'active'
+                     AND m.role = ANY (ARRAY['owner','admin']))
+    AND EXISTS (SELECT 1 FROM public.cash_sessions s
+                 WHERE s.id = cash_session_entries.session_id
+                   AND s.school_id = cash_session_entries.school_id));
+
+-- 2.2 children_stats (RIESGO REAL, detalle A): atar a staff de la escuela del niño.
+-- Reemplaza "tengo un plan con ese client_id" (forjable) por "soy staff activo de la escuela del niño
+-- Y tengo un plan en esa escuela con él". El SELECT de acudientes (parent_read_children_stats) no cambia.
+ALTER POLICY trainer_manage_children_stats ON public.children_stats
+  USING (EXISTS (SELECT 1
+                   FROM public.trainer_session_plans tsp
+                   JOIN public.children c ON c.id = tsp.client_id
+                  WHERE tsp.client_id = children_stats.child_id
+                    AND tsp.trainer_id = auth.uid()
+                    AND tsp.school_id = c.school_id
+                    AND tsp.school_id = ANY (public.user_staff_school_ids())))
+  WITH CHECK (EXISTS (SELECT 1
+                        FROM public.trainer_session_plans tsp
+                        JOIN public.children c ON c.id = tsp.client_id
+                       WHERE tsp.client_id = children_stats.child_id
+                         AND tsp.trainer_id = auth.uid()
+                         AND tsp.school_id = c.school_id
+                         AND tsp.school_id = ANY (public.user_staff_school_ids())));
+-- Pendiente (segunda pasada, decisión de producto por client_type):
+--   trainer_session_plans_owner_all debe validar que client_id sea de la escuela school_id
+--   y que school_id ∈ user_staff_school_ids(). Hoy cualquier autenticado inserta planes propios.
+
+-- 2.3 Torneos (RIESGO REAL, detalles B y C). Delegación: la escuela crea en borrador/enviada,
+--     nunca confirmada ni con pagos declarados. Confirmar es del organizador (delegation_host_manage
+--     / delegation_organizer_update, que no se tocan).
+--     OJO UPDATE: con FOR ALL este CHECK también limita los UPDATE de la escuela a esos estados;
+--     el flujo de confirmación del organizador sigue por sus propias policies / service_role.
+--     VERIFICAR con el BFF (school-delegations.route.ts) que ningún flujo escuela→'pending_payment'
+--     use el cliente con JWT del usuario; si lo usa, añadir 'pending_payment' a la lista.
+ALTER POLICY delegation_school_manage ON public.event_delegations
+  WITH CHECK (
+    school_id IN (SELECT school_members.school_id FROM public.school_members
+                   WHERE school_members.profile_id = auth.uid()
+                     AND school_members.role = ANY (ARRAY['owner','admin','school_admin'])
+                     AND school_members.status = 'active')
+    AND status IN ('draft','submitted')
+    AND confirmed_at IS NULL
+    AND COALESCE(total_paid, 0) = 0);
+
+-- Pagos: ligar pago ↔ delegación ↔ evento ↔ escuela, y estado inicial 'pending' sin revisor.
+ALTER POLICY del_payments_school_manage ON public.event_delegation_payments
+  WITH CHECK (
+    school_id IN (SELECT school_members.school_id FROM public.school_members
+                   WHERE school_members.profile_id = auth.uid()
+                     AND school_members.role = ANY (ARRAY['owner','admin','school_admin'])
+                     AND school_members.status = 'active')
+    AND EXISTS (SELECT 1 FROM public.event_delegations d
+                 WHERE d.id = event_delegation_payments.delegation_id
+                   AND d.school_id = event_delegation_payments.school_id
+                   AND d.event_id = event_delegation_payments.event_id)
+    AND status = 'pending'
+    AND reviewed_by IS NULL
+    AND reviewed_at IS NULL);
+-- Si delegation_id puede ser NULL en pagos legítimos (verificar nullable), el EXISTS los rechazaría:
+-- ajustar a (delegation_id IS NULL OR EXISTS …) solo si el negocio lo exige.
+
+-- 2.4 Observaciones de integridad (opcionales; aplicar solo si el radio medido es aceptable)
+-- attendance_records: child_id (si existe) de la misma escuela que school_id.
+ALTER POLICY attendance_records_admin_all ON public.attendance_records
+  WITH CHECK (
+    public.is_school_admin(school_id)
+    AND (child_id IS NULL OR EXISTS (SELECT 1 FROM public.children c
+                                      WHERE c.id = attendance_records.child_id
+                                        AND c.school_id = attendance_records.school_id)));
+-- Ojo: asistencia de atletas adultos / no registrados usa user_id o unregistered_athlete_id con child_id NULL.
+
+-- class_enrollments: la inscripción debe ser de la misma escuela que la clase.
+ALTER POLICY class_enrollments_manage_admin ON public.class_enrollments
+  WITH CHECK (
+    EXISTS (SELECT 1 FROM public.classes c
+             WHERE c.id = class_enrollments.class_id AND public.is_school_admin(c.school_id))
+    AND EXISTS (SELECT 1 FROM public.enrollments e
+                  JOIN public.classes c2 ON c2.id = class_enrollments.class_id
+                 WHERE e.id = class_enrollments.enrollment_id
+                   AND e.school_id = c2.school_id));
+-- Verificar que enrollments tenga school_id (la columna no se confirmó en esta auditoría) antes de aplicar.
+
+COMMIT;
+
+-- -----------------------------------------------------------------------------
+-- 3. I6 — v_payment_adjustments_familia: NO tocar la vista (invoker daría 0 filas a las familias).
+--    Excluirla del invariante. La exclusión es la lista fija dentro de invariantes_seguridad():
+--      AND c.relname NOT IN ('v_school_staff_publico','v_school_settings_publico')
+--    Hay que reemitir la función completa con CREATE OR REPLACE y agregar
+--      'v_payment_adjustments_familia'
+--    a esa lista (más 'SET search_path = pg_catalog, public, pg_temp' y el GRANT/REVOKE de la
+--    función como en 20260901115207). El cuerpo completo vigente debe leerse de la base
+--    (pg_proc.prosrc de invariantes_seguridad) para no perder I7 y los demás checks: NO se
+--    incluye aquí a propósito, para no pisarlo con una copia vieja.
+-- -----------------------------------------------------------------------------
+
+-- -----------------------------------------------------------------------------
+-- 4. PLANTILLA DE SIMULACIÓN DE SESIONES (correr con rollback; reemplazar uuids)
+-- -----------------------------------------------------------------------------
+-- begin;
+--   -- 4a. Un acudiente/atleta cualquiera NO debe poder escribir stats de un niño ajeno
+--   set local role authenticated;
+--   select set_config('request.jwt.claims', json_build_object('sub','<uuid_usuario_ajeno>')::text, true);
+--   insert into public.trainer_session_plans(school_id, trainer_id, client_id, client_type, session_date, status, name)
+--     values ('<escuela_cualquiera>', '<uuid_usuario_ajeno>', '<child_id_victima>', 'child', current_date, 'planned', 'x');
+--   insert into public.children_stats(child_id, stat_type, value) values ('<child_id_victima>', 'x', 1);
+--   -- ESPERADO tras el fix: ERROR 42501 (new row violates row-level security policy)
+-- rollback;
+--
+-- begin;
+--   -- 4b. Admin de escuela A no debe autoconfirmarse ni inscribirse con estado final
+--   set local role authenticated;
+--   select set_config('request.jwt.claims', json_build_object('sub','<uuid_admin_escuela_A>')::text, true);
+--   select public.user_admin_school_ids(), public.user_staff_school_ids();
+--   insert into public.event_delegations(event_id, school_id, status, total_paid)
+--     values ('<evento_ajeno>', '<escuela_A>', 'confirmed', 1000);   -- ESPERADO: 42501
+--   insert into public.event_delegations(event_id, school_id, status)
+--     values ('<evento_propio_abierto>', '<escuela_A>', 'draft');    -- ESPERADO: OK
+-- rollback;
+--
+-- begin;
+--   -- 4c. Owner dado de baja no escribe caja
+--   set local role authenticated;
+--   select set_config('request.jwt.claims', json_build_object('sub','<uuid_owner_inactive>')::text, true);
+--   insert into public.cash_sessions(school_id) values ('<su_escuela>');  -- ESPERADO: 42501
+-- rollback;
+--
+-- begin;
+--   -- 4d. Staff legítimo conserva su flujo (regresión): coach con plan en su escuela y niño de su escuela
+--   set local role authenticated;
+--   select set_config('request.jwt.claims', json_build_object('sub','<uuid_coach_real>')::text, true);
+--   select count(*) from public.children_stats where child_id = '<su_alumno>';   -- ESPERADO: = antes del fix
+-- rollback;
+--
+-- Cierre: npm run seguridad:invariantes  (I3 = 0, I6 = 0 tras ajustar la exclusión).
