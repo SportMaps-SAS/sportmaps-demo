@@ -31,7 +31,6 @@ import {
 } from '../services/store-checkout';
 import type { ResolvedProvider } from '../services/payment-provider.resolver';
 import { requireAuth, AuthenticatedRequest } from '../middlewares/authMiddleware';
-import { todayInZone } from '../utils/businessDate';
 import {
     validateMpWebhookSignature,
     fetchMpPayment,
@@ -45,8 +44,8 @@ import {
 import { loadProviderConfig } from '../services/payment-provider.resolver';
 import { applyReservationPayment, schoolIdForReservationReference } from '../services/reservation-payments.service';
 // Mismo formato de motivo que Wompi para que el frontend lo parsee una sola vez.
-import { buildFailureReason, bankMessageFrom, conciliarMontoRecibido, motivoPagoParcial } from './wompi';
-import { sendPaymentAttemptFailedEmails } from '../services/paymentFailureEmail.service';
+import { buildFailureReason, aplicarPagoDeEscuela } from '../services/pagos-escuela.core';
+import { politicaMercadoPago } from '../services/pasarelas/mercadopago';
 import {
     recordWebhookEvent,
     markWebhookProcessed,
@@ -412,205 +411,17 @@ export async function routeMercadoPagoTransaction(
 
 async function handleSchoolPayment(args: HandlerArgs): Promise<HandlerResult> {
     const { req, paymentId, externalRef, internalStatus, amount, paymentTypeId, payment } = args;
-
-    const { data: link, error: linkErr } = await supabase
-        .from('payment_links')
-        .select('id, payment_id, school_id, gross_amount, base_amount, sportmaps_fee, status, failed_attempts')
-        .eq('provider_reference', externalRef)
-        .maybeSingle();
-
-    if (linkErr || !link) {
-        req.log?.warn({ externalRef }, 'MP school payment: link not found');
-        return { status: 200, body: { status: 'ignored', reason: 'link_not_found' } };
-    }
-
-    const { data: existingSplit } = await supabase
-        .from('payment_splits')
-        .select('id')
-        .eq('provider_transaction_id', paymentId)
-        .maybeSingle();
-
-    if (existingSplit) {
-        return { status: 200, body: { status: 'already_processed' } };
-    }
-
-    if (internalStatus === 'paid') {
-        if (Math.abs(amount - Number(link.gross_amount)) > 1) {
-            req.log?.error(
-                { expected: link.gross_amount, received: amount, externalRef },
-                'MP school payment: amount mismatch',
-            );
-            return { status: 400, body: { error: 'amount_mismatch' } };
-        }
-
-        const today = todayInZone();
-
-        // Faltante / sobrepago: mismo criterio que wompi.ts (§3.c y §3.d de
-        // handleSchoolPayment). El enlace congeló `base_amount`; si entre la firma
-        // y el pago `apply_late_fees` sumó la mora, lo recibido no salda el cobro
-        // y NO puede quedar 'paid' (la mora se condonaba en silencio): queda
-        // 'partial' con lo recibido en amount_paid y el faltante como rastro visible.
-        const { data: actual } = await supabase
-            .from('payments')
-            .select('status, amount, amount_paid, early_payment_discount_applied, late_fee_amount')
-            .eq('id', link.payment_id)
-            .maybeSingle();
-        const conc = conciliarMontoRecibido(actual as any, link.base_amount);
-        const { sobrepago, faltante } = conc;
-
-        const { error: payUpdErr } = await supabase
-            .from('payments')
-            .update({
-                status: faltante > 0 ? 'partial' : 'paid',
-                payment_channel: 'online',
-                payment_method: 'mercadopago',
-                payment_provider: 'mercadopago',
-                provider_reference: externalRef,
-                provider_transaction_id: paymentId,
-                payment_date: today,
-                approved_at: new Date().toISOString(),
-                gross_amount: amount,
-                sportmaps_fee: link.sportmaps_fee,
-                ...(conc.amountPaidNuevo !== null ? { amount_paid: conc.amountPaidNuevo } : {}),
-                updated_at: new Date().toISOString(),
-            })
-            .eq('id', link.payment_id);
-
-        // Antes este error no se leía. Se registra sin cambiar el flujo (no se
-        // devuelve 500 aquí: eso cambiaría los reintentos de MP y es otro alcance).
-        if (payUpdErr) {
-            req.log?.error({ err: payUpdErr, paymentId: link.payment_id, externalRef }, 'MP school payment: FALLÓ actualizar el payment');
-        }
-
-        // Faltante: rastro SIN bloqueo (record_payment_failure). Ver wompi.ts §3.d:
-        // flag_payment_for_review frenaría todo checkout nuevo del pagador y la
-        // familia no podría pagar el saldo en línea.
-        // Sobrepago: a revisión como en Wompi. La marca va DESPUÉS del UPDATE: el
-        // trigger trg_clear_payment_review_on_settle baja requires_review al entrar a 'paid'.
-        if (!payUpdErr && (faltante > 0 || sobrepago > 0)) {
-            const base = buildFailureReason('mp', faltante > 0 ? 'pago_parcial' : 'sobrepago', paymentTypeId, null, paymentId);
-            const cop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
-            const { error: flagErr } = await supabase.rpc(faltante > 0 ? 'record_payment_failure' : 'flag_payment_for_review', {
-                p_kind: 'payment',
-                p_id: link.payment_id,
-                p_reason: faltante > 0
-                    ? motivoPagoParcial(base, conc, (actual as any)?.late_fee_amount)
-                    : `${base} · pagó de más ${cop(sobrepago)} (cobro ${cop(conc.montoVigente)}, recibido ${cop(conc.recibidoBase)})`,
-            });
-            if (flagErr) {
-                req.log?.error({ err: flagErr, paymentId: link.payment_id }, 'No se pudo dejar el rastro de la diferencia de monto');
-            }
-            req.log?.warn({ paymentId: link.payment_id, externalRef, faltante, sobrepago }, 'MP school payment: lo recibido no coincide con el cobro vigente');
-        }
-
-        await supabase
-            .from('payment_links')
-            .update({
-                status: 'paid',
-                paid_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-            })
-            .eq('id', link.id);
-
-        await supabase
-            .from('payment_splits')
-            .insert({
-                payment_id: link.payment_id,
-                payment_link_id: link.id,
-                payment_provider: 'mercadopago',
-                provider_reference: externalRef,
-                provider_transaction_id: paymentId,
-                gross_amount: amount,
-                // El recargo por pago online es de la ESCUELA (cubre la comisión que le
-                // descuenta la pasarela) y entra completo a su cuenta. SportMaps cobra la
-                // integración por fuera, no por transacción. Ver el comentario largo en
-                // routes/wompi.ts, handleSchoolPayment.
-                school_receives: amount,
-                sportmaps_receives: 0,
-                provider_fee: 0,
-                transfer_status: 'pending',
-                webhook_signature_valid: true,
-            });
-
-        // Notificar al staff de la escuela (dispara Modo Recepción + outbox).
-        // No-bloqueante: el pago ya quedó paid igual.
-        const { error: notifErr } = await supabase.rpc('notify_school_payment_paid', {
-            p_payment_id: link.payment_id,
-        });
-        if (notifErr) {
-            req.log?.warn({ err: notifErr, paymentId: link.payment_id }, 'notify_school_payment_paid falló (no-bloqueante)');
-        }
-
-        // Y al PADRE. Mismo hueco que tenia Wompi: la funcion de arriba avisa
-        // solo a la escuela, asi que quien pagaba por pasarela no se enteraba.
-        const { error: padreErr } = await supabase.rpc('notify_parent_payment_paid', {
-            p_payment_id: link.payment_id,
-        });
-        if (padreErr) {
-            req.log?.warn({ err: padreErr, paymentId: link.payment_id }, 'notify_parent_payment_paid falló (no-bloqueante)');
-        }
-
-        req.log?.info({ paymentId: link.payment_id, externalRef }, 'MP school payment confirmed');
-        return {
-            status: 200,
-            body: {
-                status: 'ok', kind: 'school_payment',
-                ...(sobrepago > 0 ? { overpayment: sobrepago } : {}),
-                ...(faltante > 0 ? { underpayment: faltante, partial: true } : {}),
-            },
-        };
-    }
-
-    // Mismo tratamiento que Wompi (ver wompi.ts): el error del UPDATE se lee —
-    // el CHECK de payment_links no admitía estos estados y el fallo se perdía
-    // en silencio — y solo lo ambiguo (ERROR/VOIDED) bloquea el reintento.
-    const { error: linkUpdErr } = await supabase
-        .from('payment_links')
-        .update({
-            status: internalStatus === 'rejected' ? 'declined' : internalStatus,
-            failed_attempts: ((link as any).failed_attempts ?? 0) + 1,
-            updated_at: new Date().toISOString(),
-        })
-        .eq('id', link.id);
-
-    if (linkUpdErr) {
-        req.log?.error(
-            { err: linkUpdErr, linkId: link.id, internalStatus },
-            'No se pudo marcar el payment_link como fallido — el intento queda sin rastro',
-        );
-    }
-
-    const isAmbiguous = internalStatus === 'failed' || internalStatus === 'refunded';
-
-    const { error: trailErr } = await supabase.rpc(
-        isAmbiguous ? 'flag_payment_for_review' : 'record_payment_failure',
-        {
-            p_kind: 'payment',
-            p_id: link.payment_id,
-            // MP manda el motivo humano en `status_detail` (cc_rejected_call_for_authorize…).
-            p_reason: buildFailureReason('mp', internalStatus, paymentTypeId, payment, paymentId),
-        },
-    );
-    if (trailErr) {
-        req.log?.error({ err: trailErr, paymentId: link.payment_id }, 'No se pudo registrar el fallo del cobro');
-    }
-
-    // Mismo aviso que en Wompi: hasta ahora un rechazo no le llegaba a nadie.
-    const { error: notifErr } = await supabase.rpc('notify_payment_attempt_failed', {
-        p_payment_id: link.payment_id,
-        p_reason: bankMessageFrom(payment),
-        p_ambiguous: isAmbiguous,
+    // La lógica vive en el núcleo común (services/pagos-escuela.core.ts); lo propio de
+    // Mercado Pago, en su política (services/pasarelas/mercadopago.ts).
+    return aplicarPagoDeEscuela(politicaMercadoPago, {
+        log: req.log,
+        txId: paymentId,
+        referencia: externalRef,
+        internalStatus,
+        monto: amount,
+        tipoMedio: paymentTypeId,
+        crudo: payment,
     });
-    if (notifErr) {
-        req.log?.warn({ err: notifErr, paymentId: link.payment_id }, 'notify_payment_attempt_failed falló (no-bloqueante)');
-    }
-
-    void sendPaymentAttemptFailedEmails(link.payment_id, bankMessageFrom(payment), isAmbiguous, req.log);
-
-    return {
-        status: 200,
-        body: { status: 'ok', kind: 'school_payment', internalStatus, flagged_for_review: isAmbiguous },
-    };
 }
 
 async function handleMarketplaceTransaction(args: HandlerArgs): Promise<HandlerResult> {
