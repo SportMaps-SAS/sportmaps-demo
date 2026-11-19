@@ -29,7 +29,7 @@ import { administraEstaEscuela } from './whatsapp-admin.routes';
 import { estamparComprobante } from '../jobs/whatsapp-queue.job';
 import { anularCobroCreado, crearCobroDesdeComprobante } from '../services/wa-cobro-desde-comprobante.service';
 import type { PagoPendiente } from '../services/whatsapp-receipt-matching.service';
-import { lecturaComoOcr } from '../services/wa-comprobante-por-clasificar.service';
+import { cerrarPorClasificar, lecturaComoOcr } from '../services/wa-comprobante-por-clasificar.service';
 
 const router = Router();
 
@@ -58,6 +58,22 @@ async function filaPorClasificar(schoolId: string, id: string) {
         .eq('id', id).eq('school_id', schoolId).maybeSingle();
     return { fila: (data ?? null) as any, error };
 }
+
+/** ¿La fila sigue abierta? Se relee justo antes de estampar: achica la ventana de la carrera entre dos administradores. */
+async function sigueAbierta(schoolId: string, id: string): Promise<{ abierta: boolean; estado?: string }> {
+    const { fila } = await filaPorClasificar(schoolId, id);
+    return fila && fila.estado !== 'por_clasificar' ? { abierta: false, estado: fila.estado } : { abierta: !!fila };
+}
+
+/** Mensaje claro cuando el comprobante YA quedó en el cobro pero la fila no se pudo cerrar. */
+const respuestaCierreFallido = (c: { codigo: string; http: number; estado?: string }, paymentId: string) => ({
+    error: c.codigo === 'ya_cerrado' ? 'ya_cerrada_por_otro' : c.codigo,
+    estado: c.estado ?? null,
+    payment_id: paymentId,
+    detalle: c.codigo === 'ya_cerrado'
+        ? 'Otra persona cerró este comprobante mientras lo aplicabas: revisa en Pagos que no quedara en dos cobros.'
+        : 'El comprobante quedó en el cobro «En revisión», pero la fila no se pudo cerrar. Vuelve a intentarlo: no se duplica.',
+});
 
 /** La lectura del OCR que la cola ya guardó (sha incluido): no se vuelve a leer nada. */
 async function lecturaDeLaCola(queueId: string, schoolId: string) {
@@ -186,20 +202,29 @@ router.post('/:schoolId/por-clasificar/:id/aplicar', requireAuth, async (req: Au
         due_date: (pago as any).due_date ?? null, child_id: (pago as any).child_id ?? null, atleta: null,
         categoria: (pago as any).payment_category ?? null,
     };
+    // Carrera de dos administradores: se relee la fila justo antes de estampar (el cierre vuelve a validarla con FOR UPDATE).
+    const vigente = await sigueAbierta(schoolId, id);
+    if (!vigente.abierta) return res.status(409).json({ error: 'ya_cerrada', estado: vigente.estado ?? null });
+
     const r = await estamparSeguro(() => estamparComprobante(
         { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lecturaComoOcr(lectura.ocr), log: req.log as any, queueId: fila.queue_id },
         pendiente, Number(fila.monto), { estados: ['pending', 'overdue', 'partial'] },
     ));
-    if (!r.ok) {
+    // Reintento tras un cierre fallido: el comprobante YA está en ESTE cobro → solo falta cerrar la fila.
+    const reanuda = !r.ok && r.duplicado && r.yaAplicado?.id === (pago as any).id;
+    if (!r.ok && !reanuda) {
         if (r.duplicado) return res.status(409).json({ error: 'referencia_ya_usada', pago: r.yaAplicado ?? null });
         return res.status(500).json({ error: r.error });
     }
 
-    const { data: cierre } = await supabase.rpc('wa_comprobante_por_clasificar_aplicar', {
-        p_id: id, p_payment_id: (pago as any).id, p_resolucion: 'aplicado_a_cobro_existente', p_por: req.user.id,
-    });
+    const cierre = await cerrarPorClasificar({ id, paymentId: (pago as any).id, resolucion: 'aplicado_a_cobro_existente', por: req.user.id });
+    if (!cierre.ok) {
+        // El comprobante queda estampado en el cobro (en revisión): no se deshace solo, lo ve la escuela en Pagos.
+        req.log?.error({ schoolId, id, paymentId: (pago as any).id, por: req.user.id, cierre }, '[wa-por-clasificar] aplicado, pero la fila no se cerró');
+        return res.status(cierre.http).json(respuestaCierreFallido(cierre, (pago as any).id));
+    }
     req.log?.info({ schoolId, id, paymentId: (pago as any).id, por: req.user.id, cierre }, '[wa-por-clasificar] aplicado a un cobro');
-    return res.json({ ok: true, payment_id: (pago as any).id, veredicto: r.veredicto.verdict });
+    return res.json({ ok: true, payment_id: (pago as any).id, veredicto: r.ok ? r.veredicto.verdict : null });
 });
 
 // ── POST /:id/crear-servicio — cobro nuevo de un servicio del catálogo ──────
@@ -250,18 +275,24 @@ router.post('/:schoolId/por-clasificar/:id/crear-servicio', requireAuth, async (
         { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lecturaComoOcr(lectura.ocr), log: req.log as any, queueId: fila.queue_id },
         pendiente, cobro.esAbono ? Number(fila.monto) : undefined,
     ));
-    if (!r.ok) {
+    // Reintento tras un cierre fallido: el cobro ya existía (idempotente por la cola) y el comprobante ya está en él.
+    const reanuda = !r.ok && r.duplicado && cobro.yaExistia && r.yaAplicado?.id === cobro.paymentId;
+    if (!r.ok && !reanuda) {
         // Lo recién creado no se queda huérfano: se anula (solo si lo creó el asistente y nadie lo tocó).
         if (!cobro.yaExistia) await anularCobroCreado(cobro.paymentId);
         if (r.duplicado) return res.status(409).json({ error: 'referencia_ya_usada', pago: r.yaAplicado ?? null });
         return res.status(500).json({ error: r.error });
     }
 
-    await supabase.rpc('wa_comprobante_por_clasificar_aplicar', {
-        p_id: id, p_payment_id: cobro.paymentId, p_resolucion: 'cobro_de_servicio_creado', p_por: req.user.id,
-    });
+    const cierre = await cerrarPorClasificar({ id, paymentId: cobro.paymentId, resolucion: 'cobro_de_servicio_creado', por: req.user.id });
+    if (!cierre.ok) {
+        // El cobro nuevo ya lleva el comprobante (en revisión): anularlo lo dejaría sin rastro. Se avisa y se deja consistente
+        // para reintentar (el reintento reanuda y solo cierra la fila).
+        req.log?.error({ schoolId, id, paymentId: cobro.paymentId, item: item_id, por: req.user.id, cierre }, '[wa-por-clasificar] cobro de servicio creado, pero la fila no se cerró');
+        return res.status(cierre.http).json(respuestaCierreFallido(cierre, cobro.paymentId));
+    }
     req.log?.info({ schoolId, id, paymentId: cobro.paymentId, item: item_id, abono: cobro.esAbono, por: req.user.id }, '[wa-por-clasificar] cobro de servicio creado');
-    return res.json({ ok: true, payment_id: cobro.paymentId, es_abono: cobro.esAbono, veredicto: r.veredicto.verdict });
+    return res.json({ ok: true, payment_id: cobro.paymentId, es_abono: cobro.esAbono, veredicto: r.ok ? r.veredicto.verdict : null });
 });
 
 export default router;

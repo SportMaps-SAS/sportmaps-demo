@@ -233,6 +233,46 @@ export async function registrarPorClasificar(i: {
     }
 }
 
+export type CierrePorClasificar =
+    | { ok: true; yaAplicado: boolean }
+    | { ok: false; codigo: string; http: number; estado?: string };
+
+/**
+ * Cierra la fila «por clasificar» con la RPC `wa_comprobante_por_clasificar_aplicar` y REVISA el resultado (antes la
+ * ruta lo descartaba: si el cierre fallaba, el comprobante ya estaba en el cobro y la fila seguía abierta en Cobros).
+ * Reintenta UNA vez ante un error de red/RPC (la RPC es idempotente: `ya_aplicado`). Nunca lanza.
+ *
+ *  · ok / ya_aplicado        → { ok: true }
+ *  · ya_cerrado              → 409: otra persona la cerró antes (la carrera de dos administradores).
+ *  · no_existe               → 404
+ *  · pago_ajeno / parametros → 422
+ *  · error de la RPC / red   → 502 `cierre_fallo`
+ */
+export async function cerrarPorClasificar(i: {
+    id: string; paymentId: string; resolucion: string; por: string | null;
+}): Promise<CierrePorClasificar> {
+    let ultimo = 'cierre_fallo';
+    for (let intento = 0; intento < 2; intento++) {
+        try {
+            const { data, error } = await supabase.rpc('wa_comprobante_por_clasificar_aplicar', {
+                p_id: i.id, p_payment_id: i.paymentId, p_resolucion: i.resolucion, p_por: i.por,
+            });
+            if (error) { ultimo = String(error.message ?? 'cierre_fallo'); continue; }
+            const r = (data ?? {}) as Record<string, unknown>;
+            if (r.ok === true) return { ok: true, yaAplicado: r.ya_aplicado === true };
+            const codigo = String(r.codigo ?? 'cierre_fallo');
+            if (codigo === 'ya_cerrado') return { ok: false, codigo, http: 409, ...(typeof r.estado === 'string' ? { estado: r.estado } : {}) };
+            if (codigo === 'no_existe') return { ok: false, codigo, http: 404 };
+            if (codigo === 'pago_ajeno' || codigo === 'parametros') return { ok: false, codigo, http: 422 };
+            ultimo = codigo;
+        } catch (e: any) {
+            ultimo = String(e?.message ?? e);
+        }
+    }
+    console.warn('[wa-por-clasificar] el cierre de la fila falló', { id: i.id, paymentId: i.paymentId, error: ultimo });
+    return { ok: false, codigo: 'cierre_fallo', http: 502 };
+}
+
 /** Interruptor de emergencia: `WA_POR_CLASIFICAR_OFF=1` devuelve el worker al comportamiento anterior. */
 export const porClasificarApagado = (): boolean => process.env.WA_POR_CLASIFICAR_OFF === '1';
 

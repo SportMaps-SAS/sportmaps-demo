@@ -19428,6 +19428,7 @@ export type Database = {
         Row: {
           base_amount: number
           created_at: string | null
+          checkout_url: string | null
           enrollment_id: string | null
           expires_at: string
           failed_attempts: number | null
@@ -19441,6 +19442,7 @@ export type Database = {
             | Database["public"]["Enums"]["payment_provider"]
             | null
           provider_reference: string | null
+          provider_link_id: string | null
           recurring_attempt_id: string | null
           school_id: string
           sportmaps_fee: number
@@ -19452,6 +19454,7 @@ export type Database = {
         Insert: {
           base_amount: number
           created_at?: string | null
+          checkout_url?: string | null
           enrollment_id?: string | null
           expires_at: string
           failed_attempts?: number | null
@@ -19465,6 +19468,7 @@ export type Database = {
             | Database["public"]["Enums"]["payment_provider"]
             | null
           provider_reference?: string | null
+          provider_link_id?: string | null
           recurring_attempt_id?: string | null
           school_id: string
           sportmaps_fee?: number
@@ -19476,6 +19480,7 @@ export type Database = {
         Update: {
           base_amount?: number
           created_at?: string | null
+          checkout_url?: string | null
           enrollment_id?: string | null
           expires_at?: string
           failed_attempts?: number | null
@@ -19489,6 +19494,7 @@ export type Database = {
             | Database["public"]["Enums"]["payment_provider"]
             | null
           provider_reference?: string | null
+          provider_link_id?: string | null
           recurring_attempt_id?: string | null
           school_id?: string
           sportmaps_fee?: number
@@ -47378,7 +47384,7 @@ export type Database = {
         | "cancelled"
         | "partial"
       pay_type: "one_time" | "subscription"
-      payment_provider: "wompi" | "mercadopago"
+      payment_provider: "wompi" | "mercadopago" | "bold"
       payroll_run_status: "draft" | "approved" | "paid" | "void"
       product_visibility: "public" | "school_only" | "private"
       program_level:
@@ -47611,7 +47617,7 @@ export const Constants = {
         "partial",
       ],
       pay_type: ["one_time", "subscription"],
-      payment_provider: ["wompi", "mercadopago"],
+      payment_provider: ["wompi", "mercadopago", "bold"],
       payroll_run_status: ["draft", "approved", "paid", "void"],
       product_visibility: ["public", "school_only", "private"],
       program_level: [

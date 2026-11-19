@@ -55,6 +55,7 @@ import vendorBankAccountsRouter from './routes/vendor-bank-accounts.routes';
 import shippingRouter, { shippingWebhookRouter, vendorShippingRouter } from './routes/shipping.routes';
 import { requireTrainerAuth, requireAthleteAuth, requireAuth, requireRole } from './middlewares/authMiddleware';
 import { requireCsrfHeader } from './middlewares/csrfHeader';
+import { CorsOriginError, globalErrorHandler } from './middlewares/errorHandler';
 import { requireOperationalSchool } from './middlewares/requireOperationalSchool';
 import systemRouter from './routes/system';
 import whatsappWebhookRouter from './routes/whatsapp';
@@ -309,7 +310,7 @@ app.use(cors({
             // origin malformado → bloquear
         }
 
-        return callback(new Error('Bloqueado por CORS'));
+        return callback(new CorsOriginError());
     },
     credentials: true,
 }));
@@ -602,16 +603,7 @@ Sentry.setupExpressErrorHandler(app);
 // ── Error handler centralizado ────────────────────────────────────────────────
 // IMPORTANTE: debe tener 4 parámetros para que Express lo reconozca como error handler
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
-    // pino-http adjunta req.log en cada request
-    (req as any).log?.error({ err }, 'Unhandled error');
-
-    const message = process.env.NODE_ENV === 'production'
-        ? 'Error interno del servidor.'
-        : err.message;
-
-    res.status(500).json({ error: message });
-});
+app.use(globalErrorHandler);
 
 // DIN-9 · Fail-fast ANTES de aceptar tráfico: si `MP_ENV` dice sandbox y la
 // credencial de MercadoPago es `APP_USR-` (producción), un pago «de prueba»

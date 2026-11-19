@@ -1,0 +1,3616 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`cobro de escuela — mercadopago > 01 aprobado exacto 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 02 sobrepago (el cobro bajó después de firmar el enlace) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 135000,
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "overpayment": 15000,
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_sobrepago · bank_transfer (tx=9001) · pagó de más $15.000 (cobro $135.000, recibido $150.000)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 03 faltante por mora posterior al enlace 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 165000,
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "late_fee_amount": 15000,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "partial": true,
+      "status": "ok",
+      "underpayment": 15000,
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_pago_parcial · bank_transfer (tx=9001) · Pagó $150.000; faltan $15.000 (recargo por mora aplicado después de generar el enlace; cobro $165.000)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 04 faltante con abono previo 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 200000,
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "partial": true,
+      "status": "ok",
+      "underpayment": 10000,
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_pago_parcial · bank_transfer (tx=9001) · Pagó $150.000; faltan $10.000 (el cobro subió después de generar el enlace; cobro $200.000)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 05 abono previo que se salda 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 190000,
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 06 diferencia de 1 peso (redondeo) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150001,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 07 el cobro ya estaba pagado por otra vía (doble pago) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 08 monto distinto al del enlace (400) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "error": "amount_mismatch",
+    },
+    "handled": true,
+    "status": 400,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 09 evento repetido: ya hay split de esa transacción 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+      },
+    ],
+    "payment_splits": [
+      {
+        "id": "s1",
+        "provider_transaction_id": "9001",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "status": "already_processed",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 10 enlace inexistente 1`] = `
+{
+  "final": {
+    "payment_links": [],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "reason": "link_not_found",
+      "status": "ignored",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 11 rechazado (se puede reintentar) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_rejected · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 12 ambiguo (error/devuelto): bloquea con revisión 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "refunded",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": true,
+      "internalStatus": "refunded",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "refunded",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_refunded · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": true,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        true,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 13 pendiente en la pasarela 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "pending",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "pending",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_pending · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 14 rechazado con fallos previos: el contador suma 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 3,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 3,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_rejected · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 15 falla el UPDATE del pago 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": "inyectado",
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 16 falla el UPDATE del enlace al rechazar 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": "inyectado",
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_rejected · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 17 enlace del débito automático aprobado 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 18 enlace del débito automático rechazado 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_transaction_id": null,
+        "status": "pending",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "mp_rejected · bank_transfer · cc_rejected_other_reason (tx=9001)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "cc_rejected_other_reason",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "cc_rejected_other_reason",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago > 19 enlace del débito automático con doble pago 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "provider_reference": "SCH-CARACT-0001",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "mercadopago",
+        "payment_provider": "mercadopago",
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "payment_provider": "mercadopago",
+        "provider_fee": 0,
+        "provider_reference": "SCH-CARACT-0001",
+        "provider_transaction_id": "9001",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — mercadopago, método de pago > 21 el método que escribe no depende del medio 1`] = `"mercadopago"`;
+
+exports[`cobro de escuela — wompi > 01 aprobado exacto 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 02 sobrepago (el cobro bajó después de firmar el enlace) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 135000,
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "overpayment": 15000,
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_sobrepago · NEQUI (tx=1298966-1-1) · pagó de más $15.000 (cobro $135.000, recibido $150.000)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 03 faltante por mora posterior al enlace 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 165000,
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "late_fee_amount": 15000,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "partial": true,
+      "status": "ok",
+      "underpayment": 15000,
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 150000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_pago_parcial · NEQUI (tx=1298966-1-1) · Pagó $150.000; faltan $15.000 (recargo por mora aplicado después de generar el enlace; cobro $165.000)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 04 faltante con abono previo 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 200000,
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "partial": true,
+      "status": "ok",
+      "underpayment": 10000,
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "partial",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_pago_parcial · NEQUI (tx=1298966-1-1) · Pagó $150.000; faltan $10.000 (el cobro subió después de generar el enlace; cobro $200.000)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 05 abono previo que se salda 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 190000,
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "amount_paid": 190000,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 06 diferencia de 1 peso (redondeo) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150001,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 07 el cobro ya estaba pagado por otra vía (doble pago) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "transfer",
+        "payment_date": "2026-10-01",
+        "status": "paid",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "duplicate_payment": true,
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_doble_pago · NEQUI (tx=1298966-1-1)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "a": {
+        "amount": 157500,
+        "attemptId": null,
+        "linkId": "link-1",
+        "paymentId": "cccccccc-0000-4000-8000-00000000000c",
+        "reference": "SCH-CARACT-0001",
+        "schoolId": "esc",
+        "txId": "1298966-1-1",
+      },
+      "op": "autopayCobroDoble",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 08 monto distinto al del enlace (400) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "error": "Amount mismatch",
+    },
+    "handled": true,
+    "status": 400,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — wompi > 09 evento repetido: ya hay split de esa transacción 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "id": "s1",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "status": "already_processed",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — wompi > 10 enlace inexistente 1`] = `
+{
+  "final": {
+    "payment_links": [],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "reason": "link_not_found",
+      "status": "ignored",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [],
+}
+`;
+
+exports[`cobro de escuela — wompi > 11 rechazado (se puede reintentar) 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_rejected · NEQUI · Fondos insuficientes (tx=1298966-1-1)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "Fondos insuficientes",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "Fondos insuficientes",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 12 ambiguo (error/devuelto): bloquea con revisión 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "failed",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": true,
+      "internalStatus": "failed",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "failed",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_failed · NEQUI · Fondos insuficientes (tx=1298966-1-1)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": true,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "Fondos insuficientes",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "Fondos insuficientes",
+        true,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 13 pendiente en la pasarela 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "pending",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "pending",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_pending · NEQUI · Fondos insuficientes (tx=1298966-1-1)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "Fondos insuficientes",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "Fondos insuficientes",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 14 rechazado con fallos previos: el contador suma 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 3,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 3,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_rejected · NEQUI · Fondos insuficientes (tx=1298966-1-1)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "Fondos insuficientes",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "Fondos insuficientes",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 15 falla el UPDATE del pago 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "detail": "inyectado",
+      "error": "payment_update_failed",
+    },
+    "handled": true,
+    "status": 500,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": "inyectado",
+      "op": "update",
+      "tabla": "payments",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 16 falla el UPDATE del enlace al rechazar 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "pending",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "flagged_for_review": false,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": "inyectado",
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_rejected · NEQUI · Fondos insuficientes (tx=1298966-1-1)",
+      },
+      "nombre": "record_payment_failure",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_ambiguous": false,
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_reason": "Fondos insuficientes",
+      },
+      "nombre": "notify_payment_attempt_failed",
+      "op": "rpc",
+    },
+    {
+      "args": [
+        "cccccccc-0000-4000-8000-00000000000c",
+        "Fondos insuficientes",
+        false,
+      ],
+      "op": "correo",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 17 enlace del débito automático aprobado 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "approved_at": "2026-11-19T15:00:00.000Z",
+        "gross_amount": 157500,
+        "payment_channel": "online",
+        "payment_date": "2026-11-19",
+        "payment_method": "transfer",
+        "payment_provider": "wompi",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payments",
+    },
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_school_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "args": {
+        "p_payment_id": "cccccccc-0000-4000-8000-00000000000c",
+      },
+      "nombre": "notify_parent_payment_paid",
+      "op": "rpc",
+    },
+    {
+      "a": {
+        "attemptId": "intento-1",
+        "internalStatus": "paid",
+        "linkId": "link-1",
+        "paymentId": "cccccccc-0000-4000-8000-00000000000c",
+        "reference": "SCH-CARACT-0001",
+        "txId": "1298966-1-1",
+      },
+      "op": "autopayAlResultado",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 18 enlace del débito automático rechazado 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 1,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "status": "pending",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "autopay": true,
+      "internalStatus": "rejected",
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "failed_attempts": 1,
+        "status": "declined",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "a": {
+        "attemptId": "intento-1",
+        "internalStatus": "rejected",
+        "linkId": "link-1",
+        "paymentId": "cccccccc-0000-4000-8000-00000000000c",
+        "reference": "SCH-CARACT-0001",
+        "txId": "1298966-1-1",
+      },
+      "op": "autopayAlResultado",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi > 19 enlace del débito automático con doble pago 1`] = `
+{
+  "final": {
+    "payment_links": [
+      {
+        "base_amount": 150000,
+        "failed_attempts": 0,
+        "gross_amount": 157500,
+        "id": "link-1",
+        "origin": "autopay",
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "recurring_attempt_id": "intento-1",
+        "school_id": "esc",
+        "sportmaps_fee": 7500,
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+        "wompi_reference": "SCH-CARACT-0001",
+      },
+    ],
+    "payment_splits": [
+      {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+    ],
+    "payments": [
+      {
+        "amount": 150000,
+        "amount_paid": 0,
+        "id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_channel": "transfer",
+        "payment_date": "2026-10-01",
+        "status": "paid",
+        "wompi_transaction_id": null,
+      },
+    ],
+  },
+  "respuesta": {
+    "body": {
+      "duplicate_payment": true,
+      "kind": "school_payment",
+      "status": "ok",
+    },
+    "handled": true,
+    "status": 200,
+  },
+  "traza": [
+    {
+      "cambios": {
+        "paid_at": "2026-11-19T15:00:00.000Z",
+        "status": "paid",
+        "updated_at": "2026-11-19T15:00:00.000Z",
+      },
+      "error": null,
+      "op": "update",
+      "tabla": "payment_links",
+    },
+    {
+      "fila": {
+        "gross_amount": 157500,
+        "payment_id": "cccccccc-0000-4000-8000-00000000000c",
+        "payment_link_id": "link-1",
+        "school_receives": 157500,
+        "sportmaps_receives": 0,
+        "transfer_status": "pending",
+        "webhook_signature_valid": true,
+        "wompi_fee": 0,
+        "wompi_reference": "SCH-CARACT-0001",
+        "wompi_transaction_id": "1298966-1-1",
+      },
+      "op": "insert",
+      "tabla": "payment_splits",
+    },
+    {
+      "args": {
+        "p_id": "cccccccc-0000-4000-8000-00000000000c",
+        "p_kind": "payment",
+        "p_reason": "wompi_doble_pago · NEQUI (tx=1298966-1-1)",
+      },
+      "nombre": "flag_payment_for_review",
+      "op": "rpc",
+    },
+    {
+      "a": {
+        "amount": 157500,
+        "attemptId": "intento-1",
+        "linkId": "link-1",
+        "paymentId": "cccccccc-0000-4000-8000-00000000000c",
+        "reference": "SCH-CARACT-0001",
+        "schoolId": "esc",
+        "txId": "1298966-1-1",
+      },
+      "op": "autopayCobroDoble",
+    },
+  ],
+}
+`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método BANCOLOMBIA_COLLECT 1`] = `"transfer"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método BANCOLOMBIA_QR 1`] = `"transfer"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método BANCOLOMBIA_TRANSFER 1`] = `"transfer"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método CARD 1`] = `"card"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método DAVIPLATA 1`] = `"transfer"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método DESCONOCIDO 1`] = `"other"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método NEQUI 1`] = `"transfer"`;
+
+exports[`cobro de escuela — wompi, método de pago > 20 método PSE 1`] = `"pse"`;

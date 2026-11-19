@@ -12,6 +12,7 @@
  */
 
 import { supabase } from '../config/supabase';
+import { esCerradaPorEscuela } from './whatsapp-bandeja.service';
 import { aplicarComprobante, aplicarComprobanteConMotivo } from '../jobs/whatsapp-queue.job';
 import {
     interpretarEleccion, loQueQueda, etiquetaDeCobro, resumenParaLaEscuela, TEXTO_REVISION_ESCUELA,
@@ -264,7 +265,7 @@ async function resolverFilaAbierta(
 ): Promise<boolean> {
     const { data } = await supabase
         .from('whatsapp_inbound_queue')
-        .select('id, created_at, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id')
+        .select('id, created_at, pregunta_opciones, pregunta_ocr, pregunta_at, retries, school_id, error_message')
         .eq('integration_id', integration.id)
         .eq('wa_phone_number', contactWaId)
         .eq('status', 'waiting_user')
@@ -272,7 +273,8 @@ async function resolverFilaAbierta(
         .limit(1)
         .maybeSingle();
 
-    const fila = data as FilaEsperando | null;
+    // Una fila que ya pasó a «Por clasificar» (`cerrado_escuela:`) no espera a la familia: contestarle no aplica nada.
+    const fila = (esCerradaPorEscuela((data as any)?.error_message) ? null : data) as FilaEsperando | null;
     // Sin ninguna pregunta abierta: ¿es el nombre de quien asiste que llegó DESPUÉS del comprobante (Aleja,
     // 2026-11-11)? Solo si el texto parece un nombre y hay un comprobante cerrado reciente con nombre de relleno.
     // Y si tampoco: ¿está corrigiendo o reclamando el resultado que la cola le acaba de dar? (R11)
@@ -875,13 +877,13 @@ export async function promoverSiguientePregunta(
 ): Promise<boolean> {
     try {
         const { data } = await supabase.from('whatsapp_inbound_queue')
-            .select('id, pregunta_at, pregunta_ocr, created_at')
+            .select('id, pregunta_at, pregunta_ocr, created_at, error_message')
             .eq('integration_id', integrationId)
             .eq('wa_phone_number', contactWaId)
             .eq('status', 'waiting_user')
             .order('created_at', { ascending: true })
             .limit(10);
-        const filas = (Array.isArray(data) ? data : []) as any[];
+        const filas = ((Array.isArray(data) ? data : []) as any[]).filter((f) => !esCerradaPorEscuela(f?.error_message));
         const corte = Date.now() - VIGENCIA_H * 3600_000;
         if (filas.some((f) => f.pregunta_at && new Date(f.pregunta_at).getTime() > corte)) return false;
         const siguiente = filas.find((f) => !f.pregunta_at && f.pregunta_ocr?.en_fila);

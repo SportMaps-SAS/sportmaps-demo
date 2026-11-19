@@ -27,6 +27,14 @@ import { ETIQUETA_DE_MARCA, esContactoSinContenido, esMarcaNoFamilia, marcaPorNo
 /** Prefijo de `error_message` de las filas que cerró la escuela (o el barrido). */
 export const PREFIJO_CERRADA = 'cerrado_escuela:';
 
+/**
+ * ¿La fila ya la cerró la escuela / el sistema (p. ej. pasó a «Por clasificar» en Cobros)? Una fila así puede seguir
+ * en `waiting_user` (la RPC `wa_crear_comprobante_por_clasificar` solo le antepone el prefijo), pero YA NO espera a
+ * la familia: contestarle no puede aplicar el pago, porque la escuela lo decide desde Cobros. Pura.
+ */
+export const esCerradaPorEscuela = (errorMessage: unknown): boolean =>
+    typeof errorMessage === 'string' && errorMessage.startsWith(PREFIJO_CERRADA);
+
 export const ESTADOS_BANDEJA = ['failed', 'ignored', 'waiting_user'] as const;
 
 /** Estados de pago que cuentan como «ya está registrado». */

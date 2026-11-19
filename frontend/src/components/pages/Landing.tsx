@@ -359,12 +359,14 @@ const Landing = ({ onNavigate }: LandingProps) => {
 
           {/* Navigation Arrows */}
           <button
+            aria-label="Diapositiva anterior"
             onClick={prevSlide}
             className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white hover:bg-white/20 transition-all"
           >
             <ChevronLeft className="h-6 w-6" />
           </button>
           <button
+            aria-label="Diapositiva siguiente"
             onClick={nextSlide}
             className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-12 h-12 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white hover:bg-white/20 transition-all"
           >
@@ -376,6 +378,8 @@ const Landing = ({ onNavigate }: LandingProps) => {
             {heroSlides.map((_, index) => (
               <button
                 key={index}
+                aria-label={`Ir a la diapositiva ${index + 1}`}
+                aria-current={currentSlide === index}
                 onClick={() => setCurrentSlide(index)}
                 className={`w-3 h-3 rounded-full transition-all ${currentSlide === index
                   ? 'bg-white w-8'

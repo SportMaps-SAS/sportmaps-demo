@@ -646,3 +646,42 @@ describe('los datos de quien asiste en una venta («Nicolás Cubides Ávila / 18
         expect(reg.enviados).toHaveLength(0);
     });
 });
+
+describe('caso 7 (Monster 18-nov, vacacional): «¿mañana o el viernes puedo consignar?» y «ya estoy al día»', () => {
+    const bloqueDePago = [
+        sal(5, 'Para separar tu cupo: paga *$150.000* por Nequi o Daviplata al 3194505150…',
+            { payload: { step: PASO_VENTA.PAGO, [MARCA_VENTA]: CLINICA.id } }),
+    ];
+
+    it('«Mañana o el viernes puedo consignar???» → responde el plazo, no repite «ya te envié los datos»', async () => {
+        const { ctx, reg } = ctxDe({ recientes: bloqueDePago });
+        expect(await atenderVentaDeServicio(ctx, VENTA, 'Mañana o el viernes puedo consignar???')).toBe('venta_respuesta');
+        expect(reg.enviados).toHaveLength(1);
+        expect(reg.enviados[0].contexto.corta_de_pago).toBe('plazo');
+        expect(reg.enviados[0].texto).not.toMatch(/ya te envi/i);
+    });
+
+    it('«¿Puedo pagar el viernes?» también es una pregunta de plazo', async () => {
+        const { ctx, reg } = ctxDe({ recientes: bloqueDePago });
+        await atenderVentaDeServicio(ctx, VENTA, '¿Puedo pagar el viernes?');
+        expect(reg.enviados[0]?.contexto.corta_de_pago).toBe('plazo');
+    });
+
+    it('«Ya me sale en la aplicación que estoy al día» → un acuse corto, una sola vez en 2 minutos', async () => {
+        const texto = 'Ya me sale en la aplicación que estoy al día';
+        const { ctx, reg } = ctxDe({ recientes: bloqueDePago });
+        expect(await atenderVentaDeServicio(ctx, VENTA, texto)).toBe('venta_respuesta');
+        expect(reg.enviados[0].contexto.corta_de_pago).toBe('al_dia');
+        expect(reg.enviados[0].texto).toMatch(/Gracias por avisarme/);
+
+        const repetido = ctxDe({ recientes: [...bloqueDePago, sal(1, 'x', { payload: { corta_de_pago: 'al_dia' } })] });
+        expect(await atenderVentaDeServicio(repetido.ctx, VENTA, texto)).toBe('venta_silencio');
+        expect(repetido.reg.enviados).toHaveLength(0);
+    });
+
+    it('si la cola está contestando un comprobante, el acuse de «al día» calla', async () => {
+        const { ctx, reg } = ctxDe({ recientes: bloqueDePago, enCola: true });
+        expect(await atenderVentaDeServicio(ctx, VENTA, 'Ya me sale en la aplicación que estoy al día')).toBe('venta_silencio');
+        expect(reg.enviados).toHaveLength(0);
+    });
+});

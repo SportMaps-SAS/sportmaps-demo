@@ -39,6 +39,7 @@ import { revinculacionPendiente } from '../services/wa-revinculacion.service';
 import { debeAtender, type TipoDeContacto } from '../services/whatsapp-atencion.service';
 import { rolDePersonal } from '../services/whatsapp-personal-escuela.service';
 import { esMarcaNoFamilia } from '../services/whatsapp-tipo-contacto';
+import { esCerradaPorEscuela } from '../services/whatsapp-bandeja.service';
 import {
     anunciaComprobante, normalizarFrase, PASOS_SIN_CUENTA, humanoReciente, type ComprobanteAnunciado, type FilaReciente,
 } from '../services/whatsapp-reglas-turno';
@@ -507,6 +508,18 @@ async function pasarAPorClasificar(
     if (!r.ok && r.codigo !== 'migracion_pendiente') {
         console.warn('[wa-queue] por clasificar: no se registró', { queueId: fila.id, codigo: r.codigo });
     }
+}
+
+/**
+ * Una fila `waiting_user` que pasó a «Por clasificar» (`error_message` con `cerrado_escuela:`) ya no espera a la
+ * familia: si una respuesta la tomó (`processing`), se devuelve tal cual y NO se aplica nada. Devuelve true si la soltó.
+ */
+async function soltarSiCerradaPorEscuela(fila: { id: string; error_message?: string | null } | null): Promise<boolean> {
+    if (!fila || !esCerradaPorEscuela(fila.error_message)) return false;
+    await supabase.from('whatsapp_inbound_queue')
+        .update({ status: 'waiting_user', updated_at: new Date().toISOString() })
+        .eq('id', fila.id).eq('status', 'processing');
+    return true;
 }
 
 /**
@@ -3018,6 +3031,7 @@ export async function aplicarComprobanteDeVenta(
         .eq('id', queueId).eq('status', 'waiting_user')
         .select('*');
     const fila = (Array.isArray(tomadas) ? tomadas[0] : null) as (FilaCola & { pregunta_ocr?: any }) | null;
+    if (await soltarSiCerradaPorEscuela(fila)) return;
     const guardado = fila?.pregunta_ocr;
     if (!fila || !guardado?.ocr) return;
     const datos = (guardado.venta ?? {}) as {
@@ -4307,14 +4321,15 @@ export async function destinoDelComprobante(
 async function otraPreguntaAbierta(fila: FilaCola): Promise<boolean> {
     try {
         const { data } = await supabase.from('whatsapp_inbound_queue')
-            .select('id')
+            .select('id, error_message')
             .eq('integration_id', fila.integration_id)
             .eq('wa_phone_number', fila.wa_phone_number)
             .eq('status', 'waiting_user')
             .neq('id', fila.id)
             .gte('pregunta_at', new Date(Date.now() - 24 * 3600_000).toISOString())
-            .limit(1);
-        return Array.isArray(data) && data.length > 0;
+            .limit(10);
+        // Una fila que ya pasó a «Por clasificar» no es una pregunta abierta.
+        return Array.isArray(data) && data.some((f: any) => !esCerradaPorEscuela(f?.error_message));
     } catch {
         return false;
     }
@@ -4898,10 +4913,10 @@ export async function resolverDeportistaDeLaFila(
     log?: Logger,
 ): Promise<void> {
     const { data } = await supabase.from('whatsapp_inbound_queue')
-        .select('id, school_id, integration_id, wa_phone_number, status, pregunta_ocr')
+        .select('id, school_id, integration_id, wa_phone_number, status, pregunta_ocr, error_message')
         .eq('id', queueId).eq('status', 'waiting_user').maybeSingle();
-    const leida = data as (Pick<FilaCola, 'id' | 'school_id' | 'integration_id' | 'wa_phone_number'> & { pregunta_ocr?: any }) | null;
-    if (!leida) return;
+    const leida = data as (Pick<FilaCola, 'id' | 'school_id' | 'integration_id' | 'wa_phone_number'> & { pregunta_ocr?: any; error_message?: string | null }) | null;
+    if (!leida || esCerradaPorEscuela(leida.error_message)) return;
     const guardado = leida.pregunta_ocr ?? {};
     const opciones = ((guardado.guia?.opciones ?? []) as OpcionGuiada[])
         .map((o) => o.valor as FichaPorNombre).filter((f) => f && typeof f.id === 'string' && typeof f.nombre === 'string');
@@ -4931,6 +4946,7 @@ export async function resolverDeportistaDeLaFila(
         .eq('id', queueId).eq('status', 'waiting_user')
         .select('*');
     const fila = (Array.isArray(tomadas) ? tomadas[0] : null) as (FilaCola & { pregunta_ocr?: any }) | null;
+    if (await soltarSiCerradaPorEscuela(fila)) return;
     const g = fila?.pregunta_ocr;
     if (!fila || !g?.ocr) return;
     const aLaEscuela = async (motivo: string) => {
@@ -5070,6 +5086,7 @@ async function retomarFilaGuardada(
         .eq('id', queueId).eq('status', 'waiting_user')
         .select('*');
     const fila = (Array.isArray(tomadas) ? tomadas[0] : null) as (FilaCola & { pregunta_ocr?: any }) | null;
+    if (await soltarSiCerradaPorEscuela(fila)) return;
     const guardado = fila?.pregunta_ocr;
     if (!fila || !guardado?.ocr) return;
     const aLaEscuela = async (motivo: string) => {
@@ -5545,7 +5562,7 @@ export function motivoVentaSinNombre(f: { servicio?: string | null; monto?: unkn
 export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now()): Promise<number> {
     const corte = new Date(ahora - HORAS_VIDA_PREGUNTA * 3600_000).toISOString();
     const { data: filas, error } = await supabase.from('whatsapp_inbound_queue')
-        .select('id, integration_id, wa_phone_number, pregunta_at, updated_at, en_fila:pregunta_ocr->en_fila, '
+        .select('id, integration_id, wa_phone_number, pregunta_at, updated_at, error_message, en_fila:pregunta_ocr->en_fila, '
             + 'tipo:pregunta_ocr->>tipo, servicio:pregunta_ocr->venta->>itemNombre, '
             + 'monto:pregunta_ocr->ocr->>amount, pago:pregunta_ocr->ocr->>originName, registro:pregunta_ocr->venta->registro')
         .eq('status', 'waiting_user')
@@ -5590,7 +5607,8 @@ export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now
             .update({
                 status: 'ignored',
                 result_type: 'escalated',
-                error_message: motivo.texto,
+                // Una fila ya pasada a «Por clasificar» conserva su `cerrado_escuela:`: si no, reaparecería en la bandeja.
+                ...(esCerradaPorEscuela(f.error_message) ? {} : { error_message: motivo.texto }),
                 processed_at: new Date(ahora).toISOString(),
                 locked_until: null,
             })
