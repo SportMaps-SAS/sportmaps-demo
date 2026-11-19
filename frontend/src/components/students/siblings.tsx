@@ -27,6 +27,21 @@ export interface SiblingPreview {
   amount: number;
 }
 
+/** Propuesta de hermano que devuelve first-payment-preview (por correo/teléfono del acudiente). */
+export interface SiblingSuggestion {
+  suggested_child_id: string | null;
+  suggested_name: string | null;
+  matched_by: Array<'email' | 'phone'>;
+  ambiguous: boolean;
+  candidates: Array<{ child_id: string; full_name: string; matched_by: Array<'email' | 'phone'> }>;
+}
+
+/** «el correo», «el teléfono» o «el correo y el teléfono» del acudiente. */
+export function siblingMatchText(by: Array<'email' | 'phone'>): string {
+  const parts = [by.includes('email') ? 'el correo' : null, by.includes('phone') ? 'el teléfono' : null].filter(Boolean);
+  return parts.join(' y ');
+}
+
 /** 2 → «2.º». */
 export function siblingOrdinal(n: number): string {
   return `${n}.º`;

@@ -11,7 +11,7 @@
  * Equipo y Plan son INDEPENDIENTES — nunca se cruzan entre sí.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { todayColombia } from '@/lib/dateUtils';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -49,7 +49,7 @@ import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import { PhoneInput } from '@/components/ui/phone-input';
-import { SiblingChildPicker, SiblingDiscountChip, type SiblingPreview } from '@/components/students/siblings';
+import { SiblingChildPicker, SiblingDiscountChip, siblingMatchText, type SiblingPreview, type SiblingSuggestion } from '@/components/students/siblings';
 import { useReferidoAlta } from '@/components/referidos/ReferidoAlta';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -187,6 +187,12 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
   const [siblingPreviewLoading, setSiblingPreviewLoading] = useState(false);
   // Sube cuando el BFF responde HERMANOS_DESACTUALIZADO: fuerza recalcular.
   const [siblingPreviewNonce, setSiblingPreviewNonce] = useState(0);
+  // Propuesta por correo/teléfono del acudiente. Solo propone: la casilla queda
+  // pre-marcada y el staff la confirma o la desmarca. Si la desmarca, no se
+  // vuelve a proponer a ese mismo hermano.
+  const [siblingSuggestion, setSiblingSuggestion] = useState<SiblingSuggestion | null>(null);
+  const [siblingAutoId, setSiblingAutoId] = useState<string | null>(null);
+  const siblingDismissedRef = useRef<Set<string>>(new Set());
 
   // ── Load lookup data ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -262,7 +268,7 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
     setFeeWaivers(defaultFeeWaivers(canWaiveFees));
     setStartDate(todayColombia()); setMonthlyFee('');
     setDiscountPct(0);
-    setHasSibling(false); setSiblingOfChildId(null); setSiblingPreview(null);
+    setHasSibling(false); setSiblingOfChildId(null); setSiblingPreview(null); setSiblingSuggestion(null); setSiblingAutoId(null); siblingDismissedRef.current = new Set();
     setCheckingParentEmail(false);
     setParentEmailExists(null);
     setSendInviteEmail(true);
@@ -357,9 +363,13 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
   const siblingPayload: { sibling_of_child_id?: string } = siblingsAllowed && hasSibling && siblingOfChildId
     ? { sibling_of_child_id: siblingOfChildId }
     : {};
+  // Contacto del acudiente para que el BFF proponga al hermano (solo si es válido).
+  const suggestEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parentEmail.trim()) ? parentEmail.trim().toLowerCase() : '';
+  const suggestPhone = parentPhone.replace(/\D/g, '').length >= 10 ? parentPhone.replace(/\D/g, '') : '';
   useEffect(() => {
     if (!open || !hasBilling || !siblingsAllowed || !schoolId || !startDate || !selectedPlanId || selectedPlanId === 'none') {
       setSiblingPreview(null);
+      setSiblingSuggestion(null);
       return;
     }
     let cancelled = false;
@@ -374,8 +384,21 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
           discount_pct: discountPct > 0 ? discountPct : undefined,
           ...feeWaiversPayload(feeWaivers),
           ...siblingPayload,
-        }, { 'x-school-id': schoolId }) as { sibling?: SiblingPreview | null };
-        if (!cancelled) setSiblingPreview(res?.sibling ?? null);
+          ...(suggestEmail ? { parent_email: suggestEmail } : {}),
+          ...(suggestPhone ? { parent_phone: suggestPhone } : {}),
+        }, { 'x-school-id': schoolId }) as { sibling?: SiblingPreview | null; sibling_suggestion?: SiblingSuggestion | null };
+        if (!cancelled) {
+          setSiblingPreview(res?.sibling ?? null);
+          const sug = res?.sibling_suggestion ?? null;
+          setSiblingSuggestion(sug);
+          // Pre-marca solo si hay UN hermano claro, el staff no eligió a nadie y no lo descartó.
+          if (sug?.suggested_child_id && !siblingOfChildId && !hasSibling
+              && !siblingDismissedRef.current.has(sug.suggested_child_id)) {
+            setHasSibling(true);
+            setSiblingOfChildId(sug.suggested_child_id);
+            setSiblingAutoId(sug.suggested_child_id);
+          }
+        }
       } catch {
         // El preview es informativo: si falla, el alta sigue igual y el
         // descuento lo vuelve a calcular el BFF al crear el cobro.
@@ -387,7 +410,8 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, hasBilling, siblingsAllowed, schoolId, selectedPlanId, startDate, monthlyFee, discountPct,
-      feeWaivers.registration, feeWaivers.insurance, hasSibling, siblingOfChildId, siblingPreviewNonce]);
+      feeWaivers.registration, feeWaivers.insurance, hasSibling, siblingOfChildId, siblingPreviewNonce,
+      suggestEmail, suggestPhone]);
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
@@ -856,7 +880,14 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
                     type="checkbox"
                     id="alta-has-sibling"
                     checked={hasSibling}
-                    onChange={e => { setHasSibling(e.target.checked); if (!e.target.checked) setSiblingOfChildId(null); }}
+                    onChange={e => {
+                      setHasSibling(e.target.checked);
+                      if (!e.target.checked) {
+                        if (siblingAutoId) siblingDismissedRef.current.add(siblingAutoId);
+                        setSiblingOfChildId(null);
+                        setSiblingAutoId(null);
+                      }
+                    }}
                     className="h-4 w-4 rounded border-input"
                     data-testid="alta-has-sibling"
                   />
@@ -864,6 +895,18 @@ export function CreateChildModal({ open, onClose, onSuccess, schoolId, canWaiveF
                     ¿Tiene un hermano inscrito?
                   </label>
                 </div>
+                {hasSibling && siblingAutoId && siblingSuggestion?.suggested_child_id === siblingAutoId && siblingOfChildId === siblingAutoId && (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400" data-testid="alta-sibling-suggested">
+                    Propuesto: coincide {siblingMatchText(siblingSuggestion.matched_by)} del acudiente con{' '}
+                    <b>{siblingSuggestion.suggested_name}</b>, ya inscrito. Si no es su hermano/a, desmarca la casilla.
+                  </p>
+                )}
+                {!hasSibling && siblingSuggestion?.ambiguous && (
+                  <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="alta-sibling-ambiguous">
+                    Ese correo/teléfono aparece en más de una familia ({siblingSuggestion.candidates.map(c => c.full_name).join(', ')}).
+                    Si tiene un hermano inscrito, márcalo y elígelo.
+                  </p>
+                )}
                 {hasSibling && (
                   <>
                     <p className="text-xs text-muted-foreground">
