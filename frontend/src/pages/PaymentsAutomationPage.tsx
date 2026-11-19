@@ -591,7 +591,7 @@ export default function PaymentsAutomationPage() {
   // acá a abrir el mes — sin esto, quien llega desde ese link caía siempre en
   // "Cobros" y el botón de abrir mes, que vive en "Config", quedaba invisible.
   const [searchParams, setSearchParams] = useSearchParams();
-  const PAYMENTS_TABS = ['recurrent', 'teams', 'glosas', 'conciliacion', 'history', 'cierre', 'debito', 'config', 'operaciones'] as const;
+  const PAYMENTS_TABS = ['recurrent', 'teams', 'glosas', 'conciliacion', 'saldos', 'history', 'cierre', 'debito', 'config', 'operaciones'] as const;
   const tabParam = searchParams.get('tab');
   const activeTab = (PAYMENTS_TABS as readonly string[]).includes(tabParam || '') ? tabParam! : 'recurrent';
   // Se incrementa al conectar/quitar una pasarela: remonta SportMaps Pay para
