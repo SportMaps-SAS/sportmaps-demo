@@ -16,6 +16,7 @@
 
 import { supabase } from '../config/supabase';
 import { motivoDeFila } from './whatsapp-bandeja.service';
+import type { OcrResult } from './ocr.service';
 
 export type EtiquetaPorClasificar =
     | 'abono_de_cobro' | 'saldo_de_cobro' | 'servicio_nuevo' | 'inscripcion' | 'clase_de_prueba'
@@ -142,6 +143,35 @@ export function decidirPorClasificar(i: {
             descripcion: ocr.description ? String(ocr.description).slice(0, 200) : null,
             pagador: ocr.originName ?? null,
         },
+    };
+}
+
+/**
+ * La lectura que la cola guardó en `pregunta_ocr.ocr` es un RESUMEN (monto, referencia, fecha, banco, destino…), no el
+ * `OcrResult` completo: le faltan campos que `evaluateVerdict` da por sentados (`missingFields`, `isTransactionList`…).
+ * Sin esto, estampar un comprobante desde «Por clasificar» tira `Cannot read properties of undefined (reading 'map')`.
+ * Esta función la completa con valores neutros (nada de lo que añade inventa un dato del comprobante). Pura.
+ */
+export function lecturaComoOcr(ocr: Record<string, any> | null | undefined): OcrResult {
+    const o = ocr ?? {};
+    const monto = num(o.amount);
+    return {
+        amount: monto,
+        currency: o.currency ?? 'COP',
+        date: o.date ?? null,
+        time: o.time ?? null,
+        bank: o.bank ?? null,
+        reference: o.reference ?? null,
+        destination: o.destination ?? null,
+        destinationName: o.destinationName ?? null,
+        originName: o.originName ?? null,
+        description: o.description ?? null,
+        isReceipt: o.isReceipt !== false,
+        isTransactionList: o.isTransactionList === true,
+        missingFields: Array.isArray(o.missingFields) ? o.missingFields.map(String) : [],
+        rawText: o.rawText ?? null,
+        injectionSuspected: o.injectionSuspected === true,
+        provider: String(o.provider ?? 'gemini'),
     };
 }
 

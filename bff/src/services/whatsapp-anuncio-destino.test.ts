@@ -228,7 +228,7 @@ describe('precio de hoy de la clínica', () => {
     });
     it('opciones (vacacional por semanas): una línea por opción, sin abono', () => {
         expect(precioDelServicio(VACACIONAL, { afiliado: false, hoy: '2026-11-04' }).opciones)
-            .toEqual([{ etiqueta: '1 semana', precio: 100000 }, { etiqueta: '2 semanas', precio: 140000 }]);
+            .toEqual([{ etiqueta: '1 semana', precio: 100000, precioAfiliado: 80000 }, { etiqueta: '2 semanas', precio: 140000, precioAfiliado: 120000 }]);
         expect(precioDelServicio(VACACIONAL, { afiliado: true, hoy: '2026-11-04' })).toMatchObject({ deAfiliado: true, abono: null });
     });
     it('«10 de noviembre» = el día antes del tramo', () => {

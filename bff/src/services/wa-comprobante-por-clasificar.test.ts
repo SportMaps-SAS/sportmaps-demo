@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../config/supabase', () => ({ supabase: { rpc: vi.fn() } }));
 
-import { decidirPorClasificar, MOTIVOS_CON_PLATA, porClasificarActivoPara } from './wa-comprobante-por-clasificar.service';
+import { decidirPorClasificar, MOTIVOS_CON_PLATA, porClasificarActivoPara, lecturaComoOcr } from './wa-comprobante-por-clasificar.service';
 
 const ocr = (o: Record<string, unknown> = {}) => ({
     amount: 150000, reference: 'M20540656', date: '2026-11-15', bank: 'Nequi', destination: '319 450 5150', isReceipt: true, ...o,
@@ -144,5 +144,30 @@ describe('porClasificarActivoPara (solo las escuelas de la lista)', () => {
     });
     it('el interruptor de emergencia apaga todo, aunque esté en la lista', () => {
         expect(porClasificarActivoPara(MONSTER, env({ WA_POR_CLASIFICAR_ESCUELAS: MONSTER, WA_POR_CLASIFICAR_OFF: '1' }))).toBe(false);
+    });
+});
+
+describe('lecturaComoOcr (la lectura de la cola es un resumen: se completa para el veredicto)', () => {
+    it('completa lo que evaluateVerdict da por sentado (missingFields, isTransactionList…)', () => {
+        const o = lecturaComoOcr({ amount: '120000', reference: 'R1', date: '2026-11-18', bank: 'BBVA', destination: '@3194505150', description: '2 semanas vacacional MJZM' });
+        expect(o.missingFields).toEqual([]);
+        expect(o.isReceipt).toBe(true);
+        expect(o.isTransactionList).toBe(false);
+        expect(o.amount).toBe(120000);
+        expect(o.currency).toBe('COP');
+        expect(o.provider).toBe('gemini');
+    });
+    it('respeta lo que la lectura sí trae y no inventa datos', () => {
+        const o = lecturaComoOcr({ amount: 5, isReceipt: false, isTransactionList: true, missingFields: ['date'], provider: 'claude', reference: null });
+        expect(o.isReceipt).toBe(false);
+        expect(o.isTransactionList).toBe(true);
+        expect(o.missingFields).toEqual(['date']);
+        expect(o.provider).toBe('claude');
+        expect(o.reference).toBeNull();
+        expect(o.date).toBeNull();
+    });
+    it('una lectura vacía o nula no rompe', () => {
+        expect(lecturaComoOcr(null).amount).toBeNull();
+        expect(lecturaComoOcr(undefined).missingFields).toEqual([]);
     });
 });

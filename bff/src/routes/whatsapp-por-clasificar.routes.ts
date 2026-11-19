@@ -29,6 +29,7 @@ import { administraEstaEscuela } from './whatsapp-admin.routes';
 import { estamparComprobante } from '../jobs/whatsapp-queue.job';
 import { anularCobroCreado, crearCobroDesdeComprobante } from '../services/wa-cobro-desde-comprobante.service';
 import type { PagoPendiente } from '../services/whatsapp-receipt-matching.service';
+import { lecturaComoOcr } from '../services/wa-comprobante-por-clasificar.service';
 
 const router = Router();
 
@@ -41,6 +42,15 @@ const esTablaInexistente = (e: { code?: string; message?: string } | null | unde
 
 /** Escapa lo que va dentro de un `ilike` para que «%» o «_» del usuario no sean comodines. */
 const paraIlike = (q: string) => q.replace(/[\\%_]/g, (c) => `\\${c}`).slice(0, 60);
+
+/**
+ * `estamparComprobante` puede LANZAR (una lectura con campos que faltan, la red…). Aquí se vuelve un fallo normal:
+ * así `crear-servicio` anula el cobro recién creado en vez de dejarlo huérfano, y `aplicar` responde 500 limpio.
+ */
+async function estamparSeguro(f: () => ReturnType<typeof estamparComprobante>): ReturnType<typeof estamparComprobante> {
+    try { return await f(); }
+    catch (e: any) { return { ok: false, duplicado: false, error: String(e?.message ?? e) }; }
+}
 
 async function filaPorClasificar(schoolId: string, id: string) {
     const { data, error } = await supabase.from('wa_comprobantes_por_clasificar')
@@ -176,10 +186,10 @@ router.post('/:schoolId/por-clasificar/:id/aplicar', requireAuth, async (req: Au
         due_date: (pago as any).due_date ?? null, child_id: (pago as any).child_id ?? null, atleta: null,
         categoria: (pago as any).payment_category ?? null,
     };
-    const r = await estamparComprobante(
-        { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lectura.ocr, log: req.log as any, queueId: fila.queue_id },
+    const r = await estamparSeguro(() => estamparComprobante(
+        { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lecturaComoOcr(lectura.ocr), log: req.log as any, queueId: fila.queue_id },
         pendiente, Number(fila.monto), { estados: ['pending', 'overdue', 'partial'] },
-    );
+    ));
     if (!r.ok) {
         if (r.duplicado) return res.status(409).json({ error: 'referencia_ya_usada', pago: r.yaAplicado ?? null });
         return res.status(500).json({ error: r.error });
@@ -236,10 +246,10 @@ router.post('/:schoolId/por-clasificar/:id/crear-servicio', requireAuth, async (
         id: cobro.paymentId, amount: cobro.precio, concept: cobro.concepto ?? (item as any).name, due_date: null,
         child_id: dueno.tipo === 'child' ? dueno.id : null, atleta: null, categoria: (item as any).kind,
     };
-    const r = await estamparComprobante(
-        { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lectura.ocr, log: req.log as any, queueId: fila.queue_id },
+    const r = await estamparSeguro(() => estamparComprobante(
+        { schoolId, storagePath: lectura.storagePath ?? fila.storage_path, sha: lectura.sha, ocr: lecturaComoOcr(lectura.ocr), log: req.log as any, queueId: fila.queue_id },
         pendiente, cobro.esAbono ? Number(fila.monto) : undefined,
-    );
+    ));
     if (!r.ok) {
         // Lo recién creado no se queda huérfano: se anula (solo si lo creó el asistente y nadie lo tocó).
         if (!cobro.yaExistia) await anularCobroCreado(cobro.paymentId);

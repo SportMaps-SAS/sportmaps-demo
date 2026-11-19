@@ -203,11 +203,16 @@ export function tienePrecioDeAfiliado(item: ItemConFicha): boolean {
     return Number(item.precio_afiliado) > 0 || opcionesDelItem(item).some((o) => Number(o.precio_afiliado) > 0);
 }
 
+/** El precio sin el «(afiliados $X)» de cada opción: para quien pidió justo la tarifa de no afiliados. Pura. */
+function sinNotaDeAfiliado(p: PrecioDeServicio): PrecioDeServicio {
+    return { ...p, opciones: p.opciones.map(({ precioAfiliado: _pa, ...resto }) => resto) };
+}
+
 /** Las líneas del valor de hoy: afiliado, opciones o lista por tramo, y el abono. Pura. */
 export function lineasDeValorDeVenta(p: PrecioDeServicio): string[] {
     const lineas: string[] = [];
     if (p.opciones.length) {
-        lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*`));
+        lineas.push(`Valores${p.deAfiliado ? ' de afiliado' : ''}:`, ...p.opciones.map((o) => `• ${o.etiqueta}: *${cop(o.precio)}*${o.precioAfiliado ? ` (afiliados *${cop(o.precioAfiliado)}*)` : ''}`));
     } else if (p.hoy !== null) {
         // «antes $X»: solo con descuento temporal (`precioAntesDelTramo`); el dato sale del catálogo.
         const antes = p.antes ? `antes ${cop(p.antes)}` : '';
@@ -1192,7 +1197,8 @@ export async function enviarPagoDeServicio(
     const marca = { [MARCA_VENTA]: item.id, ...(o.extra ?? {}) };
     const hoy = hoyBogota((ctx.ahora ?? (() => new Date()))().getTime());
     const afiliado = await afiliadoSiHaceFalta(ctx, item, o.pregunta);
-    const precio = precioDelServicio(item, { afiliado, hoy });
+    const precioCompleto = precioDelServicio(item, { afiliado, hoy });
+    const precio = pideTarifaDeNoAfiliado(o.pregunta) ? sinNotaDeAfiliado(precioCompleto) : precioCompleto;
     if (precio.hoy === null && !precio.opciones.length) {
         await ctx.enviar(textoSinPrecioDeServicio(item), { ...marca, step: PASO_VENTA.SIN_PRECIO, pendiente_escuela: 'valor del servicio' });
         await seguro(() => ctx.avisarEscuela(`Pregunta por «${item.name}», que no tiene precio cargado: escríbele con el valor.`), undefined);
@@ -1322,7 +1328,9 @@ async function respuestaCortaDePago(
 
     if (pideValor) {
         const afiliado = await afiliadoSiHaceFalta(ctx, item, texto);
-        const lineas = lineasDeValorDeVenta(precioDelServicio(item, { afiliado, hoy }));
+        // «Y para NO afiliados»: solo la tabla de lista, sin la nota de afiliados (pidió justo esa).
+        const precioHoy = precioDelServicio(item, { afiliado, hoy });
+        const lineas = lineasDeValorDeVenta(pideTarifaDeNoAfiliado(texto) ? sinNotaDeAfiliado(precioHoy) : precioHoy);
         if (!lineas.length) return null;
         const cierre = cuentas.length ? 'Los datos de pago son los mismos que te envié arriba 🙌' : SIN_CUENTAS_DE_PAGO;
         return responder(pideTarifaDeNoAfiliado(texto) ? 'valor_no_afiliado' : 'valor', `${lineas.join('\n')}\n\n${cierre}`, { afiliado });

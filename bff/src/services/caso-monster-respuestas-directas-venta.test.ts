@@ -241,11 +241,10 @@ describe('e · «para NO afiliados»', () => {
         expect(reg.avisos).toEqual([]);
     });
 
-    it('decir «soy afiliado» NO da el precio de afiliado (lo decide el número)', async () => {
+    it('decir «soy afiliado» NO cambia el cobro (lo decide el número), pero la cotización dice los dos valores (2026-11-18)', async () => {
         const { ctx, reg } = ctxDe({ afiliado: false });
         await atenderVentaDeServicio(ctx, venta(VACACIONAL), 'soy afiliado, ¿cuánto cuesta?');
-        expect(reg.enviados[0].texto).toContain('$100.000');
-        expect(reg.enviados[0].texto).not.toContain('$80.000');
+        expect(reg.enviados[0].texto).toContain('• 1 semana: *$100.000* (afiliados *$80.000*)');
     });
 });
 

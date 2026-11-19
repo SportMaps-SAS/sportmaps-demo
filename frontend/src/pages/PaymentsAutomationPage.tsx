@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { SaldosAFavorTab } from '@/components/payment/SaldosAFavorTab';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -1757,6 +1758,7 @@ export default function PaymentsAutomationPage() {
             <TabsTrigger value="teams" className="text-xs sm:text-sm">Equipos y Planes</TabsTrigger>
             <TabsTrigger value="glosas" className="text-xs sm:text-sm">Glosas</TabsTrigger>
             <TabsTrigger value="conciliacion" className="text-xs sm:text-sm">Conciliación</TabsTrigger>
+            <TabsTrigger value="saldos" className="text-xs sm:text-sm">Saldos a favor</TabsTrigger>
             {/* Antes decía «Historial» — chocaba con DOS pestañas de Finanzas:
                 "Historial de pagos" (grilla por atleta mes a mes) y la suya
                 propia "Transacciones" (TransactionsCard, más liviana). Esta es
@@ -2343,6 +2345,10 @@ export default function PaymentsAutomationPage() {
           ) : (
             <p className="text-sm text-muted-foreground">Selecciona una escuela para conciliar.</p>
           )}
+        </TabsContent>
+
+        <TabsContent value="saldos">
+          {schoolId ? <SaldosAFavorTab schoolId={schoolId} /> : null}
         </TabsContent>
 
         {/* ── Tab: Pagos recibidos ─────────────────────────────────────── */}

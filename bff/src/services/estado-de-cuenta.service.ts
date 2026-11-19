@@ -128,6 +128,8 @@ export interface FilaEstado {
     delMes: boolean;
     status: string;
     token?: string | null;
+    /** Dueño del saldo a favor ('c:'|'u:'|'p:' + id, igual que _saldo_a_favor_dueno). */
+    dueno?: string | null;
 }
 
 export interface Familia {
@@ -140,6 +142,16 @@ export interface Familia {
     filas: FilaEstado[];
     /** Algún cobro suyo ya tuvo aviso (cobro generado o vencido) HOY. */
     avisadaHoy: boolean;
+    /** Saldo a favor disponible de los atletas de esta familia (solo informativo, va en el correo). */
+    saldoAFavor?: number;
+}
+
+/** Misma regla que la función SQL _saldo_a_favor_dueno. */
+export function duenoDeSaldo(p: { child_id?: string | null; unregistered_athlete_id?: string | null; user_id?: string | null; parent_id?: string | null }): string | null {
+    if (p.child_id) return `c:${p.child_id}`;
+    if (p.unregistered_athlete_id) return `u:${p.unregistered_athlete_id}`;
+    const adulto = p.user_id || p.parent_id;
+    return adulto ? `p:${adulto}` : null;
 }
 
 export type ModoEstado = 'mensual' | 'manual' | 'reenvio';
@@ -294,6 +306,7 @@ export function agruparPorFamilia(
             vencido: p.status === 'overdue' || (!!p.due_date && p.due_date.slice(0, 10) < hoy),
             delMes,
             status: p.status,
+            dueno: duenoDeSaldo(p),
         });
         if ((p.charge_notice_sent_at && p.charge_notice_sent_at >= inicioHoy)
             || (p.overdue_notice_sent_at && p.overdue_notice_sent_at >= inicioHoy)) f.avisadaHoy = true;
@@ -448,6 +461,7 @@ export function cuerpoCorreoEstado(c: ContenidoCorreo): string {
           <tr><td colspan="2" style="padding:8px;"><strong>Total</strong></td><td style="padding:8px;text-align:right;"><strong>${fmtCop(deuda)}</strong></td></tr>
         </table>
         ${vencido > 0 ? `<p style="color:#b91c1c;">De ese total, <strong>${fmtCop(vencido)}</strong> ya están vencidos.</p>` : ''}
+        ${(f.saldoAFavor ?? 0) > 0 ? `<p style="color:#166534;">Además tienes un <strong>saldo a favor de ${fmtCop(f.saldoAFavor!)}</strong> con ${escaparHtml(c.escuela)}; se descuenta de tu próximo cobro.</p>` : ''}
         <p>Cada botón <strong>Pagar</strong> abre el cobro sin tener que iniciar sesión.</p>
         <h3 style="font-size:16px;margin:20px 0 4px;">Cómo pagar</h3>
         ${c.linkDePago
@@ -488,6 +502,29 @@ async function leerPorIds(tabla: string, cols: string, ids: string[]): Promise<a
     return res.flatMap((r) => (r.data ?? []) as any[]);
 }
 
+/**
+ * Pone `saldoAFavor` en cada familia (suma de sus atletas con saldo disponible).
+ * Informativo: si la lectura falla, el estado de cuenta sale igual, sin la línea.
+ */
+async function adjuntarSaldoAFavor(schoolId: string, familias: Familia[]): Promise<void> {
+    try {
+        const { data, error } = await supabase.rpc('_saldos_a_favor' as any, { p_school_id: schoolId, p_dueno: null } as any);
+        if (error) throw new Error(error.message);
+        const porDueno = new Map<string, number>();
+        for (const r of (data ?? []) as { dueno: string; disponible: number | string }[]) {
+            if (Number(r.disponible) > 0) porDueno.set(r.dueno, Number(r.disponible));
+        }
+        if (porDueno.size === 0) return;
+        for (const f of familias) {
+            const duenos = new Set(f.filas.map((x) => x.dueno).filter(Boolean) as string[]);
+            const total = [...duenos].reduce((s, d) => s + (porDueno.get(d) ?? 0), 0);
+            if (total > 0) f.saldoAFavor = total;
+        }
+    } catch (e) {
+        console.warn('[estado-de-cuenta] saldo a favor no disponible:', (e as Error).message);
+    }
+}
+
 /** Familias con deuda de una escuela, sin cobros duplicados por pagador. */
 export async function familiasConDeuda(schoolId: string, ahora: Date, mes = mesColombia(ahora)) {
     const pagos = await todas<PagoEstado>((desde) => supabase.from('payments')
@@ -525,6 +562,7 @@ export async function familiasConDeuda(schoolId: string, ahora: Date, mes = mesC
         hijos: new Map(hijos.map((x) => [x.id, x])),
         noRegistrados: new Map(noReg.map((x) => [x.id, x])),
     }, ahora, mes);
+    await adjuntarSaldoAFavor(schoolId, familias);
     return { familias, cobros: cobrables.length, duplicados: duplicados.size, sinContacto, atletaInactivo: inactivos.size };
 }
 

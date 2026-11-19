@@ -831,7 +831,11 @@ export type MontoDeVenta =
     | { tipo: 'tramo_anterior'; fecha: string; precioDeEseDia: number; precioHoy: number | null; esAbono: boolean }
     /** Dos opciones del servicio valen eso (semanas del vacacional con el mismo precio). */
     | { tipo: 'ambiguo'; precios: PrecioDeMotivo[] }
-    | { tipo: 'no_cuadra'; precios: number[]; minimo: number | null };
+    /**
+     * `afiliadoCoincide`: el monto es el precio de AFILIADO de una opción/servicio pero el número no figura como afiliado
+     * (la RPC cobraría el de lista): se reconoce la venta, y la escuela solo confirma la afiliación.
+     */
+    | { tipo: 'no_cuadra'; precios: number[]; minimo: number | null; afiliadoCoincide?: { etiqueta: string; monto: number } };
 
 /** Hasta cuántos días atrás cuenta la fecha del pago para el precio del tramo. */
 export const DIAS_TRAMO_POR_FECHA_DE_PAGO = 30;
@@ -860,6 +864,21 @@ function preciosDeVentaEn(item: ItemDeServicio, ahora: number, afiliado: boolean
     const total = sinOpciones && completos.length === 1 ? completos[0].monto : null;
     const minimo = total !== null ? precios.find((p) => p.esAbono)?.monto ?? null : null;
     return { completos, total, minimo };
+}
+
+/**
+ * ¿`monto` es el valor de AFILIADO (completo, ±$1) de alguna opción o del servicio? (2026-11-18: vacacional, 2 semanas
+ * $120.000 de afiliado vs $140.000 de lista.) Solo para reconocer la venta y explicarla: el precio del cobro lo sigue
+ * poniendo la RPC. null si el ítem no tiene valor de afiliado o ninguno coincide. Pura.
+ */
+export function valorDeAfiliadoQueCoincide(
+    item: ItemDeServicio, monto: number, ahora = Date.now(),
+): { etiqueta: string; monto: number } | null {
+    if (!(monto > 0) || !hayPrecioDeAfiliado([item])) return null;
+    const deAfiliado = preciosDeVentaEn(item, ahora, true).completos.filter((p) => igual(p.monto, monto));
+    if (!deAfiliado.length) return null;
+    const etiquetas = [...new Set(deAfiliado.map((p) => String(p.etiqueta ?? '')).filter(Boolean))].join(' / ');
+    return { etiqueta: etiquetas || String(item.name), monto: deAfiliado[0].monto };
 }
 
 /** El precio y el abono mínimo de un servicio para un tipo de persona en una fecha. */
@@ -950,7 +969,12 @@ export function decidirMontoDeVenta(
     } else if (pagoDia && eseDia && esAbonoValido(monto, eseDia.total, eseDia.minimo)) {
         r = { tipo: 'tramo_anterior', fecha: pagoDia, precioDeEseDia: eseDia.total as number, precioHoy: hoy.total, esAbono: true };
     }
-    if (!r) return noCuadra;
+    if (!r) {
+        // El monto es el valor de afiliado de la misma venta y el número no es afiliado: no se crea el cobro (la RPC
+        // decide el precio y pondría el de lista); se reconoce para explicarlo y que la escuela verifique la afiliación.
+        const coincide = afiliado ? null : valorDeAfiliadoQueCoincide(item, monto, ahora);
+        return coincide ? { ...noCuadra, afiliadoCoincide: coincide } : noCuadra;
+    }
     if (previo) return { tipo: 'ya_tiene_cobro', previo };
     return r;
 }
