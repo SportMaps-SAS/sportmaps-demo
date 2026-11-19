@@ -1,0 +1,35 @@
+{
+  "name": "cobro_unico_vence_manana",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, te recordamos que mañana vence el cobro de {{2}} por {{3}} correspondiente a {{4}} en {{5}}. Puedes pagarlo desde el botón o, si ya pagaste, enviar el comprobante por este chat.",
+      "example": {
+        "body_text": [
+          [
+            "Carolina",
+            "Copa Navidad",
+            "$85.000",
+            "Samuel",
+            "Monster's Volley Club"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "URL",
+          "text": "Pagar ahora",
+          "url": "https://sportmaps.co/p/{{1}}",
+          "example": [
+            "https://sportmaps.co/p/aB3xK9mQ"
+          ]
+        }
+      ]
+    }
+  ]
+}

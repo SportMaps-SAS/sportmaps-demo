@@ -526,14 +526,16 @@ async function adjuntarSaldoAFavor(schoolId: string, familias: Familia[]): Promi
 }
 
 /** Familias con deuda de una escuela, sin cobros duplicados por pagador. */
-export async function familiasConDeuda(schoolId: string, ahora: Date, mes = mesColombia(ahora)) {
+export async function familiasConDeuda(schoolId: string, ahora: Date, mes = mesColombia(ahora), soloPagoIds: Set<string> | null = null) {
     const pagos = await todas<PagoEstado>((desde) => supabase.from('payments')
         .select('id, school_id, parent_id, user_id, child_id, unregistered_athlete_id, concept, amount, amount_paid, early_payment_discount_applied, late_fee_amount, status, due_date, payment_type, payment_category, period_year, period_month, charge_notice_sent_at, overdue_notice_sent_at')
         .eq('school_id', schoolId).in('status', ['pending', 'overdue', 'partial'])
         .order('due_date').range(desde, desde + 999));
 
     const duplicados = new Set(await findDuplicatePaymentIds(schoolId, pagos as any));
-    const vivos = pagos.filter((p) => !duplicados.has(p.id));
+    // `soloPagoIds`: aviso dirigido a unos cobros (p.ej. un torneo recién creado). El
+    // resto de la deuda de la familia NO se incluye ni se estampa como avisada.
+    const vivos = pagos.filter((p) => !duplicados.has(p.id) && (!soloPagoIds || soloPagoIds.has(p.id)));
 
     const ids = (f: (p: PagoEstado) => string | null) => [...new Set(vivos.map(f).filter(Boolean))] as string[];
     const adultos = ids((p) => (!p.child_id && !p.unregistered_athlete_id ? p.user_id : null));
@@ -678,6 +680,8 @@ export interface OpcionesEnvio {
     bffUrl?: string | null;
     /** Pausa entre correos (Resend ~2/s). */
     pausaMs?: number;
+    /** Si viene, solo estos cobros entran al mensaje (aviso dirigido). */
+    soloPagoIds?: Set<string> | null;
 }
 
 export interface ResumenEnvio {
@@ -732,7 +736,7 @@ export async function enviarEstadoDeCuenta(schoolId: string, o: OpcionesEnvio): 
     const canalPedido: CanalPedido = o.canal ?? 'auto';
 
     const [{ familias, cobros, duplicados, sinContacto, atletaInactivo }, branding, medios, qrEscuela, waEscuela, waDisponible] = await Promise.all([
-        familiasConDeuda(schoolId, ahora, mes),
+        familiasConDeuda(schoolId, ahora, mes, o.soloPagoIds ?? null),
         resolveSchoolBranding(schoolId),
         // Las restringidas (only_for) que no valen para mensualidades no salen
         // (el Nequi personal de inscripciones de Dynasty).

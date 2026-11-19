@@ -1,0 +1,35 @@
+{
+  "name": "cobro_unico_pendiente",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, quedó pendiente el cobro de {{2}} por {{3}} de {{4}} en {{5}}. Si ya pagaste, envía el comprobante por este chat; si tuviste algún inconveniente, responde y te ayudamos.",
+      "example": {
+        "body_text": [
+          [
+            "Carolina",
+            "Copa Navidad",
+            "$85.000",
+            "Samuel",
+            "Monster's Volley Club"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "URL",
+          "text": "Pagar ahora",
+          "url": "https://sportmaps.co/p/{{1}}",
+          "example": [
+            "https://sportmaps.co/p/aB3xK9mQ"
+          ]
+        }
+      ]
+    }
+  ]
+}
