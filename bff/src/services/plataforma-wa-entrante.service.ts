@@ -23,6 +23,7 @@ import {
     type CanalPlataforma, type ClaseDeContacto, type Suscripcion,
 } from './plataforma-wa.service';
 import { atenderPrueba, haySesionDePrueba } from './plataforma-wa-pruebas.service';
+import { atenderLeadPlataforma, debeAtenderLead, leadsMapiActivo, type ResultadoLead } from './plataforma-wa-leads.service';
 
 // ─── Comandos (puros) ────────────────────────────────────────────────────────
 
@@ -88,7 +89,8 @@ export const TEXTO_COMERCIAL =
 
 export type ResultadoEntrante =
     | 'sin_canal' | 'duplicado' | 'prueba' | 'apagado' | 'activada' | 'activar_sin_escuela' | 'codigo_invalido'
-    | 'codigo_de_otro_numero' | 'desactivada' | 'ayuda' | 'silencio' | 'comercial' | 'no_texto';
+    | 'codigo_de_otro_numero' | 'desactivada' | 'ayuda' | 'silencio' | 'comercial' | 'no_texto'
+    | ResultadoLead;
 
 async function suscripcionesDelNumero(numero: string): Promise<Suscripcion[]> {
     const { data, error } = await supabase.from('platform_wa_suscripciones')
@@ -154,6 +156,15 @@ export async function atenderEntrantePlataforma(
             enlace: { url: urlDeLaApp('/whatsapp?tab=config'), texto: 'Abrir la app' }, clase: 'suscriptor', paso: 'ayuda',
         });
         return 'ayuda';
+    }
+
+    // Mapi atiende al desconocido (PLATFORM_WA_LEADS_MAPI=true, default apagado).
+    // Llegar aquí ya descarta testers y suscriptores activos; `debeAtenderLead` lo reafirma.
+    const lead = debeAtenderLead({
+        flag: leadsMapiActivo(), clase, suscripcionActiva: suscripciones.some((s) => s.estado === 'activa'),
+    });
+    if (lead.atender) {
+        return atenderLeadPlataforma({ canal, numero, tipo: msg.type, texto, ahora });
     }
 
     // D12: el número es el comercial y ventas lo atiende en el celular.

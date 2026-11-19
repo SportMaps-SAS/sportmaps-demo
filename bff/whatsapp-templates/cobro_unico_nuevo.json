@@ -1,0 +1,36 @@
+{
+  "name": "cobro_unico_nuevo",
+  "language": "es_CO",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Hola {{1}}, {{2}} generó un cobro de {{3}} por {{4}} de {{5}}, con fecha de vencimiento el {{6}}. El detalle y las formas de pago están disponibles en el botón.",
+      "example": {
+        "body_text": [
+          [
+            "Carolina",
+            "Monster's Volley Club",
+            "$85.000",
+            "Copa Navidad",
+            "Samuel",
+            "30 de noviembre"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "URL",
+          "text": "Ver detalle del cobro",
+          "url": "https://sportmaps.co/p/{{1}}",
+          "example": [
+            "https://sportmaps.co/p/aB3xK9mQ"
+          ]
+        }
+      ]
+    }
+  ]
+}

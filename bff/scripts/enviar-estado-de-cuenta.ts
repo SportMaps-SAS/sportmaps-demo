@@ -74,12 +74,27 @@ async function main() {
         console.log(`Nota solo para ${notaSoloPara.size} correos que recibieron el envío del ${diaNota}.`);
     }
 
+    // --creados-desde YYYY-MM-DD: aviso DIRIGIDO a los cobros de lote (torneos, etc.)
+    // pendientes creados ese día o después. No incluye el resto de la deuda.
+    let soloPagoIds: Set<string> | null = null;
+    const creadosDesde = arg('--creados-desde');
+    if (creadosDesde) {
+        const desde = new Date(`${creadosDesde}T00:00:00-05:00`).toISOString();
+        const { data, error } = await supabase.from('payments').select('id')
+            .eq('school_id', schoolId).eq('status', 'pending').not('charge_batch_id', 'is', null)
+            .gte('created_at', desde).limit(5000);
+        if (error) throw new Error(`No se pudieron leer los cobros creados desde ${creadosDesde}: ${error.message}`);
+        soloPagoIds = new Set(((data ?? []) as { id: string }[]).map((r) => r.id));
+        console.log(`Aviso dirigido a ${soloPagoIds.size} cobros de lote creados desde ${creadosDesde}.`);
+    }
+
     const resumen = await enviarEstadoDeCuenta(schoolId, {
         modo: reenvio ? 'reenvio' : 'manual',
         aplicar,
         canal,
         nota: arg('--nota') ?? null,
         notaSoloPara,
+        soloPagoIds,
         appUrl: frontend,
         bffUrl: bff,
     });
