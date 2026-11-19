@@ -319,9 +319,17 @@ export function CobrosYPagosDialog({
         }
         return out;
     }, [preview]);
+    // Mora con la que la RPC hace nacer una mensualidad nueva ya vencida (misma lectura).
+    const autoLateFees = useMemo(() => {
+        const out: Record<string, number> = {};
+        for (const l of preview?.lines ?? []) {
+            if (l.ref?.startsWith('new:') && (l.late_fee ?? 0) > 0) out[l.ref] = l.late_fee as number;
+        }
+        return out;
+    }, [preview]);
     const single = useMemo(
-        () => computeSingle({ pending: newAthleteOn ? [] : pendingInput, lines, global, paymentOn: payment.on, autoDiscounts: mode === 'single' ? autoDiscounts : undefined }),
-        [pendingInput, lines, global, payment.on, newAthleteOn, autoDiscounts, mode],
+        () => computeSingle({ pending: newAthleteOn ? [] : pendingInput, lines, global, paymentOn: payment.on, autoDiscounts: mode === 'single' ? autoDiscounts : undefined, autoLateFees: mode === 'single' ? autoLateFees : undefined }),
+        [pendingInput, lines, global, payment.on, newAthleteOn, autoDiscounts, autoLateFees, mode],
     );
     // Comprobante vs. total cuando se venden horas por adelantado: las horas solo van en la misma
     // operación si el comprobante cubre todo (si no, se bloquea y se ofrece «Separar las horas»).

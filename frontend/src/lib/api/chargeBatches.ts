@@ -217,6 +217,8 @@ export interface PreviewLine {
     adjustments?: AdjustmentTag[];
     amount_after: number;
     pay_amount?: number;
+    /** Mora con la que NACE una mensualidad nueva (vencimiento ya pasado y mora activa en la escuela). */
+    late_fee?: number;
     resulting_status?: 'pending' | 'paid' | 'partial' | 'cancelled';
     tags?: AdjustmentTag[];
     warnings?: string[];
@@ -842,6 +844,7 @@ export function normalizePreview(r: any): ChargeBatchPreview {
             adjustments: (Array.isArray(it.adjustments) ? it.adjustments : []).map(normalizeTag),
             amount_after: num(it.amount_after ?? it.amount),
             pay_amount: num(it.pay_amount),
+            late_fee: num(it.late_initial),
             resulting_status: it.resulting_status ?? it.status,
             warnings: Array.isArray(it.warnings) ? it.warnings : [],
         })),
