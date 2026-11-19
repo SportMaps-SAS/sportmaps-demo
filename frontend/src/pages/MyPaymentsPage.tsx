@@ -26,6 +26,7 @@ import { normalizeReceiptUrl } from '@/lib/normalizeReceiptUrl';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { calcEarlyPaymentDiscount, modoProntoPago } from '@/lib/earlyPaymentDiscount';
+import { MiSaldoAFavorCard } from '@/components/payment/MiSaldoAFavorCard';
 import { MiFacturaElectronicaCard } from '@/components/billing/MiFacturaElectronicaCard';
 import { DebitoAutomaticoCard, DebitoSugerenciaBanner } from '@/components/autopay/DebitoAutomaticoCard';
 import { useMiDebito } from '@/components/autopay/useMiDebito';
@@ -696,6 +697,7 @@ export default function MyPaymentsPage() {
         onClarify={(t) => setRespondingGlosa(glosaMap.get(t.id) ?? null)}
         porPagarFooter={
           <>
+            <MiSaldoAFavorCard />
             <DebitoSugerenciaBanner data={debito.data} userId={user?.id} onActivar={setActivarDebitoSchoolId} />
             <div id="debito" className="scroll-mt-20">
               <DebitoAutomaticoCard

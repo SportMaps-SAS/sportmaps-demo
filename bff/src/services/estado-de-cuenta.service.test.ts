@@ -104,7 +104,7 @@ vi.mock('./whatsapp-plantillas.service', async (orig) => {
 
 import {
     agruparPorFamilia, claveEstadoDeCuenta, cobrosDeAtletaInactivo, cuerpoCorreoEstado, datosWhatsAppDeFamilia, elegirCanal, enviarEstadoDeCuenta,
-    escuelasConEstadoPendiente, esDiaHabil, esHoraDelEnvioMensual, primerDiaHabilDesde, runEstadoDeCuentaMensual,
+    duenoDeSaldo, escuelasConEstadoPendiente, esDiaHabil, esHoraDelEnvioMensual, primerDiaHabilDesde, runEstadoDeCuentaMensual,
     type Familia, type PagoEstado,
 } from './estado-de-cuenta.service';
 import { mediosDePago } from './whatsapp-medios-de-pago.service';
@@ -305,6 +305,18 @@ describe('link de pago (payment_link)', () => {
         expect(html).toContain('Pagar con tarjeta, PSE o Nequi (Wompi)');
         expect(html).toContain('súbelo en la app para que la escuela lo aplique');
         expect(cuerpoCorreoEstado(base)).not.toContain('Wompi');
+    });
+
+    it('si la familia tiene saldo a favor lo dice; sin saldo no menciona nada', () => {
+        const f: Familia = {
+            clave: 'a@b.co', email: 'a@b.co', waId: null, nombre: 'Ana', perfilId: null, avisadaHoy: false, saldoAFavor: 40000,
+            filas: [{ paymentId: 'p', atleta: 'Ana', concepto: 'Mensualidad', vence: '2026-11-10', saldo: 1, vencido: false, delMes: true, status: 'pending', token: 'Tok' }],
+        };
+        const base = { escuela: 'E', familia: f, appBase: 'https://app.sportmaps.co', bffBase: 'https://bffprod.sportmaps.co', medios: [], qrEscuelaUrl: null, whatsappComprobante: null };
+        expect(cuerpoCorreoEstado(base)).toContain('saldo a favor de');
+        expect(cuerpoCorreoEstado({ ...base, familia: { ...f, saldoAFavor: undefined } })).not.toContain('saldo a favor');
+        expect(duenoDeSaldo({ child_id: 'c1', user_id: 'u1' })).toBe('c:c1');
+        expect(duenoDeSaldo({ user_id: null, parent_id: 'p1' })).toBe('p:p1');
     });
 });
 
