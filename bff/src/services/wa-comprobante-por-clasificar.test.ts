@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../config/supabase', () => ({ supabase: { rpc: vi.fn() } }));
 
-import { decidirPorClasificar, MOTIVOS_CON_PLATA, porClasificarActivoPara, lecturaComoOcr } from './wa-comprobante-por-clasificar.service';
+import { supabase } from '../config/supabase';
+import { esCerradaPorEscuela } from './whatsapp-bandeja.service';
+import { decidirPorClasificar, MOTIVOS_CON_PLATA, porClasificarActivoPara, lecturaComoOcr, cerrarPorClasificar } from './wa-comprobante-por-clasificar.service';
 
 const ocr = (o: Record<string, unknown> = {}) => ({
     amount: 150000, reference: 'M20540656', date: '2026-11-15', bank: 'Nequi', destination: '319 450 5150', isReceipt: true, ...o,
@@ -169,5 +171,59 @@ describe('lecturaComoOcr (la lectura de la cola es un resumen: se completa para 
     it('una lectura vacía o nula no rompe', () => {
         expect(lecturaComoOcr(null).amount).toBeNull();
         expect(lecturaComoOcr(undefined).missingFields).toEqual([]);
+    });
+});
+
+describe('esCerradaPorEscuela (A-1: una fila waiting_user con prefijo ya no espera a la familia)', () => {
+    it('reconoce el prefijo que antepone la RPC', () => {
+        expect(esCerradaPorEscuela('cerrado_escuela: resuelto_auto — pasó a «Por clasificar» en Cobros | sin_familia: x')).toBe(true);
+    });
+    it('no toca las demás filas (null, vacío, otros motivos)', () => {
+        expect(esCerradaPorEscuela(null)).toBe(false);
+        expect(esCerradaPorEscuela(undefined)).toBe(false);
+        expect(esCerradaPorEscuela('')).toBe(false);
+        expect(esCerradaPorEscuela('sin_familia: el número no está en ninguna ficha')).toBe(false);
+        expect(esCerradaPorEscuela('x cerrado_escuela: no al inicio')).toBe(false);
+    });
+});
+
+describe('cerrarPorClasificar (A-2: el resultado del cierre se revisa)', () => {
+    const rpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
+    const args = { id: 'f1', paymentId: 'p1', resolucion: 'aplicado_a_cobro_existente', por: 'u1' };
+
+    it('ok y ya_aplicado (idempotente) cierran bien', async () => {
+        rpc.mockReset().mockResolvedValueOnce({ data: { ok: true, ya_aplicado: false }, error: null });
+        expect(await cerrarPorClasificar(args)).toEqual({ ok: true, yaAplicado: false });
+        rpc.mockReset().mockResolvedValueOnce({ data: { ok: true, ya_aplicado: true }, error: null });
+        expect(await cerrarPorClasificar(args)).toEqual({ ok: true, yaAplicado: true });
+    });
+
+    it('ya_cerrado (otro administrador ganó la carrera) → 409 con el estado, sin reintentar', async () => {
+        rpc.mockReset().mockResolvedValue({ data: { ok: false, codigo: 'ya_cerrado', estado: 'aplicado' }, error: null });
+        expect(await cerrarPorClasificar(args)).toEqual({ ok: false, codigo: 'ya_cerrado', http: 409, estado: 'aplicado' });
+        expect(rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('no_existe → 404; pago_ajeno → 422', async () => {
+        rpc.mockReset().mockResolvedValueOnce({ data: { ok: false, codigo: 'no_existe' }, error: null });
+        expect(await cerrarPorClasificar(args)).toMatchObject({ ok: false, http: 404 });
+        rpc.mockReset().mockResolvedValueOnce({ data: { ok: false, codigo: 'pago_ajeno' }, error: null });
+        expect(await cerrarPorClasificar(args)).toMatchObject({ ok: false, http: 422 });
+    });
+
+    it('un error de la RPC se reintenta una vez y si se recupera cierra', async () => {
+        rpc.mockReset()
+            .mockResolvedValueOnce({ data: null, error: { message: 'fetch failed' } })
+            .mockResolvedValueOnce({ data: { ok: true, ya_aplicado: false }, error: null });
+        expect(await cerrarPorClasificar(args)).toEqual({ ok: true, yaAplicado: false });
+        expect(rpc).toHaveBeenCalledTimes(2);
+    });
+
+    it('si falla las dos veces (error o excepción) responde 502 cierre_fallo y nunca lanza', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        rpc.mockReset().mockRejectedValue(new Error('red caída'));
+        expect(await cerrarPorClasificar(args)).toEqual({ ok: false, codigo: 'cierre_fallo', http: 502 });
+        expect(rpc).toHaveBeenCalledTimes(2);
+        warn.mockRestore();
     });
 });

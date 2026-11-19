@@ -1,6 +1,6 @@
 # Comprobantes con plata: nunca se quedan en la bandeja
 
-Estado: **PROPUESTA — sin construir, sin migraciones aplicadas** · 2026-11-18 · Aplica a todas las escuelas con el bot de cobros (hoy: Monster´s Volley y Dynasty primero)
+Estado: **EN CONSTRUCCIÓN — fase 2 en código (BFF + migración `20261118124124`, sin aplicar a la base)** · 2026-11-18 · Aplica a todas las escuelas con el bot de cobros (hoy: Monster´s Volley y Dynasty primero)
 
 ## Problema
 
@@ -22,6 +22,25 @@ Causa raíz: el worker (`bff/src/jobs/whatsapp-queue.job.ts`) solo estampa un co
 3. **Mapi pregunta, pero no espera.** Si la familia no contesta en 24 h, el comprobante pasa igual a Cobros con lo que se sabe.
 4. **La bandeja queda solo para lo que no es plata** (archivos ilegibles, contactos que no son familias, estados).
 5. **Nada envejece sin avisar:** un comprobante en revisión con más de 24 h avisa al administrador.
+
+## Como quedó construido (2026-11-18, revisión A-1/A-2/A-10)
+
+Se implementó la alternativa del diseño: **tabla propia `wa_comprobantes_por_clasificar`**, no una fila en `payments`. No existen `wa_crear_cobro_por_clasificar` ni `wa_clasificar_cobro`; son estas RPC (migración `20261118124124`):
+
+| RPC | Quién | Qué hace |
+|---|---|---|
+| `wa_crear_comprobante_por_clasificar` | `service_role` (el worker) | Registra la fila, idempotente por `queue_id`; antepone `cerrado_escuela:` al `error_message` de la fila de la cola |
+| `wa_comprobante_por_clasificar_aplicar` | `service_role` (BFF) | Cierra la fila ligándola al cobro donde la escuela lo aplicó; `FOR UPDATE`, idempotente (`ya_aplicado`) |
+| `wa_comprobante_por_clasificar_descartar` | `authenticated`, gate adentro | La escuela descarta con motivo |
+
+Rutas BFF (`whatsapp-por-clasificar.routes.ts`): `aplicar` (a un cobro existente) y `crear-servicio` (cobro nuevo del catálogo). El comprobante se estampa «En revisión» y la escuela lo aprueba en Pagos. D1 queda resuelta: se crea la fila sin deportista hasta que la escuela asigna.
+
+### Reglas de consistencia (A-1, A-2)
+
+- **Una fila con `cerrado_escuela:` ya no espera a la familia**, aunque siga en `waiting_user` (la RPC no cambia el `status`). El BFF la excluye con `esCerradaPorEscuela` (`whatsapp-bandeja.service.ts`) en: los tres «claims» de la respuesta (`aplicarComprobanteDeVenta`, `resolverRespuestaDeDeportista`, `retomarFilaGuardada`), `resolverFilaAbierta`, `promoverSiguientePregunta`, `otraPreguntaAbierta`, `hayPreguntaDeCobroAbierta` y `vencerPreguntasSinRespuesta` (que conserva el prefijo en vez de pisarlo). Así la familia no puede aplicar el pago por el bot mientras la fila está abierta en Cobros.
+- **Orden en el worker:** `cerrar()` hace primero el `UPDATE` de `status`/`error_message` y solo después `pasarAPorClasificar` (la RPC antepone el prefijo), así que nada lo pisa.
+- **`aplicar` y `crear-servicio`:** relee la fila justo antes de estampar (409 `ya_cerrada` si otro la cerró) y revisa el cierre con `cerrarPorClasificar` (reintenta una vez). Si el cierre falla, responde 502 `cierre_fallo` (o 409 `ya_cerrada_por_otro`) con el `payment_id`; el comprobante queda en el cobro «En revisión» y NO se deshace solo. Reintentar es seguro: el estampado duplicado sobre el MISMO cobro se trata como «reanudar» y solo cierra la fila.
+- **Límite conocido:** sin una reserva de la fila en la base, dos administradores que apliquen a la vez a cobros distintos y con un comprobante sin referencia pueden estampar dos veces; el perdedor recibe 409 `ya_cerrada_por_otro` y la escuela debe anular uno en Pagos. Cerrarlo del todo pide un estado intermedio `reservado` (migración nueva, CHECK de `estado`).
 
 ## Decisiones de producto (a confirmar)
 
