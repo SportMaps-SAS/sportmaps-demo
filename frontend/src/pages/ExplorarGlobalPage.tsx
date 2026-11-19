@@ -56,6 +56,7 @@ import {
   Map as MapIcon,
   LayoutGrid,
   Dumbbell,
+  type LucideIcon,
   Compass,
   ArrowLeft,
 } from 'lucide-react';
@@ -82,6 +83,19 @@ const SERVICE_TYPES: { value: ServiceType; label: string; icon: string }[] = [
   { value: 'Entrenamiento',      label: 'Entrenamiento',      icon: '💪' },
 ];
 
+// Imagen con respaldo: si la URL remota falla (p. ej. Unsplash ya no la sirve) muestra el icono de la categoría.
+function CardImg({ src, alt, className, Icon }: { src: string; alt: string; className: string; Icon: LucideIcon }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="w-full h-full flex items-center justify-center" role="img" aria-label={alt}>
+        <Icon className="h-12 w-12 text-muted-foreground/40" />
+      </div>
+    );
+  }
+  return <img src={src} alt={alt} className={className} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 // ── Item Cards ───────────────────────────────────────────────────────────────
 
 function ServiceCard({ item, onBook }: { item: ExploreItem; onBook: (item: ExploreItem) => void }) {
@@ -89,7 +103,7 @@ function ServiceCard({ item, onBook }: { item: ExploreItem; onBook: (item: Explo
     <Card className="group overflow-hidden cursor-pointer hover:shadow-xl transition-all duration-300 border-border/50 hover:border-emerald-400/50">
       <div className="relative aspect-[4/3] bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/30 overflow-hidden">
         {item.image_url ? (
-          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+          <CardImg src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" Icon={Stethoscope} />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <Stethoscope className="h-12 w-12 text-emerald-300" />
@@ -155,7 +169,7 @@ function EventCard({ item, onRegister }: { item: ExploreItem; onRegister: (item:
     >
       <div className="relative aspect-[4/3] bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 overflow-hidden">
         {item.image_url ? (
-          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+          <CardImg src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" Icon={Trophy} />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <Trophy className="h-12 w-12 text-amber-300" />
@@ -216,7 +230,7 @@ function SchoolCard({ item }: { item: ExploreItem }) {
     >
       <div className="relative h-48 bg-gradient-to-br from-primary/10 via-primary/5 to-secondary/10 overflow-hidden">
         {item.image_url ? (
-          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" />
+          <CardImg src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" Icon={Trophy} />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-primary/20 to-secondary/20">
             <Trophy className="h-14 w-14 text-primary/30" />
@@ -305,7 +319,7 @@ function TrainerCard({ item }: { item: ExploreItem }) {
     >
       <div className="relative h-48 bg-gradient-to-br from-violet-500/10 via-fuchsia-500/5 to-purple-500/10 overflow-hidden">
         {item.image_url ? (
-          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" loading="lazy" />
+          <CardImg src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" Icon={Dumbbell} />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center">
             <Dumbbell className="h-14 w-14 text-violet-400/40" />
@@ -392,7 +406,7 @@ function ProductCard({ item, onAddToCart }: { item: ExploreItem; onAddToCart: (i
     >
       <div className="relative aspect-[4/3] bg-gradient-to-br from-rose-50 to-pink-50 dark:from-rose-950/30 dark:to-pink-950/30 overflow-hidden">
         {item.image_url ? (
-          <img src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+          <CardImg src={item.image_url} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" Icon={Package} />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
             <Package className="h-12 w-12 text-rose-300" />
