@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 942,
-  "head": "20261119164527",
+  "count": 943,
+  "head": "20261120143043",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -945,6 +945,7 @@
     {"v":"20261119141857","file":"20261119141857_invariantes_fix_regex_interno.sql","sha256":"cfe13847485c581c2da07823cb2fa0fbeee1a603cd9bf5ec0783688bee1f3f33","added":"2026-11-19","by":"Brayan Steven Lopez"},
     {"v":"20261119145807","file":"20261119145807_payment_provider_bold.sql","sha256":"0b23ecddd0ec5f0a94b502ab4252d6e05a53b3a80f61f4d247d7eb762ce972aa","added":"2026-11-19","by":"Brayan Steven Lopez"},
     {"v":"20261119145819","file":"20261119145819_payment_links_enlace_del_proveedor.sql","sha256":"bba5342eb435901ea7bfdd4df089c8a12bbe32f55b66bd45f077c93ffed2ffe9","added":"2026-11-19","by":"Brayan Steven Lopez"},
-    {"v":"20261119164527","file":"20261119164527_saldo_a_favor_en_cobro_manual.sql","sha256":"d77273e734cc971553f2e8a329e0fb8ddc416cae93b31d05dc91aff9ac454ebf","added":"2026-11-19","by":"Brayan Steven Lopez"}
+    {"v":"20261119164527","file":"20261119164527_saldo_a_favor_en_cobro_manual.sql","sha256":"d77273e734cc971553f2e8a329e0fb8ddc416cae93b31d05dc91aff9ac454ebf","added":"2026-11-19","by":"Brayan Steven Lopez"},
+    {"v":"20261120143043","file":"20261120143043_saldo_a_favor_cuenta_abonos_previos.sql","sha256":"25d581ba0a0336d0dab260095a7dff4d36c2ec03c10a2e765ea4f5d426f0f2fc","added":"2026-11-20","by":"Brayan Steven Lopez"}
   ]
 }
