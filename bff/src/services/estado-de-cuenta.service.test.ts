@@ -103,7 +103,7 @@ vi.mock('./whatsapp-plantillas.service', async (orig) => {
 });
 
 import {
-    agruparPorFamilia, claveEstadoDeCuenta, cobrosDeAtletaInactivo, cuerpoCorreoEstado, datosWhatsAppDeFamilia, elegirCanal, enviarEstadoDeCuenta,
+    agruparPorFamilia, claveEstadoDeCuenta, cobrosDeAtletaInactivo, cuerpoCorreoEstado, datosWhatsAppCobroUnico, datosWhatsAppDeFamilia, elegirCanal, enviarEstadoDeCuenta,
     duenoDeSaldo, escuelasConEstadoPendiente, esDiaHabil, esHoraDelEnvioMensual, primerDiaHabilDesde, runEstadoDeCuentaMensual,
     type Familia, type PagoEstado,
 } from './estado-de-cuenta.service';
@@ -255,6 +255,30 @@ describe('agrupación por familia', () => {
         ], datos(), MAR_3_NOV_0800, '2026-11');
         expect(familias[0].filas.filter((r) => r.delMes)).toHaveLength(0);
         expect(elegirCanal({ pedido: 'auto', whatsappEscuela: true, waId: '573001234567', email: 'caro@x.co', filasDelMes: 0 })).toBe('correo');
+        // Con la plantilla de cobro único aprobada, esa familia SÍ puede ir por WhatsApp.
+        expect(elegirCanal({ pedido: 'auto', whatsappEscuela: true, waId: '573001234567', email: 'caro@x.co', filasDelMes: 0, filasUnicas: 1 })).toBe('whatsapp_o_correo');
+        expect(elegirCanal({ pedido: 'correo', whatsappEscuela: true, waId: '573001234567', email: 'caro@x.co', filasDelMes: 0, filasUnicas: 1 })).toBe('correo');
+        expect(elegirCanal({ pedido: 'auto', whatsappEscuela: false, waId: '573001234567', email: 'caro@x.co', filasDelMes: 0, filasUnicas: 1 })).toBe('correo');
+    });
+
+    it('datosWhatsAppCobroUnico: nombre del cobro sin el deportista, suma y primer vencimiento', () => {
+        const { familias } = agruparPorFamilia([
+            pago('t1', { amount: 85000, concept: 'Copa Navidad Cuervos — Ada Luz Valencia', payment_type: 'one_time', payment_category: 'torneo', due_date: '2026-11-30' }),
+            pago('t2', { amount: 85000, concept: 'Copa Navidad Cuervos — Ada Luz Valencia', payment_type: 'one_time', payment_category: 'torneo', due_date: '2026-11-28' }),
+        ], datos(), MAR_3_NOV_0800, '2026-11');
+        const f = familias[0];
+        expect(f.filas.every((r) => r.unico && !r.delMes)).toBe(true);
+        const d = datosWhatsAppCobroUnico(f, 'Monster');
+        expect(d.conceptoPago).toBe('Copa Navidad Cuervos');
+        expect(d.monto.replace(/\D/g, '')).toBe('170000');
+        expect(d.fechaVencimiento).toBe('28 de noviembre');
+        expect(d.nombreEscuela).toBe('Monster');
+        expect(['t1', 't2']).toContain(d.paymentIdBoton);
+    });
+
+    it('una mensualidad NO es cobro único', () => {
+        const { familias } = agruparPorFamilia([pago('mens', { payment_category: 'mensualidad' })], datos(), MAR_3_NOV_0800, '2026-11');
+        expect(familias[0].filas[0].unico).toBe(false);
     });
 });
 

@@ -58,7 +58,11 @@ export type ConceptoCobro =
     // Embudo del interesado y agenda de la clase de prueba (Monster, 2026-10-30). Ninguna es cobro.
     | 'recordatorio_clase_prueba'    // víspera de la clase de PRUEBA (escuela con nombre_clase='prueba')
     | 'clase_prueba_cupo_por_vencer' // el cupo separado vence en ~2 h y la ventana ya cerró
-    | 'clase_prueba_reprogramada';   // la sesión se canceló (lluvia / el profe): elegir otro horario
+    | 'clase_prueba_reprogramada'    // la sesión se canceló (lluvia / el profe): elegir otro horario
+    // Cobros ÚNICOS (torneo, uniforme, clase extra…): NO dicen «mensualidad». 2026-11-20.
+    | 'cobro_unico_nuevo'            // el cobro se acaba de generar
+    | 'cobro_unico_vence_manana'     // vence mañana
+    | 'cobro_unico_pendiente';       // quedó pendiente
 
 /** Datos del cobro ya formateados para mostrar (COP, fechas en español). */
 export interface DatosCobro {
@@ -176,6 +180,22 @@ export const CONCEPTOS: Record<ConceptoCobro, DefConcepto> = {
     clase_prueba_reprogramada: {
         plantilla: 'clase_prueba_reprogramada', idioma: 'es_CO', esCobro: false,
         variables: (d) => [d.nombreContacto, d.nombreAtleta, d.dia, d.hora, d.motivo],
+    },
+    // "Hola {{1}}, {{2}} generó un cobro de {{3}} por {{4}} de {{5}}, con fecha de vencimiento el {{6}}. …"
+    // {{3}} = monto, {{4}} = nombre del cobro («Copa Navidad»), {{5}} = deportista.
+    cobro_unico_nuevo: {
+        plantilla: 'cobro_unico_nuevo', idioma: 'es_CO', esCobro: true,
+        variables: (d) => [d.nombreContacto, d.nombreEscuela, d.monto, d.conceptoPago, d.nombreAtleta, d.fechaVencimiento],
+    },
+    // "Hola {{1}}, te recordamos que mañana vence el cobro de {{2}} por {{3}} correspondiente a {{4}} en {{5}}. …"
+    cobro_unico_vence_manana: {
+        plantilla: 'cobro_unico_vence_manana', idioma: 'es_CO', esCobro: true,
+        variables: (d) => [d.nombreContacto, d.conceptoPago, d.monto, d.nombreAtleta, d.nombreEscuela],
+    },
+    // "Hola {{1}}, quedó pendiente el cobro de {{2}} por {{3}} de {{4}} en {{5}}. …"
+    cobro_unico_pendiente: {
+        plantilla: 'cobro_unico_pendiente', idioma: 'es_CO', esCobro: true,
+        variables: (d) => [d.nombreContacto, d.conceptoPago, d.monto, d.nombreAtleta, d.nombreEscuela],
     },
 };
 
