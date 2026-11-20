@@ -238,7 +238,7 @@ export async function pagoYaRegistrado(
         }
         const r = await import('./whatsapp-recuperacion.service');
         const registrados = (await r.pagosRegistradosDe(schoolId, k)).filter((p) => p.status === 'paid' || p.status === 'partial');
-        const cubre = r.pagosQueYaCubren(registrados, ocr.amount ?? null, r.fechaDeReferencia(ocr.date ?? null, fechaMensaje));
+        const cubre = r.pagosQueYaCubren(registrados, ocr.amount ?? null, r.fechaDeReferencia(ocr.date ?? null, fechaMensaje), ocr.reference ?? null);
         return cubre.length ? { id: cubre[0].id, concept: cubre[0].concept } : null;
     } catch {
         return null;

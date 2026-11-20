@@ -13,7 +13,7 @@ import { serviciosDeAnuncio, type ItemConFicha } from './whatsapp-anuncio-destin
 import { DIAS_CONTEXTO_VENTA, MARCA_VENTA, ventaActiva, type VentaActiva } from './whatsapp-venta-contexto';
 
 /** Las marcas del payload que lee `ventaActiva` (PostgREST: `payload->clave`). */
-const CAMPOS_PAYLOAD = [MARCA_VENTA, 'servicio_id', 'step', 'campana_id', 'destino_anuncio', 'caption'];
+const CAMPOS_PAYLOAD = [MARCA_VENTA, 'servicio_id', 'step', 'campana_id', 'destino_anuncio', 'caption', 'venta_cerrada'];
 const SELECT = ['direction', 'type', 'text_body', 'ai_generated', 'wa_timestamp', 'created_at',
     ...CAMPOS_PAYLOAD.map((c) => `${c}:payload->>${c}`)].join(', ');
 const TOPE_MENSAJES = 200;

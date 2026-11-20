@@ -304,3 +304,26 @@ describe('R11 · reclamo o corrección tras el resultado', () => {
         expect(m).toBe('reclamo_del_cliente: la familia corrige el mes o el concepto (dice noviembre): «Ahora estoy pagando noviembre» (tras resultado_comprobante)');
     });
 });
+
+// ─── Cobros abiertos: nunca «no coincide con $350.000 o $175.000» (Monster 2026-11, nombres inventados) ───
+describe('laVentaCede · el monto es de un cobro abierto', () => {
+    const alias = ['clinica de armadores'];
+    it('cobro de clínica de $300.000 con $150.000 abonados: un comprobante de $150.000 es su saldo, cede al camino de familia', () => {
+        const r = laVentaCede({
+            textos: ['te envío el pago'], alias, monto: 150000,
+            parciales: [{ amount: 300000, amount_paid: 150000 }],
+        });
+        expect(r).toMatchObject({ cede: true, razon: 'saldo_de_un_cobro' });
+    });
+    it('mensualidad abierta de $10.000: un comprobante de $10.000 no es una venta nueva', () => {
+        const r = laVentaCede({ textos: ['pago'], alias, monto: 10000, pendientes: [{ amount: 10000 }] });
+        expect(r).toMatchObject({ cede: true, razon: 'saldo_de_un_cobro' });
+    });
+    it('si nombra el servicio, la venta decide como siempre', () => {
+        const r = laVentaCede({ textos: ['abono clinica de armadores'], alias, monto: 10000, pendientes: [{ amount: 10000 }] });
+        expect(r.cede).toBe(false);
+    });
+    it('un monto que no es de ningún cobro abierto no cede', () => {
+        expect(laVentaCede({ textos: ['pago'], alias, monto: 90000, pendientes: [{ amount: 10000 }] }).cede).toBe(false);
+    });
+});

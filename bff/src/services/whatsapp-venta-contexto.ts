@@ -33,7 +33,7 @@
 
 import { normalizarFrase, type FilaReciente } from './whatsapp-reglas-turno';
 import { tokensDistintivos } from './whatsapp-venta-servicios.service';
-import { inferirServicio, type ItemConFicha } from './whatsapp-anuncio-destino';
+import { inferirServicio, ventaCerradaDeItem, type ItemConFicha } from './whatsapp-anuncio-destino';
 
 /** Cuántos días hacia atrás cuenta una señal de venta. */
 export const DIAS_CONTEXTO_VENTA = 7;
@@ -249,6 +249,38 @@ export function ventaActiva(
         if (it) return { item: it, origen: 'lead', desde: null };
     }
     return null;
+}
+
+/**
+ * ¿De qué servicio con la VENTA CERRADA habla la persona? (Monster 2026-11-20, la clínica.) Pura.
+ *
+ *  · Si lo que escribe (o la ráfaga) nombra un servicio del catálogo: ese. Cerrado → el servicio; abierto (el
+ *    vacacional) → null, aunque más atrás de la conversación se hablara de la clínica.
+ *  · Si nombra una palabra distintiva del nombre de un servicio cerrado («armadores»): ese.
+ *  · Si no nombra nada (un «Hola», un «¿cuánto cuesta?»): el de la venta activa de la conversación, si está cerrado.
+ *  · Pide el club de forma explícita (clase de prueba, mensualidad…): null, sigue el bot de siempre.
+ *
+ * `items`: TODOS los vigentes (también los cerrados). `cerradosPorEnv` se pasa tal cual a `ventaCerradaDeItem`.
+ */
+export function servicioCerradoQueSeConsulta(p: {
+    items: ItemConFicha[]; textos: (string | null | undefined)[]; mensajes: FilaReciente[];
+    ahora?: number; leadServicioId?: string | null; cerradosPorEnv?: string | string[];
+}): ItemConFicha | null {
+    const ahora = p.ahora ?? Date.now();
+    const cerrado = (it: ItemConFicha) => ventaCerradaDeItem(it, ahora, p.cerradosPorEnv ?? process.env.WA_VENTAS_CERRADAS_ITEMS);
+    const cerrados = p.items.filter(cerrado);
+    if (!cerrados.length) return null;
+    const textos = p.textos.filter((t): t is string => !!t && !!t.trim());
+    if (textos.some((t) => pideElClub(t))) return null;
+    for (const t of textos) {
+        const nombrado = itemNombradoEn(t, p.items);
+        if (nombrado) return cerrado(nombrado) ? nombrado : null;
+    }
+    const palabras = new Set(textos.flatMap((t) => normalizarFrase(t).split(' ')));
+    const porPalabra = cerrados.filter((it) => tokensDistintivos(it.name).some((k) => k.length >= 5 && palabras.has(k)));
+    if (porPalabra.length === 1) return porPalabra[0];
+    const venta = ventaActiva(p.mensajes, p.items, { ahora, leadServicioId: p.leadServicioId ?? null });
+    return venta && cerrado(venta.item) ? venta.item : null;
 }
 
 function iso(f: FilaReciente): string | null {

@@ -369,7 +369,8 @@ export async function catalogoParaProspecto(
     hoy = hoyBogota(),
 ): Promise<CatalogoParaProspecto> {
     let items: ItemConFicha[] = [];
-    try { items = await serviciosDeAnuncio(schoolId); } catch { items = []; }
+    // Solo lo que todavía se vende: el modelo no cotiza un servicio con la venta cerrada (2026-11-20).
+    try { items = await serviciosDeAnuncio(schoolId, Date.now(), { ventaAbierta: true }); } catch { items = []; }
     const cuentasPorMotivo = new Map<string, CuentaDePagoEmbudo[]>();
     await Promise.all([...new Set(items.map(motivoDeServicio))].map(async (motivo) => {
         try {

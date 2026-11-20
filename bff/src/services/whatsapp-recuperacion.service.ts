@@ -120,6 +120,8 @@ export interface PagoRegistrado {
     payment_date: string | null;
     updated_at: string | null;
     concept: string | null;
+    /** Referencia bancaria del comprobante que ya tiene (para no confundir dos abonos iguales con el mismo pago). */
+    ocr_reference?: string | null;
 }
 
 export interface ResultadoRecuperacion {
@@ -200,10 +202,20 @@ export function fechaDeReferencia(ocrDate: string | null, fechaMensaje: string):
  * `fecha`: mismo monto (cobrado o abonado) y fecha de registro dentro de la
  * ventana. Pura, para probarla sin base.
  */
-export function pagosQueYaCubren(pagos: PagoRegistrado[], monto: number | null, fecha: string): PagoRegistrado[] {
+export function pagosQueYaCubren(
+    pagos: PagoRegistrado[], monto: number | null, fecha: string,
+    /** Referencia del comprobante nuevo: si el pago registrado trae OTRA, son dos transferencias distintas. */
+    referencia?: string | null,
+): PagoRegistrado[] {
     if (monto === null || !(monto > 0)) return [];
     const ref = aDia(fecha);
+    const refNueva = normalizeReference(referencia);
     return pagos.filter((p) => {
+        // (Monster 10-nov y 19-nov 2026: dos abonos de $150.000 del mismo cobro de $300.000; el segundo se cerró como
+        // «ya registrado» por tener el mismo monto que el primero.) Dos referencias bancarias distintas (6+ caracteres)
+        // son dos transferencias: el pago registrado NO cubre a esta.
+        const refVieja = normalizeReference(p.ocr_reference ?? null);
+        if (refNueva && refVieja && refNueva.length >= 6 && refVieja.length >= 6 && refNueva !== refVieja) return false;
         // Un cobro PARCIAL no queda cubierto por un comprobante igual a su TOTAL (Monster 2026-11-12, Shara: $145.000
         // sobre un cobro de $145.000 con $20.000 abonados no es «ya registrado»): solo por lo que ya se abonó.
         const mismoMonto = p.status === 'partial'
@@ -681,7 +693,7 @@ export async function pendientesDeLaFamilia(
     const filtro = filtroDeFamilia(k);
     if (!filtro) return [];
     const { data, error } = await supabase.from('payments')
-        .select('id, amount, concept, due_date, child_id, unregistered_athlete_id, payment_category, payment_type, child:children(full_name)')
+        .select('id, amount, early_payment_discount_applied, concept, due_date, child_id, unregistered_athlete_id, payment_category, payment_type, child:children(full_name)')
         .eq('school_id', schoolId)
         .in('status', ['pending', 'overdue'])
         .or(filtro)
@@ -696,6 +708,7 @@ export async function pendientesDeLaFamilia(
         child_id: p.child_id ?? null,
         atleta: p.child?.full_name ?? (p.unregistered_athlete_id ? nombresSinRegistrar?.get(p.unregistered_athlete_id) ?? null : null),
         categoria: categoriaDelCobro(p),
+        ...(Number(p.early_payment_discount_applied) > 0 ? { descuento: Number(p.early_payment_discount_applied) } : {}),
     }));
 }
 
@@ -705,7 +718,7 @@ export async function pagosRegistradosDe(schoolId: string, k: LlavesDeFamilia): 
     if (!filtro) return [];
     const desde = new Date(Date.now() - 150 * DIA_MS).toISOString();
     const { data } = await supabase.from('payments')
-        .select('id, amount, amount_paid, status, payment_date, updated_at, concept')
+        .select('id, amount, amount_paid, status, payment_date, updated_at, concept, ocr_reference')
         .eq('school_id', schoolId)
         .in('status', ['paid', 'partial', 'awaiting_approval'])
         .or(filtro)
@@ -714,7 +727,7 @@ export async function pagosRegistradosDe(schoolId: string, k: LlavesDeFamilia): 
     return (data ?? []).map((p: any) => ({
         id: p.id, amount: Number(p.amount), amount_paid: p.amount_paid === null ? null : Number(p.amount_paid),
         status: p.status, payment_date: p.payment_date ?? null, updated_at: p.updated_at ?? null,
-        concept: p.concept ?? null,
+        concept: p.concept ?? null, ocr_reference: p.ocr_reference ?? null,
     }));
 }
 
@@ -848,7 +861,7 @@ export async function procesarComprobanteRecuperado(e: EntradaComprobante): Prom
         const vistos = new Set<string>();
         pendientes = [...porLlaves, ...delWorker].filter((p) => (vistos.has(p.id) ? false : (vistos.add(p.id), true)));
         registrados = regs;
-        pagadosQueCubren = pagosQueYaCubren(registrados, ocr.amount ?? null, fechaDeReferencia(ocr.date, e.fechaMensaje));
+        pagadosQueCubren = pagosQueYaCubren(registrados, ocr.amount ?? null, fechaDeReferencia(ocr.date, e.fechaMensaje), ocr.reference);
     }
 
     const recargos = await cargarRecargos(e.schoolId, pendientes);

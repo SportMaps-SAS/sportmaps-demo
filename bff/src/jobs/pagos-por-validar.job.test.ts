@@ -1,7 +1,7 @@
 /**
  * Resumen diario de «Pagos por validar» (2026-11-08): 07:30 a owner y admins de
  * cada escuela con comprobantes en `awaiting_approval`, recordatorio a las 17:00
- * si alguno lleva > 48 h, idempotente por escuela + día + tramo, sin N+1, sin
+ * si alguno lleva > 24 h, idempotente por escuela + día + tramo, sin N+1, sin
  * escuelas demo, y sin invitar a «Aprobar todos los verdes» a ciegas cuando la
  * escuela tiene la aprobación automática encendida.
  */
@@ -111,7 +111,7 @@ describe('resumen de las 07:30', () => {
         expect(monster.resumen.monto).toBe(137750 + 145000 + 80000);
         expect(monster.resumen.verdes).toBe(2);
         expect(monster.resumen.verdesUnClic).toBe(2);
-        expect(monster.resumen.masDe48h).toBe(2);
+        expect(monster.resumen.masDe24h).toBe(2);
         expect(monster.textos.asunto).toBe('Monster´s Volley Club: 3 pagos por validar ($362.750)');
 
         const notifs = base.tablas.notifications;
@@ -175,15 +175,38 @@ describe('resumen de las 07:30', () => {
 });
 
 describe('recordatorio de las 17:00', () => {
-    it('solo a las escuelas con algo de más de 48 h, con su propia clave', async () => {
+    it('solo a las escuelas con algo de más de 24 h, con su propia clave', async () => {
         const tarde = Date.parse('2026-11-09T22:00:00Z');
         const r = await runPagosPorValidar({ tramo: 'tarde', ahora: tarde });
         expect(r.plan.map((p) => p.schoolId)).toEqual([MONSTER]);
         expect(r.omitidas.nadaQueAvisar).toBe(1);
         const p = r.plan[0];
         expect(p.clave).toBe(claveAviso(MONSTER, '2026-11-09', 'tarde'));
-        expect(p.textos.titulo).toBe('2 pagos llevan más de 48 h sin validar');
+        expect(p.textos.titulo).toBe('2 pagos llevan más de 24 h sin validar');
         expect(p.textos.mensaje).not.toContain('Aprobar todos los verdes');
+    });
+
+    it('el umbral es de 24 h: un pago de 30 h cuenta como viejo y uno de 20 h no', () => {
+        const mk = (id: string, h: number) => ({
+            id, school_id: 's', amount: 100000, amount_paid: 0, early_payment_discount_applied: 0, concept: 'Mensualidad',
+            payment_category: null, receipt_verdict: 'amarillo', receipt_url: `r/${id}`, ocr_amount: 100000, requires_review: false,
+            child_id: null, period_year: null, period_month: null, enviado_en: hace(h * HORA),
+        } as PagoPorValidar);
+        expect(armarResumen('s', [mk('a', 30), mk('b', 20)], AHORA).masDe24h).toBe(1);
+        expect(armarResumen('s', [mk('b', 20)], AHORA).masDe24h).toBe(0);
+    });
+
+    it('una escuela con el resumen de cuentas (Monster) no recibe el aviso de la mañana, pero SÍ el recordatorio de las 17:00', async () => {
+        const antes = process.env.RESUMEN_CUENTAS_ESCUELAS;
+        process.env.RESUMEN_CUENTAS_ESCUELAS = MONSTER;
+        try {
+            const manana = await runPagosPorValidar({ tramo: 'manana', ahora: AHORA, aplicar: false });
+            expect(manana.plan.map((x) => x.schoolId)).not.toContain(MONSTER);
+            const tarde = await runPagosPorValidar({ tramo: 'tarde', ahora: Date.parse('2026-11-09T22:00:00Z'), aplicar: false });
+            expect(tarde.plan.map((x) => x.schoolId)).toContain(MONSTER);
+        } finally {
+            if (antes === undefined) delete process.env.RESUMEN_CUENTAS_ESCUELAS; else process.env.RESUMEN_CUENTAS_ESCUELAS = antes;
+        }
     });
 });
 
@@ -211,9 +234,9 @@ describe('reglas puras', () => {
     });
 
     it('cuándo avisa, quién es elegible, dónde corre y qué tramo es', () => {
-        expect(debeAvisar({ total: 1, masDe48h: 0 }, 'manana')).toBe(true);
-        expect(debeAvisar({ total: 0, masDe48h: 0 }, 'manana')).toBe(false);
-        expect(debeAvisar({ total: 5, masDe48h: 0 }, 'tarde')).toBe(false);
+        expect(debeAvisar({ total: 1, masDe24h: 0 }, 'manana')).toBe(true);
+        expect(debeAvisar({ total: 0, masDe24h: 0 }, 'manana')).toBe(false);
+        expect(debeAvisar({ total: 5, masDe24h: 0 }, 'tarde')).toBe(false);
         expect(escuelaElegible({ account_type: 'real', is_demo: false })).toBe(true);
         expect(escuelaElegible({ account_type: 'real', is_demo: true })).toBe(false);
         expect(escuelaElegible({ account_type: 'demo', is_demo: false })).toBe(false);
@@ -233,7 +256,7 @@ describe('reglas puras', () => {
         ], AHORA);
         expect(r.total).toBe(3);
         expect(r.monto).toBe(237750);
-        expect(r.masDe48h).toBe(1);
+        expect(r.masDe24h).toBe(1);
         expect(r.desglose.map((l) => `${l.etiqueta} ${l.cantidad}`)).toEqual(['Torneo 2', 'Mensualidad 1']);
         expect(textosDelAviso(r, 'Club', 'manana', true).mensaje).toContain('Por tipo: Torneo 2 · Mensualidad 1.');
     });

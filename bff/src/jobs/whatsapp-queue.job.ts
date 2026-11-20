@@ -20,7 +20,7 @@
  */
 
 import {
-    decidirPorClasificar, registrarPorClasificar, porClasificarActivoPara, type LecturaParaClasificar,
+    decidirPorClasificar, registrarPorClasificar, porClasificarActivoPara, lecturaComoOcr, type LecturaParaClasificar,
 } from '../services/wa-comprobante-por-clasificar.service';
 import crypto from 'node:crypto';
 import { supabase } from '../config/supabase';
@@ -131,6 +131,8 @@ import {
     pagoPartido, motivoPagoPartido, textoPagoPartido, VENTANA_PAGO_PARTIDO_MIN, CODIGO_PAGO_PARTIDO,
     difiereDelCobro, motivoMontoDistintoAplicado, textoMinimosEnFecha, sumaDeAbonosDeServicio, propuestaSumaDeAbonos,
     textoSumaDeAbonos, propuestaDeCobroPrevio, type PagoPrevioDeServicio,
+    imagenConPlataSinRastro, textoDeCaptura, CODIGO_CAPTURA_SIN_CONTEXTO, PASOS_CON_DATOS_DE_PAGO, DIAS_DATOS_DE_PAGO,
+    type DestinoDeCuenta,
 } from '../services/wa-cola-reglas';
 import { nombresDeAsistentesEn, textoVariosAsistentes } from '../services/whatsapp-datos-de-registro';
 
@@ -2434,7 +2436,7 @@ async function crearCobroDeVenta(plan: PlanDeVenta, precio: PrecioDeMotivo): Pro
         if (r.codigo === 'ya_tiene_cobro' && r.paymentId) {
             const previo = await cobroDeServicioPorId(v.fila.school_id, r.paymentId);
             const otra = previo
-                ? decidirMontoDeVenta(monto, item, { afiliado: plan.afiliado, fechaPago: v.ocr.date ?? null, previo })
+                ? decidirMontoDeVenta(monto, item, { afiliado: plan.afiliado, fechaPago: v.ocr.date ?? null, previo, abiertos: [] })
                 : null;
             if (otra && otra.tipo !== 'completo' && otra.tipo !== 'abono') {
                 await ejecutarVenta(plan, otra);
@@ -2860,7 +2862,22 @@ async function atenderComprobanteDeVenta(v: ArgsVenta): Promise<boolean> {
         }
     }
 
-    let decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo });
+    // Cobros abiertos de la familia (pendientes y saldos de parciales): un monto igual a uno de ellos no es un abono del servicio.
+    const abiertos: { amount: number; descuento?: number | null }[] = fam
+        ? [...fam.pendientes.map((p) => ({ amount: Number(p.amount), descuento: p.descuento ?? null })),
+            ...(await cobrosParcialesDe(schoolId, fam.parentId, fam.llaves))
+                .map((c) => ({ amount: Number(c.amount) - Number(c.amount_paid ?? 0) })).filter((c) => c.amount > 0)]
+        : [];
+    let decision = decidirMontoDeVenta(monto, item, { afiliado, fechaPago: ocr.date ?? null, previo, abiertos });
+    if (decision.tipo === 'no_cuadra' && decision.esDeCobroAbierto) {
+        // El monto es lo que ya debe en un cobro abierto: nunca «no coincide con $X o $Y». Sigue el camino de familia;
+        // sin familia, a la escuela con ese contexto.
+        if (fam) return false;
+        await aLaEscuelaPorAbierto('venta_monto_de_cobro_abierto',
+            `${pesos(monto)} para ${item.name} es lo que se debe en un cobro abierto, no un abono del servicio`,
+            'aplicarlo al cobro abierto que corresponda o registrarlo a mano', v.nombre ?? (lead?.conocido ? lead.nombre : null));
+        return true;
+    }
     // (2026-11-16) Si la persona eligió una opción (vacacional: semanas) y el monto es su precio, esa opción manda sobre la
     // deducción por monto; si no coincide, se sigue como hoy y la discrepancia queda en la propuesta de la bandeja.
     const opcionDicha = await opcionElegidaDeLaVenta(v.conversationId, item, monto, afiliado);
@@ -4450,6 +4467,35 @@ async function rafagaConPagoReal(fila: FilaCola): Promise<boolean> {
     }
 }
 
+/**
+ * (I-1) ¿Se espera plata de este número? Un concepto esperado vivo (el bot le pidió un pago), o el bot le entregó los
+ * datos para pagar en los últimos DIAS_DATOS_DE_PAGO días. Con esta señal la ráfaga de imágenes NO se omite sin leer
+ * y la captura con monto no se cierra muda. Dos lecturas como mucho; nunca lanza (ante el error, no hay señal).
+ */
+async function esperaPagoDeEsteNumero(fila: FilaCola, conversationId: string | null): Promise<boolean> {
+    try {
+        if ((await conceptosEsperadosDe(fila.school_id, fila.wa_phone_number)).length > 0) return true;
+        const convId = conversationId ?? await conversacionDeLaFila(fila);
+        if (!convId) return false;
+        const { data } = await supabase.from('whatsapp_messages').select('id')
+            .eq('conversation_id', convId).eq('direction', 'outbound')
+            .in('payload->>step', [...PASOS_CON_DATOS_DE_PAGO])
+            .gte('created_at', new Date(Date.now() - DIAS_DATOS_DE_PAGO * 24 * 3600_000).toISOString())
+            .limit(1);
+        return Array.isArray(data) && data.length > 0;
+    } catch {
+        return false;
+    }
+}
+
+/** Contactos que la escuela marcó como no-familia (personal, negocio…) o personal que no administra: sin certeza no se escala. */
+const esContactoMarcado = (tipo: string) => tipo !== 'desconocido';
+
+/** ¿El destino del comprobante? Nunca lanza (sin cruce: null). */
+async function destinoSeguro(schoolId: string, ocr: Awaited<ReturnType<typeof extractReceipt>>): Promise<DestinoDeCuenta> {
+    try { return await destinoDelComprobante(schoolId, ocr); } catch { return null; }
+}
+
 /** ¿El embudo ya separó o agendó una clase en este chat (últimos 4 días)? Ante la duda de lectura, sí (no se descarta). */
 async function tieneCupoSeparadoEnChat(conversationId: string): Promise<boolean> {
     const desde = new Date(Date.now() - 4 * 24 * 3600_000).toISOString();
@@ -4604,6 +4650,8 @@ async function comprobanteDeNumeroSinFicha(
     // «habla de pago»: se lee sin el tope de ráfaga y se guarda el archivo.
     const b4 = await contextoB4(fila.school_id, fila.wa_phone_number);
     const hablaPorTexto = textosHablanDePago(textos) || b4.esperados.length > 0;
+    // (I-1) «Se espera un pago de este número» (esperado vivo o datos de pago enviados): se lee de forma perezosa.
+    let esperaPago = hablaPorTexto;
     // (Frente C) ¿Está comprando un servicio? Con la conversación tomada se pregunta
     // primero (sin venta no se toca nada).
     let venta: VentaDelComprobante | null = null;
@@ -4619,7 +4667,10 @@ async function comprobanteDeNumeroSinFicha(
     // esté comprando un servicio: sus comprobantes nunca se pierden.
     // (R5) …salvo que un archivo anterior de la MISMA ráfaga ya haya resultado ser un pago real (quedó en la
     // bandeja, en un cobro o esperando respuesta): sus otros comprobantes no se cierran sin leer.
-    if (!hablaPorTexto && !venta && await excedeOcrSinFicha(fila) && !(await rafagaConPagoReal(fila))) {
+    // (I-1, Monster 2026-11) …ni cuando de este número se espera un pago (esperado vivo o datos de pago enviados):
+    // ahí cada imagen se lee y se guarda; una ráfaga de comprobantes de una familia nueva no se omite.
+    if (!hablaPorTexto && !venta && await excedeOcrSinFicha(fila) && !(await rafagaConPagoReal(fila))
+        && !(esperaPago = await esperaPagoDeEsteNumero(fila, conversationId))) {
         venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados);
         if (!venta) {
             await cerrar(fila.id, 'ignored', { result_type: 'none', error_message: MOTIVO_OCR_OMITIDO_RAFAGA });
@@ -4628,7 +4679,7 @@ async function comprobanteDeNumeroSinFicha(
         }
     }
     if (!venta) venta = await ventaParaComprobante(fila.school_id, conversationId, fila.wa_phone_number, b4.esperados);
-    const hablaDePago = hablaPorTexto || !!venta;
+    const hablaDePago = hablaPorTexto || !!venta || esperaPago;
     let archivo: { base64: string; mime: string; storagePath?: string | null };
     if (hablaDePago) {
         const bajada = await bajarYGuardarArchivo(fila, wa, log, responder);
@@ -4732,6 +4783,30 @@ async function comprobanteDeNumeroSinFicha(
                     fila, responder, ocr, sha: shaDe(guardada.base64), storagePath: guardada.storagePath, parentId: null, log,
                     ficha, escrito: [fila.media_caption, ...textos.slice(1)].filter(Boolean).join(' · '),
                 });
+                return true;
+            }
+        }
+        // (I-1, Monster 2026-11) Antes de callar: una imagen con monto legible hacia una cuenta de la escuela (o con el
+        // destino sin leer y un comprobante completo, o de quien debe un pago) NO se cierra muda: se guarda y queda en la
+        // bandeja / «Por clasificar». Un afiche, una foto o un chat (sin monto, o «no es comprobante») siguen sin ruido.
+        if (montoDeCaptura !== null) {
+            const destinoReal = await destinoSeguro(fila.school_id, ocr);
+            if (destinoReal === null && !esperaPago) esperaPago = await esperaPagoDeEsteNumero(fila, conversationId);
+            const completo = pareceComprobanteDePago(ocr);
+            if (imagenConPlataSinRastro({
+                monto: montoDeCaptura, isReceipt: ocr.isReceipt, isTransactionList: ocr.isTransactionList,
+                completo, destino: destinoReal, esperaPago: esperaPago || hablaDePago,
+            })) {
+                const guardada = await bajarYGuardarArchivo(fila, wa, log);
+                if (!guardada.ok) return true;
+                await cerrar(fila.id, 'ignored', {
+                    result_type: 'escalated',
+                    error_message: motivoConPropuesta(
+                        `sin_familia: ${CODIGO_CAPTURA_SIN_CONTEXTO} — ${textoDeCaptura({ monto: montoDeCaptura, completo, destino: destinoReal, esperaPago: esperaPago || hablaDePago })}; el número no está en ninguna ficha`,
+                        `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'}${ocr.date ? ` · ${ocr.date}` : ''} · abrir la imagen, ubicar a quien pagó y aplicarlo (o crear el cobro a mano)`),
+                    pregunta_ocr: huellasConLectura({ sha: shaDe(guardada.base64), ocr, storagePath: guardada.storagePath, parentId: null }),
+                });
+                log?.info?.({ queueId: fila.id }, '[wa-queue] número sin ficha: imagen con monto, a la bandeja');
                 return true;
             }
         }
@@ -4977,13 +5052,18 @@ async function comprobanteDeContactoNoAtendido(
 ): Promise<void> {
     const silencio = () => cerrar(fila.id, 'ignored', { result_type: 'none', error_message: 'contacto_no_atendido' });
     let archivo: { base64: string; mime: string; storagePath: string | null };
-    if (anunciaPago) {
+    // (I-1) La ráfaga no se omite sin leer si de este número se espera un pago (esperado vivo o datos de pago enviados).
+    let esperaPago = anunciaPago;
+    if (!esperaPago && await excedeOcrSinFicha(fila)) {
+        esperaPago = await esperaPagoDeEsteNumero(fila, conversationId);
+        if (!esperaPago) { await silencio(); return; }
+    }
+    if (esperaPago) {
         // Lo de siempre: quien anuncia un pago por texto deja el archivo guardado.
         const bajada = await bajarYGuardarArchivo(fila, wa, log);
         if (!bajada.ok) return;
         archivo = bajada;
     } else {
-        if (await excedeOcrSinFicha(fila)) { await silencio(); return; }
         const r = await obtenerArchivoDeFila(fila, wa, { guardar: false });
         if (!r.ok) { await silencio(); return; }
         archivo = r;
@@ -4996,8 +5076,37 @@ async function comprobanteDeContactoNoAtendido(
         await reintentar(fila, `OCR no disponible: ${err?.message ?? err}`, log);
         return;
     }
+    // (I-1) Una imagen con monto legible no se cierra muda: guarda el archivo y la deja en la bandeja / «Por clasificar».
+    // Solo si la regla pura lo pide (destino de la escuela, o destino sin leer con comprobante completo / pago esperado).
+    const rastroDeLaPlata = async (destino: DestinoDeCuenta, completo: boolean): Promise<boolean> => {
+        const monto = montoDelOcr(ocr);
+        if (monto === null) return false;
+        if (!esperaPago && destino === null) esperaPago = await esperaPagoDeEsteNumero(fila, conversationId);
+        if (!imagenConPlataSinRastro({
+            monto, isReceipt: ocr.isReceipt, isTransactionList: ocr.isTransactionList, completo, destino, esperaPago,
+            contactoMarcado: esContactoMarcado(tipoDeContacto),
+        })) return false;
+        const guardada = archivo.storagePath
+            ? { ok: true as const, base64: archivo.base64, storagePath: archivo.storagePath }
+            : await bajarYGuardarArchivo(fila, wa, log);
+        if (!guardada.ok) return true;
+        const sha = crypto.createHash('sha256').update(Buffer.from(archivo.base64, 'base64')).digest('hex');
+        const detalle = completo && destino === 'general'
+            ? `comprobante${ocr.amount ? ` de ${cop(ocr.amount)}` : ''} a una cuenta de la escuela`
+            : textoDeCaptura({ monto, completo, destino, esperaPago });
+        await cerrar(fila.id, 'ignored', {
+            result_type: 'escalated',
+            error_message: motivoConPropuesta(
+                `sin_familia: contacto_no_atendido (${tipoDeContacto}): ${detalle}`,
+                `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'} · deportista: sin identificar (el número no está en ninguna ficha) · ${ocr.date ?? 'sin fecha'}`),
+            pregunta_ocr: huellasConLectura({ sha, ocr, storagePath: guardada.storagePath, parentId: null }),
+        });
+        log?.info?.({ queueId: fila.id, tipo: tipoDeContacto }, '[wa-queue] contacto no atendido con un comprobante: a la bandeja');
+        return true;
+    };
     if (!pareceComprobanteDePago(ocr)) {
         if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        if (montoDelOcr(ocr) !== null && await rastroDeLaPlata(await destinoSeguro(fila.school_id, ocr), false)) return;
         await silencio();
         return;
     }
@@ -5008,25 +5117,14 @@ async function comprobanteDeContactoNoAtendido(
     }
     // Solo una cuenta GENERAL de la escuela cuenta: a una cuenta ajena o al Nequi
     // personal restringido de la dueña, un contacto personal manda plata por otras razones.
+    // (I-1) Destino sin leer en un contacto sin marcar: el comprobante completo se guarda y queda en la bandeja.
     if (destino !== 'general') {
         if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        if (destino === null && await rastroDeLaPlata(destino, true)) return;
         await silencio();
         return;
     }
-
-    const guardada = archivo.storagePath
-        ? { ok: true as const, base64: archivo.base64, storagePath: archivo.storagePath }
-        : await bajarYGuardarArchivo(fila, wa, log);
-    if (!guardada.ok) return;
-    const sha = crypto.createHash('sha256').update(Buffer.from(archivo.base64, 'base64')).digest('hex');
-    await cerrar(fila.id, 'ignored', {
-        result_type: 'escalated',
-        error_message: motivoConPropuesta(
-            `sin_familia: contacto_no_atendido (${tipoDeContacto}): comprobante${ocr.amount ? ` de ${cop(ocr.amount)}` : ''} a una cuenta de la escuela`,
-            `Propuesta → pagó: ${ocr.originName ?? 'no se leyó'} · deportista: sin identificar (el número no está en ninguna ficha) · ${ocr.date ?? 'sin fecha'}`),
-        pregunta_ocr: huellasConLectura({ sha, ocr, storagePath: guardada.storagePath, parentId: null }),
-    });
-    log?.info?.({ queueId: fila.id, tipo: tipoDeContacto }, '[wa-queue] contacto no atendido con un comprobante: a la bandeja');
+    await rastroDeLaPlata('general', true);
 }
 
 /**
@@ -5562,7 +5660,8 @@ export function motivoVentaSinNombre(f: { servicio?: string | null; monto?: unkn
 export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now()): Promise<number> {
     const corte = new Date(ahora - HORAS_VIDA_PREGUNTA * 3600_000).toISOString();
     const { data: filas, error } = await supabase.from('whatsapp_inbound_queue')
-        .select('id, integration_id, wa_phone_number, pregunta_at, updated_at, error_message, en_fila:pregunta_ocr->en_fila, '
+        .select('id, school_id, integration_id, wa_phone_number, storage_path, media_caption, pregunta_at, updated_at, error_message, '
+            + 'ocr:pregunta_ocr->ocr, guardado:pregunta_ocr->>storagePath, en_fila:pregunta_ocr->en_fila, '
             + 'tipo:pregunta_ocr->>tipo, servicio:pregunta_ocr->venta->>itemNombre, '
             + 'monto:pregunta_ocr->ocr->>amount, pago:pregunta_ocr->ocr->>originName, registro:pregunta_ocr->venta->registro')
         .eq('status', 'waiting_user')
@@ -5618,6 +5717,18 @@ export async function vencerPreguntasSinRespuesta(log?: Logger, ahora = Date.now
         if (cerradas?.length) {
             vencidas++;
             log?.info?.({ queueId: f.id, motivo: motivo.codigo }, '[wa-queue] pregunta vencida: al buzón de la escuela');
+            // (I-1, Monster 2026-11) Dos comprobantes con monto vencieron «aplicarlo a mano» y nunca se aplicaron: si la fila
+            // trae la lectura con monto, pasa a «Por clasificar» (Cobros) además de quedar en el buzón. Nunca rompe el cierre.
+            if (f.school_id && f.ocr && !esCerradaPorEscuela(f.error_message)) {
+                await pasarAPorClasificar(
+                    {
+                        id: f.id, school_id: f.school_id, integration_id: f.integration_id, wa_phone_number: f.wa_phone_number,
+                        storage_path: f.storage_path ?? f.guardado ?? null, media_caption: f.media_caption ?? null,
+                    } as unknown as FilaCola,
+                    lecturaComoOcr(f.ocr) as Awaited<ReturnType<typeof extractReceipt>>,
+                    motivo.texto,
+                ).catch((e) => log?.warn?.({ queueId: f.id, err: e?.message }, '[wa-queue] pregunta vencida: no pasó a «Por clasificar»'));
+            }
         }
     }
     return vencidas;

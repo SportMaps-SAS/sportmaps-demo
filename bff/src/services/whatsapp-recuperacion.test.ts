@@ -771,3 +771,18 @@ describe('recuperarFilaDeCola: la propuesta va en el motivo (simulación, nada s
         sinEscrituras();
     });
 });
+
+describe('dos abonos iguales del mismo cobro no son «el mismo pago» (Monster 10-nov / 19-nov 2026)', () => {
+    const primero = REG({ amount: 300000, amount_paid: 150000, status: 'partial', payment_date: '2026-11-18', ocr_reference: 'REF-AAA-111' });
+
+    it('mismo monto, referencia DISTINTA: el abono ya registrado no cubre al comprobante nuevo', () => {
+        expect(pagosQueYaCubren([primero], 150000, '2026-11-19', 'REF-BBB-222')).toHaveLength(0);
+    });
+    it('misma referencia (el mismo comprobante reenviado): sigue siendo «ya registrado»', () => {
+        expect(pagosQueYaCubren([primero], 150000, '2026-11-19', 'ref-aaa-111')).toHaveLength(1);
+    });
+    it('sin referencia en alguno de los dos lados no se opina por ella (queda la regla de monto y fecha)', () => {
+        expect(pagosQueYaCubren([primero], 150000, '2026-11-19', null)).toHaveLength(1);
+        expect(pagosQueYaCubren([{ ...primero, ocr_reference: null }], 150000, '2026-11-19', 'REF-BBB-222')).toHaveLength(1);
+    });
+});

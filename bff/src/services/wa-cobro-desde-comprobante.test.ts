@@ -28,6 +28,7 @@ const h = vi.hoisted(() => {
         b.is = (c: string, v: any) => { filtros.push((f) => (f[c] ?? null) === v); return b; };
         b.order = () => b;
         b.limit = () => b;
+        b.gte = (c: string, v: any) => { filtros.push((f) => String(f[c] ?? '') >= String(v)); return b; };
         b.update = (v: any) => { update = v; state.updates.push({ table, v }); return b; };
         const correr = () => {
             if (state.errores[table]) return { data: null, error: state.errores[table] };
@@ -57,6 +58,7 @@ import {
     motivoPorMonto, decidirConEsperado, opcionesDeMotivo, clasificarDestino, destinoExactoDelComprobante,
     crearCobroDesdeComprobante, anularCobroCreado, cobroDesdeComprobanteActivo, preciosDeMotivos, pendientesDelLead,
     textoDeCantidad,
+    decidirMontoDeVenta, montoEsDeCobrosAbiertos, cobroAbiertoEquivalente, type ItemDeServicio,
     leadPorTelefono, conceptoDelCobroCreado, esValorMotivoElegido, preciosDeServicios, sePuedeCrearSoloPorMonto,
     type PrecioDeMotivo,
 } from './wa-cobro-desde-comprobante.service';
@@ -359,5 +361,88 @@ describe('lecturas y la RPC', () => {
         ];
         expect(await leadPorTelefono('s1', '573194505150')).toEqual({ id: 'lead-1', nombre: 'Mariana Ruiz', status: 'contacted' });
         expect(await leadPorTelefono('s1', '573000000000')).toBeNull();
+    });
+});
+
+// ─── Auditoría Monster 19-20 nov 2026 (nombres inventados) ──────────────────
+
+describe('un pago de lo de siempre no se toma por un servicio ni duplica cobros', () => {
+    const CLINICA_ITEM: ItemDeServicio = {
+        id: 'it-1', name: 'Clínica de armadores', kind: 'clase_extra', price: 350000, allow_installments: true, abono_minimo_pct: 40,
+    };
+    const AHORA_T = Date.parse('2026-11-12T15:00:00Z');
+    const MENSUALIDAD = { amount: 145000 };
+
+    it('un abono válido de la clínica por el MISMO valor de la mensualidad abierta NO crea el cobro de la clínica', () => {
+        // Sin saber de los cobros abiertos, 145.000 es un abono válido (40 % de 350.000 = 140.000).
+        expect(decidirMontoDeVenta(145000, CLINICA_ITEM, { ahora: AHORA_T }).tipo).toBe('abono');
+        const d = decidirMontoDeVenta(145000, CLINICA_ITEM, { ahora: AHORA_T, abiertos: [MENSUALIDAD] });
+        expect(d.tipo).toBe('no_cuadra');
+        expect((d as any).esDeCobroAbierto).toBe(true);
+    });
+
+    it('el precio COMPLETO del servicio se respeta aunque coincida con algún cobro abierto', () => {
+        expect(decidirMontoDeVenta(350000, CLINICA_ITEM, { ahora: AHORA_T, abiertos: [{ amount: 350000 }] }).tipo).toBe('completo');
+    });
+
+    it('montoEsDeCobrosAbiertos: uno, con pronto pago, o la suma de 2–3 cobros', () => {
+        expect(montoEsDeCobrosAbiertos(145000, [MENSUALIDAD])).toBe(true);
+        expect(montoEsDeCobrosAbiertos(137750, [{ amount: 145000, descuento: 7250 }])).toBe(true);
+        expect(montoEsDeCobrosAbiertos(250000, [{ amount: 85000 }, { amount: 165000 }])).toBe(true);
+        expect(montoEsDeCobrosAbiertos(250000, [{ amount: 85000 }, { amount: 100000 }])).toBe(false);
+        expect(montoEsDeCobrosAbiertos(null, [MENSUALIDAD])).toBe(false);
+        expect(montoEsDeCobrosAbiertos(145000, [])).toBe(false);
+    });
+
+    it('decidirConEsperado: con un esperado de clínica y un monto que es la mensualidad abierta, NO crea: sigue el camino de familia', () => {
+        const esperado = { motivo: 'clase_extra' as const, monto: 250000, leadId: null, childId: 'c1' };
+        const mensualidad: PagoPendiente = { id: 'p1', amount: 250000, concept: 'Mensualidad 11/2026 - Ana Prueba', due_date: '2026-11-05', child_id: 'c1', atleta: 'Ana Prueba', categoria: 'mensualidad' };
+        // Antes: montoOk y ningún cobro de la clínica → 'crear' (cobro falso de $250.000).
+        expect(decidirConEsperado(esperado, 250000, 'exacta', [mensualidad]).tipo).toBe('seguir');
+        expect(decidirConEsperado(esperado, 250000, 'exacta', []).tipo).toBe('crear');
+    });
+
+    it('decidirConEsperado: la suma de torneo + mensualidad abiertos tampoco crea una clínica', () => {
+        const esperado = { motivo: 'clase_extra' as const, monto: 250000, leadId: null, childId: 'c1' };
+        const abiertos: PagoPendiente[] = [
+            { id: 'a', amount: 85000, concept: 'Torneo Copa Ficticia', due_date: '2026-11-05', child_id: 'c1', atleta: 'Ana Prueba', categoria: 'torneo' },
+            { id: 'b', amount: 165000, concept: 'Mensualidad 11/2026 - Ana Prueba', due_date: '2026-11-05', child_id: 'c1', atleta: 'Ana Prueba', categoria: 'mensualidad' },
+        ];
+        expect(decidirConEsperado(esperado, 250000, 'exacta', abiertos).tipo).toBe('seguir');
+    });
+
+    it('crear: ya hay un cobro abierto equivalente del mismo dueño y servicio → ya_tiene_cobro, sin llamar a la RPC', async () => {
+        h.state.tablas.payments = [
+            { id: 'dup-1', school_id: 's1', payment_category: 'torneo', status: 'pending', amount: 85000, amount_paid: 0, child_id: 'c1', created_at: new Date().toISOString() },
+        ];
+        const r = await crearCobroDesdeComprobante({
+            schoolId: 's1', queueId: 'q9', categoria: 'torneo', monto: 85000, fuente: 'tournament_item', fuenteId: 'it-2',
+            childId: 'c1', concepto: 'Torneo Copa Ficticia — Ana Prueba',
+        });
+        expect(r).toEqual({ ok: false, codigo: 'ya_tiene_cobro', paymentId: 'dup-1' });
+        expect(h.state.rpcLlamadas).toHaveLength(0);
+    });
+
+    it('crear: otro torneo del mismo precio (otra fuente), o el cobro que creó esta misma fila, sí pasan a la RPC', async () => {
+        h.state.tablas.payments = [
+            { id: 'otro', school_id: 's1', payment_category: 'torneo', status: 'pending', amount: 85000, amount_paid: 0, child_id: 'c1', created_at: new Date().toISOString() },
+        ];
+        h.state.tablas.wa_cobros_desde_comprobante = [{ payment_id: 'otro', queue_id: 'q-viejo', fuente: 'tournament_item', fuente_id: 'it-OTRO' }];
+        h.state.rpc = { data: { ok: true, payment_id: 'nuevo', precio: 85000, es_abono: false, ya_existia: false }, error: null };
+        const base = { schoolId: 's1', categoria: 'torneo' as const, monto: 85000, fuente: 'tournament_item' as const, childId: 'c1', concepto: null };
+        expect((await crearCobroDesdeComprobante({ ...base, queueId: 'q10', fuenteId: 'it-2' })).ok).toBe(true);
+        // El cobro ya lo creó ESTA fila: responde la RPC (idempotente), no el guard.
+        h.state.tablas.wa_cobros_desde_comprobante = [{ payment_id: 'otro', queue_id: 'q10', fuente: 'tournament_item', fuente_id: 'it-2' }];
+        expect(await cobroAbiertoEquivalente({ ...base, queueId: 'q10', fuenteId: 'it-2' })).toBeNull();
+    });
+
+    it('crear: un cobro ya pagado o de otro dueño no bloquea (la renovación y otros hijos pasan)', async () => {
+        h.state.tablas.payments = [
+            { id: 'pagado', school_id: 's1', payment_category: 'torneo', status: 'paid', amount: 85000, amount_paid: 85000, child_id: 'c1', created_at: new Date().toISOString() },
+            { id: 'hermano', school_id: 's1', payment_category: 'torneo', status: 'pending', amount: 85000, amount_paid: 0, child_id: 'c2', created_at: new Date().toISOString() },
+        ];
+        expect(await cobroAbiertoEquivalente({
+            schoolId: 's1', queueId: 'q11', categoria: 'torneo', monto: 85000, fuente: 'tournament_item', fuenteId: 'it-2', childId: 'c1', concepto: null,
+        })).toBeNull();
     });
 });

@@ -154,7 +154,7 @@ export async function seguimientoDeVentaDelLead(
     // Filtro gratis (sin leer el catálogo): ni el lead ni las 24 h tienen señal de venta.
     if (!pareceVentaDeServicio(lead, recientes)) return null;
     try {
-        const { serviciosDeAnuncio } = await import('./whatsapp-anuncio-destino');
+        const { serviciosDeAnuncio, ventaCerradaDeItem } = await import('./whatsapp-anuncio-destino');
         const { ventaActiva } = await import('./whatsapp-venta-contexto');
         const { textoSeguimientoDeVenta, tienePrecioDeAfiliado, botonesDeCierre } = await import('./whatsapp-venta-servicio');
         const { hoyBogota } = await import('./wa-cobro-desde-comprobante.service');
@@ -165,6 +165,9 @@ export async function seguimientoDeVentaDelLead(
             ahora: ahora.getTime(), leadServicioId: typeof servicioDelLead === 'string' ? servicioDelLead : null,
         });
         if (!venta) return null;
+        // Venta cerrada (2026-11-20): ni «¿Pudiste hacer el pago…?» ni «Hoy termina la preventa». `texto: null` = el
+        // seguimiento se omite (y NO cae al texto del modelo, que le ofrecería la clase de prueba).
+        if (ventaCerradaDeItem(venta.item, ahora.getTime())) return { itemId: venta.item.id, texto: null };
         let afiliado = false;
         if (tienePrecioDeAfiliado(venta.item)) {
             const { esAfiliado } = await import('./wa-afiliado.service');

@@ -23,7 +23,7 @@ import { esMigracionPendiente } from './ventas-servicios.service';
 import { categoriaDelCobro } from './tipo-de-cobro';
 import { buildVerdictContext } from './receipt-context.service';
 import { normalizeDestination, classifyDestinationMatch } from './receipt-verdict';
-import type { PagoPendiente } from './whatsapp-receipt-matching.service';
+import { montoCubreElCobro, type PagoPendiente } from './whatsapp-receipt-matching.service';
 import type { ConceptoEsperado } from './wa-concepto-esperado.service';
 import type { OpcionGuiada } from './whatsapp-comprobante-guiado.service';
 import { esAfiliado } from './wa-afiliado.service';
@@ -256,7 +256,7 @@ export function decidirConEsperado(
 ): DecisionEsperado {
     const delMotivo = pendientes.filter((p) =>
         categoriaDelCobro({ payment_category: p.categoria ?? null, concept: p.concept }) === esperado.motivo);
-    const existente = monto === null ? undefined : delMotivo.find((p) => igual(Number(p.amount), monto));
+    const existente = monto === null ? undefined : delMotivo.find((p) => montoCubreElCobro(p, monto));
     const montoOk = monto !== null && esperado.monto !== null && igual(esperado.monto, monto);
 
     if (esperado.leadId) {
@@ -267,8 +267,30 @@ export function decidirConEsperado(
         return montoOk ? { tipo: 'crear' } : { tipo: 'a_la_escuela', razon: 'monto' };
     }
     if (existente) return { tipo: 'aplicar_existente', pago: existente };
+    // (Monster 2026-11: una mensualidad de $145.000 se leyó como abono de la clínica y se creó un cobro falso;
+    // torneo + mensualidad = $250.000 creó una clínica de $250.000.) Si el monto es lo que la familia ya debe en OTRO
+    // cobro abierto (uno solo, o la suma de 2–3), no se crea nada: es de ese cobro. Sigue el camino de familia.
+    if (monto !== null && montoEsDeCobrosAbiertos(monto, pendientes.filter((p) => !delMotivo.includes(p)))) return { tipo: 'seguir' };
     if (montoOk && delMotivo.length === 0) return { tipo: 'crear' };
     return { tipo: 'seguir' };
+}
+
+/**
+ * ¿`monto` es lo que se debe en UN cobro abierto (con pronto pago si lo tiene), o la suma de 2–3 de ellos? Es la
+ * barrera contra tomar el pago de lo de siempre (mensualidad, torneo) por un servicio. Pura.
+ */
+export function montoEsDeCobrosAbiertos(
+    monto: number | null, cobros: Pick<PagoPendiente, 'amount' | 'descuento'>[],
+): boolean {
+    if (monto === null || !(monto > 0) || !cobros.length) return false;
+    if (cobros.some((c) => montoCubreElCobro(c, monto))) return true;
+    const montos = cobros.map((c) => Number(c.amount)).filter((m) => m > 0).slice(0, 8);
+    const buscar = (i: number, resto: number, n: number): boolean => {
+        if (Math.abs(resto) <= TOLERANCIA && n >= 2) return true;
+        if (resto < -TOLERANCIA || i >= montos.length || n >= 3) return false;
+        return buscar(i + 1, resto - montos[i], n + 1) || buscar(i + 1, resto, n);
+    };
+    return buscar(0, monto, 0);
 }
 
 /**
@@ -637,6 +659,46 @@ export type CobroDesdeComprobante =
      */
     | { ok: false; codigo: string; paymentId?: string; precio?: number | null; abonoMinimo?: number | null };
 
+/** Días hacia atrás en los que un cobro abierto del mismo servicio cuenta como «el mismo» al crear uno nuevo. */
+const DIAS_COBRO_EQUIVALENTE = 60;
+
+/**
+ * El id de un cobro ABIERTO (pendiente, vencido, en revisión o abonado) del mismo dueño y la misma categoría que ya
+ * es lo que este comprobante iba a crear: por el mismo monto (±$1). Descarta el cobro que creó ESTA misma fila de
+ * la cola (la RPC es idempotente y responde `ya_existia`) y, si ambos traen la fuente, los de otro ítem del mismo
+ * precio (dos torneos de $85.000). Nunca lanza (ante el error, null: decide la RPC).
+ */
+export async function cobroAbiertoEquivalente(i: CrearCobroDesdeComprobanteInput): Promise<string | null> {
+    try {
+        let q = supabase.from('payments').select('id, amount, amount_paid')
+            .eq('school_id', i.schoolId).eq('payment_category', i.categoria)
+            .in('status', ['pending', 'overdue', 'awaiting_approval', 'partial'])
+            .gte('created_at', new Date(Date.now() - DIAS_COBRO_EQUIVALENTE * 86_400_000).toISOString());
+        if (i.childId) q = q.eq('child_id', i.childId);
+        else if (i.unregisteredId) q = q.eq('unregistered_athlete_id', i.unregisteredId);
+        else if (i.userId) q = q.eq('user_id', i.userId);
+        else if (i.leadId) q = q.eq('signup_lead_id', i.leadId);
+        else return null;
+        const { data, error } = await q.limit(20);
+        if (error || !Array.isArray(data) || !data.length) return null;
+        const candidatos = (data as any[]).filter((p) => igual(Number(p.amount), i.monto));
+        if (!candidatos.length) return null;
+        const { data: marcas } = await supabase.from('wa_cobros_desde_comprobante')
+            .select('payment_id, queue_id, fuente, fuente_id').in('payment_id', candidatos.map((p) => p.id));
+        const filas = Array.isArray(marcas) ? (marcas as any[]) : [];
+        // La fila de la cola ya creó uno de ellos: que responda la RPC (idempotente).
+        if (filas.some((m) => m.queue_id === i.queueId)) return null;
+        const elegido = candidatos.find((p) => {
+            const m = filas.find((x) => x.payment_id === p.id);
+            // Con la fuente conocida en ambos lados, otro ítem no es «el mismo».
+            return !(m && i.fuenteId && m.fuente_id && m.fuente === i.fuente && m.fuente_id !== i.fuenteId);
+        });
+        return elegido ? String(elegido.id) : null;
+    } catch {
+        return null;
+    }
+}
+
 /**
  * Crea el cobro con la RPC (idempotente por fila de la cola + fuente). El
  * precio del cobro es el de la base: si no coincide con el comprobante (±$1),
@@ -645,6 +707,10 @@ export type CobroDesdeComprobante =
 export async function crearCobroDesdeComprobante(i: CrearCobroDesdeComprobanteInput): Promise<CobroDesdeComprobante> {
     const duenos = [i.childId, i.unregisteredId, i.leadId, i.userId].filter(Boolean).length;
     if (!i.schoolId || !i.queueId || duenos !== 1 || !(i.monto > 0)) return { ok: false, codigo: 'datos_invalidos' };
+    // (Monster 2026-11: dos cobros de $85.000 del mismo torneo; un $135.000 duplicado aunque la familia ya había pagado.)
+    // Si ya hay un cobro abierto equivalente, no se crea otro: se devuelve ESE (la cola lo trata como `ya_tiene_cobro`).
+    const equivalente = await cobroAbiertoEquivalente(i);
+    if (equivalente) return { ok: false, codigo: 'ya_tiene_cobro', paymentId: equivalente };
     try {
         const { data, error } = await supabase.rpc('wa_crear_cobro_desde_comprobante', {
             p_school_id: i.schoolId,
@@ -835,7 +901,14 @@ export type MontoDeVenta =
      * `afiliadoCoincide`: el monto es el precio de AFILIADO de una opción/servicio pero el número no figura como afiliado
      * (la RPC cobraría el de lista): se reconoce la venta, y la escuela solo confirma la afiliación.
      */
-    | { tipo: 'no_cuadra'; precios: number[]; minimo: number | null; afiliadoCoincide?: { etiqueta: string; monto: number } };
+    | {
+        tipo: 'no_cuadra'; precios: number[]; minimo: number | null; afiliadoCoincide?: { etiqueta: string; monto: number };
+        /**
+         * El monto es lo que la familia ya debe en sus cobros abiertos (mensualidad, torneo…) y solo «calzaba» como
+         * abono del servicio: NO se crea el cobro del servicio; lo decide una persona (o sigue el camino de familia).
+         */
+        esDeCobroAbierto?: true;
+    };
 
 /** Hasta cuántos días atrás cuenta la fecha del pago para el precio del tramo. */
 export const DIAS_TRAMO_POR_FECHA_DE_PAGO = 30;
@@ -930,7 +1003,11 @@ const esAbonoValido = (monto: number, total: number | null, minimo: number | nul
 export function decidirMontoDeVenta(
     monto: number | null,
     item: ItemDeServicio,
-    o: { ahora?: number; afiliado?: boolean; fechaPago?: string | null; previo?: CobroPrevioDeServicio | null } = {},
+    o: {
+        ahora?: number; afiliado?: boolean; fechaPago?: string | null; previo?: CobroPrevioDeServicio | null;
+        /** Los cobros abiertos de la familia (pendientes y saldos de parciales): un monto igual a uno de ellos no es un abono del servicio. */
+        abiertos?: Pick<PagoPendiente, 'amount' | 'descuento'>[];
+    } = {},
 ): MontoDeVenta {
     const ahora = o.ahora ?? Date.now();
     const afiliado = o.afiliado === true;
@@ -976,6 +1053,10 @@ export function decidirMontoDeVenta(
         return coincide ? { ...noCuadra, afiliadoCoincide: coincide } : noCuadra;
     }
     if (previo) return { tipo: 'ya_tiene_cobro', previo };
+    // Un ABONO (o el abono de un precio anterior) por un valor que es justo lo que la familia debe en otro cobro es
+    // casi seguro el pago de ESE cobro; el precio completo del servicio sí se respeta.
+    const esAbonoAdivinado = r.tipo === 'abono' || (r.tipo === 'tramo_anterior' && r.esAbono);
+    if (esAbonoAdivinado && montoEsDeCobrosAbiertos(monto, o.abiertos ?? [])) return { ...noCuadra, esDeCobroAbierto: true };
     return r;
 }
 

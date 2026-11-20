@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     extraerMontos, extraerFechasDePrecio, verificarSalida, permitidosDelCatalogo, permitidosDeTexto, unirPermitidos,
-    conNumerosIgnorados, montosDelItem, cortesDelItem, describirViolaciones,
+    conNumerosIgnorados, montosDelItem, cortesDelItem, describirViolaciones, extraerLugares, permitidosDeLugares,
 } from './whatsapp-verificador-montos';
 import type { ItemConFicha } from './whatsapp-anuncio-destino';
 
@@ -146,5 +146,32 @@ describe('montos y cortes del ítem', () => {
     it('opciones del vacacional con y sin afiliado', () => {
         expect(montosDelItem(VACACIONAL, { afiliado: false })).toEqual(new Set([100000, 140000, 170000, 200000]));
         expect(montosDelItem(VACACIONAL, { afiliado: true })).toEqual(new Set([80000, 120000, 150000, 170000]));
+    });
+});
+
+describe('lugares (Monster 2026-11-20: la clínica se mudó a la ECCI y el bot siguió diciendo «Colegio …»)', () => {
+    const DESCRIPCION = '📍 Lugar: Universidad ECCI, Campus 170 (Cl. 170 #49b-96), en Bogotá. Cómo llegar: https://maps.app.goo.gl/QCwRCPuVbKiW9zVk7';
+    const permitidos = () => unirPermitidos(permitidosDelCatalogo([CLINICA], { afiliado: false }), permitidosDeLugares(DESCRIPCION));
+
+    it('extrae los lugares con su nombre completo', () => {
+        expect(extraerLugares('en el Colegio Bilingüe La Enseñanza (Bogotá), sábado')).toEqual(['colegio bilingue la ensenanza']);
+        expect(extraerLugares(DESCRIPCION)).toEqual(['universidad ecci', 'campus 170']);
+        expect(extraerLugares('Parque Pinar de Suba 2, martes')).toEqual(['parque pinar de suba 2']);
+    });
+    it('frena el lugar que no es el de la descripción', () => {
+        const r = verificarSalida('La clínica es en el Colegio Bilingüe La Enseñanza. Vale $350.000.', permitidos(), { hoy: '2026-11-11' });
+        expect(r.ok).toBe(false);
+        if (!r.ok) {
+            expect(r.violaciones).toEqual([{ tipo: 'lugar', texto: 'colegio bilingue la ensenanza' }]);
+            expect(describirViolaciones(r.violaciones)).toContain('el lugar «colegio bilingue la ensenanza» no es el de los datos');
+        }
+    });
+    it('deja pasar el lugar correcto, con o sin el Campus', () => {
+        expect(verificarSalida('Es en la Universidad ECCI, Campus 170. Vale $350.000.', permitidos(), { hoy: '2026-11-11' }).ok).toBe(true);
+        expect(verificarSalida('Es en la universidad ECCI.', permitidos(), { hoy: '2026-11-11' }).ok).toBe(true);
+    });
+    it('sin lugares en la descripción no se revisa ninguno', () => {
+        const p = unirPermitidos(permitidosDelCatalogo([CLINICA], { afiliado: false }), permitidosDeLugares('Sin lugar escrito'));
+        expect(verificarSalida('Es en el Colegio Bilingüe La Enseñanza.', p, { hoy: '2026-11-11' }).ok).toBe(true);
     });
 });

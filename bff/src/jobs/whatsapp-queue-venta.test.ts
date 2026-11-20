@@ -1357,11 +1357,12 @@ describe('datos de registro en la venta (R1–R7)', () => {
             expect(lead()).toMatchObject({ full_name: 'Gabriela Reina Fonseca' });
         });
 
-        it('sin venta viva, una imagen que no es comprobante sigue como siempre (sin respuesta, `contacto_no_atendido`)', async () => {
+        it('(I-1) sin venta viva, una captura con monto a la cuenta de la escuela ya no se cierra muda: sin respuesta, pero a la bandeja con la lectura', async () => {
             enHora('2026-11-08T11:57:30-05:00');
             await procesar(foto('f1', 'cap-1', '2026-11-08T11:57:24-05:00'), captura(), 'cap-1');
             expect(textosEnviados()).toEqual([]);
-            expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'none', error_message: 'contacto_no_atendido' });
+            expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+            expect(fila('f1').error_message).toMatch(/^sin_familia: captura_sin_contexto — captura de \$300\.000 a una cuenta de la escuela/);
         });
     });
 

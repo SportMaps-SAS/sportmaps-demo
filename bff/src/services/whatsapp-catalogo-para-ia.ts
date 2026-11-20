@@ -133,7 +133,42 @@ function textoDeEscuela(t: string | null | undefined, max = MAX_DESCRIPCION): st
     return s.length > max ? `${s.slice(0, max).replace(/\s+\S*$/, '')}…` : s;
 }
 
+/**
+ * (Monster 2026-11-19) El cobro que la persona YA TIENE de este servicio (`payments.amount` y `amount_paid`).
+ * Con un abono hecho, el precio que rige para ella es el de ESE cobro, no el del catálogo de hoy: abonó $150.000 de
+ * $300.000 en preventa y al cambiar el precio el bot le dijo «saldo $166.250» (la mitad de $332.500).
+ */
+export interface CobroPrevioParaIa {
+    amount: number;
+    amountPaid: number;
+}
+
+/** El cobro previo con abono hecho (lo único que reemplaza al precio de hoy). Pura. */
+export function cobroConAbono(c: Partial<CobroPrevioParaIa> | null | undefined): CobroPrevioParaIa | null {
+    const amount = Number(c?.amount);
+    const amountPaid = Number(c?.amountPaid);
+    return Number.isFinite(amount) && amount > 0 && Number.isFinite(amountPaid) && amountPaid > 0
+        ? { amount: Math.round(amount), amountPaid: Math.round(amountPaid) }
+        : null;
+}
+
+/** Los montos del cobro previo: total, abonado y saldo. Pura. */
+export function montosDelCobroPrevio(c: CobroPrevioParaIa): number[] {
+    const saldo = c.amount - c.amountPaid;
+    return [c.amount, c.amountPaid, ...(saldo > 0 ? [saldo] : [])];
+}
+
+/** Las líneas del valor de quien ya abonó: total del cobro, abonado y SALDO (nunca el precio de hoy). Pura. */
+export function lineasDeSaldoDelCobro(c: CobroPrevioParaIa): string[] {
+    const saldo = c.amount - c.amountPaid;
+    return saldo > 0
+        ? [`Tu cobro por este servicio es de *${cop(c.amount)}*; abonaste *${cop(c.amountPaid)}* y el saldo pendiente es *${cop(saldo)}*.`]
+        : [`Tu cobro por este servicio es de *${cop(c.amount)}* y ya está pagado completo.`];
+}
+
 export interface OpcionesCatalogoIa {
+    /** Cobro que la persona ya tiene del servicio: con abono, su saldo manda sobre el precio de hoy. */
+    cobroPrevio?: CobroPrevioParaIa | null;
     /** 'YYYY-MM-DD' en Bogotá. */
     hoy: string;
     /** El número es de una familia del club (le corresponde el precio de afiliado si el ítem lo tiene). */
@@ -153,7 +188,16 @@ export function fichaDeServicioParaIa(item: ItemConFicha, o: OpcionesCatalogoIa)
     const cuando = cuandoParaIa(item);
     lineas.push(`Cuándo: ${cuando ?? 'la fecha no está cargada en el catálogo'}`);
 
-    if (precio.opciones.length) {
+    const cobro = cobroConAbono(o.cobroPrevio);
+    if (cobro) {
+        const saldo = cobro.amount - cobro.amountPaid;
+        lineas.push(`Cobro de ESTA persona por este servicio (es SU valor; manda sobre el catálogo): ${cop(cobro.amount)} en total; ya abonó ${cop(cobro.amountPaid)}; `
+            + (saldo > 0 ? `saldo pendiente ${cop(saldo)}.` : 'ya está pagado completo.'));
+        lineas.push(saldo > 0
+            ? `Si pregunta cuánto falta, cuánto debe pagar o cuál es el abono mínimo, la respuesta es el SALDO: ${cop(saldo)} (puede pagarlo completo). `
+              + 'NO uses el valor de hoy ni los de otras fechas, no recalcules abonos, mitades ni descuentos, y no mezcles «abono» con un precio de otra fecha.'
+            : 'No debe nada de este servicio; no le des otro valor ni le pidas otro abono.');
+    } else if (precio.opciones.length) {
         lineas.push(`Opciones y valor de hoy${precio.deAfiliado ? ' (valor de afiliado del club)' : ''}: `
             + precio.opciones.map((op) => `${op.etiqueta}: ${cop(op.precio)}`).join(' · '));
     } else if (precio.hoy !== null) {
@@ -167,10 +211,12 @@ export function fichaDeServicioParaIa(item: ItemConFicha, o: OpcionesCatalogoIa)
     } else {
         lineas.push('Valor: no está cargado en el catálogo.');
     }
-    if (tieneAfiliado && !precio.deAfiliado) {
+    if (!cobro && tieneAfiliado && !precio.deAfiliado) {
         lineas.push('Afiliados del club: tienen un valor especial; si la persona dice ser del club, la escuela verifica su número y le confirma ese valor (no des la cifra).');
     }
-    if (precio.abono !== null && precio.hoy !== null) {
+    if (cobro) {
+        // El abono y el saldo ya salieron del cobro de la persona; el abono del catálogo no aplica.
+    } else if (precio.abono !== null && precio.hoy !== null) {
         lineas.push(`Abono mínimo para separar el cupo: ${cop(precio.abono)}${precio.abonoPct ? ` (${precio.abonoPct} %)` : ''}; el resto (${cop(precio.hoy - precio.abono)}) queda pendiente.`);
     } else if (!precio.opciones.length && precio.hoy !== null) {
         lineas.push('Abono: el catálogo no tiene abono; el cupo se separa con el valor completo.');
