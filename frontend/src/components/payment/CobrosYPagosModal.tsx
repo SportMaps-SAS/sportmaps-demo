@@ -73,6 +73,7 @@ import { AthletePicker } from './cobros-y-pagos/AthletePicker';
 import { NewAthleteForm } from './cobros-y-pagos/NewAthleteForm';
 import { PendingChargesSection } from './cobros-y-pagos/PendingChargesSection';
 import { NewChargeLines } from './cobros-y-pagos/NewChargeLines';
+import { cargarArticulosDelCatalogo, type ArticuloDeCatalogo } from '@/lib/catalogoDeArticulos';
 import { GlobalDiscount, type GlobalTarget } from './cobros-y-pagos/GlobalDiscount';
 import { PaymentBlock } from './cobros-y-pagos/PaymentBlock';
 import { MultiTargetPicker } from './cobros-y-pagos/MultiTargetPicker';
@@ -263,6 +264,15 @@ export function CobrosYPagosDialog({
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, schoolId]);
+
+    // Catálogo de Artículos Deportivos: se ofrece en las líneas «Artículos / uniformes».
+    const [articulos, setArticulos] = useState<ArticuloDeCatalogo[]>([]);
+    useEffect(() => {
+        if (!open || !schoolId) return;
+        let cancelled = false;
+        cargarArticulosDelCatalogo(schoolId).then((items) => { if (!cancelled) setArticulos(items); });
+        return () => { cancelled = true; };
     }, [open, schoolId]);
 
     const selected = athletes.find((a) => a.id === athleteId) ?? null;
@@ -796,6 +806,7 @@ export function CobrosYPagosDialog({
                                             minDue={today}
                                             noMonthly={mode === 'single' && newAthleteOn}
                                             skippedByLine={skippedByLine}
+                                            articulos={articulos}
                                         />
                                         {mode === 'multi' && <p className="text-xs text-muted-foreground">Para registrar pagos, elige un solo atleta.</p>}
                                     </section>
