@@ -11,6 +11,7 @@ import { MANUAL_CHARGE_CATEGORY_OPTIONS } from '@/lib/manualPaymentCharge';
 import { currentPeriodBogota, formatPeriodLabel, parsePeriodKey, periodKey, shiftPeriod } from '@/lib/paymentPeriod';
 import { formatPesos, monthsFromToday, newLineDraft, type LineCalc, type MultiLineCalc, type NewLineDraft } from '@/lib/cobrosYPagos';
 import type { ChargeSuggestions } from '@/lib/api/chargeBatches';
+import { articuloElegido, conceptoDeArticulo, tallasDe, type ArticuloDeCatalogo } from '@/lib/catalogoDeArticulos';
 import { DiscountControl } from './DiscountControl';
 import { HorasAdicionalesLine } from './HorasAdicionalesLine';
 import { DiscountTags } from './DiscountTags';
@@ -30,6 +31,8 @@ interface NewChargeLinesProps {
     noMonthly?: boolean;
     /** Líneas que la vista previa omitió (índice → motivo en texto), p. ej. «ya tiene la mensualidad de ese mes». */
     skippedByLine?: Map<number, string>;
+    /** Ítems activos del catálogo de Artículos Deportivos: se ofrecen en las líneas «Artículos / uniformes». */
+    articulos?: readonly ArticuloDeCatalogo[];
 }
 
 /** Mes con mensualidad: hasta 12 atrás y 3 adelante (Q4). */
@@ -46,7 +49,7 @@ function monthOptions() {
  * apila (tipo / detalle / valor+vence / descuento / nota).
  */
 export function NewChargeLines({
-    mode, lines, onChange, calcByRef, paymentOn, canDiscount, canOverage, suggestions, defaultDue, minDue, noMonthly, skippedByLine,
+    mode, lines, onChange, calcByRef, paymentOn, canDiscount, canOverage, suggestions, defaultDue, minDue, noMonthly, skippedByLine, articulos = [],
 }: NewChargeLinesProps) {
     const [openDiscount, setOpenDiscount] = useState<Record<string, boolean>>({});
     const today = currentPeriodBogota();
@@ -112,6 +115,9 @@ export function NewChargeLines({
                 const isMonthly = l.category === 'mensualidad';
                 const pastMonth = isMonthly && l.period && monthsFromToday(l.period, today) < 0;
                 const errors = single?.errors ?? multi?.errors ?? [];
+                const ofreceCatalogo = l.category === 'articulos' && articulos.length > 0;
+                const elegido = ofreceCatalogo ? articuloElegido(l.concept, articulos) : null;
+                const tallasDelElegido = elegido ? tallasDe(elegido.item) : [];
                 return (
                     <div key={l.key} className="rounded-xl border p-3 space-y-2 bg-background" data-testid={`cyp-line-${idx}`}>
                         <div className="grid gap-2 grid-cols-2 sm:grid-cols-[13rem_minmax(0,1fr)_8rem_9rem_auto]">
@@ -175,6 +181,38 @@ export function NewChargeLines({
                             </Button>
                         </div>
 
+                        {ofreceCatalogo && (
+                            <div className="space-y-1.5" data-testid={`cyp-articulos-${idx}`}>
+                                <p className="text-[11px] text-muted-foreground">Del catálogo (puedes cambiar el detalle y el valor):</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {articulos.map((a) => (
+                                        <Button
+                                            key={a.id} type="button" size="sm" className="h-8 text-xs"
+                                            variant={elegido?.item.id === a.id ? 'default' : 'outline'}
+                                            aria-pressed={elegido?.item.id === a.id}
+                                            onClick={() => update(idx, { concept: conceptoDeArticulo(a, tallasDe(a)[0] ?? null), amount: a.price })}
+                                        >
+                                            {a.name} · {formatPesos(a.price)}
+                                        </Button>
+                                    ))}
+                                </div>
+                                {elegido && tallasDelElegido.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                        <span className="text-[11px] text-muted-foreground">Talla:</span>
+                                        {tallasDelElegido.map((t) => (
+                                            <Button
+                                                key={t} type="button" size="sm" className="h-7 px-2 text-xs"
+                                                variant={elegido.talla === t ? 'secondary' : 'ghost'}
+                                                aria-pressed={elegido.talla === t}
+                                                onClick={() => update(idx, { concept: conceptoDeArticulo(elegido.item, t) })}
+                                            >
+                                                {t}
+                                            </Button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         {isMonthly && mode === 'single' && (suggestions?.enrollments?.length ?? 0) > 1 && (
                             <Select value={l.enrollment_id ?? undefined} onValueChange={(v) => {
                                 const e = suggestions!.enrollments.find((x) => x.enrollment_id === v);
