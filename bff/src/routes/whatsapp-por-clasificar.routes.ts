@@ -111,6 +111,37 @@ router.get('/:schoolId/por-clasificar', requireAuth, async (req: AuthenticatedRe
         }
     }
 
+    // Quién es el contacto. La fila casi nunca trae `contacto_nombre` (Monster, 2026-11-20: 20 de 21 sin nombre y
+    // la tarjeta mostraba «Sin nombre · ···0145»): el nombre está en la conversación y en la ficha del prospecto.
+    // Dos lecturas por lote, nunca una por fila.
+    const contactos = [...new Set(filas.map((f) => String(f.contacto ?? '')).filter(Boolean))];
+    const telefonos = contactos.filter((c) => /^\d{10,15}$/.test(c));
+    const variantesDe = (t: string) => [...new Set([t, `+${t}`, t.startsWith('57') && t.length === 12 ? t.slice(2) : t])];
+    const chatPorContacto = new Map<string, string>();
+    const prospectoPorTelefono = new Map<string, { id: string; nombre: string }>();
+    if (contactos.length) {
+        try {
+            const [chats, leads] = await Promise.all([
+                supabase.from('whatsapp_conversations').select('contact_wa_id, contact_name')
+                    .eq('school_id', schoolId).in('contact_wa_id', contactos),
+                telefonos.length
+                    ? supabase.from('school_signup_leads').select('id, full_name, phone, created_at')
+                        .eq('school_id', schoolId).neq('status', 'discarded')
+                        .in('phone', telefonos.flatMap(variantesDe)).order('created_at', { ascending: false })
+                    : Promise.resolve({ data: [] as any[] }),
+            ]);
+            for (const c of (chats.data ?? []) as any[]) {
+                if (c?.contact_wa_id && c?.contact_name) chatPorContacto.set(c.contact_wa_id, c.contact_name);
+            }
+            for (const l of (leads.data ?? []) as any[]) {
+                const t = telefonos.find((x) => variantesDe(x).includes(String(l.phone ?? '')));
+                if (t && l.full_name && !prospectoPorTelefono.has(t)) prospectoPorTelefono.set(t, { id: l.id, nombre: l.full_name });
+            }
+        } catch (err: any) {
+            req.log?.warn({ schoolId, err: err?.message || err }, '[wa-por-clasificar] no se pudo leer el nombre de los contactos');
+        }
+    }
+
     // Servicios del catálogo donde se puede crear el cobro desde aquí (activos, sin evento, no vencidos).
     const { data: items } = await supabase.from('school_tournament_items')
         .select('id, name, kind, price, precio_afiliado, allow_installments, abono_minimo_pct, opciones, ends_at, starts_at')
@@ -127,7 +158,12 @@ router.get('/:schoolId/por-clasificar', requireAuth, async (req: AuthenticatedRe
         }));
 
     return res.json({
-        filas: filas.map((f) => ({ ...f, archivo_url: f.storage_path ? urlPorRuta.get(f.storage_path) ?? null : null })),
+        filas: filas.map((f) => ({
+            ...f,
+            archivo_url: f.storage_path ? urlPorRuta.get(f.storage_path) ?? null : null,
+            chat_nombre: f.contacto ? chatPorContacto.get(String(f.contacto)) ?? null : null,
+            prospecto: f.contacto ? prospectoPorTelefono.get(String(f.contacto)) ?? null : null,
+        })),
         servicios,
     });
 });

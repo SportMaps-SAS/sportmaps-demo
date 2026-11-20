@@ -7,7 +7,7 @@ vi.mock('@/lib/api/bffClient', () => ({ bffClient: bff }));
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => toastEstable }));
 
 const bffClient = bff;
-import { PorClasificarCard, explicarErrorDeCreacion, diasEsperando } from './PorClasificarCard';
+import { PorClasificarCard, explicarErrorDeCreacion, diasEsperando, quienEnvio } from './PorClasificarCard';
 
 const fila = (o: Record<string, unknown> = {}) => ({
     id: 'f1', contacto: '573001234567', contacto_nombre: 'Isaac Zaidman', monto: 150000, referencia: 'M20540656',
@@ -37,6 +37,34 @@ describe('PorClasificarCard', () => {
         expect(screen.getByText('Servicio nuevo')).toBeTruthy();
         expect(screen.getByText('hace 3 días')).toBeTruthy();
         for (const t of ['Crear cobro', 'Aplicar a un cobro', 'Descartar']) expect(screen.getByRole('button', { name: t })).toBeTruthy();
+    });
+});
+
+describe('quienEnvio', () => {
+    const base = { contacto: '573001234567', contacto_nombre: null, chat_nombre: null, prospecto: null, propuesta: null };
+    it('muestra el teléfono COMPLETO y el enlace al chat, no los cuatro últimos dígitos', () => {
+        const q = quienEnvio(base);
+        expect(q.telefono).toBe('+57 300 123 4567');
+        expect(q.enlace).toBe('https://wa.me/573001234567');
+    });
+    it('toma el nombre del chat o del prospecto cuando la fila no lo trae', () => {
+        expect(quienEnvio({ ...base, chat_nombre: 'Paola Aguirre' }).nombre).toBe('Paola Aguirre');
+        const p = quienEnvio({ ...base, prospecto: { id: 'l1', nombre: 'Paola A.' } });
+        expect(p.nombre).toBe('Paola A.');
+        expect(p.esProspecto).toBe(true);
+        expect(quienEnvio({ ...base, propuesta: { pagador: 'Quien pagó' } }).nombre).toBe('Quien pagó');
+        expect(quienEnvio(base).nombre).toBe('Sin nombre');
+    });
+    it('un contacto sin teléfono (usuario de Meta) no inventa un número', () => {
+        const q = quienEnvio({ ...base, contacto: 'wau-CO.-b-c-d' });
+        expect(q.telefono).toBeNull();
+        expect(q.enlace).toBeNull();
+    });
+    it('la tarjeta pinta el teléfono completo', async () => {
+        (bffClient.get as any).mockResolvedValueOnce({ filas: [fila({ contacto_nombre: null, chat_nombre: 'Paola Aguirre' })], servicios: [] });
+        render(<PorClasificarCard schoolId="s1" />);
+        expect(await screen.findByText('Paola Aguirre')).toBeTruthy();
+        expect(screen.getByText('+57 300 123 4567')).toBeTruthy();
     });
 });
 
