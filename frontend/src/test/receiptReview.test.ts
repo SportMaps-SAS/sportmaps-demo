@@ -143,9 +143,9 @@ describe('compareReceipt — comprobante contra saldo', () => {
     expect(compareReceipt({ ...cobro, due: 165000, remaining: 165000 }, 370000))
       .toEqual({ kind: 'sobra', diff: 205000, saldoAFavor: 205000, sinAcreditar: 0 });
   });
-  it('con abono previo la base solo guarda lo que pasa del cobro entero (Monster 2026-11-20: $165.000 sobre saldo $105.000)', () => {
+  it('con abono previo el sobrante entero queda como saldo a favor (Monster 2026-11-20: $165.000 sobre saldo $105.000; mig 20261120143043)', () => {
     expect(compareReceipt({ ...cobro, remaining: 105000 }, 165000))
-      .toEqual({ kind: 'sobra', diff: 60000, saldoAFavor: 40000, sinAcreditar: 20000 });
+      .toEqual({ kind: 'sobra', diff: 60000, saldoAFavor: 60000, sinAcreditar: 0 });
   });
   it('la base no acredita si no viene de «por validar» o la lectura pasa de 4 veces lo esperado', () => {
     expect(compareReceipt({ ...cobro, status: 'pending' }, 165000).saldoAFavor).toBe(0);

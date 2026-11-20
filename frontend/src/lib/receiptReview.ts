@@ -128,8 +128,8 @@ export interface ReceiptVsCharge {
   /**
    * De lo que sobra, lo que la base guarda SOLA como saldo a favor al aprobar
    * (trigger fn_payments_saldo_a_favor_al_aprobar, mig 20261013165308): solo
-   * desde «por validar», con comprobante, contra `amount − pronto pago` (NO
-   * descuenta abonos previos) y nunca si la lectura pasa de 4 veces lo esperado.
+   * desde «por validar», con comprobante, contando los abonos previos (mig
+   * 20261120143043) y nunca si la lectura pasa de 4 veces lo esperado.
    */
   saldoAFavor: number;
   /** Lo que sobra y la base NO guarda: hay que registrarlo a mano. */
@@ -158,7 +158,8 @@ export function compareReceipt(
   if (leido < p.remaining) return { kind: 'falta', diff: Math.round(p.remaining - leido), saldoAFavor: 0, sinAcreditar: 0 };
   const diff = Math.round(leido - p.remaining);
   const laBaseAcredita = p.status === 'awaiting_approval' && p.hasReceipt !== false && leido <= 4 * p.due;
-  const saldoAFavor = laBaseAcredita ? Math.min(Math.max(Math.round(leido - p.due), 0), diff) : 0;
+  // Desde 20261120143043 la base cuenta los abonos previos: guarda el sobrante entero.
+  const saldoAFavor = laBaseAcredita ? diff : 0;
   return { kind: 'sobra', diff, saldoAFavor, sinAcreditar: diff - saldoAFavor };
 }
 
