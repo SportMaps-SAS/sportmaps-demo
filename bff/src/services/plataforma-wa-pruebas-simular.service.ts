@@ -490,6 +490,9 @@ const CUANDO_SALE: Record<ConceptoCobro, string> = {
     recordatorio_clase_prueba: 'víspera de la clase de prueba del embudo (escuela con nombre «clase de prueba»), con la ventana cerrada',
     clase_prueba_cupo_por_vencer: 'el cupo separado de la clase de prueba vence en ~2 h y la ventana ya cerró',
     clase_prueba_reprogramada: 'la sesión de la clase de prueba se canceló (lluvia o el profe): elegir otro horario',
+    cobro_unico_nuevo: 'estado de cuenta: familia con solo cobros únicos (torneo, uniforme…) recién generados',
+    cobro_unico_vence_manana: 'cobranza de un cobro único, el día anterior al vencimiento',
+    cobro_unico_pendiente: 'cobranza de un cobro único que quedó pendiente',
 };
 
 const normalizarNombre = (s: string) => s.trim().toLowerCase().normalize('NFD').replace(/\p{M}/gu, '')

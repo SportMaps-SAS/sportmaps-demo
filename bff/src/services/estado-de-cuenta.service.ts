@@ -126,6 +126,8 @@ export interface FilaEstado {
     vencido: boolean;
     /** Cobro del mes del estado de cuenta (lo que menciona la plantilla de WhatsApp). */
     delMes: boolean;
+    /** Cobro único (torneo, uniforme…): categoría distinta de mensualidad. No es «del mes». */
+    unico?: boolean;
     status: string;
     token?: string | null;
     /** Dueño del saldo a favor ('c:'|'u:'|'p:' + id, igual que _saldo_a_favor_dueno). */
@@ -227,8 +229,10 @@ export const claveCorrida = (schoolId: string, mes: string) => `${TIPO_CORRIDA}:
  */
 export function elegirCanal(p: {
     pedido: CanalPedido; whatsappEscuela: boolean; waId: string | null; email: string | null; filasDelMes: number;
+    /** Cobros únicos (torneo…): salen por la plantilla `cobro_unico_nuevo` si no hay mensualidad del mes. */
+    filasUnicas?: number;
 }): Canal {
-    const puedeWa = p.pedido === 'auto' && p.whatsappEscuela && !!p.waId && p.filasDelMes > 0;
+    const puedeWa = p.pedido === 'auto' && p.whatsappEscuela && !!p.waId && (p.filasDelMes > 0 || (p.filasUnicas ?? 0) > 0);
     if (puedeWa) return p.email ? 'whatsapp_o_correo' : 'whatsapp';
     return p.email ? 'correo' : 'ninguno';
 }
@@ -305,6 +309,7 @@ export function agruparPorFamilia(
             mora: Math.min(recargoMora(p.late_fee_amount), saldo),
             vencido: p.status === 'overdue' || (!!p.due_date && p.due_date.slice(0, 10) < hoy),
             delMes,
+            unico: esCobroUnico(p.payment_category),
             status: p.status,
             dueno: duenoDeSaldo(p),
         });
@@ -381,6 +386,31 @@ export function datosWhatsAppDeFamilia(f: Familia, escuela: string, mes: string)
         ),
         /** El botón abre el cobro del mes que vence primero; esa página lista los demás. */
         paymentIdBoton: delMes[0]?.paymentId ?? null,
+    };
+}
+
+/**
+ * Variables de cobro_unico_nuevo para una familia SIN mensualidad del mes (solo cobros
+ * únicos). El concepto de un cobro de lote viene como «Copa Navidad — Nombre del
+ * deportista»: a la plantilla va solo el nombre del cobro, sin el deportista. Con varios
+ * cobros se suman y se nombran todos; el botón abre el que vence primero y esa página
+ * lista los demás.
+ */
+export function datosWhatsAppCobroUnico(f: Familia, escuela: string) {
+    const unicas = f.filas.filter((r) => r.unico && !r.delMes);
+    const nombres = [...new Set(unicas.map((r) => nombreCorto(r.atleta)?.split(' ')[0]).filter(Boolean))] as string[];
+    const atletas = nombres.length <= 1 ? (nombres[0] ?? '')
+        : `${nombres.slice(0, -1).join(', ')} y ${nombres[nombres.length - 1]}`;
+    const cobros = [...new Set(unicas.map((r) => String(r.concepto ?? '').split(' — ')[0].trim()).filter(Boolean))];
+    const vence = unicas.map((r) => r.vence).filter(Boolean).sort()[0] ?? null;
+    return {
+        nombreContacto: f.nombre.split(' ')[0] || f.nombre,
+        nombreAtleta: atletas,
+        nombreEscuela: escuela,
+        conceptoPago: cobros.join(' y '),
+        fechaVencimiento: vence ? (() => { const d = new Date(`${vence}T12:00:00Z`); return `${d.getUTCDate()} de ${MESES[d.getUTCMonth()]}`; })() : null,
+        monto: fmtCop(unicas.reduce((s, r) => s + r.saldo, 0)),
+        paymentIdBoton: unicas[0]?.paymentId ?? null,
     };
 }
 
@@ -768,6 +798,7 @@ export async function enviarEstadoDeCuenta(schoolId: string, o: OpcionesEnvio): 
         const canal = elegirCanal({
             pedido: canalPedido, whatsappEscuela: waDisponible, waId: f.waId, email: f.email,
             filasDelMes: f.filas.filter((x) => x.delMes).length,
+            filasUnicas: f.filas.filter((x) => x.unico && !x.delMes).length,
         });
         if (canal === 'ninguno') { r.sin_canal++; continue; }
         if (!o.aplicar) {
@@ -789,10 +820,13 @@ export async function enviarEstadoDeCuenta(schoolId: string, o: OpcionesEnvio): 
             /** Se ofrece activar WhatsApp si no se intentó o si faltó el consentimiento (no por otros fallos). */
             let ofrecerWa = true;
             if (canal === 'whatsapp' || canal === 'whatsapp_o_correo') {
-                const d = datosWhatsAppDeFamilia(f, escuela, mes);
+                // Con mensualidad del mes va la plantilla de mensualidad; si solo hay cobros únicos
+                // (torneo, uniforme…), la de cobro único: la otra les diría «la mensualidad de…».
+                const soloUnicos = !f.filas.some((x) => x.delMes);
+                const d = soloUnicos ? datosWhatsAppCobroUnico(f, escuela) : datosWhatsAppDeFamilia(f, escuela, mes);
                 const tokenBoton = f.filas.find((x) => x.paymentId === d.paymentIdBoton)?.token ?? null;
                 const wa = await enviarCobroPorPlantilla({
-                    schoolId, concepto: 'recordatorio_previo', telefono: f.waId, tokenBoton,
+                    schoolId, concepto: soloUnicos ? 'cobro_unico_nuevo' : 'recordatorio_previo', telefono: f.waId, tokenBoton,
                     paymentId: d.paymentIdBoton ?? undefined, parentId: f.perfilId, datos: d, ahora,
                 });
                 if (wa.enviado) {
