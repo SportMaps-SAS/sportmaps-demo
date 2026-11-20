@@ -44,10 +44,10 @@ import type { CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { chatWithTools, type LlmMessage } from './llm.service';
 import { enlacesNoPermitidos, filtrarSalidaDelModelo } from './whatsapp-salida-segura';
 import { enUnaLinea, transcripcion, MODELO_PROSPECTO_DEFAULT } from './whatsapp-prospecto-ia.service';
-import { fichaDeServicioParaIa, hoyLegibleDe } from './whatsapp-catalogo-para-ia';
+import { fichaDeServicioParaIa, hoyLegibleDe, type CobroPrevioParaIa } from './whatsapp-catalogo-para-ia';
 import { permitidosDeTextoLibre } from './whatsapp-coherencia-ficha';
 import {
-    conNumerosIgnorados, describirViolaciones, permitidosDelCatalogo, unirPermitidos, verificarSalida,
+    conNumerosIgnorados, describirViolaciones, permitidosDeLugares, permitidosDelCatalogo, unirPermitidos, verificarSalida,
     type Permitidos, type Violacion,
 } from './whatsapp-verificador-montos';
 
@@ -67,6 +67,8 @@ export interface PreguntaDeServicio {
      * (Monster 2026-11-15: «Envía aquí la foto…» 53 s después de recibirla).
      */
     comprobanteRecibido?: boolean;
+    /** (2026-11-19) El cobro que esta persona ya tiene de este servicio: con abono, su saldo manda sobre el precio de hoy. */
+    cobroPrevio?: CobroPrevioParaIa | null;
 }
 
 export type RespuestaDeServicio =
@@ -134,8 +136,8 @@ export function limpiarRespuestaServicio(texto: string | null | undefined, enlac
 }
 
 /** El prompt del sistema: reglas + SOLO los datos del ítem y las cuentas. Pura. */
-export function promptDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado' | 'cuentas' | 'hoy' | 'comprobanteRecibido'>): string {
-    const datos = fichaDeServicioParaIa(p.item, { hoy: p.hoy, afiliado: p.afiliado, cuentas: p.cuentas });
+export function promptDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado' | 'cuentas' | 'hoy' | 'comprobanteRecibido' | 'cobroPrevio'>): string {
+    const datos = fichaDeServicioParaIa(p.item, { hoy: p.hoy, afiliado: p.afiliado, cuentas: p.cuentas, cobroPrevio: p.cobroPrevio });
     return [
         `Eres el asistente AUTOMÁTICO del WhatsApp de una escuela deportiva. La persona que te escribe está comprando UN servicio: «${enUnaLinea(p.item.name, 200)}». Hoy es ${hoyLegibleDe(p.hoy)} (hora de Colombia).`,
         '',
@@ -173,11 +175,12 @@ export function promptDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado'
  * fechas de la descripción que no contradicen el catálogo, y las cuentas (no
  * son plata). Pura.
  */
-export function permitidosDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado' | 'cuentas' | 'hoy'>): Permitidos {
+export function permitidosDeServicio(p: Pick<PreguntaDeServicio, 'item' | 'afiliado' | 'cuentas' | 'hoy' | 'cobroPrevio'>): Permitidos {
     return conNumerosIgnorados(
         unirPermitidos(
-            permitidosDelCatalogo([p.item], { afiliado: p.afiliado }),
+            permitidosDelCatalogo([p.item], { afiliado: p.afiliado, cobroPrevio: p.cobroPrevio }),
             permitidosDeTextoLibre(p.item.description, [p.item], { hoy: p.hoy, itemFijo: p.item }),
+            permitidosDeLugares(p.item.description),
         ),
         p.cuentas.map((c) => c.numero),
     );

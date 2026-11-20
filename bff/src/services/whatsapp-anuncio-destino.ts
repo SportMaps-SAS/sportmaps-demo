@@ -185,10 +185,56 @@ export function servicioVigente(it: Pick<ItemDeServicio, 'active' | 'event_id' |
 }
 
 /**
+ * ¿La VENTA de este servicio ya cerró? (Monster 2026-11-20: la venta de la clínica terminó el 20-nov y la
+ * clínica es el 21 y 22; quien YA abonó sigue con su saldo y sus comprobantes, el resto ya no compra.) Pura.
+ *
+ * Cierra si:
+ *  (a) el id del ítem está en `cerradosPorEnv` (por defecto la variable `WA_VENTAS_CERRADAS_ITEMS`, ids separados
+ *      por coma: así se cierra YA, sin esperar la medianoche), o
+ *  (b) REGLA GENERAL NUEVA (decisión de 2026-11-20): un evento (`kind === 'clase_extra'`) con `starts_at` deja de
+ *      venderse cuando EMPIEZA (`ahora >= starts_at`). Un torneo, vacacional o campamento NO entran en la regla.
+ *
+ * Solo para las superficies de VENTA (ficha, cotización, anuncios, campañas, seguimientos). El reconocimiento de
+ * comprobantes y los saldos (`itemsDeServicio`, `preciosDeServicios`, el cobro previo) NO la usan: siguen hasta el fin.
+ */
+export function ventaCerradaDeItem(
+    item: Pick<ItemDeServicio, 'id' | 'kind' | 'starts_at'> | null | undefined,
+    ahora: number = Date.now(),
+    cerradosPorEnv: string | string[] | undefined = process.env.WA_VENTAS_CERRADAS_ITEMS,
+): boolean {
+    if (!item) return false;
+    const ids = (Array.isArray(cerradosPorEnv) ? cerradosPorEnv : String(cerradosPorEnv ?? '').split(','))
+        .map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+    if (item.id && ids.includes(String(item.id).toLowerCase())) return true;
+    if (item.kind === 'clase_extra' && item.starts_at) {
+        const inicio = new Date(item.starts_at).getTime();
+        return Number.isFinite(inicio) && ahora >= inicio;
+    }
+    return false;
+}
+
+/** El mensaje fijo a quien pregunta por un servicio cuya venta cerró y NO tiene cobro de él. Pura. */
+export function textoVentaCerrada(item: Pick<ItemDeServicio, 'name'> | null | undefined): string {
+    const nombre = String(item?.name ?? '');
+    if (/cl[ií]nica de armadores/i.test(nombre)) {
+        return 'Las inscripciones de la *Clínica de armadores y atacantes* ya cerraron: la clínica es mañana y el domingo (21 y 22 de noviembre). '
+            + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
+            + 'Para cualquier otra pregunta, ya le pasé tu mensaje a la escuela y te responde por aquí 🙌';
+    }
+    return `Las inscripciones de *${nombre || 'este servicio'}* ya cerraron. `
+        + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
+        + 'Para cualquier otra pregunta, ya le pasé tu mensaje a la escuela y te responde por aquí 🙌';
+}
+
+/**
  * Los servicios ACTIVOS de la escuela, con descripción y precios (M2; sin esas
  * columnas, los de siempre). UNA lectura, solo cuando hace falta. Nunca lanza.
+ * `ventaAbierta: true` (superficies de VENTA) quita los que ya cerraron su venta (`ventaCerradaDeItem`); sin
+ * eso devuelve todos los vigentes (quien YA abonó, la cola de comprobantes, el seguimiento de la escuela).
  */
-export async function serviciosDeAnuncio(schoolId: string, ahora = Date.now()): Promise<ItemConFicha[]> {
+export async function serviciosDeAnuncio(
+    schoolId: string, ahora = Date.now(), opciones: { ventaAbierta?: boolean } = {},
+): Promise<ItemConFicha[]> {
     const leer = (cols: string) => supabase.from('school_tournament_items')
         .select(cols).eq('school_id', schoolId).eq('active', true).is('event_id', null).limit(50);
     try {
@@ -196,7 +242,8 @@ export async function serviciosDeAnuncio(schoolId: string, ahora = Date.now()): 
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
         if (error || !Array.isArray(data)) return [];
-        return (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora));
+        return (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora)
+            && !(opciones.ventaAbierta && ventaCerradaDeItem(it, ahora)));
     } catch {
         return [];
     }

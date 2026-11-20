@@ -29,7 +29,7 @@ import { cop, cuandoEs } from './whatsapp-venta-servicios.service';
 import { comoPagar, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { abonoMinimo, opcionesDelItem, precioVigente } from './wa-cobro-desde-comprobante.service';
 import {
-    diaLegible, motivoDeServicio, precioDelServicio, servicioVigente, type ItemConFicha,
+    diaLegible, motivoDeServicio, precioDelServicio, servicioVigente, ventaCerradaDeItem, type ItemConFicha,
 } from './whatsapp-anuncio-destino';
 import { verificarTokenFormulario, type PreciosMostrados, type RespuestaDeFormulario } from './whatsapp-flows.service';
 import type { Motivo } from './motivos-de-cobro';
@@ -428,7 +428,7 @@ export async function atenderRespuestaDeFormulario(
             novedades: datos.aceptaNovedades,
         };
         const item = token.servicioId ? await ctx.servicio(token.servicioId).catch(() => null) : null;
-        if (!item || !servicioVigente(item, ahora.getTime())) {
+        if (!item || !servicioVigente(item, ahora.getTime()) || ventaCerradaDeItem(item, ahora.getTime())) {
             await ctx.guardarLead({ servicio: item ? servicioDelLead(item) : null, deportista: datos.deportista, fechaNacimiento: datos.fechaNacimiento, formulario })
                 .catch(() => null);
             await ctx.enviar(textoServicioCerrado(item?.name ?? null), { ...base, resultado: 'servicio_inactivo', servicio_id: token.servicioId });

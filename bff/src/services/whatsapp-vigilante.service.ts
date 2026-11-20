@@ -429,6 +429,11 @@ const PREFIJO_CERRADA = 'cerrado_escuela:';
 /** Cierres en silencio que SÍ son un desenlace: el comprobante ya estaba registrado. */
 const YA_ESTABA = /ya registrado|ya_registrado|comprobante repetido|comprobante ya recibido|referencia ya usada|venta_comprobante_repetido/i;
 
+/** Cierres de «esto no es un pago» (la lectura dijo que no es comprobante). Sin señal de pago, ni se cuentan ni se listan. */
+const NO_ES_UN_PAGO = /^(no es un comprobante|no_es_comprobante_sin_contexto|consulta_no_comprobante|listado de movimientos|ni comprobante ni matr)/i;
+/** Cierres que no bajaron el archivo (ráfaga sin OCR, contacto no atendido): sin `storage_path`. */
+const SIN_ARCHIVO_GUARDADO = /^(ocr_omitido|contacto_no_atendido)/i;
+
 export type Desenlace =
     | { tipo: 'cobro' }
     | { tipo: 'resuelto' }
@@ -486,6 +491,9 @@ export function desenlaceDeComprobante(
         }
         if (YA_ESTABA.test(motivo)) return { tipo: 'resuelto' };
         const porque = motivo ? ` (motivo interno: ${recortar(motivo, 60)})` : '';
+        // Una imagen que la propia cola descartó como «no es un pago» (afiche, foto, captura de chat, listado) no es ruido
+        // para la escuela ni debe contarse aunque el OCR haya leído un número, salvo que algo diga que era un pago.
+        if (NO_ES_UN_PAGO.test(motivo) && !senales.conceptoEsperado && !senales.textoDePago) return { tipo: 'ruido' };
         if (montoDe(f.monto) !== null) {
             return {
                 tipo: 'sin_desenlace',
@@ -493,7 +501,9 @@ export function desenlaceDeComprobante(
                 queHacer: 'Abrir la conversación, confirmar si es un pago real y registrarlo.',
             };
         }
-        if (f.storage_path && (senales.conceptoEsperado || senales.textoDePago)) {
+        // `ocr_omitido` y `contacto_no_atendido` cierran SIN bajar el archivo (no hay `storage_path`): con la señal de
+        // que se esperaba un pago también cuentan; eran justo los comprobantes de la ráfaga que nadie vio.
+        if ((f.storage_path || SIN_ARCHIVO_GUARDADO.test(motivo)) && (senales.conceptoEsperado || senales.textoDePago)) {
             const senal = senales.conceptoEsperado ? 'se esperaba un pago de este número' : 'el cliente dijo que pagó';
             return {
                 tipo: 'sin_desenlace',

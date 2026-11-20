@@ -166,6 +166,9 @@ vi.mock('../services/whatsapp-receipt-matching.service', () => ({
     pagosPendientesDe: vi.fn(() => Promise.resolve(PAGOS)),
     resolverPago: (...a: any[]) => resolverPagoMock(...a),
     describirPago: (p: any) => p.concept,
+    // (pronto pago, otro agente) el cobro se cubre con el valor completo o con el descuento.
+    montoAPagar: (p: any) => Number(p.amount) - Number(p.descuento ?? 0),
+    montoCubreElCobro: (p: any, monto: number | null) => monto !== null && Number(p.amount) === monto,
     mensajeElegirPago: () => 'elige',
 }));
 
@@ -404,11 +407,21 @@ describe('Bandeja: número desconocido', () => {
         expect(downloadMediaMock).toHaveBeenCalledTimes(1);
     });
 
-    it('sin hablar de pagos y sin destino de la escuela: se lee pero NO se guarda ni se responde', async () => {
+    it('(I-1) sin hablar de pagos y sin destino leído, pero con un comprobante completo (monto + referencia): NO se le responde y SÍ queda en la bandeja con el archivo', async () => {
         state.textos = [{ text_body: 'Urgente' }];
         await runWhatsAppQueue();
+        expect(updatesCola.some((u) => typeof u.storage_path === 'string')).toBe(true);
+        expect(updatesCola.find((u) => u.status === 'ignored')).toMatchObject({ result_type: 'escalated' });
+        expect(updatesCola.find((u) => u.status === 'ignored').error_message).toMatch(/^sin_familia: captura_sin_contexto/);
+        expect(mensajesDelBot()).toBe(0);
+    });
+
+    it('sin hablar de pagos y la imagen NO es un comprobante (un afiche con un precio): sigue sin ruido, sin guardar', async () => {
+        state.textos = [{ text_body: 'Urgente' }];
+        extractReceiptMock.mockResolvedValue({ isReceipt: false, isTransactionList: false, amount: 90000, destination: null });
+        await runWhatsAppQueue();
         expect(updatesCola.some((u) => typeof u.storage_path === 'string')).toBe(false);
-        expect(updatesCola.find((u) => u.status === 'ignored')).toMatchObject({ error_message: 'contacto_no_atendido' });
+        expect(updatesCola.find((u) => u.status === 'ignored')).toMatchObject({ result_type: 'none', error_message: 'contacto_no_atendido' });
         expect(mensajesDelBot()).toBe(0);
     });
 

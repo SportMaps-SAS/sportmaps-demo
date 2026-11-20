@@ -313,6 +313,29 @@ describe('desenlaceDeComprobante', () => {
         const sinArchivo = fila({ status: 'ignored', result_type: 'none', error_message: 'bot_apagado', storage_path: null });
         expect(desenlaceDeComprobante(sinArchivo, { conceptoEsperado: true, textoDePago: true }, AHORA).tipo).toBe('ruido');
     });
+    it('(I-1) una ráfaga omitida sin OCR (`ocr_omitido`, sin archivo guardado) de quien debía un pago SÍ cuenta; sin señal, no', () => {
+        const f = fila({ status: 'ignored', result_type: 'none', error_message: 'ocr_omitido: ráfaga de imágenes de un contacto sin ficha', storage_path: null });
+        expect(desenlaceDeComprobante(f, SIN_SENALES, AHORA).tipo).toBe('ruido');
+        const d = desenlaceDeComprobante(f, { conceptoEsperado: true, textoDePago: false }, AHORA);
+        expect(d.tipo).toBe('sin_desenlace');
+        expect((d as any).motivo).toContain('se esperaba un pago de este número');
+        const c = fila({ status: 'ignored', result_type: 'none', error_message: 'contacto_no_atendido', storage_path: null });
+        expect(desenlaceDeComprobante(c, { conceptoEsperado: false, textoDePago: true }, AHORA).tipo).toBe('sin_desenlace');
+    });
+    it('(I-1) `contacto_no_atendido` con monto leído se lista aunque no haya archivo ni señal (el caso de los $140.000)', () => {
+        const f = fila({ status: 'ignored', result_type: 'none', error_message: 'contacto_no_atendido', storage_path: null, monto: '140000' });
+        const d = desenlaceDeComprobante(f, SIN_SENALES, AHORA);
+        expect(d.tipo).toBe('sin_desenlace');
+        expect((d as any).motivo).toContain('aunque se leyó un monto');
+    });
+    it('«no es un comprobante» con un número leído (un afiche con un precio) y sin señal de pago: ruido, no se cuenta', () => {
+        for (const motivo of ['no es un comprobante', 'no_es_comprobante_sin_contexto', 'consulta_no_comprobante:texto', 'listado de movimientos']) {
+            const f = fila({ status: 'ignored', result_type: 'none', error_message: motivo, monto: '90000' });
+            expect(desenlaceDeComprobante(f, SIN_SENALES, AHORA).tipo).toBe('ruido');
+            // …pero con el cliente diciendo que pagó, sí.
+            expect(desenlaceDeComprobante(f, { conceptoEsperado: false, textoDePago: true }, AHORA).tipo).toBe('sin_desenlace');
+        }
+    });
     it.each([
         'ya registrado: Mensualidad noviembre',
         'comprobante ya recibido (misma imagen)',

@@ -314,8 +314,20 @@ describe('runWhatsAppQueue — la puerta de atención', () => {
         expect(ultimoCierre()).toMatchObject({ status: 'ignored', error_message: 'contacto_no_atendido' });
     });
 
-    it('desconocido: comprobante sin destino de la escuela ni texto de pago → silencio, sin guardar', async () => {
+    it('(I-1) desconocido: comprobante con monto y referencia, sin destino leído ni texto de pago → no se le responde, pero se GUARDA y queda en la bandeja', async () => {
         state.atencion = { atender: true, tipo: 'desconocido', botEncendido: true };
+
+        await runWhatsAppQueue();
+
+        expect(sendTextMessageMock).not.toHaveBeenCalled();
+        expect(updatesCola.some((u) => typeof u.storage_path === 'string')).toBe(true);
+        expect(ultimoCierre()).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(ultimoCierre().error_message).toMatch(/^sin_familia: captura_sin_contexto/);
+    });
+
+    it('desconocido: lo que no es un comprobante (sin monto) sigue en silencio, sin guardar', async () => {
+        state.atencion = { atender: true, tipo: 'desconocido', botEncendido: true };
+        extractReceiptMock.mockResolvedValue({ isReceipt: false, isTransactionList: false, amount: null, provider: 'gemini' });
 
         await runWhatsAppQueue();
 

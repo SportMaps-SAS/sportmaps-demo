@@ -990,7 +990,7 @@ export const BrandedEmailTemplates = {
                 `,
                 cta: { label: 'Revisar pagos por validar', url: params.url },
                 closingHtml: `Recibes este resumen porque eres dueño o administrador de <strong>${escuela}</strong> en SportMaps.
-                    Llega a las 7:30 a. m. solo los días con pagos esperando, y a las 5:00 p. m. si alguno lleva más de 48 horas.`,
+                    Llega a las 7:30 a. m. solo los días con pagos esperando, y a las 5:00 p. m. si alguno lleva más de 24 horas.`,
             }),
         };
     },

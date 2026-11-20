@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { approvePayment, notifyGroupApproved } from '@/lib/approvePayment';
-import { orderReceiptGroup, remainingOf, dueOf, joinSpanish } from '@/lib/receiptReview';
+import { orderReceiptGroup, remainingOf, dueOf, joinSpanish, compareReceipt } from '@/lib/receiptReview';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -132,8 +132,25 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
   // El abono es de UN cobro: con un comprobante de varios no se ofrece.
   const canAbono = allowInstallments === true && !isGroup;
   const ocrShort = ocrAmount != null && ocrAmount > 0 && ocrAmount < remaining;
-  // Sin abonos, el aviso fuerte aplica a montos que no cuadran o no se leyeron.
-  const needsFullConfirm = !canAbono && !editable && (hasDiscrepancy || hasReceiptNoOcr);
+  // Comprobante contra saldo: ¿sobra o falta plata, y qué hace la base con el sobrante?
+  // En grupo se compara contra TODOS los cobros ligados al comprobante (así lo cuenta la base).
+  const cmp = compareReceipt({
+    due: isGroup ? group.reduce((s, p) => s + dueOf(p), 0) : expected,
+    remaining,
+    status: (isGroup ? group.find((p) => p.ocr_amount != null) : payment)?.status,
+    hasReceipt: group.some((p) => !!p.receipt_url),
+    grossAmount: isGroup ? null : payment?.gross_amount,
+  }, ocrAmount);
+  const sobra = cmp.kind === 'sobra';
+  const falta = cmp.kind === 'falta';
+  // Aprobar COMPLETO pide confirmación siempre que la plata no cuadre:
+  //  · sin abonos: monto distinto o sin lectura (como antes);
+  //  · con abonos: el comprobante trae MENOS y aun así se elige «Pago completo»
+  //    (antes pasaba sin preguntar y el cobro quedaba pagado entero);
+  //  · trae MÁS: la escuela confirma que vio a dónde va el sobrante.
+  const needsFullConfirm = !editable && (
+    (!canAbono && (hasDiscrepancy || hasReceiptNoOcr)) || (canAbono && falta) || sobra
+  );
 
   // Al abrir: si el comprobante cubre menos que el saldo y la escuela recibe
   // abonos, sugerir modo abono con el valor del comprobante. Si no, completo.
@@ -405,10 +422,33 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
               </span>
             </div>
           )}
-          {hasDiscrepancy && canAbono && (
+          {falta && canAbono && (
             <p className="text-xs text-amber-700 -mt-2">
-              El comprobante no coincide con el valor esperado. Verifica antes de aprobar: puedes registrarlo como <strong>abono</strong>.
+              El comprobante trae <strong>{formatCurrency(cmp.diff)} menos</strong> que el saldo. Regístralo como <strong>abono</strong>:
+              el cobro queda con ese saldo pendiente.
             </p>
+          )}
+
+          {/* El comprobante trae MÁS plata que el cobro: decir a dónde va el sobrante. */}
+          {sobra && (
+            <div className="p-3 rounded-xl border border-amber-300 bg-amber-50 space-y-1" data-testid="aprobar-sobrante">
+              <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4 shrink-0" /> El comprobante trae {formatCurrency(cmp.diff)} de más
+              </p>
+              <p className="text-xs text-amber-800">
+                {cmp.saldoAFavor > 0
+                  ? <>Al aprobar, {isGroup ? 'los cobros quedan pagados' : 'el cobro queda pagado'} y <strong>{formatCurrency(cmp.saldoAFavor)}</strong> quedan
+                    como <strong>saldo a favor</strong> de {payment.athlete_name || 'la familia'}: se descuentan solos de sus cobros pendientes o del próximo.</>
+                  : <>Al aprobar, ese sobrante <strong>no queda guardado</strong> en ningún lado.</>}
+                {cmp.sinAcreditar > 0 && cmp.saldoAFavor > 0 && (
+                  <> Los otros <strong>{formatCurrency(cmp.sinAcreditar)}</strong> no se guardan solos (el cobro ya tenía abonos): anótalos aparte.</>
+                )}
+              </p>
+              <p className="text-xs text-amber-800">
+                Si esa plata era para <strong>otra cosa</strong> (otro deportista, un torneo, una tarifa distinta), no apruebes todavía:
+                cierra, corrige el valor del cobro o crea el cobro que falta, y vuelve.
+              </p>
+            </div>
           )}
 
           {/* Comprobante subido pero OCR no leyó el monto: no aprobar el total a ciegas */}
@@ -461,7 +501,7 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
           )}
 
           {/* Escuela sin abonos y el monto no cuadra: no hay abono que registrar. */}
-          {needsFullConfirm && hasDiscrepancy && (
+          {needsFullConfirm && hasDiscrepancy && !sobra && !canAbono && (
             <div className="p-3 rounded-xl border border-red-300 bg-red-50 space-y-1">
               <p className="text-xs font-bold text-red-700 flex items-center gap-1.5">
                 <AlertTriangle className="h-4 w-4 shrink-0" /> {isGroup ? 'El comprobante no cuadra con los cobros marcados' : 'Tu escuela no recibe abonos'}
@@ -474,10 +514,18 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
               </p>
             </div>
           )}
-          {needsFullConfirm && (
+          {needsFullConfirm && mode === 'full' && (
             <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
               <input type="checkbox" className="mt-0.5" checked={confirmFull} onChange={(e) => setConfirmFull(e.target.checked)} />
-              <span>Verifiqué que el pago de {formatCurrency(remaining)} está completo (por ejemplo, el resto llegó por otro medio).</span>
+              <span>
+                {sobra
+                  ? (cmp.saldoAFavor > 0
+                    ? <>Revisé el comprobante: los {formatCurrency(cmp.diff)} de más son de esta familia y {cmp.sinAcreditar > 0 ? `${formatCurrency(cmp.saldoAFavor)} quedan` : 'quedan'} como saldo a favor.</>
+                    : <>Revisé el comprobante y ya anoté aparte los {formatCurrency(cmp.diff)} de más.</>)
+                  : falta
+                    ? <>El comprobante trae {formatCurrency(cmp.diff)} menos, pero verifiqué que el pago de {formatCurrency(remaining)} está completo (el resto llegó por otro medio).</>
+                    : <>Verifiqué que el pago de {formatCurrency(remaining)} está completo (por ejemplo, el resto llegó por otro medio).</>}
+              </span>
             </label>
           )}
 

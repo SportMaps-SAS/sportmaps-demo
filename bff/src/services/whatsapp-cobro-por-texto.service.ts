@@ -26,7 +26,7 @@
  * Pura: quien la llama trae los cobros, los parciales y el ajuste.
  */
 
-import { describirPago, type PagoPendiente } from './whatsapp-receipt-matching.service';
+import { describirPago, montoCubreElCobro, type PagoPendiente } from './whatsapp-receipt-matching.service';
 import { mesDePago, mesesDelTexto, montoEscrito } from './whatsapp-eleccion-de-pago.service';
 
 /** Un cobro abonado: lo que falta es `amount - amount_paid`. */
@@ -35,6 +35,8 @@ export interface CobroParcial {
     amount: number;
     amount_paid: number | null;
     concept: string | null;
+    /** Pronto pago congelado en el cobro: también está «cubierto». Opcional. */
+    early_payment_discount_applied?: number | null;
 }
 
 export type DecisionPorTexto =
@@ -126,7 +128,8 @@ export function decidirCobroPorTexto(e: {
 }): DecisionPorTexto {
     const { pendientes, parciales, monto, lectura } = e;
     const conRecargo = (p: PagoPendiente) => monto !== null && (e.recargos?.get(p.id) ?? []).includes(monto);
-    const saldoDe = (p: CobroParcial) => Math.max(Number(p.amount) - Number(p.amount_paid ?? 0), 0);
+    const saldoDe = (p: CobroParcial) =>
+        Math.max(Number(p.amount) - Number(p.amount_paid ?? 0) - Math.max(Number(p.early_payment_discount_applied ?? 0) || 0, 0), 0);
     const cita = lectura.texto ? ` («${lectura.texto}»)` : '';
 
     // 1. «Envío el saldo»: el parcial cuyo saldo es ese monto.
@@ -147,10 +150,32 @@ export function decidirCobroPorTexto(e: {
         }
     }
 
+    // 1·bis. (Monster 10-nov y 19-nov 2026: $150.000 + $150.000 de un cobro de $300.000, y la base quedó con UN abono)
+    //     El monto es EXACTAMENTE el saldo de UN cobro ya abonado y no hay ningún cobro pendiente por ese valor: es
+    //     el segundo abono del MISMO cobro, aunque la familia no escriba «saldo». Antes caía en «sin pendientes» y
+    //     el camino de «ya registrado» lo cerraba por tener el mismo monto que el primer abono. Va a la escuela con
+    //     el resumen: se SUMA a `amount_paid` del mismo cobro (no crea cobro nuevo ni recalcula el precio).
+    if (monto !== null && !lectura.saldo && !pendientes.some((p) => montoCubreElCobro(p, monto))) {
+        const delSaldo = parciales.filter((p) => saldoDe(p) > 0 && Math.abs(saldoDe(p) - monto) <= 1);
+        if (delSaldo.length === 1) {
+            const p = delSaldo[0];
+            return {
+                tipo: 'a_la_escuela',
+                codigo: 'saldo_de_parcial',
+                pagoId: p.id,
+                resumen: `La familia mandó ${cop(monto)}${cita}: es justo el saldo de ${p.concept ?? 'un cobro'} ` +
+                    `(abonado ${cop(Number(p.amount_paid ?? 0))} de ${cop(Number(p.amount))}). ` +
+                    `Es otro abono del MISMO cobro: aplíquenlo desde Pagos para que se sume a lo abonado (${cop(Number(p.amount_paid ?? 0) + monto)}).`,
+                mensaje: `Recibí tu comprobante de *${cop(monto)}* para completar *${p.concept ?? 'tu cobro'}* 📄 ` +
+                    'Se lo paso a la escuela para que lo aplique y te confirme.',
+            };
+        }
+    }
+
     // 1a. MAYOR que el saldo de un cobro ya abonado y sin ningún pendiente que cuadre (Monster 2026-11-12, Shara:
     //     $145.000 sobre un cobro de $145.000 con $20.000 abonados). No se estampa ni se cierra con «ya registrado»:
     //     la escuela aplica el saldo y decide el excedente.
-    if (monto !== null && !pendientes.some((p) => Number(p.amount) === monto)) {
+    if (monto !== null && !pendientes.some((p) => montoCubreElCobro(p, monto))) {
         const sobre = parciales.filter((p) => monto > saldoDe(p) && saldoDe(p) > 0);
         if (sobre.length === 1) {
             const p = sobre[0];
@@ -167,7 +192,8 @@ export function decidirCobroPorTexto(e: {
         }
     }
 
-    const igual = (p: PagoPendiente) => monto !== null && Number(p.amount) === monto;
+    // Con pronto pago (descuento congelado en el cobro) la familia transfiere `amount − descuento`: también es «igual».
+    const igual = (p: PagoPendiente) => montoCubreElCobro(p, monto);
     const cuadra = (p: PagoPendiente) => igual(p) || conRecargo(p);
     const porMes = lectura.meses.length
         ? pendientes.filter((p) => { const m = mesDePago(p); return m !== null && lectura.meses.includes(m); })

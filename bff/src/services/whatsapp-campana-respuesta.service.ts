@@ -39,7 +39,7 @@ import {
     ACCIONES_CAMPANA, PREFIJO_BOTON_CAMPANA, avisarAdministracion, type AccionCampana,
 } from './whatsapp-campanas.service';
 import { entranteConIntencion } from './whatsapp-audiencias.service';
-import { motivoDeServicio, serviciosDeAnuncio, type ItemConFicha } from './whatsapp-anuncio-destino';
+import { motivoDeServicio, serviciosDeAnuncio, textoVentaCerrada, ventaCerradaDeItem, type ItemConFicha } from './whatsapp-anuncio-destino';
 import { MARCA_VENTA, itemNombradoEn } from './whatsapp-venta-contexto';
 import {
     BOTONES_DE_ENTRADA, MAX_CUERPO_CON_BOTONES, botonesDeVenta, lineaDeSaludoDeVenta, type BotonDeVenta,
@@ -55,6 +55,8 @@ export const PASO_CAMPANA = 'campana';
 export const PASO_RESPUESTA_SI = 'campana_respuesta_si';
 export const PASO_RESPUESTA_LUEGO = 'campana_respuesta_luego';
 export const PASO_BAJA = 'opt_out_confirmado';
+/** Paso del mensaje fijo de una venta cerrada (el bot lo usa en el chat y la campaña). */
+export const PASO_VENTA_CERRADA = 'venta_cerrada';
 export const PASO_NO_INTERESA = 'campana_no_interesa';
 
 export const TEXTO_LUEGO = '¡Entendido! 🙌 Cuando quieras, escríbenos por aquí y te contamos.';
@@ -160,9 +162,20 @@ async function enviarDirecto(a: {
  */
 async function servicioDeLaCampana(schoolId: string, campana: CampanaMin): Promise<ItemConFicha | null> {
     try {
-        const items = await serviciosDeAnuncio(schoolId);
+        const items = await serviciosDeAnuncio(schoolId, Date.now(), { ventaAbierta: true });
         if (!items.length) return null;
         return itemNombradoEn(campana.respuesta_si, items) ?? itemNombradoEn(campana.nombre, items);
+    } catch {
+        return null;
+    }
+}
+
+/** El servicio vigente de la campaña cuya venta YA cerró (null si no es de un servicio o sigue en venta). Nunca lanza. */
+async function servicioCerradoDeLaCampana(schoolId: string, campana: CampanaMin): Promise<ItemConFicha | null> {
+    try {
+        const cerrados = (await serviciosDeAnuncio(schoolId)).filter((it) => ventaCerradaDeItem(it));
+        if (!cerrados.length) return null;
+        return itemNombradoEn(campana.respuesta_si, cerrados) ?? itemNombradoEn(campana.nombre, cerrados);
     } catch {
         return null;
     }
@@ -257,6 +270,29 @@ async function atenderBoton(
     // la respuesta lleva la marca de la venta y lo que escriba después lo atiende la
     // venta (frente A, Monster 2026-11-08).
     const item = await servicioDeLaCampana(integration.school_id, campana);
+    // (2026-11-20) La campaña es la de un servicio cuya VENTA ya cerró: un mensaje fijo (sin ficha, botones ni
+    // cotización) y a la escuela. Quien ya abonó sigue con su saldo y sus comprobantes por el camino de siempre.
+    if (!item) {
+        const cerrado = await servicioCerradoDeLaCampana(integration.school_id, campana);
+        if (cerrado) {
+            await enviarDirecto({
+                integration, conversationId, contactWaId: msg.contactWaId, texto: textoVentaCerrada(cerrado),
+                step: PASO_VENTA_CERRADA, campanaId: campana.id,
+                extra: { venta_cerrada: cerrado.id, pendiente_escuela: `venta cerrada: ${cerrado.name}`.slice(0, 300) },
+            });
+            await supabase.from('whatsapp_conversations')
+                .update({ status: 'open', updated_at: new Date().toISOString() }).eq('id', conversationId);
+            await avisarAdministracion({
+                schoolId: integration.school_id,
+                clave: `wa_campana_si:${campana.id}:${msg.contactWaId}`,
+                titulo: `${etiquetaDeContacto(msg.contactName, msg.contactWaId)} respondió «Sí» a una venta cerrada`,
+                mensaje: `A la campaña «${campana.nombre}», cuya venta ya cerró. Se le dijo que la escuela le responde: escríbele.`,
+                link: `/whatsapp?conversacion=${conversationId}`,
+                data: { tipo: 'whatsapp_campana_si', campana_id: campana.id, conversation_id: conversationId },
+            });
+            return 'si';
+        }
+    }
     const marca = item ? { [MARCA_VENTA]: item.id } : undefined;
     // Venta de un servicio (Monster 2026-11-09, «que todo sea más fácil y concreto, vender
     // más rápido»): la respuesta va con [Separar mi cupo] [Ver detalles] [Hablar con alguien];

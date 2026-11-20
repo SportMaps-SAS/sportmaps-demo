@@ -40,6 +40,10 @@ export interface FilaPorClasificar {
     propuesta: { detalle?: string | null; texto?: string | null; pagador?: string | null } | null;
     created_at: string;
     archivo_url: string | null;
+    /** Nombre de la conversación de WhatsApp de ese contacto, si la hay. */
+    chat_nombre?: string | null;
+    /** Ficha de prospecto de la escuela con ese teléfono, si la hay. */
+    prospecto?: { id: string; nombre: string } | null;
 }
 export interface ServicioDelCatalogo {
     id: string; nombre: string; tipo: string; precio: number; precio_afiliado: number | null;
@@ -60,6 +64,25 @@ const cop = (n: number) => new Intl.NumberFormat('es-CO', { style: 'currency', c
 
 export function diasEsperando(creado: string, ahora = Date.now()): number {
     return Math.max(0, Math.floor((ahora - new Date(creado).getTime()) / 86_400_000));
+}
+
+/**
+ * Quién mandó el comprobante: el nombre que haya (fila → chat → prospecto → pagador leído) y el contacto COMPLETO.
+ * Antes salía «Sin nombre · ···0145»: con cuatro dígitos la escuela no podía buscar el chat ni distinguir dos
+ * contactos que terminan igual (Monster, 2026-11-20). Un contacto sin teléfono (usuario de Meta, alias «wau-…»)
+ * no tiene número que mostrar.
+ */
+export function quienEnvio(f: Pick<FilaPorClasificar, 'contacto' | 'contacto_nombre' | 'chat_nombre' | 'prospecto' | 'propuesta'>): {
+    nombre: string; telefono: string | null; enlace: string | null; esProspecto: boolean;
+} {
+    const limpio = (s: string | null | undefined) => String(s ?? '').trim();
+    const nombre = limpio(f.contacto_nombre) || limpio(f.chat_nombre) || limpio(f.prospecto?.nombre) || limpio(f.propuesta?.pagador) || 'Sin nombre';
+    const digitos = /^\d{10,15}$/.test(limpio(f.contacto)) ? limpio(f.contacto) : null;
+    const telefono = !digitos ? null
+        : digitos.length === 12 && digitos.startsWith('57')
+            ? `+57 ${digitos.slice(2, 5)} ${digitos.slice(5, 8)} ${digitos.slice(8)}`
+            : `+${digitos}`;
+    return { nombre, telefono, enlace: digitos ? `https://wa.me/${digitos}` : null, esProspecto: !!f.prospecto };
 }
 
 /** Lo que se le explica a la escuela cuando la base no creó el cobro. */
@@ -128,6 +151,7 @@ export function PorClasificarCard({ schoolId, onCambio }: { schoolId: string; on
                 <CardContent className="space-y-2">
                     {filas.map((f) => {
                         const dias = diasEsperando(f.created_at);
+                        const quien = quienEnvio(f);
                         return (
                             <div key={f.id} className="flex flex-col gap-3 rounded-lg border bg-background p-3 sm:flex-row sm:items-center" data-testid={`pc-${f.id}`}>
                                 {f.archivo_url ? (
@@ -144,8 +168,11 @@ export function PorClasificarCard({ schoolId, onCambio }: { schoolId: string; on
                                         {dias >= 1 && <span className={`text-xs ${dias >= 2 ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}>hace {dias} {dias === 1 ? 'día' : 'días'}</span>}
                                     </div>
                                     <div className="text-xs text-muted-foreground">
-                                        {f.contacto_nombre || f.propuesta?.pagador || 'Sin nombre'}
-                                        {f.contacto ? ` · ···${f.contacto.slice(-4)}` : ''}
+                                        <span className="font-medium text-foreground">{quien.nombre}</span>
+                                        {quien.esProspecto ? ' (prospecto)' : ''}
+                                        {quien.telefono && quien.enlace ? (
+                                            <> · <a href={quien.enlace} target="_blank" rel="noreferrer" className="underline underline-offset-2" aria-label={`Abrir el chat de WhatsApp de ${quien.telefono}`}>{quien.telefono}</a></>
+                                        ) : f.contacto ? ' · sin teléfono (usuario de WhatsApp)' : ''}
                                         {f.referencia ? ` · ref. ${f.referencia}` : ''}
                                         {f.fecha_comprobante ? ` · ${f.fecha_comprobante}` : ''}
                                         {f.banco ? ` · ${f.banco}` : ''}
@@ -192,7 +219,8 @@ function CrearCobroDialog({ schoolId, fila, servicios, onClose, onListo }: {
 }) {
     const [servicioId, setServicioId] = useState<string>('');
     const [opcion, setOpcion] = useState<string>('');
-    const [q, setQ] = useState('');
+    // Si el contacto ya tiene ficha de prospecto, la búsqueda arranca con su nombre (se puede cambiar).
+    const [q, setQ] = useState(fila.prospecto?.nombre ?? '');
     const [resultados, setResultados] = useState<Dueno[]>([]);
     const [dueno, setDueno] = useState<Dueno | null>(null);
     const [enviando, setEnviando] = useState(false);

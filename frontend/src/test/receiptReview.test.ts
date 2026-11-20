@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   sortReviewQueue, waitingLabel, greenExclusion, bulkGreenSelection, rejectReasonError, rejectErrorMessage,
-  REJECT_REASONS, type QueueItem, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish,
+  REJECT_REASONS, type QueueItem, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish, compareReceipt,
 } from '@/lib/receiptReview';
 
 const base = (o: Partial<QueueItem> & { id: string }): QueueItem => ({
@@ -125,5 +125,33 @@ describe('un comprobante, varios cobros (Juliana: $450.000 por sept, oct y nov)'
     expect(joinSpanish([])).toBe('');
     expect(joinSpanish(['Septiembre 2026'])).toBe('Septiembre 2026');
     expect(joinSpanish(['Septiembre 2026', 'Octubre 2026', 'Noviembre 2026'])).toBe('Septiembre 2026, Octubre 2026 y Noviembre 2026');
+  });
+});
+
+describe('compareReceipt — comprobante contra saldo', () => {
+  const cobro = { due: 125000, remaining: 125000, status: 'awaiting_approval', hasReceipt: true };
+  it('igual dentro de la tolerancia y sin lectura', () => {
+    expect(compareReceipt(cobro, 125000).kind).toBe('igual');
+    expect(compareReceipt(cobro, 125500).kind).toBe('igual');
+    expect(compareReceipt(cobro, null).kind).toBe('sin_lectura');
+  });
+  it('trae menos: falta, sin saldo a favor', () => {
+    expect(compareReceipt({ ...cobro, due: 350000, remaining: 350000 }, 175000))
+      .toEqual({ kind: 'falta', diff: 175000, saldoAFavor: 0, sinAcreditar: 0 });
+  });
+  it('trae más: el sobrante completo queda como saldo a favor', () => {
+    expect(compareReceipt({ ...cobro, due: 165000, remaining: 165000 }, 370000))
+      .toEqual({ kind: 'sobra', diff: 205000, saldoAFavor: 205000, sinAcreditar: 0 });
+  });
+  it('con abono previo la base solo guarda lo que pasa del cobro entero (Monster 2026-11-20: $165.000 sobre saldo $105.000)', () => {
+    expect(compareReceipt({ ...cobro, remaining: 105000 }, 165000))
+      .toEqual({ kind: 'sobra', diff: 60000, saldoAFavor: 40000, sinAcreditar: 20000 });
+  });
+  it('la base no acredita si no viene de «por validar» o la lectura pasa de 4 veces lo esperado', () => {
+    expect(compareReceipt({ ...cobro, status: 'pending' }, 165000).saldoAFavor).toBe(0);
+    expect(compareReceipt(cobro, 1250000)).toMatchObject({ kind: 'sobra', saldoAFavor: 0, sinAcreditar: 1125000 });
+  });
+  it('el recargo del enlace de pago no es sobrante', () => {
+    expect(compareReceipt({ ...cobro, grossAmount: 132500 }, 132500).kind).toBe('igual');
   });
 });

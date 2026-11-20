@@ -118,3 +118,39 @@ describe('decidirCobroPorTexto', () => {
         expect(decidir({ pendientes: [OCT], monto: null })).toBeNull();
     });
 });
+
+describe('auditoría Monster 19-20 nov 2026 (nombres inventados)', () => {
+    // Cobro de $300.000 con un primer abono aprobado de $150.000 (el 10-nov); el 19-nov llegan otros $150.000.
+    const PARCIAL = { id: 'nov-torneo', amount: 300000, amount_paid: 150000, concept: 'Torneo Copa Ficticia - Mateo Prueba' };
+
+    it('(a)/(f) el segundo abono por el saldo exacto, SIN la palabra «saldo», va al mismo cobro parcial (no a «ya registrado»)', () => {
+        const d = decidir({ pendientes: [], parciales: [PARCIAL], monto: 150000 });
+        expect(d).toMatchObject({ tipo: 'a_la_escuela', codigo: 'saldo_de_parcial', pagoId: 'nov-torneo' });
+        expect((d as any).resumen).toContain('abonado $150.000 de $300.000');
+        expect((d as any).resumen).toContain('MISMO cobro');
+        expect((d as any).resumen).toContain('$300.000)'); // 150.000 abonados + 150.000 = 300.000
+    });
+
+    it('(f) el saldo se calcula sobre lo ya abonado, no sobre un precio nuevo: otro monto no dispara la regla', () => {
+        expect(decidir({ pendientes: [], parciales: [PARCIAL], monto: 140000 })).toBeNull();
+    });
+
+    it('el saldo descuenta el pronto pago congelado del parcial', () => {
+        const conPronto = { ...PARCIAL, early_payment_discount_applied: 10000 };
+        expect(decidir({ pendientes: [], parciales: [conPronto], monto: 140000 })).toMatchObject({ codigo: 'saldo_de_parcial' });
+    });
+
+    it('si hay un cobro pendiente por ese mismo monto, la regla del saldo no le gana (se decide como siempre)', () => {
+        const d = decidir({ pendientes: [{ ...OCT, amount: 150000 }], parciales: [PARCIAL], monto: 150000 });
+        expect(d?.tipo === 'a_la_escuela' && d.codigo === 'saldo_de_parcial').toBe(false);
+    });
+
+    it('(b) pagó el valor con 5 % de pronto pago ($332.500 de $350.000): cuadra, no es un abono ni «quedan $17.500»', () => {
+        const conDescuento: PagoPendiente = { ...OCT, id: 'clinica', amount: 350000, descuento: 17500 };
+        const d = decidir({ pendientes: [conDescuento], monto: 332500 });
+        // `null` = sin opinión: sigue el camino normal y se estampa en ESE cobro (no `monto_no_cuadra`).
+        expect(d).toBeNull();
+        const sinDescuento: PagoPendiente = { ...OCT, id: 'clinica', amount: 350000 };
+        expect(decidir({ pendientes: [sinDescuento], monto: 332500 })).toMatchObject({ tipo: 'a_la_escuela', codigo: 'monto_no_cuadra' });
+    });
+});

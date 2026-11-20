@@ -45,7 +45,8 @@ import {
 } from './whatsapp-anuncio-destino';
 import { comoPagar, estadoDeSalientes, numeroLegible, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { cop, tokensDistintivos } from './whatsapp-venta-servicios.service';
-import { hoyBogota, opcionesDelItem } from './wa-cobro-desde-comprobante.service';
+import { hoyBogota, opcionesDelItem, type ItemDeServicio } from './wa-cobro-desde-comprobante.service';
+import { cobroConAbono, lineasDeSaldoDelCobro, type CobroPrevioParaIa } from './whatsapp-catalogo-para-ia';
 import type { Motivo } from './motivos-de-cobro';
 import type { PreguntaDeServicio, RespuestaDeServicio } from './whatsapp-servicio-ia';
 import { nombreDeAsistente, puedeSerPalabraDeNombre } from './whatsapp-comprobante-de-ficha.service';
@@ -245,11 +246,15 @@ export function textoDePagoDeServicio(
     item: ItemConFicha,
     precio: PrecioDeServicio | null,
     cuentas: CuentaDePagoEmbudo[],
-    o: { afiliado?: boolean; hoy?: string; cierre?: string } = {},
+    o: { afiliado?: boolean; hoy?: string; cierre?: string; cobroPrevio?: CobroPrevioParaIa | null } = {},
 ): string {
     const cierre = o.cierre ?? CIERRE_DE_PAGO;
     const p = precio ?? precioDelServicio(item, { afiliado: o.afiliado === true, hoy: o.hoy ?? hoyBogota(Date.now()) });
-    const valor = lineasDeValorDeVenta(p);
+    // Con un abono hecho, el valor es el SALDO de su cobro, nunca el precio de hoy ni un abono de otra fecha.
+    const cobro = cobroConAbono(o.cobroPrevio);
+    const valor = cobro ? lineasDeSaldoDelCobro(cobro) : lineasDeValorDeVenta(p);
+    // Vacacional: se dan las dos tarifas y se pide que diga cuál es (no se asume externa).
+    if (!cobro && !p.deAfiliado && p.opciones.some((x) => x.precioAfiliado)) valor.push('Si entrenas en el club (afiliada/o) aplica el valor de afiliados; cuéntame cuál es tu caso.');
     const como = cuentas.length ? comoPagar(cuentas).replace(/\n+$/, '') : null;
     const pagar = como
         ? `Transfiere ${como}${como.includes('\n') ? '' : '.'}`
@@ -712,6 +717,26 @@ export function intencionEnVenta(texto: string | null | undefined): IntencionVen
     return 'detalle';
 }
 
+/**
+ * (Monster 2026-11-20, un proveedor) Un mensaje que COBRA a la escuela: «me colaboras con un pago pendiente que tenemos
+ * de $245.000», «puedes pagar en este enlace», factura, cuenta de cobro. No es un cliente que quiere pagar: no inicia
+ * venta ni recibe datos de pago; pasa a la escuela. Con el nombre o el tema del servicio («pago de la clínica») es de un
+ * cliente y NO entra aquí. Pura.
+ */
+export function reclamaPagoALaEscuela(texto: string | null | undefined, item?: Pick<ItemDeServicio, 'name'> | null): boolean {
+    const t = normalizarFrase(texto);
+    if (!t) return false;
+    const url = /:\/\/|www\.|\b[a-z0-9-]+\.(?:com|co|net|org|io|app|link|me|ly|info|biz|site|online|page|pay|cc|ws)\b/.test(String(texto ?? '').toLowerCase());
+    const fuerte = /\b(factura|facturas|cuenta de cobro|cuentas de cobro|orden de compra|remision|pago pendiente|saldo pendiente|deuda pendiente)\b/.test(t);
+    const reclama = fuerte
+        || /\b(me|nos) (deben|adeudan)\b|\b(pendiente|pendientes) (de )?(pago|pagarme|pagarnos)\b|\b(que|para que) (la escuela|el club|ustedes) (me |nos )?(pague|paguen|cancele|cancelen|consigne|consignen|gire|giren)\b|\b(pagarme|pagarnos|cancelarme|cancelarnos|girarme|girarnos)\b|\bpagar(me|nos)? en (este|el siguiente|ese) (enlace|link)\b|\b(me|nos) (colabora|colaboras|colaboran|ayuda|ayudas|ayudan|puede|puedes|pueden) (con|a) (el|un|su|ese|este) pago\b/.test(t);
+    if (!reclama) return false;
+    if (url || fuerte) return true;
+    if (/\b(clinica|torneo|vacacional|campamento|inscripcion|inscribir|inscribirme|cupo|mensualidad|abono|apartar|separar|mi hij[oa])\b/.test(t)) return false;
+    const nombre = normalizarFrase(item?.name);
+    return !(nombre && nombre.length > 4 && t.includes(nombre));
+}
+
 /** ¿Pide los datos para pagar? (la ficha del anuncio manda el pago aparte solo si los pidió). Pura. */
 export function pideDatosDePago(texto: string | null | undefined): boolean {
     return intencionEnVenta(texto) === 'pago';
@@ -1037,6 +1062,11 @@ export interface CtxVentaServicio {
     guardarLead: (servicio: { id: string; nombre: string; tipo: string }) => Promise<string | null>;
     /** B4: el motivo del próximo comprobante, vigente hasta el fin del servicio. */
     registrarEsperado: (e: { motivo: Motivo; leadId: string | null; venceEn: string | null }) => Promise<boolean>;
+    /**
+     * (2026-11-19) El cobro que esta persona YA tiene de este servicio (`payments.amount` / `amount_paid`, p. ej. con
+     * `cobroPrevioDelServicio`). Con abono, su saldo y su mínimo salen de ahí, no del precio de hoy. null = no tiene.
+     */
+    cobroPrevio?: (item: ItemConFicha) => Promise<CobroPrevioParaIa | null>;
     /** IA anclada al ítem (frente B). */
     responderPregunta: (p: PreguntaDeServicio) => Promise<RespuestaDeServicio>;
     /** UN mensaje; `contexto` va al payload del saliente. Con `botones`, botones de respuesta (si no salen, el texto solo). */
@@ -1188,6 +1218,42 @@ async function afiliadoSiHaceFalta(ctx: CtxVentaServicio, item: ItemConFicha, te
     return seguro(() => ctx.afiliado(), false);
 }
 
+/** El cobro con abono que la persona ya tiene del servicio (null si no tiene o no se pudo leer). Nunca lanza. */
+async function cobroPrevioDe(ctx: CtxVentaServicio, item: ItemConFicha): Promise<CobroPrevioParaIa | null> {
+    if (!ctx.cobroPrevio) return null;
+    return cobroConAbono(await seguro(() => ctx.cobroPrevio!(item), null));
+}
+
+/**
+ * El hook `ctx.cobroPrevio` del bot: el cobro con abono que el PROSPECTO ya tiene de este servicio (el dueño es su
+ * lead, el que el bot ya resuelve con `leadDeVenta`). Una lectura del lead y una del cobro por ítem, memorizadas en
+ * el turno. Familias del club y simulación: null (siguen con el precio vigente). Nunca lanza. Inyectable para probar.
+ */
+export function crearCobroPrevioDelTurno(d: {
+    omitir: boolean;
+    leadId: () => Promise<string | null | undefined>;
+    cobro: (dueno: { leadId: string }, item: ItemConFicha) => Promise<{ amount: number; amountPaid: number } | null>;
+}): (item: ItemConFicha) => Promise<CobroPrevioParaIa | null> {
+    const memo = new Map<string, Promise<CobroPrevioParaIa | null>>();
+    return (item) => {
+        if (d.omitir) return Promise.resolve(null);
+        let p = memo.get(item.id);
+        if (!p) {
+            p = (async () => {
+                try {
+                    const leadId = await d.leadId();
+                    if (!leadId) return null;
+                    return cobroConAbono(await d.cobro({ leadId }, item));
+                } catch {
+                    return null;
+                }
+            })();
+            memo.set(item.id, p);
+        }
+        return p;
+    };
+}
+
 /**
  * El mensaje de pago aparte: precio de hoy, cuentas, lead con el servicio y el
  * esperado B4 (para que el comprobante cree el cobro del servicio). Lo usan la
@@ -1223,15 +1289,16 @@ export async function enviarPagoDeServicio(
     const ahoraMs = (ctx.ahora ?? (() => new Date()))().getTime();
     const registro = await registroDelTurno(ctx, null, ahoraMs);
     const faltanDatos = registro ? faltantesDe(registro, hoy) : null;
+    const cobroPrevio = await cobroPrevioDe(ctx, item);
     await ctx.enviar(textoDePagoDeServicio(item, precio, cuentas,
-        registro && faltanDatos ? { cierre: cierreDePagoSegunRegistro(faltanDatos, registro) } : {}) + nota, {
+        { ...(registro && faltanDatos ? { cierre: cierreDePagoSegunRegistro(faltanDatos, registro) } : {}), cobroPrevio }) + nota, {
         ...marca,
         step: PASO_VENTA.PAGO,
         ...(faltanDatos?.length ? { faltan_datos: faltanDatos } : {}),
         repetible: true,
         datos_de_pago: cuentas.length > 0,
         precio_hoy: precio.hoy,
-        ...(precio.abono !== null ? { abono: precio.abono } : {}),
+        ...(cobroPrevio ? { saldo_cobro_previo: cobroPrevio.amount - cobroPrevio.amountPaid } : precio.abono !== null ? { abono: precio.abono } : {}),
         ...(precio.deAfiliado ? { afiliado: true } : {}),
         motivo_esperado: { motivo, monto: null, registrado },
         ...(cuentas.length ? {} : { sin_cuentas: true }),
@@ -1421,6 +1488,11 @@ export async function atenderVentaDeServicio(
     if (intencion === 'club') return null;
     const ahora = (ctx.ahora ?? (() => new Date()))().getTime();
     const marca = { [MARCA_VENTA]: item.id, intencion_venta: intencion };
+    // Un proveedor que le cobra a la escuela no es un cliente: ni datos de pago ni nombre de asistente; pasa a la escuela.
+    if (reclamaPagoALaEscuela(texto, item)) {
+        await seguro(() => ctx.avisarEscuela(`Mensaje que parece COBRARLE a la escuela (no es una compra de «${item.name}»): «${texto.slice(0, 300)}».`), undefined);
+        return 'venta_a_la_escuela';
+    }
     // Un comprobante en la ráfaga (o en la cola): lo contesta la cola, una sola vez.
     const colaContesta = async () => (ctx.comprobanteEnCurso ? seguro(() => ctx.comprobanteEnCurso!(), false) : false);
     // «Comparto soporte de pago… / Gabriela Covaleda García / 13 años»: dice que pagó Y da los datos de quien asiste.
@@ -1616,9 +1688,10 @@ export async function atenderVentaDeServicio(
             }
             const afiliado = await afiliadoSiHaceFalta(ctx, item, texto);
             const cuentas = await seguro(() => ctx.cuentas(motivoDeServicio(item)), [] as CuentaDePagoEmbudo[]);
+            const cobroPrevio = await cobroPrevioDe(ctx, item);
             const r = await seguro<RespuestaDeServicio>(() => ctx.responderPregunta({
                 schoolId: ctx.schoolId, conversationId: ctx.conversationId, item, pregunta: texto,
-                recientes: ctx.recientes, afiliado, cuentas, hoy, comprobanteRecibido: pagado,
+                recientes: ctx.recientes, afiliado, cuentas, hoy, comprobanteRecibido: pagado, cobroPrevio,
             }), { tipo: 'no_se', motivo: 'error' });
             let descartada = false;
             if (r.tipo === 'respuesta' && r.texto.trim()) {

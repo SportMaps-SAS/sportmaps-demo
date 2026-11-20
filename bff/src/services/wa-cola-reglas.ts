@@ -328,6 +328,8 @@ export function laVentaCede(e: {
     if (e.monto !== null && !nombraElServicio) {
         const saldos = (e.parciales ?? []).map((p) => Number(p.amount) - Number(p.amount_paid ?? 0)).filter((s) => s > 0);
         if (saldos.some((s) => igual(s, e.monto as number))) return { cede: true, razon: 'saldo_de_un_cobro', desmiente: false };
+        // Un monto igual al de un cobro pendiente abierto de la familia no es una venta nueva (Monster 2026-11).
+        if ((e.pendientes ?? []).some((p) => igual(Number(p.amount), e.monto as number))) return { cede: true, razon: 'saldo_de_un_cobro', desmiente: false };
         const montos = (e.pendientes ?? []).map((p) => Number(p.amount)).filter((m) => m > 0).slice(0, 8);
         if (montos.length >= 2 && algunaSumaDa(montos, e.monto)) return { cede: true, razon: 'suma_de_cobros', desmiente: false };
     }
@@ -647,4 +649,48 @@ export function propuestaDeCobroPrevio(e: {
         + `sumando este comprobante de ${pesos(monto)} serían ${pesos(suma)}`
         + `${queda > TOLERANCIA ? ` (faltarían ${pesos(queda)})` : queda < -TOLERANCIA ? ` (${pesos(-queda)} de más)` : ' (el cobro completo)'}; `
         + 'sumarlo al mismo cobro, no crear otro';
+}
+
+// ─── Imágenes con plata que se cerraban mudas (auditoría 1–20 nov 2026, Monster's) ───────────────────────────
+//
+// 70 filas `contacto_no_atendido`, ráfagas «sin ficha» sin OCR y capturas con monto cerraron sin que la escuela
+// viera nada. Invariante I-1: una imagen con monto legible (o de alguien de quien se espera un pago) deja rastro.
+
+/** Pasos del bot cuyo mensaje entrega los datos para pagar: quien los recibió puede mandar un comprobante. */
+export const PASOS_CON_DATOS_DE_PAGO: readonly string[] = [
+    'medios_de_pago_publicos', 'medios_de_pago_confirma', 'embudo_esperando_pago', 'pago_mensualidad_aclaracion',
+];
+/** Días en que un mensaje con datos de pago sigue contando como «se espera un pago de este número». */
+export const DIAS_DATOS_DE_PAGO = 4;
+
+export type DestinoDeCuenta = 'general' | 'restringida' | 'fuera_de_sportmaps' | 'ajena' | null;
+
+/** Código (tras `sin_familia:`) de una imagen con monto de alguien sin ficha que se iba a cerrar muda. */
+export const CODIGO_CAPTURA_SIN_CONTEXTO = 'captura_sin_contexto';
+
+/**
+ * ¿Una imagen con monto que iba a cerrarse en silencio tiene que quedar en la bandeja / «Por clasificar»? Pura.
+ *  · Sin monto, «no es comprobante» o listado de movimientos → no (un afiche, una foto, un chat no hacen ruido).
+ *  · Dinero a una cuenta ajena, restringida o «por fuera de SportMaps» → no (no es plata de la escuela).
+ *  · Dinero a una cuenta general de la escuela → sí, sea comprobante completo o captura recortada.
+ *  · Destino sin leer o sin cuentas con qué cruzar → sí si es un comprobante completo (referencia o fecha+banco) o
+ *    si se espera un pago de ese número; no si el contacto está marcado (personal, negocio…) y no hay certeza.
+ */
+export function imagenConPlataSinRastro(e: {
+    monto: number | null | undefined; isReceipt?: boolean | null; isTransactionList?: boolean | null;
+    completo: boolean; destino: DestinoDeCuenta; esperaPago: boolean; contactoMarcado?: boolean;
+}): boolean {
+    if (!(typeof e.monto === 'number' && e.monto > 0)) return false;
+    if (e.isReceipt === false || e.isTransactionList === true) return false;
+    if (e.destino === 'general') return true;
+    if (e.destino !== null) return false;
+    if (e.contactoMarcado) return false;
+    return e.completo || e.esperaPago;
+}
+
+/** Lo que se sabe de la imagen, para el motivo que ve la escuela. Pura. */
+export function textoDeCaptura(e: { monto: number; completo: boolean; destino: DestinoDeCuenta; esperaPago: boolean }): string {
+    const aDonde = e.destino === 'general' ? 'a una cuenta de la escuela' : 'a un destino sin confirmar';
+    return `${e.completo ? 'comprobante' : 'captura'} de ${pesos(e.monto)} ${aDonde}`
+        + `${e.completo ? '' : ', sin fecha ni número de comprobante'}${e.esperaPago ? ' (se esperaba un pago de este número)' : ''}`;
 }

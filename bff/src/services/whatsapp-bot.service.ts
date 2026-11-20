@@ -157,6 +157,7 @@ import {
 } from './textos-clase-prueba';
 import {
     atenderDestinoDeAnuncio, mapeoDeAnuncio, serviciosDeAnuncio, servicioDeAnuncioPorId, servicioVigente, motivoDeServicio,
+    ventaCerradaDeItem, textoVentaCerrada,
     MARCA_DESTINO, type CtxAnuncio, type ResultadoAnuncio, type ItemConFicha,
 } from './whatsapp-anuncio-destino';
 import type { Motivo } from './motivos-de-cobro';
@@ -171,17 +172,18 @@ import {
     PASO_FORMULARIO_ENVIADO, PASO_FORMULARIO_RESPALDO,
     type CtxRespuestaFormulario, type ResultadoFormulario,
 } from './whatsapp-formulario-servicio';
-import { asegurarLeadDeVenta, guardarDatosDeRegistro, hoyBogota, leadDeVenta } from './wa-cobro-desde-comprobante.service';
+import { asegurarLeadDeVenta, cobroPrevioDelServicio, guardarDatosDeRegistro, hoyBogota, leadDeVenta } from './wa-cobro-desde-comprobante.service';
 import { registroDeFicha } from './wa-registro-de-venta.service';
 import {
     atenderOleada1Desconocido, atenderOleada1Familia, preguntarReferidoTrasTurno, type IoDelBot,
 } from './whatsapp-bot-oleada1';
-import { contextoDeVenta, mensajesParaVenta } from './whatsapp-venta-contexto.db';
+import { contextoDeVenta, mensajesParaVenta, servicioDelLead } from './whatsapp-venta-contexto.db';
 import {
-    botonDelClubQuietoEnVenta, pideElClub, pidioElClubConTexto, ventaAntesDelPedidoDelClub, type VentaActiva,
+    botonDelClubQuietoEnVenta, pideElClub, pidioElClubConTexto, servicioCerradoQueSeConsulta, ventaAntesDelPedidoDelClub,
+    type VentaActiva,
 } from './whatsapp-venta-contexto';
 import {
-    atenderBotonDelClubEnVenta, atenderVentaDeServicio, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes,
+    atenderBotonDelClubEnVenta, atenderVentaDeServicio, crearCobroPrevioDelTurno, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes,
     ventaCedeAlEmbudo, ventaDeFamilia, textoClubAparteDeLaVenta, textoDePagoDeServicio, tienePrecioDeAfiliado, PASO_VENTA,
     atenderBotonDeVenta, parsearBotonDeVenta, TEXTO_SERVICIO_NO_VIGENTE,
     type CtxVentaServicio, type ResultadoVenta,
@@ -2840,7 +2842,8 @@ function ctxAnuncio(
         schoolId,
         recientes: async () => recientes,
         mapeo: (sourceId) => mapeoDeAnuncio(schoolId, sourceId),
-        servicios: () => serviciosDeAnuncio(schoolId),
+        // Solo lo que todavía se vende: un servicio con la venta cerrada no se ficha ni se cotiza (2026-11-20).
+        servicios: () => serviciosDeAnuncio(schoolId, Date.now(), { ventaAbierta: true }),
         afiliado: async () => (await esAfiliado(schoolId, contactWaId)).afiliado,
         cuentas: async (motivo) => (await mediosDePago(schoolId, { categoria: motivo })).cuentas
             .map((c) => ({ tipo: c.tipo, numero: c.numero, titular: c.titular })),
@@ -3047,7 +3050,7 @@ export async function atenderRespuestaDeFormularioEnBot(
         enviar: (texto, contexto) => deliver(integration, conversationId, contactWaId, texto, { ...contexto, repetible: true }),
         reenviarFormulario: async (servicioId) => {
             const item = servicioId ? await servicioDeAnuncioPorId(schoolId, servicioId) : null;
-            if (!item || !servicioVigente(item)) return false;
+            if (!item || !servicioVigente(item) || ventaCerradaDeItem(item)) return false;
             const sinCuentas = !(await cuentasDe(motivoDeServicio(item)).catch(() => [])).length;
             return mandarFormularioDeServicio(integration, conversationId, contactWaId, item, { sinCuentas, reenvio: true });
         },
@@ -3288,6 +3291,12 @@ function ctxVentaServicio(
             const { registrarConceptoEsperado } = await import('./wa-concepto-esperado.service');
             return registrarConceptoEsperado(schoolId, contactWaId, { motivo: e.motivo, leadId: e.leadId, venceEn: e.venceEn });
         },
+        // (2026-11-19) El saldo de quien ya abonó sale de SU cobro (payments.amount − amount_paid), no del precio de hoy.
+        cobroPrevio: crearCobroPrevioDelTurno({
+            omitir: o.familia || enSimulacion(),
+            leadId: async () => (await leadDeVenta(schoolId, contactWaId))?.id,
+            cobro: (dueno, item) => cobroPrevioDelServicio(schoolId, dueno, item),
+        }),
         responderPregunta: (p) => responderPreguntaDeServicio(p),
         enviar: (texto, contexto, botones) => deliver(integration, conversationId, contactWaId, texto, contexto,
             botones?.length ? { botones } : undefined),
@@ -3421,6 +3430,72 @@ async function atenderBotonDeVentaEnBot(
     }
 }
 
+/** Paso del mensaje fijo de una venta cerrada (payload `venta_cerrada: <id del ítem>` = ya se le dijo). */
+export const PASO_VENTA_CERRADA = 'venta_cerrada';
+
+/**
+ * (2026-11-20, Monster: la venta de la clínica terminó el 20-nov; la clínica es el 21 y 22.) La persona habla de un
+ * servicio cuya VENTA cerró (`ventaCerradaDeItem`) y NO tiene cobro de él: UN mensaje fijo por conversación y el
+ * chat pasa a la escuela. Sin cotizar, sin ficha, sin clase de prueba (el 8-nov, sin este camino, el bot caía al
+ * embudo y le ofrecía la clase de $15.000 a quien preguntaba por la clínica). Si TIENE cobro (abono), devuelve null:
+ * sigue el flujo del saldo y de los comprobantes de siempre (`cobroPrevio`). Va ANTES de la venta, el anuncio y el
+ * embudo. null = no aplica (otro tema, sin servicio cerrado, con cobro, pidió el club). Nunca lanza.
+ */
+async function atenderVentaCerradaEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    text: string, botonId: string | null, rafaga: string | null,
+): Promise<ResultadoDesconocido | null> {
+    try {
+        if (!text && !botonId) return null;
+        const schoolId = integration.school_id;
+        const items = await serviciosDelTurno(schoolId);
+        if (!items.some((it) => ventaCerradaDeItem(it))) return null;
+        const mensajes = await mensajesVentaDelTurno(conversationId);
+        let item: ItemConFicha | null = null;
+        const boton = parsearBotonDeVenta(botonId);
+        if (botonId) {
+            if (!boton) return null;
+            const delBoton = items.find((i) => i.id === boton.itemId) ?? null;
+            item = delBoton && ventaCerradaDeItem(delBoton) ? delBoton : null;
+        } else {
+            const textos = [text, rafaga];
+            const sinLead = servicioCerradoQueSeConsulta({ items, textos, mensajes });
+            item = sinLead ?? servicioCerradoQueSeConsulta({
+                items, textos, mensajes, leadServicioId: await servicioDelLead(schoolId, contactWaId),
+            });
+        }
+        if (!item) return null;
+        // Quien YA abonó sigue con su saldo y sus comprobantes: no es de esta puerta.
+        const lead = await leadDeVenta(schoolId, contactWaId);
+        if (lead && await cobroPrevioDelServicio(schoolId, { leadId: lead.id }, item)) return null;
+        const recientes = await mensajesRecientes(conversationId);
+        // La escuela está escribiendo: la conversación es suya.
+        if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) {
+            await marcarAbiertaSinAviso(conversationId);
+            return 'escuela_atendiendo';
+        }
+        // UNA vez por conversación: lo que siga lo contesta la escuela (el bot no cotiza ni abre el embudo).
+        const yaDicho = [...mensajes, ...recientes].some((f) => f.direction === 'outbound' && f.payload?.venta_cerrada === item!.id);
+        if (yaDicho) {
+            await marcarAbiertaSinAviso(conversationId);
+            return 'venta_cerrada';
+        }
+        await deliver(integration, conversationId, contactWaId, textoVentaCerrada(item), {
+            step: PASO_VENTA_CERRADA, venta_cerrada: item.id, repetible: true,
+            pendiente_escuela: `venta cerrada: ${item.name}`.slice(0, 300),
+        });
+        await abrirEnBuzon(integration, conversationId, contactWaId, {
+            motivo: 'puerta_otro',
+            detalle: `Pregunta por «${item.name}», cuya venta ya cerró y no tiene cobro de ese servicio: «${String(text || botonId).slice(0, 300)}». Se le dijo que la escuela le responde: escríbele.`,
+        });
+        console.info('[whatsapp-bot] venta cerrada: mensaje fijo y a la escuela', { conversationId, servicio: item.id });
+        return 'venta_cerrada';
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] venta cerrada falló; sigue el bot de siempre', { conversationId, err: e?.message });
+        return null;
+    }
+}
+
 /**
  * Venta de un servicio de un número SIN ficha. null = no hay venta (o pidió el club
  * de forma explícita): sigue el bot de siempre. Nunca lanza.
@@ -3511,6 +3586,10 @@ async function atenderVentaDeFamilia(t: {
         // que salió es de ella, o si nombra el servicio ahora (`ventaDeFamilia`).
         const venta = ventaDeFamilia(recientes, items, text, rafaga);
         if (!venta) return false;
+        // (2026-11-20) Servicio con la venta cerrada: ni cotizar ni pago. Mensaje fijo y a la escuela, salvo que ya tenga cobro.
+        if (ventaCerradaDeItem(venta.item)) {
+            if (await atenderVentaCerradaEnBot(integration, conversationId, contactWaId, text, botonId, rafaga)) return true;
+        }
         if (pideALaPersona(rafaga, await vocativosDeEscuela(integration.school_id))?.tipo === 'escalar') return false;
         // La pregunta de un comprobante abierta la contesta 2.5.
         if (await hayPreguntaDeCobroAbierta(integration, contactWaId)
@@ -4310,6 +4389,7 @@ export type ResultadoDesconocido =
     | 'prospecto_seguimiento' | 'escuela_atendiendo'
     | 'prospecto_horarios' | 'prospecto_precios' | 'prospecto_info' | 'prospecto_persona' | 'prospecto_ia'
     | 'venta_consulta' | 'medios_de_pago' | 'medios_de_pago_escalado'
+    | 'venta_cerrada'
     | 'externo' | 'horarios_de_hoy' | 'disputa_de_pago'
     | 'pregunta_de_comprobante'
     | 'llegada_clase'
@@ -4505,6 +4585,9 @@ async function atenderDesconocidoEnEscuela(
     //         lead de un servicio, 7 días), todo lo atiende la venta: «Hola», «Ok», «.»
     //         o «ese día tenemos torneo» ya no reciben la bienvenida con sedes ni la
     //         clase de prueba. Sale de la venta solo si pide el club de forma explícita.
+    // 0a-ter-bis. (2026-11-20) Habla de un servicio cuya VENTA cerró y no tiene cobro de él: mensaje fijo y a la escuela.
+    const ventaCerrada = await atenderVentaCerradaEnBot(integration, conversationId, contactWaId, text, botonId, rafaga);
+    if (ventaCerrada) return ventaCerrada;
     const enVenta = await atenderVentaDelDesconocido(integration, conversationId, contactWaId, text, botonId, rafaga);
     if (enVenta) return enVenta;
 

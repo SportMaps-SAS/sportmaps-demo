@@ -9,7 +9,7 @@
  * manda UN resumen por escuela y tramo:
  *
  *   · 07:30 COT ('manana'): solo si hay pagos por validar.
- *   · 17:00 COT ('tarde'): recordatorio extra solo si alguno lleva más de 48 h.
+ *   · 17:00 COT ('tarde'): recordatorio extra solo si alguno lleva más de 24 h.
  *
  * Contenido: cuántos son y cuánto suman (saldo por cubrir), cuántos están en
  * verde y cuántos entran en «Aprobar todos los verdes» (misma regla que
@@ -85,7 +85,11 @@ export const ORIGEN_APP = 'https://app.sportmaps.co';
 export const URL_PANEL = `${ORIGEN_APP}/payments-automation`;
 /** El mismo enlace del aviso de comprobantes (pestaña «Cobros», la que abre por defecto). */
 export const LINK_IN_APP = '/payments-automation?tab=recurrent';
-export const UMBRAL_TARDE_MS = 48 * 3600_000;
+/**
+ * Desde cuándo un pago por validar cuenta como «viejo» para el recordatorio de las 17:00. Era 48 h; Monster
+ * (auditoría 19-20 nov 2026) tenía pagos de días sin que nadie los mirara: ahora 24 h.
+ */
+export const UMBRAL_TARDE_MS = 24 * 3600_000;
 export const ROLES_DESTINO = ['owner', 'admin', 'school_admin'] as const;
 const LIMITE = 5000;
 /** Misma tolerancia que la hoja de aprobación y `greenExclusion` (0,5 %). */
@@ -258,8 +262,8 @@ export interface ResumenPagos {
     /** Cuándo entró el más antiguo (ISO). */
     masAntiguo: string | null;
     esperaMasAntiguoMs: number;
-    /** Cuántos llevan más de 48 h. */
-    masDe48h: number;
+    /** Cuántos llevan más de 24 h. */
+    masDe24h: number;
     /** Por tipo, de más a menos cobros (empates en el orden del filtro). */
     desglose: LineaDesglose[];
 }
@@ -274,7 +278,7 @@ export function armarResumen(
     let verdes = 0;
     let verdesUnClic = 0;
     const verdesExcluidos: Record<string, number> = {};
-    let masDe48h = 0;
+    let masDe24h = 0;
     let masAntiguo: number | null = null;
     for (const p of pagos) {
         const s = saldo(p);
@@ -287,7 +291,7 @@ export function armarResumen(
         }
         const entro = Date.parse(p.enviado_en);
         if (Number.isFinite(entro)) {
-            if (ahora - entro >= UMBRAL_TARDE_MS) masDe48h++;
+            if (ahora - entro >= UMBRAL_TARDE_MS) masDe24h++;
             if (masAntiguo === null || entro < masAntiguo) masAntiguo = entro;
         }
         const clave = tipoDeCobro(p);
@@ -305,16 +309,16 @@ export function armarResumen(
         verdesExcluidos,
         masAntiguo: masAntiguo === null ? null : new Date(masAntiguo).toISOString(),
         esperaMasAntiguoMs: masAntiguo === null ? 0 : Math.max(0, ahora - masAntiguo),
-        masDe48h,
+        masDe24h,
         // De más a menos; los empates, en el orden del filtro (sort es estable).
         desglose: ORDEN_TIPOS.map((k) => porTipo.get(k)).filter((l): l is LineaDesglose => !!l)
             .sort((a, b) => b.cantidad - a.cantidad),
     };
 }
 
-/** Mañana: si hay algo. Tarde: solo si algo lleva más de 48 h. Pura. */
-export function debeAvisar(r: Pick<ResumenPagos, 'total' | 'masDe48h'>, tramo: Tramo): boolean {
-    return tramo === 'manana' ? r.total > 0 : r.masDe48h > 0;
+/** Mañana: si hay algo. Tarde: solo si algo lleva más de 24 h. Pura. */
+export function debeAvisar(r: Pick<ResumenPagos, 'total' | 'masDe24h'>, tramo: Tramo): boolean {
+    return tramo === 'manana' ? r.total > 0 : r.masDe24h > 0;
 }
 
 export const claveAviso = (schoolId: string, fecha: string, tramo: Tramo) =>
@@ -381,9 +385,9 @@ export function lineaEspera(r: Pick<ResumenPagos, 'total' | 'esperaMasAntiguoMs'
     return r.total === 1 ? `Lleva ${espera} esperando.` : `El más antiguo lleva ${espera} esperando.`;
 }
 
-export function linea48(r: Pick<ResumenPagos, 'masDe48h'>): string | null {
-    if (r.masDe48h === 0) return null;
-    return r.masDe48h === 1 ? '1 lleva más de 48 h esperando.' : `${r.masDe48h} llevan más de 48 h esperando.`;
+export function linea24(r: Pick<ResumenPagos, 'masDe24h'>): string | null {
+    if (r.masDe24h === 0) return null;
+    return r.masDe24h === 1 ? '1 lleva más de 24 h esperando.' : `${r.masDe24h} llevan más de 24 h esperando.`;
 }
 
 /** «Mensualidad 22 · Torneo 5 · Clínica 1». Pura. */
@@ -406,12 +410,12 @@ export function textosDelAviso(r: ResumenPagos, escuela: string, tramo: Tramo, a
     const espera = lineaEspera(r);
     const porTipo = r.desglose.length > 1 ? `Por tipo: ${desgloseCorto(r)}.` : '';
     if (tramo === 'tarde') {
-        const viejos = r.masDe48h === 1 ? '1 pago lleva' : `${r.masDe48h} pagos llevan`;
+        const viejos = r.masDe24h === 1 ? '1 pago lleva' : `${r.masDe24h} pagos llevan`;
         return {
-            titulo: `${viejos} más de 48 h sin validar`,
+            titulo: `${viejos} más de 24 h sin validar`,
             mensaje: [`En total hay ${r.total} por validar (${cop(r.monto)}).`, verdes, espera].filter(Boolean).join(' '),
-            asunto: `Recordatorio — ${nombre}: ${viejos} más de 48 h sin validar`,
-            tituloCorreo: `${viejos} más de 48 h esperando`,
+            asunto: `Recordatorio — ${nombre}: ${viejos} más de 24 h sin validar`,
+            tituloCorreo: `${viejos} más de 24 h esperando`,
         };
     }
     return {
@@ -580,7 +584,7 @@ export async function correoDelPlan(p: PlanEscuela): Promise<{ subject: string; 
         lineaVerdes: lineaVerdes(r, p.autoAprobacion),
         lineaEspera: lineaEspera(r),
         masAntiguoFecha: r.masAntiguo ? horaColombia(r.masAntiguo) : '',
-        linea48: linea48(r),
+        linea48: linea24(r), // (la plantilla conserva el nombre viejo del parámetro)
         desglose: r.desglose.map((l) => ({ etiqueta: l.etiqueta, cantidad: l.cantidad, monto: cop(l.monto) })),
         url: URL_PANEL,
     });
@@ -618,7 +622,7 @@ async function avisarEscuela(p: PlanEscuela, tramo: Tramo, fecha: string, log: L
                 monto_total: r.monto,
                 verdes: r.verdes,
                 verdes_un_clic: r.verdesUnClic,
-                mas_de_48h: r.masDe48h,
+                mas_de_24h: r.masDe24h,
             },
         })));
         if (error) (log as any).warn?.({ schoolId: p.schoolId, err: error.message }, '[pagos-por-validar] no se pudo guardar el aviso in-app');
@@ -682,7 +686,10 @@ export async function runPagosPorValidar(opts: OpcionesCorrida): Promise<Resulta
         .in('id', [...porEscuela.keys()]);
     if (errEscuelas) throw new Error(`schools: ${errEscuelas.message}`);
     // Las escuelas con el resumen de cuentas cada 4 h (resumen-cuentas.job) no reciben además este (sería el mismo correo dos veces).
-    const conResumenDeCuentas = idsConResumenDeCuentas();
+    // Solo en la MAÑANA: el recordatorio de las 17:00 (pagos de más de 24 h) también les llega, porque el resumen de
+    // cuentas es solo correo, no trae aviso in-app y no avisa de lo vencido (Monster, 19-20 nov 2026: pagos
+    // «por aprobar» de días sin que nadie los mirara, y el aviso viejo las dejaba fuera por completo).
+    const conResumenDeCuentas = opts.tramo === 'manana' ? idsConResumenDeCuentas() : new Set<string>();
     const elegibles = ((escuelas ?? []) as any[]).filter((e) => escuelaElegible(e) && !conResumenDeCuentas.has(e.id));
     res.omitidas.noElegible = porEscuela.size - elegibles.length;
     if (!elegibles.length) return res;

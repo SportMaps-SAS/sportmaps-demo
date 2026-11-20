@@ -118,6 +118,50 @@ export function remainingOf(p: Pick<QueueItem, 'amount' | 'amount_paid' | 'early
   return Math.max(dueOf(p) - (Number(p.amount_paid) || 0), 0);
 }
 
+// ─── Comprobante contra cobro ────────────────────────────────────────────────
+
+export interface ReceiptVsCharge {
+  /** 'sobra' = trae más plata que el saldo; 'falta' = trae menos. Tolerancia 0,5 %. */
+  kind: 'sin_lectura' | 'igual' | 'sobra' | 'falta';
+  /** Plata de diferencia contra el saldo por cubrir (siempre ≥ 0). */
+  diff: number;
+  /**
+   * De lo que sobra, lo que la base guarda SOLA como saldo a favor al aprobar
+   * (trigger fn_payments_saldo_a_favor_al_aprobar, mig 20261013165308): solo
+   * desde «por validar», con comprobante, contra `amount − pronto pago` (NO
+   * descuenta abonos previos) y nunca si la lectura pasa de 4 veces lo esperado.
+   */
+  saldoAFavor: number;
+  /** Lo que sobra y la base NO guarda: hay que registrarlo a mano. */
+  sinAcreditar: number;
+}
+
+/**
+ * Compara lo que leyó el comprobante con lo que falta por pagar. Pura.
+ *
+ * Caso origen (Monster's Volley, 2026-11-20): seis cobros «por aprobar» con
+ * comprobantes de hasta $205.000 por encima del cobro y la hoja solo decía
+ * «no coincide»: la escuela no sabía que el sobrante se volvía saldo a favor,
+ * ni cuánto. `ocr` y `remaining` pueden ser los de un grupo (un comprobante,
+ * varios cobros): ahí `due` es la suma de lo debido de TODOS los cobros ligados.
+ */
+export function compareReceipt(
+  p: { due: number; remaining: number; status?: string | null; hasReceipt?: boolean; grossAmount?: number | null },
+  ocr: number | null | undefined,
+): ReceiptVsCharge {
+  const none = { diff: 0, saldoAFavor: 0, sinAcreditar: 0 };
+  if (ocr == null || !(Number(ocr) > 0) || p.remaining <= 0) return { kind: 'sin_lectura', ...none };
+  const leido = Number(ocr);
+  // El recargo del enlace de pago es de la escuela, no un sobrante.
+  if (p.grossAmount != null && Number(p.grossAmount) === leido) return { kind: 'igual', ...none };
+  if (Math.abs(leido - p.remaining) / p.remaining <= 0.005) return { kind: 'igual', ...none };
+  if (leido < p.remaining) return { kind: 'falta', diff: Math.round(p.remaining - leido), saldoAFavor: 0, sinAcreditar: 0 };
+  const diff = Math.round(leido - p.remaining);
+  const laBaseAcredita = p.status === 'awaiting_approval' && p.hasReceipt !== false && leido <= 4 * p.due;
+  const saldoAFavor = laBaseAcredita ? Math.min(Math.max(Math.round(leido - p.due), 0), diff) : 0;
+  return { kind: 'sobra', diff, saldoAFavor, sinAcreditar: diff - saldoAFavor };
+}
+
 /**
  * ¿Entra en «Aprobar todos los verdes»? Solo lo que aprobaría una persona sin
  * dudar: comprobante por validar, veredicto verde, monto leído igual al saldo

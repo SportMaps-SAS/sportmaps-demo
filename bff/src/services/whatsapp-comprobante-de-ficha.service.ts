@@ -238,7 +238,7 @@ export async function pagoYaRegistrado(
         }
         const r = await import('./whatsapp-recuperacion.service');
         const registrados = (await r.pagosRegistradosDe(schoolId, k)).filter((p) => p.status === 'paid' || p.status === 'partial');
-        const cubre = r.pagosQueYaCubren(registrados, ocr.amount ?? null, r.fechaDeReferencia(ocr.date ?? null, fechaMensaje));
+        const cubre = r.pagosQueYaCubren(registrados, ocr.amount ?? null, r.fechaDeReferencia(ocr.date ?? null, fechaMensaje), ocr.reference ?? null);
         return cubre.length ? { id: cubre[0].id, concept: cubre[0].concept } : null;
     } catch {
         return null;
@@ -344,7 +344,7 @@ const CONECTORES = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'da', 'do', 'd
  * Palabras que nunca son parte de un nombre (normalizadas): saludos, cortesías,
  * preguntas, pagos, servicios, días, meses, posiciones de juego. Cortan el nombre.
  */
-const NO_NOMBRE = new Set(('hola buenas buenos buen dia dias tardes tarde noches noche gracias muchas mil ok okey oki ' +
+const NO_NOMBRE = new Set(('enlace enlaces link links url factura facturas cobro cobros colabora colaboras colaboran colaboracion hola buenas buenos buen dia dias tardes tarde noches noche gracias muchas mil ok okey oki ' +
     'listo lista dale perfecto perfecta vale claro si no ya que como cuando donde cual cuanto cuantos cuanta ' +
     'quien porque por para con sin aqui aca alli ahi esto este esta ese esa eso estos estas envio envie envia mando ' +
     'mande adjunto adjunta pago pague pagado pagada pagamos pagar abono abone saldo cupo cupos comprobante soporte ' +
@@ -365,9 +365,9 @@ const NO_NOMBRE = new Set(('hola buenas buenos buen dia dias tardes tarde noches
     'hasta entre sobre interesado interesada interesados interesadas interes interesa').split(' '));
 
 /** Un enlace o un correo: nunca es un nombre («Https Portaldepago Segurosdelestado Com Pago-agil» quedó de asistente). */
-const ENLACE_O_CORREO = /:\/\/|www\.|\.(?:com|co|net|org)\b|@/i;
+const ENLACE_O_CORREO = /:\/\/|www\.|\.(?:com|co|net|org|io|app|link|me|ly|info|biz|site|online|page|pay|cc|ws)\b|@/i;
 /** Un trozo (sin espacios) que es un enlace o un correo. */
-const TROZO_DE_ENLACE = /\S*(?::\/\/|www\.|\.(?:com|co|net|org)\b|@)\S*/gi;
+const TROZO_DE_ENLACE = /\S*(?::\/\/|www\.|\.(?:com|co|net|org|io|app|link|me|ly|info|biz|site|online|page|pay|cc|ws)\b|@)\S*/gi;
 
 /** ¿El texto trae un enlace o un correo? Pura. */
 export function traeEnlaceOCorreo(texto: string | null | undefined): boolean {

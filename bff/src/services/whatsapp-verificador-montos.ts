@@ -31,6 +31,7 @@
  * interesado) y whatsapp-coherencia-ficha (la ficha libre contra el catálogo).
  */
 
+import { cobroConAbono, montosDelCobroPrevio, type CobroPrevioParaIa } from './whatsapp-catalogo-para-ia';
 import {
     abonoMinimo, hoyBogota, opcionesDelItem, tramosPorFecha, type ItemDeServicio,
 } from './wa-cobro-desde-comprobante.service';
@@ -277,6 +278,11 @@ export interface Permitidos {
     diasDeEvento: Set<string>;
     /** Cuentas y teléfonos (solo dígitos): no son montos. */
     numerosIgnorados: string[];
+    /**
+     * Lugares (normalizados) que puede nombrar la respuesta («universidad ecci»). Si está vacío o ausente no se
+     * revisan lugares. (Monster 2026-11-20: la clínica se mudó a la ECCI y el bot siguió diciendo «Colegio …».)
+     */
+    lugares?: Set<string>;
 }
 
 export function permitidosVacios(): Permitidos {
@@ -291,6 +297,7 @@ export function unirPermitidos(...ps: (Permitidos | null | undefined)[]): Permit
         p.cortes.forEach((c) => out.cortes.add(c));
         p.diasDeEvento.forEach((d) => out.diasDeEvento.add(d));
         out.numerosIgnorados.push(...p.numerosIgnorados);
+        p.lugares?.forEach((l) => (out.lugares ??= new Set()).add(l));
     }
     return out;
 }
@@ -314,7 +321,8 @@ export function montosDelItem(item: ItemDeServicio, o: { afiliado: boolean | 'to
     if (opciones.length) {
         for (const op of opciones) {
             if (o.afiliado !== true || !positivo(op.precio_afiliado)) agregar(op.precio);
-            if (conAfiliado) agregar(op.precio_afiliado);
+            // Opciones: a quien no está identificado como afiliado se le dicen las dos tarifas (2026-11-20, vacacional).
+            if (conAfiliado || o.afiliado === false) agregar(op.precio_afiliado);
         }
     } else {
         if (o.afiliado !== true || !positivo(item.precio_afiliado)) {
@@ -352,8 +360,21 @@ export function diasDelItem(item: Pick<ItemDeServicio, 'starts_at' | 'ends_at'>)
 }
 
 /** Lo permitido por el catálogo (todos los servicios que se le dan al modelo). Pura. */
-export function permitidosDelCatalogo(items: ItemDeServicio[], o: { afiliado: boolean | 'todos' }): Permitidos {
+export function permitidosDelCatalogo(
+    items: ItemDeServicio[], o: { afiliado: boolean | 'todos'; cobroPrevio?: CobroPrevioParaIa | null },
+): Permitidos {
     const out = permitidosVacios();
+    // (Monster 2026-11-19) Con un abono hecho, los montos son los de SU cobro (total, abonado, saldo): los del
+    // catálogo de hoy (y sus mitades) quedan fuera, así el saldo recalculado ($166.250) no pasa.
+    const cobro = cobroConAbono(o.cobroPrevio);
+    if (cobro) {
+        montosDelCobroPrevio(cobro).forEach((m) => out.montos.add(m));
+        for (const it of items) {
+            cortesDelItem(it).forEach((c) => out.cortes.add(c));
+            diasDelItem(it).forEach((d) => out.diasDeEvento.add(d));
+        }
+        return out;
+    }
     for (const it of items) {
         montosDelItem(it, o).forEach((m) => out.montos.add(m));
         cortesDelItem(it).forEach((c) => out.cortes.add(c));
@@ -374,11 +395,37 @@ export function conNumerosIgnorados(p: Permitidos, numeros: (string | null | und
     return { ...p, numerosIgnorados: [...p.numerosIgnorados, ...numeros.map((n) => String(n ?? '').replace(/\D/g, '')).filter((n) => n.length >= 5)] };
 }
 
+// ─── Lugares ────────────────────────────────────────────────────────────────
+
+const LUGAR = /\b([Cc]olegio|[Uu]niversidad|[Ll]iceo|[Pp]arque|[Cc]oliseo|[Gg]imnasio|[Pp]olideportivo|[Cc]ampus)\s+((?:(?:de|del|la|el|los|las)\s+)?[\p{Lu}\d][\p{L}\d'’-]*(?:\s+(?:(?:de|del|la|el)\s+)?[\p{Lu}\d][\p{L}\d'’-]*){0,4})/gu;
+
+/** Los lugares nombrados en un texto («Universidad ECCI», «Colegio Bilingüe La Enseñanza»), normalizados. Pura. */
+export function extraerLugares(texto: string | null | undefined): string[] {
+    const t = String(texto ?? '').replace(URL, ' ');
+    const out = new Set<string>();
+    for (const m of t.matchAll(LUGAR)) out.add(normalizarParaMontos(`${m[1]} ${m[2]}`).replace(/\s+/g, ' ').trim());
+    return [...out];
+}
+
+/** Los lugares que puede nombrar la respuesta de un servicio: los de su descripción. Pura. */
+export function permitidosDeLugares(...textos: (string | null | undefined)[]): Permitidos {
+    const out = permitidosVacios();
+    const lugares = new Set<string>();
+    for (const t of textos) extraerLugares(t).forEach((l) => lugares.add(l));
+    if (lugares.size) out.lugares = lugares;
+    return out;
+}
+
+function lugaresFueraDeLoPermitido(texto: string | null | undefined, permitidos: Set<string>): string[] {
+    return extraerLugares(texto).filter((l) => ![...permitidos].some((p) => p.startsWith(l) || l.startsWith(p)));
+}
+
 // ─── Verificación ───────────────────────────────────────────────────────────
 
 export type Violacion =
     | { tipo: 'monto'; valor: number; texto: string }
-    | { tipo: 'fecha_de_precio'; texto: string; frase: string; corte: string };
+    | { tipo: 'fecha_de_precio'; texto: string; frase: string; corte: string }
+    | { tipo: 'lugar'; texto: string };
 
 export type ResultadoVerificacion = { ok: true } | { ok: false; violaciones: Violacion[] };
 
@@ -396,6 +443,9 @@ export function verificarSalida(texto: string | null | undefined, permitidos: Pe
         if (permitidos.diasDeEvento.has(f.declarada)) continue;
         if (!permitidos.cortes.has(f.corte)) violaciones.push({ tipo: 'fecha_de_precio', texto: f.texto, frase: f.frase, corte: f.corte });
     }
+    if (permitidos.lugares?.size) {
+        for (const l of lugaresFueraDeLoPermitido(texto, permitidos.lugares)) violaciones.push({ tipo: 'lugar', texto: l });
+    }
     return violaciones.length ? { ok: false, violaciones } : { ok: true };
 }
 
@@ -403,5 +453,7 @@ export function verificarSalida(texto: string | null | undefined, permitidos: Pe
 export function describirViolaciones(v: Violacion[]): string {
     return v.map((x) => (x.tipo === 'monto'
         ? `el monto «${x.texto}» no está en los datos`
-        : `la fecha de precio «${x.texto}» no coincide con las fechas de precio de los datos`)).join('; ');
+        : x.tipo === 'lugar'
+            ? `el lugar «${x.texto}» no es el de los datos`
+            : `la fecha de precio «${x.texto}» no coincide con las fechas de precio de los datos`)).join('; ');
 }

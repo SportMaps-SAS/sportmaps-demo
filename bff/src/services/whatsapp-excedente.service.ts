@@ -84,6 +84,8 @@ export async function cargarRecargos(schoolId: string, cobros: PagoPendiente[]):
  */
 export function montoEsperado(pago: PagoPendiente, monto: number | null, recargos: Map<string, number[]>): number {
     if (monto !== null && (recargos.get(pago.id) ?? []).includes(monto)) return monto;
+    // Pronto pago congelado en el cobro: lo que debe decir el comprobante es amount − descuento (si no, sale MONTO_DIFIERE).
+    if (monto !== null && Number(pago.descuento ?? 0) > 0 && Math.abs(Number(pago.amount) - Number(pago.descuento) - monto) <= 1) return monto;
     return Number(pago.amount);
 }
 

@@ -26,6 +26,24 @@ export interface PagoPendiente {
      * congeladas en `pregunta_opciones` antes del 2026-10-10 no la traen.
      */
     categoria?: string | null;
+    /**
+     * Lo que la familia YA no debe por pronto pago (`payments.early_payment_discount_applied`, congelado en el cobro):
+     * transfiere `amount − descuento`. Opcional: sin él, todo sigue como antes. (Monster 2026-11: $332.500 de un
+     * cobro de $350.000 se leyó como abono y el bot dijo «quedan $17.500».)
+     */
+    descuento?: number | null;
+}
+
+/** Lo que de verdad debe transferir la familia por este cobro: `amount − descuento` (nunca negativo). Pura. */
+export function montoAPagar(p: Pick<PagoPendiente, 'amount' | 'descuento'>): number {
+    const d = Number(p.descuento ?? 0);
+    return Math.max(Number(p.amount) - (Number.isFinite(d) && d > 0 ? d : 0), 0);
+}
+
+/** ¿`monto` es lo que debe transferir la familia por este cobro: el valor completo o con el pronto pago (±$1)? Pura. */
+export function montoCubreElCobro(p: Pick<PagoPendiente, 'amount' | 'descuento'>, monto: number | null): boolean {
+    if (monto === null) return false;
+    return Number(p.amount) === monto || (Number(p.descuento ?? 0) > 0 && Math.abs(montoAPagar(p) - monto) <= 1);
 }
 
 export type Coincidencia =
@@ -52,7 +70,7 @@ export async function pagosPendientesDe(
 ): Promise<PagoPendiente[]> {
     const { data, error } = await supabase
         .from('payments')
-        .select('id, amount, concept, due_date, child_id, payment_category, payment_type, child:children(full_name)')
+        .select('id, amount, early_payment_discount_applied, concept, due_date, child_id, payment_category, payment_type, child:children(full_name)')
         // `user_id`: el atleta ADULTO identificado por su propio número llega
         // como `parentId` (wa_identify_by_phone, migración 20261013165308) y
         // sus cobros pueden tener user_id = él y parent_id vacío.
@@ -72,6 +90,7 @@ export async function pagosPendientesDe(
         child_id: p.child_id ?? null,
         atleta: p.child?.full_name ?? null,
         categoria: categoriaDelCobro(p),
+        ...(Number(p.early_payment_discount_applied) > 0 ? { descuento: Number(p.early_payment_discount_applied) } : {}),
     }));
 }
 
@@ -116,7 +135,7 @@ export function resolverPago(pendientes: PagoPendiente[], monto: number | null):
     if (monto !== null) {
         // El monto coincide con EXACTAMENTE uno → se aplica a ese, y la
         // respuesta dice a cuál para que el padre pueda corregir.
-        const exactos = pendientes.filter((p) => p.amount === monto);
+        const exactos = pendientes.filter((p) => montoCubreElCobro(p, monto));
         if (exactos.length === 1) return { tipo: 'por_monto', pago: exactos[0] };
 
         // Varios del MISMO monto: el monto no desempata. Preguntar.

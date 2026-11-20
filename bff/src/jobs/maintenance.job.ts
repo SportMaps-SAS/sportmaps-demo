@@ -667,7 +667,7 @@ export function initMaintenanceJobs() {
     // comprobantes, ~20 en verde, el dueño entró y no aprobó ninguno). Este
     // manda UN resumen por escuela: correo branded + in-app (+ WhatsApp de
     // plataforma, apagado). 07:30 si hay pendientes; 17:00 solo si alguno lleva
-    // más de 48 h. Idempotente por escuela + día + tramo con la reserva en
+    // más de 24 h. Idempotente por escuela + día + tramo con la reserva en
     // email_sends (los 3 BFF y los reinicios no duplican).
     //
     // Solo producción (`pagosPorValidarActivo`: NODE_ENV=production, porque dev
