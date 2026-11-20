@@ -29,6 +29,7 @@ import {
 } from '../services/whatsapp.service';
 import { estaDadoDeBaja, AVISO_DADO_DE_BAJA } from '../services/whatsapp-optin.service';
 import { acusarReciboDeComprobante, PASO_ACUSE_RECIBO } from '../services/whatsapp-acuse-recibo';
+import { grupoDelServicio, textoGrupo } from '../services/whatsapp-grupo-servicio';
 import { extractReceipt } from '../services/ocr.service';
 import { conContextoLlm } from '../services/llm-usage.service';
 import { extractEnrollmentForm, type EnrollmentFormResult } from '../services/enrollment-ocr.service';
@@ -2177,9 +2178,14 @@ export function textoVentaRecibida(e: {
     const para = paraElServicio(e.servicio);
     const aNombre = e.nombre ? ` a nombre de *${e.nombre}*` : '';
     if (e.aprobado && e.saldo) {
+        // El saldo completa un abono que ya recibió el link: no se repite.
         return `¡Listo! ✅ Quedó registrado el saldo${valor} ${para}${aNombre}: completaste *${pesos(e.saldo.total)}*. Tu cupo está confirmado.`;
     }
-    if (e.aprobado) return `¡Listo! ✅ Quedó registrado tu pago${valor} ${para}${aNombre}. Tu cupo está confirmado.`;
+    if (e.aprobado) {
+        // Pago completo o abono aprobado por la escuela: la invitación al grupo del servicio, si lo tiene.
+        const grupo = grupoDelServicio(e.servicio);
+        return `¡Listo! ✅ Quedó registrado tu pago${valor} ${para}${aNombre}. Tu cupo está confirmado.${grupo ? `\n\n${textoGrupo(grupo)}` : ''}`;
+    }
     const cierre = 'La escuela lo valida y te confirma el cupo por aquí.';
     if (e.abono) {
         const queda = e.abono.queda > 0 ? ` Quedan *${pesos(e.abono.queda)}* para completar *${pesos(e.abono.total)}*.` : '';
