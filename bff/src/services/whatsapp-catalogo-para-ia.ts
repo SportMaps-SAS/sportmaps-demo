@@ -198,8 +198,20 @@ export function fichaDeServicioParaIa(item: ItemConFicha, o: OpcionesCatalogoIa)
               + 'NO uses el valor de hoy ni los de otras fechas, no recalcules abonos, mitades ni descuentos, y no mezcles «abono» con un precio de otra fecha.'
             : 'No debe nada de este servicio; no le des otro valor ni le pidas otro abono.');
     } else if (precio.opciones.length) {
-        lineas.push(`Opciones y valor de hoy${precio.deAfiliado ? ' (valor de afiliado del club)' : ''}: `
-            + precio.opciones.map((op) => `${op.etiqueta}: ${cop(op.precio)}`).join(' · '));
+        // (Monster 2026-11-20) Teléfono sin identificar como afiliado: NO se asume «externo». Se dan las dos tarifas de cada
+        // opción y se le pide que diga cuál es (antes solo veía la de externos y el bot decía «no tengo otro valor»).
+        const dosTarifas = !precio.deAfiliado && precio.opciones.some((op) => op.precioAfiliado !== undefined);
+        lineas.push(dosTarifas
+            ? 'Opciones y valor de hoy (no se sabe si la persona es afiliada del club): '
+              + precio.opciones.map((op) => (op.precioAfiliado !== undefined
+                  ? `${op.etiqueta}: afiliados ${cop(op.precioAfiliado)} · externos ${cop(op.precio)}`
+                  : `${op.etiqueta}: ${cop(op.precio)}`)).join(' | ')
+            : `Opciones y valor de hoy${precio.deAfiliado ? ' (valor de afiliado del club)' : ''}: `
+              + precio.opciones.map((op) => `${op.etiqueta}: ${cop(op.precio)}`).join(' · '));
+        if (dosTarifas) {
+            lineas.push('Tarifa: no sabes si la persona es afiliada del club (entrena en él) o externa. Da LAS DOS tarifas de la opción que pregunta («afiliados X · externos Y») y pídele que diga cuál es. '
+                + 'NUNCA asumas que es externa ni digas que no hay otro valor para quien no es afiliada.');
+        }
     } else if (precio.hoy !== null) {
         if (precio.deAfiliado) {
             lineas.push(`Valor para esta persona (afiliada al club): ${cop(precio.hoy)}, sin importar la fecha.`);
@@ -211,7 +223,7 @@ export function fichaDeServicioParaIa(item: ItemConFicha, o: OpcionesCatalogoIa)
     } else {
         lineas.push('Valor: no está cargado en el catálogo.');
     }
-    if (!cobro && tieneAfiliado && !precio.deAfiliado) {
+    if (!cobro && tieneAfiliado && !precio.deAfiliado && !precio.opciones.some((op) => op.precioAfiliado !== undefined)) {
         lineas.push('Afiliados del club: tienen un valor especial; si la persona dice ser del club, la escuela verifica su número y le confirma ese valor (no des la cifra).');
     }
     if (cobro) {

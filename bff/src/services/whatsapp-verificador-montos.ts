@@ -321,7 +321,8 @@ export function montosDelItem(item: ItemDeServicio, o: { afiliado: boolean | 'to
     if (opciones.length) {
         for (const op of opciones) {
             if (o.afiliado !== true || !positivo(op.precio_afiliado)) agregar(op.precio);
-            if (conAfiliado) agregar(op.precio_afiliado);
+            // Opciones: a quien no está identificado como afiliado se le dicen las dos tarifas (2026-11-20, vacacional).
+            if (conAfiliado || o.afiliado === false) agregar(op.precio_afiliado);
         }
     } else {
         if (o.afiliado !== true || !positivo(item.precio_afiliado)) {

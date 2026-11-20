@@ -144,7 +144,8 @@ describe('montos y cortes del ítem', () => {
         expect(cortesDelItem(CLINICA)).toEqual(new Set(['11-11']));
     });
     it('opciones del vacacional con y sin afiliado', () => {
-        expect(montosDelItem(VACACIONAL, { afiliado: false })).toEqual(new Set([100000, 140000, 170000, 200000]));
+        // Sin identificar como afiliado se dicen las dos tarifas (2026-11-20): también salen las de afiliado.
+        expect(montosDelItem(VACACIONAL, { afiliado: false })).toEqual(new Set([100000, 140000, 170000, 200000, 80000, 120000, 150000]));
         expect(montosDelItem(VACACIONAL, { afiliado: true })).toEqual(new Set([80000, 120000, 150000, 170000]));
     });
 });

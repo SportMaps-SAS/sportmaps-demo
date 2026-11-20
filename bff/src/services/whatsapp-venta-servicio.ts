@@ -45,7 +45,7 @@ import {
 } from './whatsapp-anuncio-destino';
 import { comoPagar, estadoDeSalientes, numeroLegible, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { cop, tokensDistintivos } from './whatsapp-venta-servicios.service';
-import { hoyBogota, opcionesDelItem } from './wa-cobro-desde-comprobante.service';
+import { hoyBogota, opcionesDelItem, type ItemDeServicio } from './wa-cobro-desde-comprobante.service';
 import { cobroConAbono, lineasDeSaldoDelCobro, type CobroPrevioParaIa } from './whatsapp-catalogo-para-ia';
 import type { Motivo } from './motivos-de-cobro';
 import type { PreguntaDeServicio, RespuestaDeServicio } from './whatsapp-servicio-ia';
@@ -253,6 +253,8 @@ export function textoDePagoDeServicio(
     // Con un abono hecho, el valor es el SALDO de su cobro, nunca el precio de hoy ni un abono de otra fecha.
     const cobro = cobroConAbono(o.cobroPrevio);
     const valor = cobro ? lineasDeSaldoDelCobro(cobro) : lineasDeValorDeVenta(p);
+    // Vacacional: se dan las dos tarifas y se pide que diga cuál es (no se asume externa).
+    if (!cobro && !p.deAfiliado && p.opciones.some((x) => x.precioAfiliado)) valor.push('Si entrenas en el club (afiliada/o) aplica el valor de afiliados; cuéntame cuál es tu caso.');
     const como = cuentas.length ? comoPagar(cuentas).replace(/\n+$/, '') : null;
     const pagar = como
         ? `Transfiere ${como}${como.includes('\n') ? '' : '.'}`
@@ -713,6 +715,26 @@ export function intencionEnVenta(texto: string | null | undefined): IntencionVen
     if (PAGO.test(t)) return 'pago';
     if (!conPregunta && saludoConVocativo(palabras)) return 'saludo';
     return 'detalle';
+}
+
+/**
+ * (Monster 2026-11-20, un proveedor) Un mensaje que COBRA a la escuela: «me colaboras con un pago pendiente que tenemos
+ * de $245.000», «puedes pagar en este enlace», factura, cuenta de cobro. No es un cliente que quiere pagar: no inicia
+ * venta ni recibe datos de pago; pasa a la escuela. Con el nombre o el tema del servicio («pago de la clínica») es de un
+ * cliente y NO entra aquí. Pura.
+ */
+export function reclamaPagoALaEscuela(texto: string | null | undefined, item?: Pick<ItemDeServicio, 'name'> | null): boolean {
+    const t = normalizarFrase(texto);
+    if (!t) return false;
+    const url = /:\/\/|www\.|\b[a-z0-9-]+\.(?:com|co|net|org|io|app|link|me|ly|info|biz|site|online|page|pay|cc|ws)\b/.test(String(texto ?? '').toLowerCase());
+    const fuerte = /\b(factura|facturas|cuenta de cobro|cuentas de cobro|orden de compra|remision|pago pendiente|saldo pendiente|deuda pendiente)\b/.test(t);
+    const reclama = fuerte
+        || /\b(me|nos) (deben|adeudan)\b|\b(pendiente|pendientes) (de )?(pago|pagarme|pagarnos)\b|\b(que|para que) (la escuela|el club|ustedes) (me |nos )?(pague|paguen|cancele|cancelen|consigne|consignen|gire|giren)\b|\b(pagarme|pagarnos|cancelarme|cancelarnos|girarme|girarnos)\b|\bpagar(me|nos)? en (este|el siguiente|ese) (enlace|link)\b|\b(me|nos) (colabora|colaboras|colaboran|ayuda|ayudas|ayudan|puede|puedes|pueden) (con|a) (el|un|su|ese|este) pago\b/.test(t);
+    if (!reclama) return false;
+    if (url || fuerte) return true;
+    if (/\b(clinica|torneo|vacacional|campamento|inscripcion|inscribir|inscribirme|cupo|mensualidad|abono|apartar|separar|mi hij[oa])\b/.test(t)) return false;
+    const nombre = normalizarFrase(item?.name);
+    return !(nombre && nombre.length > 4 && t.includes(nombre));
 }
 
 /** ¿Pide los datos para pagar? (la ficha del anuncio manda el pago aparte solo si los pidió). Pura. */
@@ -1466,6 +1488,11 @@ export async function atenderVentaDeServicio(
     if (intencion === 'club') return null;
     const ahora = (ctx.ahora ?? (() => new Date()))().getTime();
     const marca = { [MARCA_VENTA]: item.id, intencion_venta: intencion };
+    // Un proveedor que le cobra a la escuela no es un cliente: ni datos de pago ni nombre de asistente; pasa a la escuela.
+    if (reclamaPagoALaEscuela(texto, item)) {
+        await seguro(() => ctx.avisarEscuela(`Mensaje que parece COBRARLE a la escuela (no es una compra de «${item.name}»): «${texto.slice(0, 300)}».`), undefined);
+        return 'venta_a_la_escuela';
+    }
     // Un comprobante en la ráfaga (o en la cola): lo contesta la cola, una sola vez.
     const colaContesta = async () => (ctx.comprobanteEnCurso ? seguro(() => ctx.comprobanteEnCurso!(), false) : false);
     // «Comparto soporte de pago… / Gabriela Covaleda García / 13 años»: dice que pagó Y da los datos de quien asiste.
