@@ -927,7 +927,19 @@ export function CobrosYPagosDialog({
                                 </div>
                             )}
                             <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2">
-                                {buttonReason && <p className="text-xs text-muted-foreground sm:mr-auto" data-testid="cyp-button-reason">{buttonReason}</p>}
+                                {buttonReason && (
+                                    // Lo que le falta llenar a la escuela (quién recibió, duplicado sin decidir) se ve como
+                                    // aviso: en gris pasaba por «el botón no funciona». Los estados de espera siguen en gris.
+                                    <p
+                                        className={(recibidoErr || dupBlock)
+                                            ? 'text-sm font-semibold text-amber-700 dark:text-amber-400 sm:mr-auto'
+                                            : 'text-xs text-muted-foreground sm:mr-auto'}
+                                        role={(recibidoErr || dupBlock) ? 'alert' : undefined}
+                                        data-testid="cyp-button-reason"
+                                    >
+                                        {(recibidoErr || dupBlock) ? `Falta: ${buttonReason}` : buttonReason}
+                                    </p>
+                                )}
                                 <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>Cancelar</Button>
                                 <Button onClick={() => void submit()} disabled={button.disabled || !!duplicadoReciente} className="min-w-[10rem]" data-testid="cyp-primary">
                                     {submitting && <Loader2 className="h-4 w-4 animate-spin mr-1.5" />}

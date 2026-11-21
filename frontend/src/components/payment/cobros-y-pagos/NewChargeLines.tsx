@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Minus, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -11,7 +11,7 @@ import { MANUAL_CHARGE_CATEGORY_OPTIONS } from '@/lib/manualPaymentCharge';
 import { currentPeriodBogota, formatPeriodLabel, parsePeriodKey, periodKey, shiftPeriod } from '@/lib/paymentPeriod';
 import { formatPesos, monthsFromToday, newLineDraft, type LineCalc, type MultiLineCalc, type NewLineDraft } from '@/lib/cobrosYPagos';
 import type { ChargeSuggestions } from '@/lib/api/chargeBatches';
-import { articuloElegido, conceptoDeArticulo, tallasDe, type ArticuloDeCatalogo } from '@/lib/catalogoDeArticulos';
+import { CANTIDAD_MAXIMA, articuloElegido, conceptoDeArticulo, tallasDe, valorPorCantidad, type ArticuloDeCatalogo } from '@/lib/catalogoDeArticulos';
 import { DiscountControl } from './DiscountControl';
 import { HorasAdicionalesLine } from './HorasAdicionalesLine';
 import { DiscountTags } from './DiscountTags';
@@ -204,13 +204,55 @@ export function NewChargeLines({
                                                 key={t} type="button" size="sm" className="h-7 px-2 text-xs"
                                                 variant={elegido.talla === t ? 'secondary' : 'ghost'}
                                                 aria-pressed={elegido.talla === t}
-                                                onClick={() => update(idx, { concept: conceptoDeArticulo(elegido.item, t) })}
+                                                onClick={() => update(idx, { concept: conceptoDeArticulo(elegido.item, t, elegido.cantidad) })}
                                             >
                                                 {t}
                                             </Button>
                                         ))}
                                     </div>
                                 )}
+                                {elegido && (() => {
+                                    const cambiarCantidad = (nueva: number) => update(idx, {
+                                        concept: conceptoDeArticulo(elegido.item, elegido.talla, nueva),
+                                        amount: valorPorCantidad(l.amount, elegido.cantidad, nueva, elegido.item.price),
+                                    });
+                                    return (
+                                        <div className="flex flex-wrap items-center gap-1.5" data-testid={`cyp-articulos-cantidad-${idx}`}>
+                                            <span className="text-[11px] text-muted-foreground">Cantidad:</span>
+                                            <Button
+                                                type="button" variant="outline" size="icon" className="h-7 w-7"
+                                                aria-label="Quitar una unidad" disabled={elegido.cantidad <= 1}
+                                                onClick={() => cambiarCantidad(elegido.cantidad - 1)}
+                                            >
+                                                <Minus className="h-3.5 w-3.5" />
+                                            </Button>
+                                            <span className="min-w-[1.5rem] text-center text-sm font-medium tabular-nums" aria-label="Cantidad">{elegido.cantidad}</span>
+                                            <Button
+                                                type="button" variant="outline" size="icon" className="h-7 w-7"
+                                                aria-label="Agregar una unidad" disabled={elegido.cantidad >= CANTIDAD_MAXIMA}
+                                                onClick={() => cambiarCantidad(elegido.cantidad + 1)}
+                                            >
+                                                <Plus className="h-3.5 w-3.5" />
+                                            </Button>
+                                            {elegido.cantidad > 1 && l.amount != null && l.amount > 0 && (
+                                                <span className="text-[11px] text-muted-foreground tabular-nums">
+                                                    {formatPesos(Math.round(l.amount / elegido.cantidad))} c/u
+                                                </span>
+                                            )}
+                                            {/* Otro artículo distinto = otra línea (cada uno queda como su propio cobro). */}
+                                            <Button
+                                                type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs ml-auto"
+                                                data-testid={`cyp-articulos-otro-${idx}`}
+                                                onClick={() => onChange([...lines, newLineDraft({
+                                                    category: 'articulos', concept: CHARGE_CATEGORY_LABEL.articulos,
+                                                    due_date: l.due_date || defaultDue, amount: null, pay: paymentOn,
+                                                })])}
+                                            >
+                                                <Plus className="h-3.5 w-3.5 mr-1" /> Otro artículo
+                                            </Button>
+                                        </div>
+                                    );
+                                })()}
                             </div>
                         )}
                         {isMonthly && mode === 'single' && (suggestions?.enrollments?.length ?? 0) > 1 && (
