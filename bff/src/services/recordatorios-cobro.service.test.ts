@@ -36,7 +36,7 @@ vi.mock('../utils/emailTemplates', () => ({
 
 import {
     ESCALONES, diasDesdeVencimiento, escalonDelDia, unirNombres, planificar, esHoraDeRecordatorios,
-    enviarContacto, runRecordatoriosCobro, cobrosDeAtletaDadoDeBaja, type EntradaPlan, type ContactoPlaneado,
+    enviarContacto, runRecordatoriosCobro, cobrosDeAtletaDadoDeBaja, esUnicoRecordable, ESCALONES_UNICO, type EntradaPlan, type ContactoPlaneado,
 } from './recordatorios-cobro.service';
 import type { Familia, PagoEstado } from './estado-de-cuenta.service';
 
@@ -364,5 +364,93 @@ describe('mora en la cadencia', () => {
         const params = (BrandedEmailTemplates.recordatorioCobro as any).mock.calls.at(-1)[0];
         expect(params.lateFee).toEqual({ base: '$300.000', fee: '$15.000' });
         expect(params.amount).toBe('$315.000');
+    });
+});
+
+describe('cobros únicos en la escalera (cobro_unico_*)', () => {
+    const unica = (id: string, atleta: string, vence: string, cobro = 'Copa Navidad Cuervos', saldo = 85000, extra: Partial<Familia['filas'][number]> = {}) =>
+        ({ paymentId: id, atleta, concepto: `${cobro} — ${atleta}`, vence, saldo, vencido: false, delMes: false, unico: true, status: 'pending', ...extra });
+    const fam = (filas: any[], extra: Partial<Familia> = {}): Familia => ({
+        clave: 'caro@x.co', email: 'caro@x.co', waId: '573001112233', nombre: 'Carolina Pérez', perfilId: 'perfil-1', filas, avisadaHoy: false, ...extra,
+    });
+
+    it('la escalera de cobros únicos son dos pasos: mañana vence (-1) y quedó pendiente (+3..+9)', () => {
+        expect(ESCALONES_UNICO.map((e) => [e.concepto, e.plantilla, e.desde, e.hasta])).toEqual([
+            ['vence_manana', 'cobro_unico_vence_manana', -1, -1],
+            ['pendiente_suave', 'cobro_unico_pendiente', 3, 9],
+        ]);
+        expect(escalonDelDia(-1, true)?.plantilla).toBe('cobro_unico_vence_manana');
+        expect(escalonDelDia(0, true)).toBeNull();
+        expect(escalonDelDia(-3, true)).toBeNull();
+        expect(escalonDelDia(10, true)).toBeNull();
+        expect(escalonDelDia(-3)?.concepto).toBe('recordatorio_previo'); // la de mensualidad no cambia
+    });
+
+    it('víspera del vencimiento: sale cobro_unico_vence_manana con el nombre del cobro, sin el deportista', () => {
+        const f = fam([unica('t1', 'Ada Luz Valencia', '2026-10-10'), unica('t2', 'Ada Luz Valencia', '2026-10-10')]);
+        const plan = planificar(entrada([f], [pago('t1', '2026-10-10'), pago('t2', '2026-10-10')]));
+        expect(plan.contactos).toHaveLength(1);
+        const c = plan.contactos[0];
+        expect(c.concepto).toBe('vence_manana');          // notice_type de collection_notices
+        expect(c.plantilla).toBe('cobro_unico_vence_manana');
+        expect(c.datos.conceptoPago).toBe('Copa Navidad Cuervos');
+        expect(c.datos.nombreAtleta).toBe('Ada');
+        expect(c.datos.monto).toBe('$170.000');
+        expect(c.paymentIds).toEqual(['t1', 't2']);
+    });
+
+    it('3 días después: cobro_unico_pendiente; sin mora', () => {
+        const f = fam([unica('t1', 'Ada Luz Valencia', '2026-10-06', 'Torneo', 85000, { vencido: true })]);
+        const plan = planificar(entrada([f], [pago('t1', '2026-10-06', { status: 'overdue' })]));
+        expect(plan.contactos[0]).toMatchObject({ concepto: 'pendiente_suave', plantilla: 'cobro_unico_pendiente' });
+        expect(plan.contactos[0].datos.monto).toBe('$85.000');
+    });
+
+    it('fuera de los dos pasos no sale nada (previo, vence hoy, +10, +20)', () => {
+        for (const vence of ['2026-10-12', '2026-10-09', '2026-09-29', '2026-09-19']) {
+            const f = fam([unica('t1', 'Ada', vence)]);
+            expect(planificar(entrada([f], [pago('t1', vence)])).contactos, vence).toHaveLength(0);
+        }
+    });
+
+    it('si el escalón de la mensualidad empata con el del cobro único, manda la mensualidad (un contacto por día)', () => {
+        const f = fam([
+            { paymentId: 'm1', atleta: 'Samuel R', concepto: 'Mensualidad', vence: '2026-10-10', saldo: 150000, vencido: false, delMes: true, status: 'pending' },
+            unica('t1', 'Samuel R', '2026-10-10'),
+        ]);
+        const plan = planificar(entrada([f], [pago('m1', '2026-10-10'), pago('t1', '2026-10-10')]));
+        expect(plan.contactos).toHaveLength(1);
+        expect(plan.contactos[0].plantilla).toBeUndefined();
+        expect(plan.contactos[0].paymentIds).toEqual(['m1']);
+    });
+
+    it('por correo no hay escalera de cobros únicos', () => {
+        const f = fam([unica('t1', 'Ada', '2026-10-06', 'Torneo', 85000, { vencido: true })], { waId: null });
+        const plan = planificar(entrada([f], [pago('t1', '2026-10-06', { status: 'overdue' })], { canalCorreo: true }));
+        expect(plan.contactos).toHaveLength(0);
+    });
+
+    it('respeta el interruptor de mora para el «quedó pendiente» y el candado de ya enviado', () => {
+        const f = () => fam([unica('t1', 'Ada', '2026-10-06', 'Torneo')]);
+        const pagos = [pago('t1', '2026-10-06', { status: 'overdue' })];
+        expect(planificar({ ...entrada([f()], pagos), tipos: { previo: true, mora: false } }).contactos).toHaveLength(0);
+        expect(planificar(entrada([f()], pagos, { enviados: new Set(['t1|pendiente_suave']) })).contactos).toHaveLength(0);
+        expect(planificar(entrada([f()], [pago('t1', '2026-10-06', { status: 'overdue', overdue_notice_sent_at: '2026-10-06T12:00:00Z' })])).contactos).toHaveLength(0);
+    });
+
+    it('esUnicoRecordable: torneo sí (aunque diga subscription), mensualidad no, sin categoría no', () => {
+        expect(esUnicoRecordable({ payment_type: 'one_time', payment_category: 'torneo' })).toBe(true);
+        expect(esUnicoRecordable({ payment_type: 'subscription', payment_category: 'torneo' })).toBe(true);
+        expect(esUnicoRecordable({ payment_type: 'subscription', payment_category: 'mensualidad' })).toBe(false);
+        expect(esUnicoRecordable({ payment_type: 'subscription', payment_category: null })).toBe(false);
+    });
+
+    it('enviarContacto: manda la plantilla de cobro único y registra el escalón equivalente', async () => {
+        h.enviar.mockResolvedValue({ enviado: true, waMessageId: 'wamid', plantilla: 'cobro_unico_vence_manana' });
+        const c: ContactoPlaneado = { ...contacto('vence_manana'), plantilla: 'cobro_unico_vence_manana', paymentIds: ['t1'] };
+        expect(await enviarContacto('s', c, AHORA)).toBe('enviado');
+        expect(h.enviar.mock.calls[0][0]).toMatchObject({ concepto: 'cobro_unico_vence_manana', paymentId: 't1' });
+        expect(ops('collection_notices', 'insert')[0].args[0]).toMatchObject({ notice_type: 'vence_manana', payment_id: 't1' });
+        expect(ops('payments', 'update')[0].args[0]).toHaveProperty('charge_notice_sent_at');
     });
 });
