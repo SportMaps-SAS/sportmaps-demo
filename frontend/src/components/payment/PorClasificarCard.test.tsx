@@ -70,7 +70,8 @@ describe('quienEnvio', () => {
 
 describe('helpers', () => {
     it('explica por qué la base no creó el cobro, con los números', () => {
-        const t = explicarErrorDeCreacion({ error: 'monto_no_coincide', precio: 350000, abono_minimo: 175000 }, 150000);
+        // Intl es-CO pone un espacio entre «$» y la cifra según la versión de ICU de Node: se compara sin espacios.
+        const t = explicarErrorDeCreacion({ error: 'monto_no_coincide', precio: 350000, abono_minimo: 175000 }, 150000).replace(/\s/g, '');
         expect(t).toContain('$150.000');
         expect(t).toContain('$350.000');
         expect(t).toContain('$175.000');
