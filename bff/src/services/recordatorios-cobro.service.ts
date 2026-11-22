@@ -75,6 +75,7 @@ import { BrandedEmailTemplates } from '../utils/emailTemplates';
 import { appPublica, enlaceDeCobro } from '../utils/url-publica-familias';
 import { findDuplicatePaymentIds } from './duplicatePayerGuard.service';
 import { esMensualidad } from './tipo-de-cobro';
+import { esCobroUnico } from './payment-accounts';
 import { desgloseMora, montoConMora } from '../utils/desglose-mora';
 import { COLUMNAS_CONTACTO_FICHA, COLUMNAS_CONTACTO_HIJO } from './contacto-acudiente';
 import {
@@ -87,7 +88,11 @@ import {
 export type ConceptoRecordatorio = Extract<ConceptoCobro,
     'recordatorio_previo' | 'vence_manana' | 'vence_hoy' | 'pendiente_suave' | 'pendiente_directo' | 'aviso_final'>;
 
-export interface Escalon { concepto: ConceptoRecordatorio; desde: number; hasta: number; mora: boolean }
+export interface Escalon {
+    concepto: ConceptoRecordatorio; desde: number; hasta: number; mora: boolean;
+    /** Plantilla que sale si NO es la del concepto (cobros únicos). El registro en collection_notices usa `concepto`. */
+    plantilla?: ConceptoCobro;
+}
 
 /** En orden de severidad creciente. */
 export const ESCALONES: Escalon[] = [
@@ -97,6 +102,21 @@ export const ESCALONES: Escalon[] = [
     { concepto: 'pendiente_suave', desde: 3, hasta: 9, mora: true },
     { concepto: 'pendiente_directo', desde: 10, hasta: 19, mora: true },
     { concepto: 'aviso_final', desde: 20, hasta: 23, mora: true },
+];
+
+/**
+ * Escalera de los COBROS ÚNICOS (torneo, uniforme, clase extra…): dos pasos, por WhatsApp.
+ * Las plantillas de mensualidad dicen «la mensualidad de…», así que tienen las suyas
+ * (cobro_unico_*, aprobadas el 2026-11-20). `concepto` es el escalón equivalente de la
+ * escalera principal: así `collection_notices.notice_type` (CHECK a esos seis valores),
+ * el estampado y la severidad se reutilizan sin migración. Un cobro es mensualidad o
+ * único, nunca los dos, por lo que (payment_id, notice_type) no choca.
+ * Sin «recordatorio previo» ni «vence hoy» (el aviso de nacimiento ya lo dio el
+ * estado de cuenta), sin escalones de mora, sin correo.
+ */
+export const ESCALONES_UNICO: Escalon[] = [
+    { concepto: 'vence_manana', desde: -1, hasta: -1, mora: false, plantilla: 'cobro_unico_vence_manana' },
+    { concepto: 'pendiente_suave', desde: 3, hasta: 9, mora: true, plantilla: 'cobro_unico_pendiente' },
 ];
 
 const SEVERIDAD = new Map(ESCALONES.map((e, i) => [e.concepto, i]));
@@ -115,8 +135,8 @@ export function diasDesdeVencimiento(dueDate: string, hoyISO: string): number {
     return Math.round((b - a) / 86_400_000);
 }
 
-export function escalonDelDia(delta: number): Escalon | null {
-    return ESCALONES.find((e) => delta >= e.desde && delta <= e.hasta) ?? null;
+export function escalonDelDia(delta: number, unico = false): Escalon | null {
+    return (unico ? ESCALONES_UNICO : ESCALONES).find((e) => delta >= e.desde && delta <= e.hasta) ?? null;
 }
 
 /** Fecha 'YYYY-MM-DD' corrida n días. */
@@ -169,6 +189,8 @@ export interface ContactoPlaneado {
     /** Aviso de política de cobranza de la escuela (school_settings.collection_policy_notice). */
     avisoPolitica?: string | null;
     concepto: ConceptoRecordatorio;
+    /** Plantilla de cobro único que sale en lugar de la del concepto (ver ESCALONES_UNICO). */
+    plantilla?: ConceptoCobro;
     /** Cobros que menciona el mensaje; el primero es el "líder" (el más viejo): botón y candado. */
     paymentIds: string[];
     /**
@@ -228,7 +250,7 @@ export function planificar(e: EntradaPlan): Plan {
     };
     const limitePrevio = `${sumarDias(e.hoy, -DIAS_SIN_REPETIR_PREVIO)}T05:00:00Z`; // 00:00 COT
 
-    type Cand = { paymentId: string; escalon: Escalon; delta: number; atleta: string; saldo: number; mora: number; vence: string };
+    type Cand = { paymentId: string; escalon: Escalon; delta: number; atleta: string; saldo: number; mora: number; vence: string; unico: boolean; cobro: string };
     // Clave del destinatario: 'wa:<id>' (WhatsApp) o el correo (correo).
     const porDestino = new Map<string, { canal: CanalRecordatorio; familias: Familia[]; cands: Cand[] }>();
 
@@ -237,7 +259,8 @@ export function planificar(e: EntradaPlan): Plan {
         for (const r of f.filas) {
             if (!r.vence) continue;
             const delta = diasDesdeVencimiento(r.vence, e.hoy);
-            const esc = escalonDelDia(delta);
+            const unico = r.unico === true;
+            const esc = escalonDelDia(delta, unico);
             if (!esc) { descartes.sin_escalon_hoy++; continue; }
             if (esc.mora ? e.tipos?.mora === false : e.tipos?.previo === false) { descartes.sin_escalon_hoy++; continue; }
             if (e.enviados.has(`${r.paymentId}|${esc.concepto}`)) { descartes.ya_enviado++; continue; }
@@ -249,7 +272,10 @@ export function planificar(e: EntradaPlan): Plan {
             if (esc.concepto === 'pendiente_suave' && p?.overdue_notice_sent_at) {
                 descartes.vencido_ya_avisado++; continue;
             }
-            cands.push({ paymentId: r.paymentId, escalon: esc, delta, atleta: r.atleta, saldo: r.saldo, mora: r.mora ?? 0, vence: r.vence });
+            cands.push({
+                paymentId: r.paymentId, escalon: esc, delta, atleta: r.atleta, saldo: r.saldo, mora: r.mora ?? 0, vence: r.vence,
+                unico, cobro: String(r.concepto ?? '').split(' — ')[0].trim(),
+            });
         }
         if (cands.length === 0) continue;
         if (f.avisadaHoy || e.contactadosHoy.has(f.clave) || (f.waId && e.contactadosHoy.has(`wa:${f.waId}`))) {
@@ -262,7 +288,8 @@ export function planificar(e: EntradaPlan): Plan {
             destino = `wa:${f.waId}`;
             canal = 'whatsapp';
         } else if (e.canalCorreo && f.email) {
-            suyos = cands.filter((c) => ESCALONES_CORREO.has(c.escalon.concepto));
+            // Los cobros únicos no tienen correo en esta escalera (ver ESCALONES_UNICO).
+            suyos = cands.filter((c) => !c.unico && ESCALONES_CORREO.has(c.escalon.concepto));
             if (suyos.length === 0) { descartes.sin_escalon_hoy++; continue; }
             destino = f.email.trim().toLowerCase();
             canal = 'email';
@@ -279,10 +306,13 @@ export function planificar(e: EntradaPlan): Plan {
     const contactos: ContactoPlaneado[] = [];
     for (const [destino, g] of porDestino) {
         const max = Math.max(...g.cands.map((c) => SEVERIDAD.get(c.escalon.concepto)!));
-        const grupo = g.cands
-            .filter((c) => SEVERIDAD.get(c.escalon.concepto) === max)
-            .sort((a, b) => a.vence.localeCompare(b.vence));
+        let grupo = g.cands.filter((c) => SEVERIDAD.get(c.escalon.concepto) === max);
+        // Empate de escalón entre mensualidad y cobro único: manda la mensualidad (un solo contacto
+        // por día y su plantilla no se puede mezclar con la de cobro único).
+        if (grupo.some((c) => !c.unico)) grupo = grupo.filter((c) => !c.unico);
+        grupo = grupo.sort((a, b) => a.vence.localeCompare(b.vence));
         const lider = grupo[0];
+        const soloUnicos = lider.unico;
         const fam = g.familias[0];
         const total = grupo.reduce((s, c) => s + c.saldo, 0);
         const mora = grupo.reduce((s, c) => s + c.mora, 0);
@@ -295,10 +325,19 @@ export function planificar(e: EntradaPlan): Plan {
             diaCorte: e.diaCorte ?? null,
             avisoPolitica: e.avisoPolitica ?? null,
             concepto: lider.escalon.concepto,
+            ...(soloUnicos ? { plantilla: lider.escalon.plantilla } : {}),
             paymentIds: grupo.map((c) => c.paymentId),
             total,
             mora,
-            datos: {
+            datos: soloUnicos ? {
+                nombreContacto: fam.nombre.split(' ')[0] || fam.nombre,
+                nombreAtleta: unirNombres(grupo.map((c) => c.atleta)),
+                nombreEscuela: e.escuela,
+                conceptoPago: [...new Set(grupo.map((c) => c.cobro).filter(Boolean))].join(' y '),
+                fechaVencimiento: fechaLarga(lider.vence),
+                monto: fmtCop(total),
+                diasVencido: lider.delta > 0 ? lider.delta : null,
+            } : {
                 nombreContacto: fam.nombre.split(' ')[0] || fam.nombre,
                 nombreAtleta: unirNombres(grupo.map((c) => c.atleta)),
                 nombreEscuela: e.escuela,
@@ -334,6 +373,46 @@ export function entraEnRecordatorios(p: { payment_type?: string | null; payment_
     // Sin payment_type en la fila (la consulta ya filtra 'subscription') se toma como tal.
     const tipo = p.payment_type ?? 'subscription';
     return tipo === 'subscription' && esMensualidad({ ...p, payment_type: tipo });
+}
+
+/**
+ * ¿Es un cobro único que la escalera de cobros únicos puede recordar? Categoría distinta
+ * de mensualidad (`payment_type` no es fiable) y que NO entre ya como mensualidad. Pura.
+ */
+export function esUnicoRecordable(p: { payment_type?: string | null; payment_category?: string | null; concept?: string | null }): boolean {
+    return !entraEnRecordatorios(p) && esCobroUnico(p.payment_category);
+}
+
+/**
+ * Cobros de lotes creados SIN «Avisar a las familias» (spec cobros-multiples I21/Q9). La
+ * escuela decidió no avisar: si la familia nunca recibió el aviso de nacimiento
+ * (`charge_notice_sent_at` vacío), el recordatorio sería su primer contacto y por una
+ * vía que la escuela no pidió. Mismo criterio que payment-lifecycle-emails
+ * (`idsDeLotesSinAviso`), sin importar ese job (importaría este servicio de vuelta).
+ * Ante error de consulta no se excluye nada.
+ */
+export async function cobrosDeLotesSilenciosos(paymentIds: string[]): Promise<Set<string>> {
+    const fuera = new Set<string>();
+    if (paymentIds.length === 0) return fuera;
+    try {
+        const filas: { id: string; charge_batch_id: string }[] = [];
+        for (const t of trozos(paymentIds)) {
+            const { data, error } = await supabase.from('payments').select('id, charge_batch_id').in('id', t).not('charge_batch_id', 'is', null);
+            if (error) return fuera;
+            filas.push(...((data as any[]) ?? []));
+        }
+        const lotes = [...new Set(filas.map((f) => f.charge_batch_id))];
+        const silenciosos = new Set<string>();
+        for (const t of trozos(lotes)) {
+            const { data, error } = await supabase.from('charge_batches').select('id, notify_families').in('id', t);
+            if (error) return fuera;
+            for (const b of (data as any[]) ?? []) if (b.notify_families !== true) silenciosos.add(b.id);
+        }
+        for (const f of filas) if (silenciosos.has(f.charge_batch_id)) fuera.add(f.id);
+    } catch {
+        /* sin dato: no se excluye nada */
+    }
+    return fuera;
 }
 
 /**
@@ -493,19 +572,23 @@ export async function planDeEscuela(
         : null;
     const avisoPolitica = String((ajustes as any)?.collection_policy_notice ?? '').trim() || null;
 
-    // Solo mensualidades (las plantillas dicen "la mensualidad de …"), con saldo
-    // y sin comprobante en revisión: a quien ya pagó y espera aprobación no se le cobra.
+    // Mensualidades (escalera principal) y cobros únicos (ESCALONES_UNICO), con saldo y sin
+    // comprobante en revisión: a quien ya pagó y espera aprobación no se le cobra. Sin filtrar
+    // por `payment_type` en la consulta (no es fiable): la partición se hace abajo, en código.
     const { data: crudos, error } = await supabase.from('payments')
         .select('id, school_id, parent_id, user_id, child_id, unregistered_athlete_id, concept, amount, amount_paid, early_payment_discount_applied, late_fee_amount, status, due_date, payment_type, payment_category, period_year, period_month, charge_notice_sent_at, overdue_notice_sent_at, requires_review')
         .eq('school_id', schoolId)
-        .eq('payment_type', 'subscription')
         .in('status', ['pending', 'overdue', 'partial'])
         .gte('due_date', desde)
         .lte('due_date', hasta)
         .limit(5000);
     if (error) throw new Error(`payments: ${error.message}`);
-    const pagos = ((crudos as any[]) ?? [])
-        .filter((p) => p.requires_review !== true && entraEnRecordatorios(p)) as PagoEstado[];
+    const candidatos = ((crudos as any[]) ?? []).filter((p) => p.requires_review !== true);
+    const unicosCandidatos = candidatos.filter(esUnicoRecordable);
+    // Un cobro único de un lote silencioso al que nunca se avisó no se recuerda (ver arriba).
+    const silenciosos = await cobrosDeLotesSilenciosos(unicosCandidatos.filter((p) => !p.charge_notice_sent_at).map((p) => p.id));
+    const pagos = candidatos
+        .filter((p) => entraEnRecordatorios(p) || (esUnicoRecordable(p) && !silenciosos.has(p.id))) as PagoEstado[];
 
     const duplicados = new Set(await findDuplicatePaymentIds(schoolId, pagos as any));
     const vivos = pagos.filter((p) => !duplicados.has(p.id));
@@ -647,7 +730,7 @@ export async function enviarContacto(schoolId: string, c: ContactoPlaneado, ahor
     const r = c.canal === 'email'
         ? await enviarPorCorreo(schoolId, c, lider)
         : await enviarCobroPorPlantilla({
-            schoolId, concepto: c.concepto, telefono: c.waId!, datos: c.datos,
+            schoolId, concepto: c.plantilla ?? c.concepto, telefono: c.waId!, datos: c.datos,
             tokenBoton: await emitirTokenCobro(lider), paymentId: lider, parentId: c.perfilId, ahora,
         });
 
