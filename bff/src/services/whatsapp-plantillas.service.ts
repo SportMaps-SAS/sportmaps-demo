@@ -35,6 +35,7 @@
 import { supabase } from '../config/supabase';
 import { decryptToken } from './whatsapp.service';
 import { conDestinatarioDeMeta } from './whatsapp-usuario-meta';
+import { registrarAviso } from './whatsapp-avisos-log';
 import { esFestivoColombia } from '../utils/festivos-colombia';
 
 const GRAPH_API_VERSION = process.env.WHATSAPP_GRAPH_VERSION || 'v21.0';
@@ -616,7 +617,7 @@ export interface EnvioCobro {
  * Orden de los controles: integración → plantilla → teléfono → opt-in → datos →
  * botón → token → horario → envío. Todo faltante vuelve como motivo; nada lanza.
  */
-export async function enviarCobroPorPlantilla(p: EnvioCobro): Promise<ResultadoEnvio> {
+async function enviarCobroPorPlantillaSinRegistro(p: EnvioCobro): Promise<ResultadoEnvio> {
     const def = CONCEPTOS[p.concepto];
 
     const integ = await integracionDeEscuela(p.schoolId);
@@ -703,6 +704,22 @@ export async function enviarCobroPorPlantilla(p: EnvioCobro): Promise<ResultadoE
     }).catch(() => undefined);
 
     return { enviado: true, waMessageId, plantilla: vigente.nombre };
+}
+
+/**
+ * Punto único de los avisos por plantilla: manda y, si la escuela tiene la bandera WA_AVISOS_LOG_SCHOOL_IDS,
+ * deja el intento en `whatsapp_avisos_log` (salió o no, con su motivo). El registro no espera ni lanza.
+ */
+export async function enviarCobroPorPlantilla(p: EnvioCobro): Promise<ResultadoEnvio> {
+    const r = await enviarCobroPorPlantillaSinRegistro(p);
+    void registrarAviso({
+        schoolId: p.schoolId, concepto: p.concepto, paymentId: p.paymentId ?? null, parentId: p.parentId ?? null,
+        destino: aWaId(p.telefono),
+        ...(r.enviado
+            ? { resultado: 'enviado' as const, plantilla: r.plantilla, waMessageId: r.waMessageId }
+            : { resultado: 'no_enviado' as const, motivo: r.motivo, detalle: r.detalle ?? null }),
+    });
+    return r;
 }
 
 /**
