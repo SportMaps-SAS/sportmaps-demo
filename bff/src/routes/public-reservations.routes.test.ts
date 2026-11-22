@@ -57,10 +57,13 @@ async function app() {
 const guest = (over: Record<string, any> = {}) => ({
     id: GID, phone: '+573001112233', email: 'ana@x.co', full_name: 'Ana', verified_phone_at: null, verified_email_at: null, ...over,
 });
-const body = { facility_id: UUID1, starts_at: '2026-11-06T22:00:00Z', ends_at: '2026-11-06T23:00:00Z', payment_method: 'online' };
+// Fechas relativas a hoy: el enlace de estado vence 14 días después del fin de la reserva, así que una fecha fija caduca sola.
+const FIN_RESERVA = new Date(Date.now() + 2 * 24 * 3600_000).toISOString();
+const INICIO_RESERVA = new Date(Date.now() + 2 * 24 * 3600_000 - 3600_000).toISOString();
+const body = { facility_id: UUID1, starts_at: INICIO_RESERVA, ends_at: FIN_RESERVA, payment_method: 'online' };
 const okRes = {
     ok: true, idempotent_replay: false,
-    reservation: { id: UUID2, school_id: UUID1, user_id: null, guest_booker_id: GID, status: 'pending_payment', ends_at: '2026-11-06T23:00:00Z', price_snapshot: { a: 1 } },
+    reservation: { id: UUID2, school_id: UUID1, user_id: null, guest_booker_id: GID, status: 'pending_payment', ends_at: FIN_RESERVA, price_snapshot: { a: 1 } },
 };
 
 beforeEach(() => {
