@@ -233,6 +233,7 @@ export default function AthleteCardPublicPage() {
                 </p>
                 <Input
                   type="email"
+                  autoComplete="username"
                   placeholder="Correo"
                   value={staffEmail}
                   onChange={(e) => setStaffEmail(e.target.value)}
@@ -240,6 +241,7 @@ export default function AthleteCardPublicPage() {
                 />
                 <Input
                   type="password"
+                  autoComplete="current-password"
                   placeholder="Contraseña"
                   value={staffPassword}
                   onChange={(e) => setStaffPassword(e.target.value)}
