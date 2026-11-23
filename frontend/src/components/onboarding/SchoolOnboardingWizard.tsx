@@ -38,6 +38,7 @@ import { emailClient } from '@/lib/email-client';
 import { esNombreDePagoUnico, PAGO_UNICO_NO_ES_PLAN_MSG } from '@/lib/school/pagosUnicos';
 import { FootballModalitySelect } from '@/components/teams/FootballModalitySelect';
 import { modalityToSave } from '@/lib/sports/footballModality';
+import { resolveSignupSport } from '@/lib/auth/signupMetadata';
 
 type BusinessModel = 'teams' | 'plans' | 'both';
 type StepId = 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
@@ -260,7 +261,22 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       setTeamSport(data.sport || '');
       setTeamModality(data.sport_modality || '');
       setTeamPrice(String(data.price_monthly || '150000'));
+      return;
     }
+
+    // Sin equipo todavía: se precarga el deporte que la academia ya eligió en el
+    // registro, en vez de volver a preguntarlo (hallazgo A).
+    const { data: school } = await supabase
+      .from('schools')
+      .select('sports')
+      .eq('id', schoolId)
+      .maybeSingle();
+    const sport = resolveSignupSport({
+      schoolSports: (school as { sports?: string[] | null } | null)?.sports,
+      metadataSport: user?.user_metadata?.sport_name,
+      catalog: SPORTS_LIST,
+    });
+    if (sport) setTeamSport((prev) => prev || sport);
   };
 
   const loadPlanData = async () => {

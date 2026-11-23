@@ -925,7 +925,7 @@ export default function RegisterPage() {
                       )}
                     />
                     {errors.sportId && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.sportId.message}</p>}
-                    <p className="text-[9px] text-[#8a9186] px-1 italic">Este deporte autogenerará categorías sugeridas para tu academia.</p>
+                    <p className="text-[9px] text-[#8a9186] px-1 italic">Lo usamos para dejar listo tu primer grupo. Podrás agregar más deportes después.</p>
                   </div>
                 </div>
               )}
