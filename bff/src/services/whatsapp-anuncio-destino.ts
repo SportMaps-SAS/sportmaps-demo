@@ -49,6 +49,7 @@ import {
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
 import { PASO_VENTA, botonesDeVenta, pideDatosDePago, textoDePagoDeServicio, type BotonDeVenta } from './whatsapp-venta-servicio';
 import { esConsultaDePatrocinio } from './whatsapp-patrocinio';
+import { marcarCuposLlenos } from './wa-cupos-de-servicio.service';
 
 // ─── El anuncio (referral de Meta) ──────────────────────────────────────────
 
@@ -170,9 +171,14 @@ export async function mapeoDeAnuncio(schoolId: string, sourceId: string | null):
 export interface ItemConFicha extends ItemDeServicio {
     description?: string | null;
     image_url?: string | null;
+    /** Cupo total del servicio (null = sin límite). */
+    capacity?: number | null;
+    created_at?: string | null;
+    /** (2026-11-22) Lo marca la lectura del catálogo cuando el servicio tiene cupo y ya se completó (`marcarCuposLlenos`). */
+    cupos_llenos?: boolean;
 }
 
-const COLUMNAS = 'id, name, kind, price, active, event_id, starts_at, ends_at, description, image_url';
+const COLUMNAS = 'id, name, kind, price, active, event_id, starts_at, ends_at, description, image_url, capacity, created_at';
 const COLUMNAS_M2 = `${COLUMNAS}, allow_installments, precio_afiliado, precios_por_fecha, abono_minimo_pct, opciones`;
 /** (2026-11-11) + el precio de afiliado por fecha. Migración nueva: sin ella se lee M2, y sin M2 las de siempre. */
 const COLUMNAS_M3 = `${COLUMNAS_M2}, precios_afiliado_por_fecha`;
@@ -198,7 +204,7 @@ export function servicioVigente(it: Pick<ItemDeServicio, 'active' | 'event_id' |
  * comprobantes y los saldos (`itemsDeServicio`, `preciosDeServicios`, el cobro previo) NO la usan: siguen hasta el fin.
  */
 export function ventaCerradaDeItem(
-    item: Pick<ItemDeServicio, 'id' | 'kind' | 'starts_at'> | null | undefined,
+    item: (Pick<ItemDeServicio, 'id' | 'kind' | 'starts_at'> & { cupos_llenos?: boolean }) | null | undefined,
     ahora: number = Date.now(),
     cerradosPorEnv: string | string[] | undefined = process.env.WA_VENTAS_CERRADAS_ITEMS,
 ): boolean {
@@ -206,6 +212,8 @@ export function ventaCerradaDeItem(
     const ids = (Array.isArray(cerradosPorEnv) ? cerradosPorEnv : String(cerradosPorEnv ?? '').split(','))
         .map((x) => String(x).trim().toLowerCase()).filter(Boolean);
     if (item.id && ids.includes(String(item.id).toLowerCase())) return true;
+    // (c) (2026-11-22) el servicio tiene cupo y ya se completó (lo marca la lectura del catálogo).
+    if (item.cupos_llenos === true) return true;
     if (item.kind === 'clase_extra' && item.starts_at) {
         const inicio = new Date(item.starts_at).getTime();
         return Number.isFinite(inicio) && ahora >= inicio;
@@ -214,8 +222,13 @@ export function ventaCerradaDeItem(
 }
 
 /** El mensaje fijo a quien pregunta por un servicio cuya venta cerró y NO tiene cobro de él. Pura. */
-export function textoVentaCerrada(item: Pick<ItemDeServicio, 'name'> | null | undefined): string {
+export function textoVentaCerrada(item: (Pick<ItemDeServicio, 'name'> & { cupos_llenos?: boolean }) | null | undefined): string {
     const nombre = String(item?.name ?? '');
+    if (item?.cupos_llenos === true) {
+        return `Los cupos de *${nombre || 'este servicio'}* ya se completaron 🙌 `
+            + 'Si quieres quedar en lista de espera, escríbeme el nombre completo de quien asistiría y la escuela te avisa por aquí si se libera un cupo. '
+            + 'Si ya pagaste, envíanos el comprobante con el nombre completo del deportista y la escuela te lo confirma.';
+    }
     if (/cl[ií]nica de armadores/i.test(nombre)) {
         return 'Las inscripciones de la *Clínica de armadores y atacantes* ya cerraron: la clínica es mañana y el domingo (21 y 22 de noviembre). '
             + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
@@ -242,8 +255,9 @@ export async function serviciosDeAnuncio(
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
         if (error || !Array.isArray(data)) return [];
-        return (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora)
-            && !(opciones.ventaAbierta && ventaCerradaDeItem(it, ahora)));
+        const vigentes = await marcarCuposLlenos(schoolId,
+            (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora)), ahora);
+        return vigentes.filter((it) => !(opciones.ventaAbierta && ventaCerradaDeItem(it, ahora)));
     } catch {
         return [];
     }
@@ -263,7 +277,7 @@ export async function servicioDeAnuncioPorId(schoolId: string, id: string): Prom
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS_M2));
         if (error && esMigracionPendiente(error)) ({ data, error } = await leer(COLUMNAS));
         if (error || !Array.isArray(data) || !data[0]) return null;
-        return data[0] as unknown as ItemConFicha;
+        return (await marcarCuposLlenos(schoolId, [data[0] as unknown as ItemConFicha]))[0];
     } catch {
         return null;
     }
@@ -765,7 +779,9 @@ export function textoFichaDeServicio(
             : completo;
         // El precio de afiliado no está en el texto público: solo lo ve quien es de una
         // familia del club (el bot lo sabe por el número).
-        const lineaAfiliado = precio.deAfiliado && precio.hoy !== null
+        // (2026-11-22) Con opciones (semanas del vacacional) `precio.hoy` es el precio BASE del ítem, no el de
+        // afiliado: decía «Como afiliado, tu valor es $100.000» cuando el suyo era $80.000, $120.000 o $150.000.
+        const lineaAfiliado = precio.deAfiliado && precio.hoy !== null && !precio.opciones.length
             ? `Como afiliado del club, tu valor es *${cop(precio.hoy)}*.` : null;
         return [cuerpo, lineaAfiliado, cierre].filter(Boolean).join('\n\n');
     }
