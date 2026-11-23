@@ -6,6 +6,7 @@ import {
     copToCents,
 } from '../services/wompi.service';
 import { reprocessOrphanWebhooks } from '../services/webhook-reprocess.service';
+import { tocaAvisarBloqueoPac, mensajeBloqueoPac } from '../services/invoicing/bloqueo-pac-aviso';
 import { autoEmitPendingInvoices, autoEmitPendingMarketplaceInvoices, autoEmitPendingOrders, reconcilePendingInvoices, FACTURA_ATASCADA_HORAS } from '../services/invoicing.service';
 
 import { runGlosaNotifications } from './glosa-notifications.job';
@@ -49,6 +50,7 @@ import { runPlanChangeDetector } from './plan-change-detector.job';
 
 /** Último aviso de factura atascada por dueño (memoria del proceso; se reinicia con el deploy). */
 const ultimoAvisoFacturaAtascada = new Map<string, number>();
+const ultimoAvisoBloqueoPac = new Map<string, number>();
 
 /**
  * Inicia los trabajos de mantenimiento programados para el BFF.
@@ -300,6 +302,14 @@ export function initMaintenanceJobs() {
             const r = await autoEmitPendingInvoices();
             if (r.scanned > 0) {
                 console.log(`[CRON] Auto-facturación (escuela): scanned=${r.scanned} emitted=${r.emitted} skipped=${r.skipped} failed=${r.failed}`);
+            }
+            // El PAC frenó a una escuela por una factura sin enviar a la DIAN: avisar (máx. una vez cada 6 h por escuela).
+            for (const escuela of r.bloqueadas ?? []) {
+                if (!tocaAvisarBloqueoPac(ultimoAvisoBloqueoPac.get(escuela))) continue;
+                ultimoAvisoBloqueoPac.set(escuela, Date.now());
+                const msg = mensajeBloqueoPac(escuela);
+                console.error(msg);
+                Sentry.captureMessage(msg, 'error');
             }
         } catch (err: any) {
             Sentry.captureException(err);
