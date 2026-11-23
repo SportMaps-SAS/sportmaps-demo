@@ -1235,7 +1235,7 @@ async function marcarFacturaAnulada(params: {
 
 // ─── Triggers automáticos (barridos idempotentes) ──────────────────────────────
 
-const AUTO_EMPTY = { scanned: 0, emitted: 0, failed: 0, skipped: 0 };
+const AUTO_EMPTY: { scanned: number; emitted: number; failed: number; skipped: number; bloqueadas?: string[] } = { scanned: 0, emitted: 0, failed: 0, skipped: 0 };
 /**
  * Motivos que NO son un fallo: el pago no se puede facturar todavía (o nunca) y
  * no hay nada que reintentar hasta que cambie el dato de fondo.
@@ -1384,7 +1384,7 @@ async function recolectarPagosPendientes(params: {
 /** Barre pagos 'paid' recientes de escuelas con facturador activo sin factura. */
 export async function autoEmitPendingInvoices(
     opts?: { sinceDays?: number; limit?: number },
-): Promise<{ scanned: number; emitted: number; failed: number; skipped: number }> {
+): Promise<{ scanned: number; emitted: number; failed: number; skipped: number; bloqueadas?: string[] }> {
     const sinceDays = opts?.sinceDays ?? 3;
     const limit = opts?.limit ?? 100;
     const sinceDate = new Date(Date.now() - sinceDays * 86_400_000).toISOString().slice(0, 10);
@@ -1442,7 +1442,7 @@ export async function autoEmitPendingInvoices(
             }
         } catch { failed++; }
     }
-    return { scanned: pending.length, emitted, failed, skipped };
+    return { scanned: pending.length, emitted, failed, skipped, bloqueadas: [...bloqueadas] };
 }
 
 // ─── Backfill explícito (el camino para el rezago) ────────────────────────────
