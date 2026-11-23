@@ -23,6 +23,8 @@ trap 'rm -f "$TMP"' EXIT
     20261123082624_escuela_guarda_deporte_del_registro.sql \
     20261123084254_onboarding_status_pasos_reales.sql \
     20261123085942_onboarding_tracking_eventos.sql \
+    20261123111624_onboarding_checklist_extras.sql \
+    20261123112301_consentimiento_whatsapp_registro.sql \
     ${ETAPA1_MIGRATIONS:-}
   do
     [ -f "$ROOT/supabase/migrations/$m" ] || { echo "falta la migración $m" >&2; exit 1; }
