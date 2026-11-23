@@ -21,6 +21,7 @@ trap 'rm -f "$TMP"' EXIT
   # dentro de la transacción que se revierte.
   for m in \
     20261123082624_escuela_guarda_deporte_del_registro.sql \
+    20261123084254_onboarding_status_pasos_reales.sql \
     ${ETAPA1_MIGRATIONS:-}
   do
     [ -f "$ROOT/supabase/migrations/$m" ] || { echo "falta la migración $m" >&2; exit 1; }
