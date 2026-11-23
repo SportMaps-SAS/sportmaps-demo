@@ -43,6 +43,7 @@ import {
 } from './asistenciaModel';
 import { DESHACER_MS, claveLista } from './colaAsistencia';
 import { useColaAsistencia, useWakeLock } from './useCoachV2Senal';
+import { etiquetaFrescura } from '@/lib/offline/frescura';
 import {
   cerrarListaSesion, claveContexto, esAdministracion, useClasesHoy, useEquiposCoach, useHistorial, useOrigenClase, usePlanesCoach,
   usePlanillasPorRevisar, usePtDeHoy, useRoster, useSesionDelDia, useSoloEquipos,
@@ -309,6 +310,8 @@ function ListaDelEntreno({ ctx, fecha, retroDias, hoy, onFecha, onElegirClase }:
   const rosterId = ctx.tipo === 'session' ? (origenQ.data?.team_id ?? origenQ.data?.offering_id ?? null) : ctx.id;
   const rosterQ = useRoster(rosterTipo, rosterId);
   const sesionQ = useSesionDelDia(ctx, fecha);
+  // Sin señal el roster sale de la copia del teléfono: se dice de cuándo es.
+  const etiquetaRoster = etiquetaFrescura(rosterQ.dataUpdatedAt);
 
   const key = schoolId ? claveLista(schoolId, claveContexto(ctx), fecha) : '';
   const avisoSesion = useRef(false);
@@ -462,7 +465,10 @@ function ListaDelEntreno({ ctx, fecha, retroDias, hoy, onFecha, onElegirClase }:
       {!online && (
         <div role="status" className="flex items-start gap-2 rounded-2xl bg-amber-100 p-3 text-sm text-amber-900 dark:bg-amber-950/50 dark:text-amber-200" data-testid="aviso-sin-senal">
           <WifiOff className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Sin señal. La lista se guarda en el teléfono y sube sola cuando vuelva.</span>
+          <span>
+            Sin señal. La lista se guarda en el teléfono y sube sola cuando vuelva.
+            {etiquetaRoster && <> Deportistas tal como estaban el {etiquetaRoster}.</>}
+          </span>
         </div>
       )}
       {pendientesOtras.length > 0 && (

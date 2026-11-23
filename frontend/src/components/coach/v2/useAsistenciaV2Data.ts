@@ -156,11 +156,12 @@ export function useOrigenClase(sessionId: string | null) {
   });
 }
 
-export function useRoster(tipo: 'team' | 'offering' | null, id: string | null) {
-  return useQuery<RosterRespuesta>({
-    queryKey: ['v2-asis-roster', tipo, id],
+/** Misma consulta para la pantalla y para la precarga del día (lib/offline): una sola definición. */
+export function rosterQueryOptions(tipo: 'team' | 'offering' | null, id: string | null) {
+  return {
+    queryKey: ['v2-asis-roster', tipo, id] as const,
     enabled: !!tipo && !!id,
-    queryFn: () => conCache(`roster:${tipo}:${id}`, async () => {
+    queryFn: (): Promise<RosterRespuesta> => conCache(`roster:${tipo}:${id}`, async () => {
       const r = await bffClient.get<RosterRespuesta & { bookings?: any[] }>(`/api/v1/attendance/roster/${tipo}/${id}`);
       // Reservas de gente que no está en el roster: se suman, como en la versión clásica.
       const base = [...(r.athletes ?? [])];
@@ -179,14 +180,19 @@ export function useRoster(tipo: 'team' | 'offering' | null, id: string | null) {
       base.sort((a, b) => a.full_name.localeCompare(b.full_name));
       return { athletes: base, atletas_sin_equipo: r.atletas_sin_equipo, atletas_pausados: r.atletas_pausados };
     }),
-  });
+  };
 }
 
-export function useSesionDelDia(ctx: ContextoLista | null, fecha: string) {
-  return useQuery<SesionDelDia>({
-    queryKey: ['v2-asis-sesion', ctx ? claveContexto(ctx) : null, fecha],
+export function useRoster(tipo: 'team' | 'offering' | null, id: string | null) {
+  return useQuery<RosterRespuesta>(rosterQueryOptions(tipo, id));
+}
+
+/** Misma consulta para la pantalla y para la precarga del día (lib/offline): una sola definición. */
+export function sesionDelDiaQueryOptions(ctx: ContextoLista | null, fecha: string) {
+  return {
+    queryKey: ['v2-asis-sesion', ctx ? claveContexto(ctx) : null, fecha] as const,
     enabled: !!ctx,
-    queryFn: () => conCache(`sesion:${ctx ? claveContexto(ctx) : ''}:${fecha}`, async (): Promise<SesionDelDia> => {
+    queryFn: (): Promise<SesionDelDia> => conCache(`sesion:${ctx ? claveContexto(ctx) : ''}:${fecha}`, async (): Promise<SesionDelDia> => {
       if (!ctx) return { session: null, records: [] };
       if (ctx.tipo === 'team') {
         const r = await bffClient.get<SesionDelDia & { reason?: string; sessions?: OpcionClase[] }>(`/api/v1/attendance/session/${ctx.id}?date=${fecha}`);
@@ -215,7 +221,11 @@ export function useSesionDelDia(ctx: ContextoLista | null, fecha: string) {
       if (rErr) throw rErr;
       return { session, records: records ?? [] };
     }),
-  });
+  };
+}
+
+export function useSesionDelDia(ctx: ContextoLista | null, fecha: string) {
+  return useQuery<SesionDelDia>(sesionDelDiaQueryOptions(ctx, fecha));
 }
 
 export interface HistorialV2 {

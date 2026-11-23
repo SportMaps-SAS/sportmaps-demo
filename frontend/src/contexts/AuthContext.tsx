@@ -9,6 +9,9 @@ import { getUserFriendlyError } from '@/lib/error-translator';
 import { clearPwaTenant } from '@/pwa/tenant';
 import { clearBoardSettings } from '@/lib/school/tacticalBoardSettings';
 import { fetchRoleContexts, readStoredContextKey, storeContextKey, clearStoredContexts, clearStoredContextKey, safeInternalPath, type RoleContext } from '@/lib/roleContexts';
+import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
+import { guardarCopiaArranque, leerCopiaArranque, leerSesionGuardada, limpiarDatosOffline } from '@/lib/offline/arranqueSinRed';
+import { iniciarGuardado, restaurarConsultas } from '@/lib/offline/queryPersistence';
 
 interface UserProfile {
   id: string;
@@ -29,6 +32,15 @@ interface UserProfile {
   preferences?: any;
   created_at: string;
   updated_at: string;
+}
+
+/** Lo que Auth resuelve al arrancar, guardado para cuando la red falla (lib/offline/arranqueSinRed.ts). */
+interface CopiaAuth {
+  profile: UserProfile;
+  isPersonalTrainer: boolean;
+  trainerSchoolId: string | null;
+  trainerOnboardingStatus: string | null;
+  roleContexts: RoleContext[];
 }
 
 interface AuthContextType {
@@ -89,8 +101,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // rol real y sin contextos, y un instante después saltaba a /elegir-rol o
   // cambiaba de módulo (y los efectos corrían con el rol equivocado).
   const profileLoadingRef = useRef(false);
+  // Modo offline: la última lectura del perfil falló (red/servidor), a diferencia de «no hay fila».
+  // Sin esto fetchProfile devuelve null en los dos casos y se intentaba CREAR un perfil que ya existe.
+  const perfilFalloRef = useRef(false);
+  // true si lo que se ve salió de la copia guardada y no de la base: al volver la red se recarga.
+  const arrancoDesdeCopiaRef = useRef(false);
 
   const fetchProfile = useCallback(async (userId: string): Promise<UserProfile | null> => {
+    perfilFalloRef.current = false;
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -111,6 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return data as UserProfile;
     } catch (error) {
       console.error('Error fetching profile:', error);
+      perfilFalloRef.current = true;
       return null;
     }
   }, []);
@@ -177,6 +196,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setActiveContextKey(valid ? stored : null);
   }, []);
 
+  // Sin red: pinta con la copia del último arranque con éxito. Devuelve false si no hay copia
+  // vigente de ESTE usuario (entonces todo sigue como antes).
+  const aplicarCopiaAuth = useCallback((userId: string): boolean => {
+    const c = leerCopiaArranque<CopiaAuth>('auth', userId);
+    if (!c?.profile || c.profile.id !== userId) return false;
+    setProfile(c.profile);
+    setIsPersonalTrainer(!!c.isPersonalTrainer);
+    setTrainerSchoolId(c.trainerSchoolId ?? null);
+    setTrainerOnboardingStatus(c.trainerOnboardingStatus ?? null);
+    const contexts = Array.isArray(c.roleContexts) ? c.roleContexts : [];
+    setRoleContexts(contexts);
+    const stored = readStoredContextKey(userId);
+    setActiveContextKey(stored && contexts.some((x) => x.key === stored) ? stored : null);
+    arrancoDesdeCopiaRef.current = true;
+    return true;
+  }, []);
+
   const createProfile = useCallback(async (userId: string, userData: Partial<UserProfile>) => {
     try {
       // Check if profile already exists
@@ -226,6 +262,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (!mounted) return;
 
+      // Sin señal y con el token vencido, getSession() devuelve null aunque la sesión SIGA
+      // guardada (el refresco falló por red; un rechazo real la habría borrado). No es un cierre
+      // de sesión: se arranca con la copia del último arranque y, al volver la red, se recarga.
+      if (!session) {
+        const guardada = leerSesionGuardada();
+        if (guardada && aplicarCopiaAuth(guardada.user.id)) {
+          profileLoadedForRef.current = null;
+          setSession(null);
+          setUser(guardada.user as unknown as User);
+          setLoading(false);
+          return;
+        }
+      }
+
       setSession(session);
       setUser(session?.user || null);
 
@@ -235,6 +285,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           profileLoadingRef.current = true;
           const userProfile = await fetchProfile(session.user.id);
           if (mounted) {
+            if (!userProfile && perfilFalloRef.current && aplicarCopiaAuth(session.user.id)) {
+              // Falló la lectura (no «no existe»): copia guardada, sin intentar crear un perfil.
+              profileLoadedForRef.current = null;
+            } else {
             if (userProfile) {
               setProfile(userProfile);
             } else {
@@ -253,6 +307,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               session.user.user_metadata?.role;
             await fetchTrainerContext(session.user.id, resolvedRole);
             await loadRoleContexts(session.user.id, resolvedRole);
+            }
           }
         } catch (error) {
           // Si falló, liberar el guard para que la otra ruta sí lo reintente.
@@ -291,6 +346,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           return;
         }
+
+        // INITIAL_SESSION sin sesión pero con la sesión AÚN guardada = el refresco del token falló
+        // por falta de red: no se borra al usuario ni su perfil (lo resuelve getSession arriba).
+        if (!session && event !== 'SIGNED_OUT' && leerSesionGuardada()) return;
 
         // Synchronous updates only
         setSession(session);
@@ -353,7 +412,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [fetchProfile, createProfile, fetchTrainerContext, loadRoleContexts]);
+  }, [fetchProfile, createProfile, fetchTrainerContext, loadRoleContexts, aplicarCopiaAuth]);
+
+  // Modo offline · copia del arranque: solo cuando lo que se ve salió de la base (no de la copia).
+  useEffect(() => {
+    if (!OFFLINE_ENABLED || loading || !user || !profile || arrancoDesdeCopiaRef.current) return;
+    if (profile.id !== user.id) return;
+    guardarCopiaArranque<CopiaAuth>('auth', user.id, {
+      profile, isPersonalTrainer, trainerSchoolId, trainerOnboardingStatus, roleContexts,
+    });
+  }, [loading, user, profile, isPersonalTrainer, trainerSchoolId, trainerOnboardingStatus, roleContexts]);
+
+  // Modo offline · lecturas del entrenador: se restauran al conocer al usuario y DESPUÉS se
+  // empieza a guardar (un guardado temprano con la memoria vacía pisaría la copia buena).
+  useEffect(() => {
+    if (!OFFLINE_ENABLED || !user?.id) return;
+    const userId = user.id;
+    let cancelado = false;
+    let parar: (() => void) | null = null;
+    void restaurarConsultas(queryClient, userId).then(() => {
+      if (!cancelado) parar = iniciarGuardado(queryClient, userId);
+    });
+    return () => { cancelado = true; parar?.(); };
+  }, [user?.id, queryClient]);
+
+  // Modo offline · volvió la red tras arrancar con la copia: se recarga perfil y contextos reales.
+  useEffect(() => {
+    if (!OFFLINE_ENABLED || !user?.id) return;
+    const userId = user.id;
+    const alVolverLaRed = () => {
+      if (!arrancoDesdeCopiaRef.current) return;
+      arrancoDesdeCopiaRef.current = false;
+      void (async () => {
+        const p = await fetchProfile(userId);
+        if (p) {
+          setProfile(p);
+          await fetchTrainerContext(userId, p.role);
+          await loadRoleContexts(userId, p.role);
+        } else if (perfilFalloRef.current) {
+          arrancoDesdeCopiaRef.current = true; // la red aún no responde: reintenta en el próximo «online»
+        }
+      })();
+    };
+    window.addEventListener('online', alVolverLaRed);
+    return () => window.removeEventListener('online', alVolverLaRed);
+  }, [user?.id, fetchProfile, fetchTrainerContext, loadRoleContexts]);
 
   const signUp = async (email: string, password: string, userData: Partial<UserProfile> & { invitation_code?: string, school_name?: string }) => {
     try {
@@ -494,6 +597,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if ('caches' in window) {
         void caches.delete('supabase-api').catch(() => { /* no-op */ });
       }
+
+      // Modo offline: lecturas persistidas (IndexedDB), copias de arranque y las lecturas del
+      // entrenador en localStorage. Son datos de menores y del DISPOSITIVO, no de la persona.
+      void limpiarDatosOffline();
 
       // Reset BFF module-level school header so the next user doesn't inherit it.
       bffClient.setSchoolId(null);

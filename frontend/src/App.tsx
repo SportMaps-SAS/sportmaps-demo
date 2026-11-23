@@ -3,6 +3,8 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 // v2.1 — polls, reports, events docs
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { configurarRetencionOffline } from "@/lib/offline/queryPersistence";
+import { configurarReconexionEscalonada } from "@/lib/offline/reconexion";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -299,6 +301,11 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Modo offline (docs/specs/modo-offline-y-sincronizacion.md): las consultas del entrenador viven en
+// memoria tanto como vale su copia guardada, y al volver la red React Query se entera escalonado.
+configurarRetencionOffline(queryClient);
+configurarReconexionEscalonada();
 
 const EnvironmentBanner = () => {
   const env = import.meta.env.VITE_APP_ENV;

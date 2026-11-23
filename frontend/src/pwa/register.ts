@@ -1,4 +1,7 @@
 import { requestPwaReload } from './reloadGuard';
+import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
+import { leerSesionGuardada } from '@/lib/offline/arranqueSinRed';
+import { convienePrecargar } from './precacheBuild';
 
 export async function registerSW() {
   if (!('serviceWorker' in navigator)) return;
@@ -82,6 +85,34 @@ export async function registerSW() {
     // Respaldo para la pestaña que queda abierta y visible horas (p.ej. el panel
     // de la escuela en un escritorio), donde no hay foco ni visibilidad que cambie.
     setInterval(checkForUpdate, 60 * 60 * 1000);
+
+    // ── Precarga para abrir sin señal ─────────────────────────────────────────
+    // Con la página ociosa, con sesión guardada y con red buena, se le pide al SW que baje el
+    // build que falta. Sin sesión (landing pública) no se gastan datos. Idempotente: el SW solo
+    // pide lo que no tiene, así que repetirlo en cada visita cuesta casi nada.
+    if (OFFLINE_ENABLED) {
+      const pedirPrecarga = () => {
+        const nav = navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } };
+        if (!convienePrecargar({
+          online: navigator.onLine !== false,
+          saveData: nav.connection?.saveData,
+          effectiveType: nav.connection?.effectiveType ?? null,
+          haySesion: !!leerSesionGuardada(),
+        })) return;
+        navigator.serviceWorker.ready
+          .then((r) => r.active?.postMessage({ type: 'PRECACHE_BUILD' }))
+          .catch(() => {});
+      };
+      const idle = (window as unknown as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+      const cuandoOcioso = () => (idle ? idle(pedirPrecarga, { timeout: 15000 }) : setTimeout(pedirPrecarga, 8000));
+      // Tras la carga + un respiro: no compite con el login ni con las primeras consultas.
+      if (document.readyState === 'complete') setTimeout(cuandoOcioso, 5000);
+      else window.addEventListener('load', () => setTimeout(cuandoOcioso, 5000), { once: true });
+      // Si el usuario inicia sesión DESPUÉS de cargar la página, se intenta al volver a primer plano.
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') cuandoOcioso();
+      });
+    }
 
   } catch (err) {
     console.error('[PWA] Error registrando SW:', err);
