@@ -68,3 +68,23 @@ describe('resolveSignupSport', () => {
     expect(resolveSignupSport({ schoolSports: null, metadataSport: 42, catalog })).toBe('');
   });
 });
+
+describe('buildSignupMetadata — consentimiento de WhatsApp', () => {
+  const dueno = { full_name: 'Ana', role: 'school', school_name: 'Academia X' };
+
+  it('viaja solo si la persona marcó la casilla', () => {
+    expect(buildSignupMetadata({ ...dueno, whatsapp_consent: true }).whatsapp_consent).toBe(true);
+    expect('whatsapp_consent' in buildSignupMetadata({ ...dueno, whatsapp_consent: false })).toBe(false);
+    expect('whatsapp_consent' in buildSignupMetadata({ ...dueno })).toBe(false);
+    expect('whatsapp_consent' in buildSignupMetadata({ ...dueno, whatsapp_consent: 'true' as unknown as boolean })).toBe(false);
+  });
+
+  it('solo para dueños de negocio: academia, club u organizador', () => {
+    for (const role of ['school', 'facility_manager', 'organizer']) {
+      expect(buildSignupMetadata({ role, whatsapp_consent: true }).whatsapp_consent).toBe(true);
+    }
+    for (const role of ['parent', 'athlete', 'coach', 'store_owner']) {
+      expect('whatsapp_consent' in buildSignupMetadata({ role, whatsapp_consent: true })).toBe(false);
+    }
+  });
+});

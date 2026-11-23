@@ -459,7 +459,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('online', alVolverLaRed);
   }, [user?.id, fetchProfile, fetchTrainerContext, loadRoleContexts]);
 
-  const signUp = async (email: string, password: string, userData: Partial<UserProfile> & { invitation_code?: string, school_name?: string, sport_id?: string | number, sport_name?: string }) => {
+  const signUp = async (email: string, password: string, userData: Partial<UserProfile> & { invitation_code?: string, school_name?: string, sport_id?: string | number, sport_name?: string, whatsapp_consent?: boolean }) => {
     try {
       const redirectUrl = `${window.location.origin}/`;
 

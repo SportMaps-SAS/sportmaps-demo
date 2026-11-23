@@ -24,11 +24,17 @@ export interface SignupUserData {
   school_name?: string | null;
   sport_id?: string | number | null;
   sport_name?: string | null;
+  whatsapp_consent?: boolean | null;
   // RegisterPage arma más campos; se ignoran acá (ver arriba).
   [extra: string]: unknown;
 }
 
 const MAX_SPORT_NAME = 80;
+
+// Quien abre una cuenta para operar un negocio (academia, club, organizador) puede
+// aceptar avisos por WhatsApp sobre su cuenta. La casilla nace SIN marcar y solo
+// viaja cuando la persona la marcó: el consentimiento es explícito.
+const ROLES_CON_CONSENTIMIENTO = new Set(['school', 'facility_manager', 'organizer']);
 
 export function buildSignupMetadata(userData: SignupUserData): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
@@ -39,6 +45,10 @@ export function buildSignupMetadata(userData: SignupUserData): Record<string, un
     invitation_code: userData.invitation_code,
     school_name: userData.school_name,
   };
+
+  if (userData.whatsapp_consent === true && ROLES_CON_CONSENTIMIENTO.has(String(userData.role))) {
+    metadata.whatsapp_consent = true;
+  }
 
   // El deporte solo tiene sentido para quien crea una academia.
   if (userData.role === 'school') {
