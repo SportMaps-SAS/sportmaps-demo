@@ -195,8 +195,21 @@ export default function JoinSchoolByCodePage() {
         setSubmitError(res.message ?? 'No se pudo enviar la solicitud.');
         return;
       }
-      setSentName(name.trim());
       qc.invalidateQueries({ queryKey: ['my-school-join-status'] });
+      // Coincidencia sin ambigüedad con una ficha ya cargada: quedó vinculada, sin esperar a la escuela.
+      if (res.auto_approved && res.school_id && res.kind) {
+        setClaimed({
+          ok: true,
+          school_id: res.school_id,
+          school_name: res.school_name ?? school?.school_name ?? '',
+          kind: res.kind,
+          child_id: res.child_id ?? null,
+          athlete_name: res.athlete_name ?? name.trim(),
+        });
+        setStep('claimed');
+        return;
+      }
+      setSentName(name.trim());
       setStep('done');
     } catch (e) {
       setSubmitError(joinErrorMessage(e));

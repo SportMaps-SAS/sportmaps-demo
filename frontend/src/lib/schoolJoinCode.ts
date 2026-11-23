@@ -252,3 +252,38 @@ export function joinErrorMessage(e: unknown, fallback = 'No se pudo completar. I
   const anyE = e as { body?: { error?: string; message?: string }; message?: string } | null;
   return anyE?.body?.error || anyE?.body?.message || anyE?.message || fallback;
 }
+
+// ── Estado de una solicitud pendiente (etapa 3 del onboarding) ───────────────
+
+/**
+ * «hoy», «ayer», «hace 3 días»: cuánto lleva enviada una solicitud. Cuenta días de
+ * calendario en Colombia (UTC-5 fijo), no bloques de 24 h: una solicitud de las 23:00
+ * ya es «ayer» a las 00:10. Pura.
+ */
+export function enviadaHaceTexto(createdAtIso: string, ahora: number = Date.now()): string {
+  const t = Date.parse(createdAtIso);
+  if (!Number.isFinite(t)) return '';
+  const dia = (ms: number) => Math.floor((ms - 5 * 3600_000) / 86_400_000);
+  const dias = Math.max(0, dia(ahora) - dia(t));
+  if (dias === 0) return 'enviada hoy';
+  if (dias === 1) return 'enviada ayer';
+  return `enviada hace ${dias} días`;
+}
+
+/**
+ * Enlace wa.me hacia el WhatsApp de la escuela, o null si no hay un celular usable.
+ * Acepta celular colombiano de 10 dígitos (le pone 57) o ya con indicativo (11 a 15).
+ */
+export function waLinkEscuela(
+  telefono: string | null | undefined,
+  schoolName: string,
+  athleteName: string,
+): string | null {
+  const digitos = String(telefono ?? '').replace(/\D/g, '');
+  let numero: string;
+  if (digitos.length === 10 && digitos.startsWith('3')) numero = `57${digitos}`;
+  else if (digitos.length >= 11 && digitos.length <= 15) numero = digitos;
+  else return null;
+  const texto = `Hola, soy acudiente de ${athleteName}. Envié una solicitud para unirme a ${schoolName} en SportMaps y sigue en revisión. ¿Me ayudan a aprobarla?`;
+  return `https://wa.me/${numero}?text=${encodeURIComponent(texto)}`;
+}
