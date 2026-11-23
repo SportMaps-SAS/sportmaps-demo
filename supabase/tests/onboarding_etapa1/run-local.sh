@@ -25,6 +25,10 @@ trap 'rm -f "$TMP"' EXIT
     20261123085942_onboarding_tracking_eventos.sql \
     20261123111624_onboarding_checklist_extras.sql \
     20261123112301_consentimiento_whatsapp_registro.sql \
+    20261105124322_unirse_codigo_ficha_precargada.sql \
+    20261105212701_solicitud_unirse_con_documento.sql \
+    20261106000100_unirse_reclamar_y_vincular_con_valvula_y_rol.sql \
+    20261123115126_solicitudes_union_aprobacion_automatica.sql \
     ${ETAPA1_MIGRATIONS:-}
   do
     [ -f "$ROOT/supabase/migrations/$m" ] || { echo "falta la migración $m" >&2; exit 1; }
