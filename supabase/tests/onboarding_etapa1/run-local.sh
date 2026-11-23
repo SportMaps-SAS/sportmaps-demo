@@ -22,6 +22,7 @@ trap 'rm -f "$TMP"' EXIT
   for m in \
     20261123082624_escuela_guarda_deporte_del_registro.sql \
     20261123084254_onboarding_status_pasos_reales.sql \
+    20261123085942_onboarding_tracking_eventos.sql \
     ${ETAPA1_MIGRATIONS:-}
   do
     [ -f "$ROOT/supabase/migrations/$m" ] || { echo "falta la migración $m" >&2; exit 1; }
@@ -30,7 +31,12 @@ trap 'rm -f "$TMP"' EXIT
   done
   for t in "$DIR"/T*.sql; do
     printf '\n-- ===== prueba %s =====\n' "$(basename "$t")"
-    cat "$t"
+    # T04 incrusta las consultas reales de docs/onboarding (marcadores @@EMBUDO_*@@).
+    sed -e "/@@EMBUDO_ACADEMIAS@@/{r $ROOT/docs/onboarding/embudo-academias.sql
+d
+}" -e "/@@EMBUDO_ACUDIENTES@@/{r $ROOT/docs/onboarding/embudo-acudientes.sql
+d
+}" "$t"
   done
   printf '\n%s\n' 'ROLLBACK;'
 } > "$TMP"
