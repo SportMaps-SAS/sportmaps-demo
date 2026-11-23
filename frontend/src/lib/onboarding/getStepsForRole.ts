@@ -1,4 +1,5 @@
 import { USER_ROLES } from '../../constants/roles';
+import { isBranchConfirmed } from './schoolOnboardingRules';
 import { Building, Users, Award, Bell, Activity, Shield, TrendingUp, Trophy, UserCircle, Calendar, Plus, Heart, ShoppingBag, CreditCard, Tag, Layers } from 'lucide-react';
 
 export const getStepsForRole = (role: string, status: any) => {
@@ -13,29 +14,32 @@ export const getStepsForRole = (role: string, status: any) => {
                 ];
             }
 
-            // Wizard guiado: sede → (modelo) → equipo/plan → coach → atleta → pagos
+            // Wizard guiado: sede → (modelo) → equipo/plan → coach → atleta → pagos.
+            // Cada href lleva a la pantalla donde se resuelve el paso: este mismo
+            // listado es el checklist del panel después del asistente, y antes
+            // todos apuntaban a /dashboard (un clic que no hacía nada).
             // El modelo (teams|plans|both) se elige en onboarding y vive en
             // schools.business_model. Si esta vacio el paso lo pregunta.
             const businessModel = status.business_model as 'teams' | 'plans' | 'both' | undefined;
             const wizardSteps: Array<{ id: string; title: string; description: string; completed: boolean; href: string; icon: any }> = [
-                { id: 'confirm_branch', title: 'Tu Sede',  description: 'Confirma la dirección de tu sede principal.', completed: status.has_branches, href: '/dashboard', icon: Building },
+                { id: 'confirm_branch', title: 'Tu Sede',  description: 'Confirma la dirección de tu sede principal.', completed: isBranchConfirmed(status), href: '/branches', icon: Building },
             ];
 
             if (!businessModel) {
-                wizardSteps.push({ id: 'choose_model', title: 'Modelo', description: '¿Tu academia trabaja por equipos o por planes/membresías?', completed: false, href: '/dashboard', icon: Award });
+                wizardSteps.push({ id: 'choose_model', title: 'Modelo', description: '¿Tu academia trabaja por equipos o por planes/membresías?', completed: false, href: '/teams', icon: Award });
             } else {
                 if (businessModel === 'teams' || businessModel === 'both') {
-                    wizardSteps.push({ id: 'create_team', title: 'Primer Equipo', description: 'Crea tu primer grupo o equipo deportivo.', completed: status.has_teams, href: '/dashboard', icon: Trophy });
+                    wizardSteps.push({ id: 'create_team', title: 'Primer Equipo', description: 'Crea tu primer grupo o equipo deportivo.', completed: !!status.has_teams, href: '/teams', icon: Trophy });
                 }
                 if (businessModel === 'plans' || businessModel === 'both') {
-                    wizardSteps.push({ id: 'create_plan', title: 'Primer Plan', description: 'Crea tu primera mensualidad o paquete.', completed: !!status.has_plans, href: '/dashboard', icon: TrendingUp });
+                    wizardSteps.push({ id: 'create_plan', title: 'Primer Plan', description: 'Crea tu primera mensualidad o paquete.', completed: !!status.has_plans, href: '/offerings', icon: TrendingUp });
                 }
             }
 
             wizardSteps.push(
-                { id: 'invite_staff',    title: 'Entrenador',    description: 'Invita a tu primer entrenador.',                  completed: status.has_staff,                    href: '/dashboard', icon: Users },
-                { id: 'add_student',     title: 'Primer Atleta', description: 'Registra a tu primer deportista.',                completed: !!status.has_students,               href: '/dashboard', icon: Bell },
-                { id: 'setup_payments',  title: 'Cobros',        description: 'Configura cómo recibir pagos.',                   completed: status.payment_setup_completed === true, href: '/dashboard', icon: CreditCard },
+                { id: 'invite_staff',    title: 'Entrenador',    description: 'Invita a tu primer entrenador.',                  completed: !!status.has_staff,                  href: '/staff', icon: Users },
+                { id: 'add_student',     title: 'Primer Atleta', description: 'Registra a tu primer deportista.',                completed: !!status.has_students,               href: '/students', icon: Bell },
+                { id: 'setup_payments',  title: 'Cobros',        description: 'Configura cómo recibir pagos.',                   completed: status.payment_setup_completed === true, href: '/payments-automation?tab=config', icon: CreditCard },
             );
             return wizardSteps;
         }

@@ -35,6 +35,7 @@ import { CoachHomeV2 } from '@/components/coach/v2/CoachHomeV2';
 import { AthleteHomeV2 } from '@/components/athlete/v2/AthleteHomeV2';
 import { useRolActivo } from '@/hooks/useRolActivo';
 import { resolveOnboardingGateStatus } from '@/lib/onboardingGate';
+import { shouldShowSchoolChecklist } from '@/lib/onboarding/schoolOnboardingRules';
 import { JoinSchoolCodeBanner } from '@/components/school-join/JoinSchoolCodeBanner';
 
 /**
@@ -746,6 +747,25 @@ function SchoolRoleDashboardPage() {
           </div>
         );
       })()}
+
+      {/* Checklist de la academia DESPUÉS del asistente y hasta su primer cobro.
+          Antes no existía: el de abajo se apaga con onboarding 'completed', y el
+          asistente bloquea el panel hasta ese estado (hallazgo E). */}
+      {['school', 'school_admin', 'owner'].includes(profile.role as string)
+        && shouldShowSchoolChecklist({
+          onboardingStatus,
+          steps: onboardingSteps,
+          hasCharges: rpcStatus?.has_charges,
+        }) && (
+        <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+          <DashboardChecklist
+            steps={onboardingSteps}
+            title="Pon a andar tu academia"
+            subtitle="Te faltan pocos pasos para ver tu primer cobro."
+            onStepClick={(step) => navigate(step.href)}
+          />
+        </div>
+      )}
 
       {/* Checklist genérico para otros roles (parent, coach, athlete) */}
       {onboardingSteps.length > 0 && !onboardingSteps.every(s => s.completed) && onboardingStatus !== 'completed'

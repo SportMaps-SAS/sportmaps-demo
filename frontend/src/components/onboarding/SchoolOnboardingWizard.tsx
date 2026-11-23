@@ -39,6 +39,7 @@ import { esNombreDePagoUnico, PAGO_UNICO_NO_ES_PLAN_MSG } from '@/lib/school/pag
 import { FootballModalitySelect } from '@/components/teams/FootballModalitySelect';
 import { modalityToSave } from '@/lib/sports/footballModality';
 import { resolveSignupSport } from '@/lib/auth/signupMetadata';
+import { isSchoolWizardStepDone } from '@/lib/onboarding/schoolOnboardingRules';
 
 type BusinessModel = 'teams' | 'plans' | 'both';
 type StepId = 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
@@ -82,6 +83,8 @@ const onlyLetters = (v: string) => v.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ \
 interface OnboardingStatus {
   has_school: boolean;
   has_branches: boolean;
+  /** La sede principal tiene dirección. Llega con la migración 20261123084254. */
+  branch_confirmed?: boolean | null;
   has_teams: boolean;
   has_plans?: boolean;
   has_staff: boolean;
@@ -101,7 +104,10 @@ interface WizardStep {
 
 // Pasos disponibles. El wizard ensambla cuales se muestran segun business_model.
 const STEP_DEFS: Record<StepId, WizardStep> = {
-  branch:   { id: 'branch',   title: 'Tu Sede',           subtitle: 'Confirma la direccion de tu sede principal', icon: Building,      required: true  },
+  // No obligatoria: el paso estuvo oculto para todas las academias (se daba por
+  // hecho con la sede automática). Ahora se muestra, pero se puede saltar para no
+  // sumar una barrera nueva antes de ver el producto.
+  branch:   { id: 'branch',   title: 'Tu Sede',           subtitle: 'Confirma la direccion de tu sede principal', icon: Building,      required: false },
   model:    { id: 'model',    title: 'Modelo',            subtitle: '¿Como organizas tu academia?',               icon: Layers,        required: true  },
   team:     { id: 'team',     title: 'Primer Equipo',     subtitle: 'Crea tu primer grupo o equipo deportivo',    icon: Trophy,        required: true  },
   plan:     { id: 'plan',     title: 'Primer Plan',       subtitle: 'Crea tu primera mensualidad o paquete',      icon: Tag,           required: true  },
@@ -153,18 +159,10 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   // plan, no solo porque schools.business_model tenga valor (puede venir del
   // default 'teams' del backfill). Asi forzamos al admin a ver el step en su
   // primer onboarding y confirmar explicitamente como organiza su academia.
-  const isStepDoneById = useCallback((id: StepId): boolean => {
-    switch (id) {
-      case 'branch':   return !!status.has_branches;
-      case 'model':    return !!status.has_teams || !!status.has_plans;
-      case 'team':     return !!status.has_teams;
-      case 'plan':     return !!status.has_plans;
-      case 'coach':    return !!status.has_staff;
-      case 'student':  return !!status.has_students;
-      case 'payments': return !!status.payment_setup_completed;
-      default:         return false;
-    }
-  }, [status]);
+  const isStepDoneById = useCallback(
+    (id: StepId): boolean => isSchoolWizardStepDone(id, status),
+    [status],
+  );
 
   // Determine initial step based on what's already done
   const getInitialStep = useCallback(() => {

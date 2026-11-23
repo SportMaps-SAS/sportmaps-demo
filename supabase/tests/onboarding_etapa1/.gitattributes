@@ -1,0 +1,2 @@
+# Los scripts de shell y el SQL que se pasa por sed deben quedar en LF.
+*.sh text eol=lf
