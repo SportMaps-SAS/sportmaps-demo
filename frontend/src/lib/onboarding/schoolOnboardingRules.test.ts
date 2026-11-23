@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isBranchConfirmed, isSchoolWizardStepDone, shouldShowSchoolChecklist } from './schoolOnboardingRules';
+import { isBranchConfirmed, isSchoolWizardStepDone, shouldShowSchoolChecklist, isWizardStepRequired, schoolHasSport } from './schoolOnboardingRules';
 import { getStepsForRole } from './getStepsForRole';
 
 describe('isBranchConfirmed (hallazgo B)', () => {
@@ -58,7 +58,7 @@ describe('shouldShowSchoolChecklist (hallazgo E)', () => {
   });
 });
 
-describe('getStepsForRole — pasos de la academia', () => {
+describe('getStepsForRole — checklist de la academia (6 pasos)', () => {
   const status = {
     has_school: true,
     has_branches: true,
@@ -69,24 +69,61 @@ describe('getStepsForRole — pasos de la academia', () => {
     has_staff: false,
     has_students: false,
     payment_setup_completed: false,
+    has_charges: false,
+    has_families: false,
   };
   const steps = getStepsForRole('school', status);
   const paso = (id: string) => steps.find((s) => s.id === id)!;
 
-  it('«Tu sede» no se marca solo porque exista la sede automática', () => {
-    expect(paso('confirm_branch').completed).toBe(false);
+  it('son 6 pasos, en el orden de la propuesta, cada uno con ícono', () => {
+    expect(steps.map((s) => s.id)).toEqual([
+      'create_plan', 'add_student', 'see_charge', 'payment_method', 'invite_families', 'invite_staff',
+    ]);
+    expect(steps.every((s) => !!s.icon)).toBe(true);
   });
   it('cada paso lleva a la pantalla donde se resuelve, no de vuelta al panel', () => {
-    expect(paso('confirm_branch').href).toBe('/branches');
-    expect(paso('create_team').href).toBe('/teams');
     expect(paso('create_plan').href).toBe('/offerings');
-    expect(paso('invite_staff').href).toBe('/staff');
     expect(paso('add_student').href).toBe('/students');
-    expect(paso('setup_payments').href).toBe('/payments-automation?tab=config');
+    expect(paso('see_charge').href).toBe('/payments-automation');
+    expect(paso('payment_method').href).toBe('/payments-automation?tab=config');
+    expect(paso('invite_families').href).toBe('/students');
+    expect(paso('invite_staff').href).toBe('/staff');
     expect(steps.some((s) => s.href === '/dashboard')).toBe(false);
   });
   it('refleja lo que ya existe', () => {
     expect(paso('create_plan').completed).toBe(true);
-    expect(paso('create_team').completed).toBe(false);
+    expect(paso('add_student').completed).toBe(false);
+  });
+  it('un dueño sin escuela todavía solo ve «Registrar academia»', () => {
+    expect(getStepsForRole('school', { has_school: false }).map((s) => s.id)).toEqual(['create_school']);
+  });
+});
+
+describe('getStepsForRole — checklist del acudiente (3 pasos)', () => {
+  it('quien llegó por invitación aceptada arranca con el paso 1 hecho', () => {
+    const steps = getStepsForRole('parent', { has_accepted_invite: true });
+    expect(steps.map((s) => s.id)).toEqual(['connect_school', 'review_athlete', 'see_payments']);
+    expect(steps[0].completed).toBe(true);
+    expect(steps.every((s) => !!s.icon)).toBe(true);
+  });
+});
+
+describe('asistente corto', () => {
+  it('solo el deporte bloquea; plan, equipo, modelo y el resto se pueden saltar', () => {
+    expect(isWizardStepRequired('sport')).toBe(true);
+    for (const id of ['branch', 'model', 'team', 'plan', 'coach', 'student', 'payments'] as const) {
+      expect(isWizardStepRequired(id)).toBe(false);
+    }
+  });
+
+  it('schoolHasSport: basta un deporte guardado o el del registro', () => {
+    expect(schoolHasSport({})).toBe(false);
+    expect(schoolHasSport({ schoolSports: [] })).toBe(false);
+    expect(schoolHasSport({ schoolSports: ['  ', null] })).toBe(false);
+    expect(schoolHasSport({ schoolSports: ['Voleibol'] })).toBe(true);
+    expect(schoolHasSport({ schoolSports: ['Deporte raro fuera del catálogo'] })).toBe(true);
+    expect(schoolHasSport({ metadataSport: 'Fútbol' })).toBe(true);
+    expect(schoolHasSport({ metadataSport: '   ' })).toBe(false);
+    expect(schoolHasSport({ metadataSport: 42 })).toBe(false);
   });
 });

@@ -66,3 +66,28 @@ export function shouldShowSchoolChecklist(args: {
   if (args.steps.every((s) => s.completed)) return false;
   return args.hasCharges === false;
 }
+
+// ── Asistente corto ──────────────────────────────────────────────────────────
+// Decisión de producto (22-nov-2026): para entrar al panel solo hacen falta el
+// nombre de la academia y el deporte; el plan o grupo y todo lo demás pasa al
+// checklist, con «Saltar» y sin bloquear. El nombre ya se pide en el registro y
+// el deporte también (hallazgo A), así que el paso «Deporte» solo aparece para
+// quien llegó sin él (registro con Google, cuentas anteriores al arreglo).
+
+export type WizardStepId = SchoolWizardStepId | 'sport';
+
+const PASOS_OBLIGATORIOS: ReadonlySet<WizardStepId> = new Set<WizardStepId>(['sport']);
+
+/** Único punto donde se decide qué paso del asistente bloquea el avance. */
+export function isWizardStepRequired(id: WizardStepId): boolean {
+  return PASOS_OBLIGATORIOS.has(id);
+}
+
+/**
+ * ¿La academia ya tiene deporte? Basta uno guardado (aunque no esté en el
+ * catálogo del selector) o el del registro en el metadata del usuario.
+ */
+export function schoolHasSport(args: { schoolSports?: ReadonlyArray<string | null> | null; metadataSport?: unknown }): boolean {
+  if (Array.isArray(args.schoolSports) && args.schoolSports.some((s) => typeof s === 'string' && s.trim() !== '')) return true;
+  return typeof args.metadataSport === 'string' && args.metadataSport.trim() !== '';
+}

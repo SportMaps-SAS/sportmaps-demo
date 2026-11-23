@@ -1,8 +1,10 @@
-import React from 'react';
-import { CheckCircle2, Circle, ArrowRight, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle2, Circle, ArrowRight, Sparkles, ChevronUp } from 'lucide-react';
+import { readChecklistCollapsed, writeChecklistCollapsed } from '@/lib/onboarding/onboardingChecklists';
 import { OnboardingStep } from '../../types/dashboard';
 import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
 
 interface Props {
     steps: OnboardingStep[];
@@ -11,6 +13,11 @@ interface Props {
     title?: string;
     /** Subtitulo de detalle. Default "Completa estos pasos para activar todas las funciones". */
     subtitle?: string;
+    /**
+     * Si se pasa, el checklist se puede colapsar a una píldora («2/6») y reabrir.
+     * El id separa lo guardado de cada checklist (escuela, acudiente, club).
+     */
+    collapsibleId?: string;
 }
 
 /**
@@ -28,12 +35,35 @@ export const DashboardChecklist: React.FC<Props> = ({
     onStepClick,
     title = 'Configura tu cuenta',
     subtitle = 'Completa estos pasos para activar todas las funciones.',
+    collapsibleId,
 }) => {
+    const [collapsed, setCollapsed] = useState(() => (collapsibleId ? readChecklistCollapsed(collapsibleId) : false));
+    const setColapsado = (v: boolean) => {
+        setCollapsed(v);
+        if (collapsibleId) writeChecklistCollapsed(collapsibleId, v);
+    };
     const completedCount = steps.filter((s) => s.completed).length;
     const progress = Math.round((completedCount / steps.length) * 100);
     const nextStep = steps.find((s) => !s.completed);
 
     if (steps.length === 0) return null;
+
+    // Colapsado: una píldora que se reabre con un clic. No ocupa el panel.
+    if (collapsibleId && collapsed) {
+        return (
+            <div className="flex justify-center">
+                <button
+                    type="button"
+                    onClick={() => setColapsado(false)}
+                    aria-label={`Mostrar ${title}: ${completedCount} de ${steps.length} pasos completados`}
+                    className="inline-flex items-center gap-2 rounded-full border border-primary/20 bg-primary/10 px-4 py-1.5 text-xs font-semibold text-primary hover:bg-primary/15"
+                >
+                    <Sparkles className="h-3 w-3" />
+                    {title} · {completedCount}/{steps.length}
+                </button>
+            </div>
+        );
+    }
 
     return (
         <div className="space-y-6">
@@ -51,6 +81,21 @@ export const DashboardChecklist: React.FC<Props> = ({
                         ? <>Siguiente paso: <span className="font-medium text-foreground">{nextStep.title}</span></>
                         : subtitle}
                 </p>
+                {collapsibleId && (
+                    <>
+                        <p className="mt-1 text-xs text-muted-foreground">{completedCount} de {steps.length} completados</p>
+                        <div className="mt-3 flex items-center justify-center gap-2">
+                            {nextStep && (
+                                <Button size="sm" onClick={() => onStepClick(nextStep)}>
+                                    {nextStep.title} <ArrowRight className="ml-1 h-4 w-4" />
+                                </Button>
+                            )}
+                            <Button size="sm" variant="ghost" onClick={() => setColapsado(true)}>
+                                <ChevronUp className="mr-1 h-4 w-4" /> Ocultar
+                            </Button>
+                        </div>
+                    </>
+                )}
             </div>
 
             {/* Progress bar */}

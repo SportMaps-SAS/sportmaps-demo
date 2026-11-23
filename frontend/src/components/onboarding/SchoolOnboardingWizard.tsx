@@ -39,14 +39,14 @@ import { esNombreDePagoUnico, PAGO_UNICO_NO_ES_PLAN_MSG } from '@/lib/school/pag
 import { FootballModalitySelect } from '@/components/teams/FootballModalitySelect';
 import { modalityToSave } from '@/lib/sports/footballModality';
 import { resolveSignupSport } from '@/lib/auth/signupMetadata';
-import { isSchoolWizardStepDone } from '@/lib/onboarding/schoolOnboardingRules';
+import { isSchoolWizardStepDone, isWizardStepRequired, schoolHasSport } from '@/lib/onboarding/schoolOnboardingRules';
 import { bffClient } from '@/lib/api/bffClient';
 import { todayColombia } from '@/lib/dateUtils';
 import { planWizardStudentCreation, type WizardEnrollTarget } from '@/lib/onboarding/wizardStudentPayload';
 import { track } from '@/lib/onboarding/trackOnboardingEvent';
 
 type BusinessModel = 'teams' | 'plans' | 'both';
-type StepId = 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
+type StepId = 'sport' | 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
 
 /**
  * Convierte errores tecnicos de Supabase/PostgREST en mensajes que un
@@ -111,24 +111,27 @@ const STEP_DEFS: Record<StepId, WizardStep> = {
   // No obligatoria: el paso estuvo oculto para todas las academias (se daba por
   // hecho con la sede automática). Ahora se muestra, pero se puede saltar para no
   // sumar una barrera nueva antes de ver el producto.
+  // Único paso obligatorio: solo aparece si la academia llegó sin deporte.
+  sport:    { id: 'sport',    title: 'Deporte',           subtitle: '¿Qué deporte practica tu academia?',          icon: Trophy,        required: true  },
   branch:   { id: 'branch',   title: 'Tu Sede',           subtitle: 'Confirma la direccion de tu sede principal', icon: Building,      required: false },
-  model:    { id: 'model',    title: 'Modelo',            subtitle: '¿Como organizas tu academia?',               icon: Layers,        required: true  },
-  team:     { id: 'team',     title: 'Primer Equipo',     subtitle: 'Crea tu primer grupo o equipo deportivo',    icon: Trophy,        required: true  },
-  plan:     { id: 'plan',     title: 'Primer Plan',       subtitle: 'Crea tu primera mensualidad o paquete',      icon: Tag,           required: true  },
+  model:    { id: 'model',    title: 'Modelo',            subtitle: '¿Como organizas tu academia?',               icon: Layers,        required: false },
+  team:     { id: 'team',     title: 'Primer Equipo',     subtitle: 'Crea tu primer grupo o equipo deportivo',    icon: Trophy,        required: false },
+  plan:     { id: 'plan',     title: 'Primer Plan',       subtitle: 'Crea tu primera mensualidad o paquete',      icon: Tag,           required: false },
   coach:    { id: 'coach',    title: 'Entrenador',        subtitle: 'Invita a tu primer entrenador',              icon: UserPlus,      required: false },
   student:  { id: 'student',  title: 'Primer Atleta',     subtitle: 'Registra a tu primer deportista',            icon: GraduationCap, required: false },
   payments: { id: 'payments', title: 'Cobros',            subtitle: 'Configura como recibir pagos',               icon: CreditCard,    required: false },
 };
 
-const buildSteps = (model: BusinessModel | null): WizardStep[] => {
+const buildSteps = (model: BusinessModel | null, sportMissing = false): WizardStep[] => {
   // El paso "Modelo" aparece SIEMPRE (no se autoesconde cuando hay default
   // 'teams' del backfill). El admin puede volver a este paso desde las pills
   // para cambiar su organizacion.
-  const steps: WizardStep[] = [STEP_DEFS.branch, STEP_DEFS.model];
+  const steps: WizardStep[] = [...(sportMissing ? [STEP_DEFS.sport] : []), STEP_DEFS.branch, STEP_DEFS.model];
   if (model === 'teams' || model === 'both') steps.push(STEP_DEFS.team);
   if (model === 'plans' || model === 'both') steps.push(STEP_DEFS.plan);
   steps.push(STEP_DEFS.coach, STEP_DEFS.student, STEP_DEFS.payments);
-  return steps;
+  // Qué bloquea se decide en un solo lugar (schoolOnboardingRules): el asistente es corto.
+  return steps.map((st) => ({ ...st, required: isWizardStepRequired(st.id) }));
 };
 
 interface SchoolOnboardingWizardProps {
@@ -157,15 +160,18 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
     else if (status.has_teams)                setBusinessModel('teams');
   }, [businessModel, status.has_teams, status.has_plans]);
 
-  const STEPS = buildSteps(businessModel);
+  // undefined = aún cargando; null = cargó y la academia no tiene deporte.
+  const [schoolSport, setSchoolSport] = useState<string | null | undefined>(undefined);
+  const [sportChoice, setSportChoice] = useState('');
+  const STEPS = buildSteps(businessModel, schoolSport === null);
 
   // `model` se considera "done" solo si la escuela ya creó al menos un team o
   // plan, no solo porque schools.business_model tenga valor (puede venir del
   // default 'teams' del backfill). Asi forzamos al admin a ver el step en su
   // primer onboarding y confirmar explicitamente como organiza su academia.
   const isStepDoneById = useCallback(
-    (id: StepId): boolean => isSchoolWizardStepDone(id, status),
-    [status],
+    (id: StepId): boolean => (id === 'sport' ? !!schoolSport : isSchoolWizardStepDone(id, status)),
+    [status, schoolSport],
   );
 
   // Determine initial step based on what's already done
@@ -229,6 +235,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   // Load existing onboarding data
   useEffect(() => {
     if (schoolId) {
+      loadSport();
       loadBranchData();
       loadTeamData();
       loadPlanData();
@@ -255,6 +262,36 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       setEnrollTeams(((teams as unknown) as typeof enrollTeams) ?? []);
     })();
   }, [currentStepId, schoolId]);
+
+  // ¿Tiene deporte la academia? Si no, el asistente lo pide (es lo único obligatorio).
+  const loadSport = async () => {
+    if (!schoolId) return;
+    const { data } = await supabase.from('schools').select('sports').eq('id', schoolId).maybeSingle();
+    const sports = (data as { sports?: string[] | null } | null)?.sports;
+    const metadataSport = user?.user_metadata?.sport_name;
+    setSchoolSport(schoolHasSport({ schoolSports: sports, metadataSport }) ? 'ok' : null);
+  };
+
+  const handleSaveSport = async () => {
+    if (!schoolId || !sportChoice) {
+      toast({ title: 'Elige el deporte de tu academia', variant: 'destructive' });
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('schools').update({ sports: [sportChoice] }).eq('id', schoolId);
+      if (error) throw error;
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'sport' });
+      setTeamSport((prev) => prev || sportChoice);
+      // El paso desaparece de la lista al quedar guardado: no se avanza a mano.
+      setSchoolSport('ok');
+      onRefresh();
+    } catch (err: any) {
+      toast({ title: 'Error', description: friendlyError(err), variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const loadBranchData = async () => {
     if (!schoolId) return;
@@ -858,6 +895,29 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   const renderStepContent = () => {
     const stepId = STEPS[currentStep]?.id;
     switch (stepId) {
+      case 'sport':
+        return (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Es lo único que necesitamos para abrir tu panel. Lo demás lo haces después, a tu ritmo.
+            </p>
+            <div className="space-y-2">
+              <Label>Deporte *</Label>
+              <Select value={sportChoice} onValueChange={setSportChoice}>
+                <SelectTrigger><SelectValue placeholder="Elige un deporte" /></SelectTrigger>
+                <SelectContent>
+                  {SPORTS_LIST.map((sport) => (
+                    <SelectItem key={sport} value={sport}>{sport}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={handleSaveSport} disabled={saving || !sportChoice} className="w-full">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Guardar y continuar
+            </Button>
+          </div>
+        );
       case 'branch':
         return (
           <div className="space-y-4">
@@ -1269,7 +1329,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
         )}
         {allRequiredDone && (
           <Button variant="outline" size="sm" onClick={() => handleFinish('later')}>
-            Terminar después <ArrowRight className="h-4 w-4 ml-1" />
+            Ir a mi panel <ArrowRight className="h-4 w-4 ml-1" />
           </Button>
         )}
         {!isLastStep && (
