@@ -649,6 +649,17 @@ async function closeHourBankVisit(
     .update({ status: 'closed', ended_at: lastExit, billed_minutes: billedMinutes })
     .eq('id', visitId);
 
+  // Día de evento (migración 20261123083815): si la visita empezó en un día que
+  // la escuela marcó como evento, el trigger de la base la dejó en 0 y devolvió
+  // el consumo. No hay excedente que avisar.
+  if (billedMinutes > 0) {
+    const { data: finalVisit } = await supabase.from('hour_bank_visits').select('billed_minutes').eq('id', visitId).maybeSingle();
+    if (finalVisit?.billed_minutes === 0) {
+      console.log(`[ADMS] banco de horas: visita ${visitId} cerrada en día de evento — no descuenta`);
+      return;
+    }
+  }
+
   console.log(`[ADMS] banco de horas: visita ${visitId} cerrada — ${billedMinutes} min facturados`);
 
   // D-10: sin bloqueo automático de excedente, solo notificación — mismo
