@@ -17,7 +17,7 @@
  *    MAX_INTENTOS_SERVIDOR seguidos queda «atascada» para que el usuario decida).
  *  · Sin React ni red propia: pura y probable. El almacén, el reloj y el candado se inyectan.
  */
-import { backoffDelay, safeStorage } from '@/lib/tournamentActionQueue';
+import { backoffDelay, conJitter, safeStorage } from '@/lib/tournamentActionQueue';
 import { candadoNavegador, type Candado, type ResultadoEnvio } from '@/components/coach/v2/colaAsistencia';
 import { idbDel, idbGet, idbListPrefix, idbSet } from './idbStore';
 
@@ -76,6 +76,8 @@ export interface BandejaOpciones {
   almacen?: AlmacenBandeja;
   now?: () => number;
   onChange?: () => void;
+  /** Azar del jitter de reintentos (tests: `() => 1`). */
+  random?: () => number;
   /** Por defecto: navigator.locks (o candado con vencimiento en localStorage). */
   candado?: Candado | null;
   /** Avisa a las demás pestañas que algo cambió. Por defecto BroadcastChannel si existe. */
@@ -110,6 +112,7 @@ export class Bandeja {
   private readonly o: Required<Pick<BandejaOpciones, 'userId' | 'manejadores'>> & BandejaOpciones;
   private readonly almacen: AlmacenBandeja;
   private readonly now: () => number;
+  private readonly random: () => number;
   private readonly candado: Candado | null;
   private readonly canal: BandejaOpciones['canal'];
   private quitarCanal: (() => void) | null = null;
@@ -118,6 +121,7 @@ export class Bandeja {
     this.o = opts;
     this.almacen = opts.almacen ?? almacenIndexedDb;
     this.now = opts.now ?? Date.now;
+    this.random = opts.random ?? Math.random;
     this.candado = opts.candado !== undefined ? opts.candado : candadoNavegador(`sm-bandeja:${opts.userId}:envio`, safeStorage());
     this.canal = opts.canal !== undefined ? opts.canal : canalDelNavegador('sm-bandeja');
     this.quitarCanal = this.canal?.escuchar(() => { void this.cargar(true); }) ?? null;
@@ -260,13 +264,13 @@ export class Bandeja {
       }
       if (res.kind === 'auth') {
         this.authFallos += 1;
-        const delay = backoffDelay(this.authFallos);
+        const delay = conJitter(backoffDelay(this.authFallos), this.random);
         this.authHasta = this.now() + delay;
         eventos.push({ type: 'auth_error', message: res.message, delayMs: delay });
         break;
       }
       // retry: esta espera; las demás siguen.
-      const delay = Math.max(backoffDelay((actual?.intentos ?? accion.intentos) + 1), res.retryAfterMs ?? 0);
+      const delay = Math.max(conJitter(backoffDelay((actual?.intentos ?? accion.intentos) + 1), this.random), res.retryAfterMs ?? 0);
       if (misma) {
         const n: AccionEnBandeja = { ...actual!, intentos: actual!.intentos + 1, nextAttemptAt: this.now() + delay };
         if (res.servidor && n.intentos >= MAX_INTENTOS_SERVIDOR) {

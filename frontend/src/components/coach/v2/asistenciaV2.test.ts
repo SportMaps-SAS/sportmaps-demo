@@ -131,7 +131,7 @@ const lista = (records: { childId: string; status: 'present' | 'absent' | 'excus
 describe('cola de listas sin señal', () => {
   it('guardar dos veces la misma lista deja UNA entrada (fusiona por deportista, gana lo último)', () => {
     let t = 1000;
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => t, send: vi.fn() });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => t, send: vi.fn() });
     cola.guardar(lista([{ childId: 'a', status: 'present' }, { childId: 'b', status: 'absent' }]), 0);
     t += 10;
     cola.guardar(lista([{ childId: 'b', status: 'excused' }]), 0);
@@ -144,7 +144,7 @@ describe('cola de listas sin señal', () => {
   it('no envía durante la ventana de Deshacer; Deshacer la saca sin tocar el servidor', async () => {
     let t = 0;
     const send = vi.fn(async (): Promise<ResultadoEnvio> => ({ kind: 'ok' }));
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => t, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => t, send });
     cola.guardar(lista([{ childId: 'a', status: 'absent' }]), 8000);
     await cola.flush(true);
     expect(send).not.toHaveBeenCalled();
@@ -169,7 +169,7 @@ describe('cola de listas sin señal', () => {
       return { kind: 'ok' };
     });
     const storage = memoria();
-    const cola = new ColaAsistencia({ key: 'k', storage, now: () => t, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage, now: () => t, send });
     cola.guardar(lista([{ childId: 'a', status: 'present' }, { childId: 'b', status: 'absent' }]), 0);
 
     const ev1 = await cola.flush();
@@ -184,7 +184,7 @@ describe('cola de listas sin señal', () => {
     expect(ev2[0]).toMatchObject({ type: 'retry', delayMs: 2000 });
 
     // La lista sobrevive a recargar la app (persistida).
-    const recargada = new ColaAsistencia({ key: 'k', storage, now: () => t, send });
+    const recargada = new ColaAsistencia({ key: 'k', random: () => 1, storage, now: () => t, send });
     expect(recargada.size).toBe(1);
 
     red = true;
@@ -200,7 +200,7 @@ describe('cola de listas sin señal', () => {
     const t = 0;
     let soltar: (r: ResultadoEnvio) => void = () => {};
     const send = vi.fn(() => new Promise<ResultadoEnvio>((res) => { soltar = res; }));
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => t, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => t, send });
     cola.guardar(lista([{ childId: 'a', status: 'present' }]), 0);
     const p = cola.flush(true);
     await Promise.resolve();
@@ -213,7 +213,7 @@ describe('cola de listas sin señal', () => {
 
   it('un rechazo de regla no descarta la lista: queda con el error y no se reintenta sola', async () => {
     const send = vi.fn(async (): Promise<ResultadoEnvio> => ({ kind: 'rule', message: 'La sesión ya fue finalizada.' }));
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => 0, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => 0, send });
     cola.guardar(lista([{ childId: 'a', status: 'present' }]), 0);
     await cola.flush(true);
     await cola.flush(true);
@@ -224,7 +224,7 @@ describe('cola de listas sin señal', () => {
 
   it('sesión vencida (401): se detiene sin perder la lista', async () => {
     const send = vi.fn(async (): Promise<ResultadoEnvio> => ({ kind: 'auth', message: 'No hay sesión activa' }));
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => 0, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => 0, send });
     cola.guardar(lista([{ childId: 'a', status: 'present' }]), 0);
     const ev = await cola.flush(true);
     expect(ev).toEqual([{ type: 'auth_error', message: 'No hay sesión activa', delayMs: 1000 }]);
@@ -235,7 +235,7 @@ describe('cola de listas sin señal', () => {
     let t = 0;
     const orden: string[] = [];
     const send = vi.fn(async (i: ListaEnCola): Promise<ResultadoEnvio> => { orden.push(i.key); return { kind: 'ok' }; });
-    const cola = new ColaAsistencia({ key: 'k', storage: memoria(), now: () => t, send });
+    const cola = new ColaAsistencia({ key: 'k', random: () => 1, storage: memoria(), now: () => t, send });
     cola.guardar(lista([{ childId: 'a', status: 'present' }]), 0);
     t = 5;
     cola.guardar({ ...lista([{ childId: 'z', status: 'present' }]), key: claveLista('s1', 'team:t2', '2026-10-08') }, 0);

@@ -175,7 +175,7 @@ export default function MembershipsPage() {
                         <b>{aRevisar.length}</b> membresía(s) figuran como activas pero con la fecha ya
                         pasada. El estado <b>no se cambia solo</b>: el dato viene del club y puede llegar
                         rezagado, y darlas por vencidas automáticamente dejaría a socios al día sin
-                        acceso. Confirmá con el club y actualizá el estado a mano.
+                        acceso. Confirma con el club y actualiza el estado a mano.
                     </AlertDescription>
                 </Alert>
             )}

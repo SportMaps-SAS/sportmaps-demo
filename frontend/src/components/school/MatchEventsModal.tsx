@@ -49,7 +49,7 @@ export function MatchEventsModal({
 
   const handleAddStaged = () => {
     if (!draftSubject) {
-      toast({ title: 'Elegí un jugador.', variant: 'destructive' });
+      toast({ title: 'Elige un jugador.', variant: 'destructive' });
       return;
     }
     const [subject_type, subject_id] = draftSubject.split(':') as [NewFootballMatchEvent['subject_type'], string];
@@ -73,7 +73,7 @@ export function MatchEventsModal({
 
   const handleSave = async () => {
     if (staged.length === 0) {
-      toast({ title: 'Agregá al menos un evento antes de guardar.', variant: 'destructive' });
+      toast({ title: 'Agrega al menos un evento antes de guardar.', variant: 'destructive' });
       return;
     }
     try {

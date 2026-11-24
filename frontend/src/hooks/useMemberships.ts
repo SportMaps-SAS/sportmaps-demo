@@ -144,7 +144,7 @@ export function useMemberships(schoolIdOverride?: string | null) {
             const fallaron = resultado.length - ok;
             toast({
                 title: `${ok} membresía(s) cargada(s)`,
-                description: fallaron > 0 ? `${fallaron} no se pudieron cargar. Revisá el detalle.` : undefined,
+                description: fallaron > 0 ? `${fallaron} no se pudieron cargar. Revisa el detalle.` : undefined,
                 variant: fallaron > 0 ? 'destructive' : undefined,
             });
         },

@@ -330,7 +330,7 @@ export default function MonthlyReportsPage() {
                 title: r.sent > 0 ? '📧 Informe enviado' : 'No se envió',
                 description: r.sent > 0
                     ? 'Correo con el resumen y el enlace, más la notificación en la app.'
-                    : r.results?.[0]?.reason ?? 'Revisá que esté publicado y tenga acudiente.',
+                    : r.results?.[0]?.reason ?? 'Revisa que esté publicado y tenga acudiente.',
                 variant: r.sent > 0 ? 'default' : 'destructive',
             });
             queryClient.invalidateQueries({ queryKey: claveInformes });

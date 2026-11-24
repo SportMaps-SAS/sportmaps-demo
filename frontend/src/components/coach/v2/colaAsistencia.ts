@@ -34,7 +34,7 @@
  *    candado con vencimiento en el mismo storage). Antes de cada envío se relee:
  *    siempre sube la versión más nueva que haya en el teléfono.
  */
-import { backoffDelay, safeStorage, type QueueStorage } from '@/lib/tournamentActionQueue';
+import { backoffDelay, conJitter, safeStorage, type QueueStorage } from '@/lib/tournamentActionQueue';
 import { claveDeRegistroLista, type RegistroLista } from './asistenciaModel';
 
 export const DESHACER_MS = 8000;
@@ -115,6 +115,8 @@ export interface ColaOpciones {
   storage?: QueueStorage | null;
   now?: () => number;
   onChange?: () => void;
+  /** Azar del jitter de reintentos (tests: `() => 1`). */
+  random?: () => number;
   /** Por defecto: candado con vencimiento en el mismo storage (o ninguno si no hay storage). */
   candado?: Candado | null;
 }
@@ -247,12 +249,14 @@ export class ColaAsistencia {
   private authHasta = 0;
   private readonly opts: ColaOpciones;
   private readonly now: () => number;
+  private readonly random: () => number;
   private readonly candado: Candado | null;
 
   constructor(opts: ColaOpciones) {
     const storage = opts.storage === undefined ? safeStorage() : opts.storage;
     this.opts = { ...opts, storage };
     this.now = opts.now ?? Date.now;
+    this.random = opts.random ?? Math.random;
     this.candado = opts.candado !== undefined ? opts.candado : storage ? candadoEnStorage(storage, `${opts.key}:candado`, this.now) : null;
     this.recargar(false);
   }
@@ -464,13 +468,13 @@ export class ColaAsistencia {
       if (res.kind === 'auth') {
         // Sesión vencida: no se insiste cada 2 s; espera creciente hasta que vuelva a entrar.
         this.authFallos += 1;
-        const delay = backoffDelay(this.authFallos);
+        const delay = conJitter(backoffDelay(this.authFallos), this.random);
         this.authHasta = this.now() + delay;
         events.push({ type: 'auth_error', message: res.message, delayMs: delay });
         break;
       }
       // retry: esta lista espera; las demás siguen (cada una con su propia espera).
-      const delay = Math.max(backoffDelay((actual?.attempts ?? item.attempts) + 1), res.retryAfterMs ?? 0);
+      const delay = Math.max(conJitter(backoffDelay((actual?.attempts ?? item.attempts) + 1), this.random), res.retryAfterMs ?? 0);
       if (mismaVersion) {
         actual!.attempts += 1;
         actual!.nextAttemptAt = this.now() + delay;

@@ -137,7 +137,7 @@ function ComoMeFue({ userId, ahora }: { userId: string | undefined; ahora: Date 
                       className={cn('w-full rounded-md', i === carga.length - 1 ? 'bg-primary' : 'bg-primary/40')}
                       style={{ height: `${((c.valor ?? 0) / 10) * 80}px` }}
                     />
-                    <span className="text-[11px] text-muted-foreground">{c.label}</span>
+                    <span className="text-xs text-muted-foreground">{c.label}</span>
                   </div>
                 ))}
               </div>

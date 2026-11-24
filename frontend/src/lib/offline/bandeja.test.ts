@@ -23,7 +23,7 @@ function nueva(opts: {
   const reloj = opts.reloj ?? { t: 1_000_000 };
   const enviadas: string[] = [];
   const envio = opts.envio ?? (async (a) => { enviadas.push(a.id); return { kind: 'ok' } as ResultadoEnvio; });
-  const b = new Bandeja({
+  const b = new Bandeja({ random: () => 1,
     userId: opts.userId ?? 'u1', manejadores: { evaluar: envio }, almacen, now: () => reloj.t, candado: null, canal: null,
   });
   return { b, almacen, reloj, enviadas };
@@ -167,7 +167,7 @@ describe('Bandeja — errores', () => {
     let soltar!: () => void;
     const retenida = new Promise<void>((r) => { soltar = r; });
     const reenvios: AccionEnBandeja[] = [];
-    const b2 = new Bandeja({
+    const b2 = new Bandeja({ random: () => 1,
       userId: 'u1', almacen: (b as unknown as { almacen: AlmacenBandeja }).almacen, now: Date.now, candado: null, canal: null,
       manejadores: { evaluar: async (a) => { reenvios.push(a); if (reenvios.length === 1) await retenida; return { kind: 'ok' }; } },
     });
@@ -214,8 +214,8 @@ describe('Bandeja — usuarios y pestañas', () => {
     const candado = { con: async <T,>(fn: (r: () => void) => Promise<T>) => { if (ocupado) return null; ocupado = true; try { return await fn(() => undefined); } finally { ocupado = false; } } };
     let llamadas = 0;
     const manejadores = { evaluar: async () => { llamadas++; await new Promise((r) => setTimeout(r, 10)); return { kind: 'ok' } as ResultadoEnvio; } };
-    const t1 = new Bandeja({ userId: 'u1', manejadores, almacen, candado, canal: null });
-    const t2 = new Bandeja({ userId: 'u1', manejadores, almacen, candado, canal: null });
+    const t1 = new Bandeja({ random: () => 1, userId: 'u1', manejadores, almacen, candado, canal: null });
+    const t2 = new Bandeja({ random: () => 1, userId: 'u1', manejadores, almacen, candado, canal: null });
     await t1.encolar(entrada('evaluar:a'));
     await t2.cargar();
     await Promise.all([t1.flush(true), t2.flush(true)]);
@@ -227,7 +227,7 @@ describe('Bandeja — usuarios y pestañas', () => {
   it('avisa a los oyentes y al canal cuando cambia', async () => {
     const onChange = vi.fn();
     const avisar = vi.fn();
-    const b = new Bandeja({ userId: 'u1', manejadores: { evaluar: async () => ({ kind: 'ok' }) }, almacen: almacenEnMemoria(), candado: null, canal: { avisar, escuchar: () => () => undefined }, onChange });
+    const b = new Bandeja({ random: () => 1, userId: 'u1', manejadores: { evaluar: async () => ({ kind: 'ok' }) }, almacen: almacenEnMemoria(), candado: null, canal: { avisar, escuchar: () => () => undefined }, onChange });
     await b.encolar(entrada('evaluar:a'));
     expect(onChange).toHaveBeenCalled();
     expect(avisar).toHaveBeenCalled();

@@ -32,6 +32,11 @@ export const CATEGORIES = {
   http5xx:         { label: 'Peticiones 5xx', sev: 'warn' },
   http4xx:         { label: 'Peticiones 4xx', sev: 'warn' },
   pageError:       { label: 'Excepción JS no capturada', sev: 'warn' },
+  // Reglas de la V2 y accesibilidad (DESIGN.md §2, §9, §12)
+  contrast:        { label: 'Contraste por debajo de WCAG AA', sev: 'warn' },
+  unnamed:         { label: 'Control sin nombre accesible', sev: 'warn' },
+  v2Seguro:        { label: 'V2: «¿Seguro?» en vez de Deshacer', sev: 'warn' },
+  v2Voseo:         { label: 'V2: voseo en pantalla (va de «tú»)', sev: 'warn' },
 };
 
 // Lista de hallazgos de un registro (un route × config).
@@ -82,6 +87,11 @@ export function classify(rec) {
   const f4 = rec.failed.filter((f) => f.status >= 400 && f.status < 500);
   if (f5.length) add('http5xx', f5.length, f5.map((f) => ({ text: `${f.status} ${f.method} ${f.url}` })));
   if (f4.length) add('http4xx', f4.length, f4.map((f) => ({ text: `${f.status} ${f.method} ${f.url}` })));
+  // Registros capturados antes de estos chequeos no los traen: se omiten.
+  if (c.contrast?.count) add('contrast', c.contrast.count, c.contrast.samples.map((x) => ({ ...x, text: `${x.ratio}:1 (mín ${x.min}) ${x.fg} sobre ${x.bg} · ${x.px}px — «${x.text}»` })));
+  if (c.unnamed?.count) add('unnamed', c.unnamed.count, c.unnamed.samples);
+  if (c.v2?.seguro?.length) add('v2Seguro', c.v2.seguro.length, c.v2.seguro);
+  if (c.v2?.voseo?.length) add('v2Voseo', c.v2.voseo.length, c.v2.voseo);
   if (rec.pageErrors.length) add('pageError', rec.pageErrors.length, rec.pageErrors.map((t) => ({ text: t })));
   const status = issues.some((i) => i.sev === 'fail') ? 'fail' : issues.some((i) => i.sev === 'warn') ? 'warn' : 'pass';
   return { status, issues };

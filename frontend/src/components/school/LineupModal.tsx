@@ -701,7 +701,7 @@ export function LineupModal({ open, onClose, teamId, teamName, sourceType, sourc
 
   const handleSave = async () => {
     if (starters.length > MAX_STARTERS) {
-      toast({ title: `Máximo ${MAX_STARTERS} titulares`, description: `Tenés ${starters.length} marcados.`, variant: 'destructive' });
+      toast({ title: `Máximo ${MAX_STARTERS} titulares`, description: `Tienes ${starters.length} marcados.`, variant: 'destructive' });
       return;
     }
     // Antes bloqueaba SIEMPRE con 0 jugadores, incluso con formación ya
@@ -709,7 +709,7 @@ export function LineupModal({ open, onClose, teamId, teamName, sourceType, sourc
     // ya acepta players: [] sin problema, así que alcanza con formación O
     // al menos un jugador.
     if (starters.length === 0 && benchPlayers.length === 0 && !formation.trim()) {
-      toast({ title: 'Elegí una formación o marcá al menos un jugador.', variant: 'destructive' });
+      toast({ title: 'Elige una formación o marca al menos un jugador.', variant: 'destructive' });
       return;
     }
 

@@ -187,12 +187,15 @@ reinstala encima). Íconos: **lucide-react**.
 - Objetivos táctiles ≥ 44×44px en móvil.
 - Formularios: `Label` asociado, error en texto debajo del campo.
 
-## 10. QA visual
+## 10. QA visual y compuertas
 
-- `frontend/e2e/visual-qa.spec.ts` (`npm run qa:visual` en `frontend/`) recorre las páginas
-  públicas en 360px, 768px y 1440px, en claro y oscuro, guarda capturas y reporta: scroll
-  horizontal, objetivos táctiles chicos, imágenes sin `alt`, enlaces `#`, errores de consola y contraste.
-- Cambios de tokens globales: adjuntar capturas antes/después de esa misma corrida.
+| Herramienta | Qué cubre | Cuándo |
+|---|---|---|
+| `node scripts/v2-gate/run.mjs` | Estático, sin abrir la app: px fijos, texto < 12px, hex fijos, «¿Seguro?», voseo. **Trinquete** contra `scripts/v2-gate/baseline.json`: falla solo si algo empeora | Antes de cada commit de frontend. Tras pagar deuda: `--actualizar` |
+| `node scripts/qa-responsive/run.mjs` | **La app con sesión** (cuentas de Club Campestre Demo, escrituras bloqueadas): todas las pantallas del menú por rol × 6 tamaños × densidad × zoom. Mide desborde, barra inferior, táctil, texto chico, pestañas, modales, **contraste, controles sin nombre, «¿Seguro?» y voseo en pantalla** | Cada fase de la V2: línea base antes y corrida después (regla 4 del track) |
+| `npm run qa:visual` (en `frontend/`) | Páginas públicas sin sesión y sin base, claro y oscuro | Cambios en login, registro, páginas legales |
+
+Cambios de tokens globales: adjuntar capturas antes/después de `qa-responsive`.
 
 ## 11. Qué no hacer
 
@@ -202,3 +205,32 @@ reinstala encima). Íconos: **lucide-react**.
 - Más de un acento naranja compitiendo en la misma vista.
 - Degradados y glow en pantallas operativas (asistencia, pagos, listas).
 - Copiar el look de otra marca o app.
+
+## 12. V2 de la app: criterios de aceptación
+
+La V2 es el rediseño de la app (ROADMAP → «Track V2»). Fuentes: el lienzo
+(`https://claude.ai/artifact/CGQozXBXP91kJn7YNF5Cs4`), `docs/mapa-app/cruce-rediseno.md`,
+`docs/specs/modulos-v2-definicion.md` y el spec de cada módulo (`docs/specs/<módulo>-v2.md`).
+Las pantallas nuevas viven en carpetas `…/v2/` (`components/coach/v2`, `parent/v2`, `athlete/v2`, `settings/v2`).
+
+Las **8 reglas** no son estilo: una pantalla que las rompe no se da por cerrada.
+
+| Regla | Qué significa en pantalla | Cómo se verifica |
+|---|---|---|
+| **WhatsApp primero** | Lo que la familia o el profe necesitan les llega por WhatsApp; la app es para lo que no cabe ahí | Spec del módulo; se prueba con mensajes reales |
+| **Una frase y un botón** | Cada tarjeta dice una cosa y ofrece una acción principal. Nada de tableros con 6 métricas y 4 botones | Revisión contra el lienzo |
+| **Lo normal ya viene marcado** | Lista con todos presentes; se toca la excepción, no la regla | Revisión + prueba de tareas |
+| **Deshacer en vez de «¿Seguro?»** | Acción inmediata + aviso de 8 s con «Deshacer» (`useAccionConDeshacer`, `DESHACER_MS`). La escritura sale a los 8 s o al salir de la pantalla. El diálogo de confirmación queda solo para lo **irreversible hacia afuera** (borrar una escuela, anular un pago ya conciliado) | `v2-gate` (regla `seguro`) y `qa-responsive` (`v2Seguro`) |
+| **Funciona sin señal** donde aplique | Asistencia y evaluación en la cancha se guardan en una cola local y suben solas (`colaAsistencia`); la pantalla lo dice («Se subirá cuando haya señal») | Pruebas con red cortada (Playwright `context.setOffline(true)`) |
+| **Palabras de la cancha** | Una palabra por cosa (`V2Palabras`, V2-0b): «Cobros», «Entrenadores», «acudiente». Español de Colombia, de **tú**, sin voseo | `v2-gate` (regla `voseo`) y `qa-responsive` (`v2Voseo`) |
+| **Valores por defecto** | Fecha de hoy, el grupo del profe, el monto del plan: el formulario llega casi lleno | Revisión + prueba de tareas |
+| **Celular primero** | Se diseña a 360 px y se agranda. Cero píxeles fijos, solo tokens; objetivos de 44 px; claro y oscuro | `v2-gate` (`px-fijo`, `texto-chico`, `color-fijo`) y `qa-responsive` |
+
+Además, en toda pantalla V2:
+
+- **Carga, vacío y error son tres estados distintos**, cada uno con su texto y su acción (nunca un
+  «No hay datos» cuando en realidad falló la red).
+- **Interruptor de reversa por rol** mientras dure la transición (la V1 sigue disponible).
+- **Cada fase se mide**: línea base de la base viva antes y número después (regla 4 del track). La
+  corrida de `qa-responsive` de la fase va en `scripts/qa-responsive/out/<fase>`.
+

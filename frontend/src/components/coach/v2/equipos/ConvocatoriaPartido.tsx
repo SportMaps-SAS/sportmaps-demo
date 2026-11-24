@@ -215,7 +215,7 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
                   </span>
                   <span className="flex min-w-0 flex-col leading-tight">
                     <span className="truncate">{nombre ? nombreCorto(nombre) : 'Deportista'}</span>
-                    <span className="text-[11px] font-normal opacity-80">Refuerzo</span>
+                    <span className="text-xs font-normal opacity-80">Refuerzo</span>
                   </span>
                 </button>
               );

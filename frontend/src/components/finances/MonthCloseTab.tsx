@@ -227,7 +227,7 @@ export function MonthCloseTab({ schoolId, activeBranchId }: { schoolId: string |
       </div>
       {closeRow?.status === 'cerrado' && liveTotals && (liveTotals.total_expected !== closeRow.total_expected || liveTotals.total_settled !== closeRow.total_settled) && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">
-          El número cerrado (facturado {formatCurrency(closeRow.total_expected)} · cobrado {formatCurrency(closeRow.total_settled)}) quedó desactualizado — entraron movimientos después del cierre. Volvé a cerrar para recalcular.
+          El número cerrado (facturado {formatCurrency(closeRow.total_expected)} · cobrado {formatCurrency(closeRow.total_settled)}) quedó desactualizado — entraron movimientos después del cierre. Vuelve a cerrar para recalcular.
         </p>
       )}
 

@@ -517,6 +517,81 @@ export async function inPageChecks(opts) {
     }
   }
 
+  // ── 12. contraste WCAG AA (texto sólido sobre el primer fondo sólido) ────
+  // Aproximado: si hay imagen/degradado detrás no se mide (no se puede saber
+  // el color real). Una muestra por combinación color/fondo/tamaño.
+  out.contrast = { count: 0, samples: [] };
+  {
+    const parse = (c) => { const m = /rgba?\(([^)]+)\)/.exec(c || ''); if (!m) return null; const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const bgOf = (el) => {
+      for (let n = el; n; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+        if ([...n.children].some((c) => (c.tagName === 'IMG' || c.tagName === 'VIDEO' || c.tagName === 'CANVAS') && getComputedStyle(c).position === 'absolute')) return null;
+        const b = parse(cs.backgroundColor);
+        if (b && b.a >= 0.95) return b;
+        if (b && b.a > 0.05) return null; // fondo translúcido: depende de lo de atrás
+      }
+      return { r: 255, g: 255, b: 255, a: 1 };
+    };
+    const seen = new Set();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let tn;
+    while ((tn = walker.nextNode())) {
+      const el = tn.parentElement;
+      if (!el || !(tn.textContent || '').trim()) continue;
+      if (!isVisible(el) || isSrOnly(el) || inClosedSidebar(el)) continue;
+      const cs = getComputedStyle(el);
+      if (cs.webkitTextFillColor === 'transparent') continue;
+      if (el.closest('[disabled],[aria-disabled="true"]')) continue; // WCAG exime lo deshabilitado
+      const fg = parse(cs.color);
+      if (!fg || fg.a < 0.95) continue;
+      const bg = bgOf(el);
+      if (!bg) continue;
+      const L1 = lum(fg), L2 = lum(bg);
+      const ratio = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+      const size = parseFloat(cs.fontSize);
+      const big = size >= 24 || (Number(cs.fontWeight) >= 700 && size >= 18.66);
+      const min = big ? 3 : 4.5;
+      if (ratio >= min) continue;
+      const key = `${cs.color}|${bg.r},${bg.g},${bg.b}|${big}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.contrast.count++;
+      if (out.contrast.samples.length < maxSamples) out.contrast.samples.push(sample(el, { ratio: Math.round(ratio * 100) / 100, min, fg: cs.color, bg: `rgb(${bg.r}, ${bg.g}, ${bg.b})`, px: size }));
+    }
+  }
+
+  // ── 13. controles sin nombre accesible ───────────────────────────────────
+  out.unnamed = { count: 0, samples: [] };
+  for (const el of document.querySelectorAll('button, a[href], [role="button"], [role="tab"], [role="menuitem"], [role="switch"], [role="checkbox"]')) {
+    if (!isVisible(el) || inClosedSidebar(el)) continue;
+    const name = (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.innerText || '').trim();
+    const img = el.querySelector('img[alt]:not([alt=""]), svg[aria-label], [role="img"][aria-label]');
+    if (name || img) continue;
+    out.unnamed.count++;
+    if (out.unnamed.samples.length < maxSamples) out.unnamed.samples.push(sample(el));
+  }
+
+  // ── 14. reglas V2 visibles: «¿Seguro?» en vez de Deshacer, voseo ─────────
+  out.v2 = { seguro: [], voseo: [] };
+  {
+    const reSeguro = /¿\s*(?:Seguro|Segura|Est[áa]s?\s+segur[oa]|Realmente)(?!\p{L})/u;
+    const reVoseo = /(?<!\p{L})(?:querés|tenés|podés|sabés|hacé|decí|mirá|escribí|probá|tocá|subí|completá|ingresá|revisá|agregá|seleccioná|confirmá|marcá|actualizá|cargá|guardá|usá|pagá|buscá|intentá|esperá|volvé|poné|llamá|activá|creá|enviá|contanos|escribinos|avisanos|fijate|acordate|vení|andá|ponete)(?!\p{L})/iu;
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let tn;
+    while ((tn = walker.nextNode())) {
+      const t = (tn.textContent || '').trim();
+      const el = tn.parentElement;
+      if (!t || !el || !isVisible(el) || inClosedSidebar(el)) continue;
+      const ms = reSeguro.exec(t);
+      if (ms && out.v2.seguro.length < maxSamples) out.v2.seguro.push(sample(el, { text: t.slice(0, 80) }));
+      const mv = reVoseo.exec(t);
+      if (mv && out.v2.voseo.length < maxSamples) out.v2.voseo.push(sample(el, { text: `«${mv[0]}» en: ${t.slice(0, 70)}` }));
+    }
+  }
+
   out.docHeight = doc.scrollHeight;
   out.title = document.title;
   out.h1 = (document.querySelector('main h1, h1') || {}).innerText || '';

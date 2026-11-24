@@ -1,0 +1,1013 @@
+{
+  "generado": "2026-11-24",
+  "porArchivo": {
+    "frontend/src/App.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/AppSidebar.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/GlobalNotificationBell.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/access/DeviceUsersDialog.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/access/HourBankBalanceCard.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/access/HourBankEventDays.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/access/HourBankSchoolSection.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/access/StudentReportPanel.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/accounting/InvoiceIdentifiers.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/accounting/InvoicingTab.tsx": {
+      "texto-chico": 9
+    },
+    "frontend/src/components/accounting/VoidInvoiceDialog.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/athlete/AthleteClassBooking.tsx": {
+      "texto-chico": 4,
+      "seguro": 1
+    },
+    "frontend/src/components/athlete/AthleteVisibleRoutines.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/components/athlete/RestTimerInline.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/athlete/SessionExecution.tsx": {
+      "texto-chico": 34
+    },
+    "frontend/src/components/athlete/SlotPicker.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/attendance/CoachPostTrainingRatingDialog.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/auth/GoogleSignInButton.tsx": {
+      "texto-chico": 1,
+      "color-fijo": 3
+    },
+    "frontend/src/components/autopay/DebitoAutomaticoPanel.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/billing/BillingDetailsForm.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/billing/MunicipalitySelect.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/biomech/BiomechCaptureModal.tsx": {
+      "texto-chico": 12
+    },
+    "frontend/src/components/biomech/BiomechResultCard.tsx": {
+      "texto-chico": 18
+    },
+    "frontend/src/components/booking/CompactSessionSlot.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/components/booking/HourGridPicker.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/cards/AthleteIdCard.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 31
+    },
+    "frontend/src/components/cards/CardTemplatesManager.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/checkout/PaymentProviderGate.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/children/ChildPauseSection.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/clinical/AvailabilityBadge.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/clinical/ClinicalHistoryTab.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/clinical/ConsentPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/clinical/DiagnosisPicker.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/clinical/ExercisesTab.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/clinical/NoteCard.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/components/clinical/NoteFormParts.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/clinical/NoteForms.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/clinical/PatientAppointmentsTab.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach/CoachProfileWizard.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/coach/CompetitionResultFormDialog.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach/CompetitionResultsList.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach/LevelProgressionPanel.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach/MesocycleRubricTable.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach/MesocycleSection.tsx": {
+      "texto-chico": 12
+    },
+    "frontend/src/components/coach/MicrocycleLoadPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/coach/SessionFormDialog.tsx": {
+      "texto-chico": 1,
+      "seguro": 1
+    },
+    "frontend/src/components/coach/StandaloneMicrocyclesPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/coach/WeeklyLoadPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/coach-activity/CoachCard.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/coach-activity/CoachDetailSheet.tsx": {
+      "texto-chico": 2,
+      "seguro": 1
+    },
+    "frontend/src/components/coach-activity/CoachWeekChart.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/coach-evaluation/CoachEvaluationDialog.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/coach-evaluation/EvaluationHistory.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/BranchChip.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/BranchSelector.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/FileUpload.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/ImageUpload.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/SchoolSwitcher.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/common/StatFilterBar.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/dashboard/InvitationBanner.tsx": {
+      "color-fijo": 1
+    },
+    "frontend/src/components/dashboard/ProfileCompletionBanner.tsx": {
+      "color-fijo": 5
+    },
+    "frontend/src/components/dashboard/PromotionBanner.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/enrollment/EnrollPlanStudentModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/explore/EnrollmentAuthModal.tsx": {
+      "color-fijo": 10
+    },
+    "frontend/src/components/explore/ExploreMapInteractive.tsx": {
+      "texto-chico": 9
+    },
+    "frontend/src/components/explore/PlanCard.tsx": {
+      "texto-chico": 3,
+      "color-fijo": 2
+    },
+    "frontend/src/components/finances/OverdueAccountsCard.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/finances/TransactionsCard.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/footer/SportMapsFooter.tsx": {
+      "color-fijo": 2
+    },
+    "frontend/src/components/marketplace/ServiceBookingModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/marketplace/UnifiedExploreMap.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/modals/MobileAppPreviewModal.tsx": {
+      "px-fijo": 2
+    },
+    "frontend/src/components/modals/WelcomeModal.tsx": {
+      "texto-chico": 2,
+      "color-fijo": 2
+    },
+    "frontend/src/components/navigation/MobileBottomNav.tsx": {
+      "texto-chico": 1,
+      "color-fijo": 1
+    },
+    "frontend/src/components/onboarding/SchoolOnboardingWizard.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/partido-vivo/LiveMatchParts.tsx": {
+      "px-fijo": 4
+    },
+    "frontend/src/components/partido-vivo/LiveMatchScreen.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/partido-vivo/PreStartPanel.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/payment/ApprovePaymentMethodSheet.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/ClasesDePruebaDialog.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/payment/CobrosYPagosModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/FailedAttemptChip.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/GlosaConciliationDialog.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/InstallmentsConfigCard.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/PagoOrigenInsignia.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/PaymentAccountsEditor.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/PaymentCheckoutModal.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/PaymentModal.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/payment/PaymentOriginBadge.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/payment/RegisterCashPaymentModal.tsx": {
+      "texto-chico": 36
+    },
+    "frontend/src/components/payment/cobros-y-pagos/AthletePicker.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/cobros-y-pagos/DiscountControl.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/cobros-y-pagos/DiscountTags.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/cobros-y-pagos/GlobalDiscount.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payment/cobros-y-pagos/HorasAdicionalesLine.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/payment/cobros-y-pagos/NewAthleteForm.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/cobros-y-pagos/NewChargeLines.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/components/payment/cobros-y-pagos/PaymentBlock.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/payment/cobros-y-pagos/PendingChargesSection.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payment/cobros-y-pagos/PreviewSummary.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payments/BankAccountFields.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/payments/MontoRecibido.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/payments/TipoDeCobroBadge.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/performance/MetricHighlights.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/performance/MetricSparklineGrid.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/components/performance/MetricSummary.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/performance/PerformanceEvolutionSection.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/reservar/ReservaParts.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/reservar/SlotPicker.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/reservas/SlotGrid.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/reviews/QuestionsList.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/reviews/ReviewCard.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/components/reviews/WriteReviewModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/AjustesAgendaClasePrueba.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/AthleteEvolutionModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/school/AvailabilityManager.tsx": {
+      "texto-chico": 12
+    },
+    "frontend/src/components/school/CanalesClasePrueba.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/ExercisePacksTab.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/components/school/FacilityFormDialog.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/school/FacilityReservationModal.tsx": {
+      "color-fijo": 2
+    },
+    "frontend/src/components/school/FootballDashboardModal.tsx": {
+      "texto-chico": 15,
+      "seguro": 2
+    },
+    "frontend/src/components/school/FootballSeasonStats.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/school/FormationGallery.tsx": {
+      "px-fijo": 5,
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/LineupModal.tsx": {
+      "px-fijo": 3,
+      "texto-chico": 14
+    },
+    "frontend/src/components/school/MatchEventsModal.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/school/OwnerReservationModal.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/school/PerformanceEntryModal.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/school/RegisterAthleteDialog.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/school/TacticalAiPanel.tsx": {
+      "px-fijo": 2,
+      "texto-chico": 11
+    },
+    "frontend/src/components/school/TacticalBoard.tsx": {
+      "px-fijo": 12,
+      "texto-chico": 64
+    },
+    "frontend/src/components/school/TacticalCourtDialog.tsx": {
+      "px-fijo": 3,
+      "texto-chico": 4
+    },
+    "frontend/src/components/school/TacticalDrawToolsPanel.tsx": {
+      "texto-chico": 9
+    },
+    "frontend/src/components/school/TacticalM6dLayer.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/school/TacticalPossessionBar.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/school/TacticalTeamsDialog.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/school/TacticalTimeline.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/school/TeamPerformanceEntryModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/school/TrialClassBookingModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/school/TrialClassSelfModal.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/school/TrialClassSettingsModal.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/school/WeekSessionsPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/school/schoolVideos/VideoLibraryTab.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/components/school/tacticalBoardPrefs.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/tacticalMedia/FrameNoteBar.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 1
+    },
+    "frontend/src/components/school/tacticalMedia/PlayNotesDialog.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 5
+    },
+    "frontend/src/components/school/tacticalMedia/PlayVideosDialog.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/settings/BrandingAuditLog.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/settings/PreciosDeServicioEditor.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/settings/ProfileSection.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/settings/SchoolMetricsSettings.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/settings/SellableCatalogCard.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 10
+    },
+    "frontend/src/components/settings/SportMapsPaySettings.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/soportes/SoportesInsignia.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/store/OrderTimeline.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 1
+    },
+    "frontend/src/components/store/StoreChat.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/store/StoreConversationsPanel.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/store/inventory/KardexDialog.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/students/ClasePruebaPanel.tsx": {
+      "texto-chico": 5,
+      "seguro": 1
+    },
+    "frontend/src/components/students/CreateAdultAthleteModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/students/CreateChildModal.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/students/CreateStudentModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/students/EnrollmentFeesSection.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/students/PauseRequestsInbox.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/students/PlanCombobox.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/students/ProspectoDetalleEmbudo.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/students/ZkPinField.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/support/TicketDiagnosisPanel.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/teams/CreateTeamModal.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/tournaments/TeamPlayersDialog.tsx": {
+      "seguro": 2
+    },
+    "frontend/src/components/tournaments/TournamentCardsPanel.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/tournaments/TournamentContentPanel.tsx": {
+      "seguro": 2
+    },
+    "frontend/src/components/tournaments/TournamentSponsorsPanel.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/components/tournaments/TournamentTeamsPanel.tsx": {
+      "seguro": 2
+    },
+    "frontend/src/components/tournaments/live/MatchSocialPanel.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/tournaments/public/PublicHeader.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/tournaments/public/PublicMatchCard.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/components/tournaments/public/PublicTabs.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/tournaments/public/ShareSheet.tsx": {
+      "texto-chico": 1,
+      "color-fijo": 2
+    },
+    "frontend/src/components/tournaments/public/TeamSheet.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/trainer/BlockBuilder.tsx": {
+      "texto-chico": 25
+    },
+    "frontend/src/components/trainer/CompleteSessionModal.tsx": {
+      "texto-chico": 19
+    },
+    "frontend/src/components/trainer/EditClientModal.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/components/trainer/ExerciseSearchInput.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/components/trainer/QuickUseRoutineModal.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/components/trainer/RoutineCard.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/components/trainer/RoutineFormModal.tsx": {
+      "px-fijo": 4,
+      "texto-chico": 8
+    },
+    "frontend/src/components/trainer/SessionPlanCard.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/trainer/SessionPlanModal.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/trainer/SessionUsageDetailModal.tsx": {
+      "texto-chico": 9
+    },
+    "frontend/src/components/trainer/TrainerFeedbackModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/ui/alert.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/ui/chart.tsx": {
+      "px-fijo": 2
+    },
+    "frontend/src/components/ui/drawer.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/ui/navigation-menu.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/ui/number-stepper.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/ui/scroll-area.tsx": {
+      "px-fijo": 2
+    },
+    "frontend/src/components/ui/separator.tsx": {
+      "px-fijo": 2
+    },
+    "frontend/src/components/ui/sidebar.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/components/universal/BookingRoster.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/universal/BusinessModelConfig.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/universal/ChildMembershipSection.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/universal/FinalizeSessionModal.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/universal/OfferingCoachesPanel.tsx": {
+      "texto-chico": 12
+    },
+    "frontend/src/components/universal/OfferingsManagement.tsx": {
+      "texto-chico": 31,
+      "color-fijo": 2
+    },
+    "frontend/src/components/universal/PlanLevelRulesSection.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/components/universal/PlanProgressBar.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/vendor/ActivateStoreCTA.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/vendor/product-wizard/ProductGalleryUploader.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/components/vendor/product-wizard/ProductWizard.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/vendor/product-wizard/VariantMatrixBuilder.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/components/wellness/WellnessModule.tsx": {
+      "texto-chico": 25
+    },
+    "frontend/src/components/whatsapp/PreciosDelBot.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/components/whatsapp/ReporteDeCampana.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/layouts/AuthLayout.tsx": {
+      "px-fijo": 3,
+      "texto-chico": 4
+    },
+    "frontend/src/pages/AccountDeletionPage.tsx": {
+      "color-fijo": 7
+    },
+    "frontend/src/pages/AccountingBudgetPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/AdminAccessLogsPage.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/pages/AdminSubscriptionsPage.tsx": {
+      "texto-chico": 16
+    },
+    "frontend/src/pages/AdminSupportInboxPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/AthletePaymentsPage.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/AttendanceHistoryPage.tsx": {
+      "texto-chico": 10
+    },
+    "frontend/src/pages/AttendanceSupervisionPage.tsx": {
+      "texto-chico": 36,
+      "color-fijo": 3
+    },
+    "frontend/src/pages/BiomechVolleyballLabPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/CalendarPage.tsx": {
+      "texto-chico": 7,
+      "seguro": 1
+    },
+    "frontend/src/pages/CertificateTemplatesPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/ChildAttendancePage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/ChildProgressPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/ChildReportDetailPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/CoachAttendancePage.tsx": {
+      "texto-chico": 27,
+      "color-fijo": 3
+    },
+    "frontend/src/pages/CoachPlansPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/CoachReportsPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/CobroPublicoPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/DashboardPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/ExplorarGlobalPage.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/pages/InvitationsManagementPage.tsx": {
+      "texto-chico": 11
+    },
+    "frontend/src/pages/JoinPlanPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/JoinSchoolPublicPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/JoinTeamPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/LoginPage.tsx": {
+      "px-fijo": 9,
+      "texto-chico": 13,
+      "color-fijo": 75
+    },
+    "frontend/src/pages/MarketplacePage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/MembershipsPage.tsx": {
+      "texto-chico": 6
+    },
+    "frontend/src/pages/MessageTemplatesPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/MonthlyReportsPage.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/MyChildrenPageClassic.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/MyEnrollmentsPage.tsx": {
+      "texto-chico": 1,
+      "seguro": 1
+    },
+    "frontend/src/pages/MyPaymentsPageClassic.tsx": {
+      "texto-chico": 14
+    },
+    "frontend/src/pages/OnboardingRolePage.tsx": {
+      "px-fijo": 1,
+      "texto-chico": 1,
+      "color-fijo": 17
+    },
+    "frontend/src/pages/ParentCheckoutPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/PaymentRemindersPage.tsx": {
+      "texto-chico": 12
+    },
+    "frontend/src/pages/PaymentsAutomationPage.tsx": {
+      "texto-chico": 58
+    },
+    "frontend/src/pages/PayrollPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/PrivacyPage.tsx": {
+      "color-fijo": 16
+    },
+    "frontend/src/pages/ProfilePage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/ProgramsManagementPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/RegisterPage.tsx": {
+      "px-fijo": 9,
+      "texto-chico": 28,
+      "color-fijo": 159
+    },
+    "frontend/src/pages/ReporterDashboardPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/SchoolBranchesManagementPage.tsx": {
+      "texto-chico": 2,
+      "seguro": 1
+    },
+    "frontend/src/pages/SchoolCardsAdminPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/SchoolDetailPage.tsx": {
+      "color-fijo": 2
+    },
+    "frontend/src/pages/SchoolFacilitiesPage.tsx": {
+      "texto-chico": 13,
+      "seguro": 1
+    },
+    "frontend/src/pages/SchoolJoinQRsPage.tsx": {
+      "texto-chico": 7,
+      "seguro": 1
+    },
+    "frontend/src/pages/SchoolLeadFormPage.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/pages/SchoolSetupPage.tsx": {
+      "color-fijo": 5
+    },
+    "frontend/src/pages/SchoolSportsPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/SchoolStudentsManagementPage.tsx": {
+      "texto-chico": 13,
+      "seguro": 1
+    },
+    "frontend/src/pages/SettingsPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/StatsPage.tsx": {
+      "texto-chico": 16
+    },
+    "frontend/src/pages/StoreCheckoutPage.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/pages/StoreOrdersPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/TeamsPage.tsx": {
+      "texto-chico": 13,
+      "color-fijo": 2
+    },
+    "frontend/src/pages/TermsPage.tsx": {
+      "color-fijo": 10
+    },
+    "frontend/src/pages/TiendaPublicaPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/TrainingPage.tsx": {
+      "texto-chico": 8,
+      "seguro": 1
+    },
+    "frontend/src/pages/TrainingPlansPage.tsx": {
+      "px-fijo": 2,
+      "texto-chico": 1
+    },
+    "frontend/src/pages/WellnessSchedulePage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/admin/AdminMarketplaceModerationPage.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/pages/admin/AdminPayoutsPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/admin/AdminTacticalAiUsagePage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/admin/AdminWhatsAppPlataformaPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/booking/PublicFacilityBookingPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/booking/PublicTrialClassBookingPage.tsx": {
+      "texto-chico": 19,
+      "seguro": 2
+    },
+    "frontend/src/pages/clinical/ClinicalInviteAcceptPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/clinical/FollowUpsPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/clinical/PatientDetailPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/clinical/PatientRecordPrintPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/clinical/PatientsPage.tsx": {
+      "texto-chico": 4
+    },
+    "frontend/src/pages/clinical/ProfessionalReportsPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/coach/CoachEquipmentPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/events/TournamentEmbedPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/events/TournamentMatchPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/events/TournamentTeamInvitePage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/organizer/CreateEventPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/organizer/EventManagementPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/organizer/OrganizerCalendarPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/polls/components/CreatePollDialog.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/reservar/ReservaEstadoPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/reservar/ReservarPage.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/school/AccessControlPage.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/pages/school/AttendanceSheetIntakePage.tsx": {
+      "texto-chico": 1,
+      "seguro": 1
+    },
+    "frontend/src/pages/school/PickupMonitorPage.tsx": {
+      "px-fijo": 1
+    },
+    "frontend/src/pages/school/SchoolEquipmentPage.tsx": {
+      "seguro": 1
+    },
+    "frontend/src/pages/school/SchoolRoutines.tsx": {
+      "texto-chico": 9
+    },
+    "frontend/src/pages/school/SchoolTournamentDetailPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/school/enrollment-intake/FichaMatricula.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/trainer/TrainerAvailability.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/trainer/TrainerClients.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/trainer/TrainerOnboarding.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/trainer/TrainerProfileEditor.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/trainer/TrainerRoutineDetail.tsx": {
+      "texto-chico": 18,
+      "seguro": 2
+    },
+    "frontend/src/pages/trainer/TrainerRoutines.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/trainer/tabs/ClientGoalsTab.tsx": {
+      "texto-chico": 3
+    },
+    "frontend/src/pages/trainer/tabs/ClientProgressTab.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/trainer/tabs/ClientResumenTab.tsx": {
+      "texto-chico": 7
+    },
+    "frontend/src/pages/trainer/tabs/ClientStatsTab.tsx": {
+      "texto-chico": 11
+    },
+    "frontend/src/pages/trainer/tabs/ClientTrainingTab.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/trainer/tabs/TrainerInvitationsTab.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/vendor/VendorInboxPage.tsx": {
+      "texto-chico": 5
+    },
+    "frontend/src/pages/vendor/VendorOnboardingPage.tsx": {
+      "texto-chico": 1
+    },
+    "frontend/src/pages/vendor/VendorPayoutsPage.tsx": {
+      "texto-chico": 8
+    },
+    "frontend/src/pages/vendor/VendorShippingSettingsPage.tsx": {
+      "texto-chico": 2
+    },
+    "frontend/src/pages/vendor/VendorSubscribersPage.tsx": {
+      "texto-chico": 1
+    }
+  }
+}

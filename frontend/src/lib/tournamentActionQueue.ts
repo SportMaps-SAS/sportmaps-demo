@@ -55,6 +55,8 @@ export interface ActionQueueOptions {
   now?: () => number;
   newId?: () => string;
   onChange?: () => void;
+  /** Azar del jitter de reintentos (tests: `() => 1`). */
+  random?: () => number;
 }
 
 interface Persisted { items: QueuedAction[]; versions: Record<string, number> }
@@ -64,6 +66,21 @@ export const BACKOFF_MAX_MS = 30000;
 
 export function backoffDelay(attempts: number): number {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempts - 1));
+}
+
+/**
+ * «Equal jitter»: una espera al azar entre la mitad y el total de `ms`.
+ *
+ * Sin esto, cuando la base o el BFF responden 5xx (p. ej. la caída de Disk IO
+ * del 2026-10-14) TODAS las colas de los teléfonos —marcadores en vivo, listas
+ * de asistencia V2, bandeja offline— reintentan en el mismo instante (1 s, 2 s,
+ * 4 s…) y cada ola le pega junta a un servidor que ya está en problemas. Lo
+ * mismo al volver la señal en una cancha con varios profes. El azar las reparte.
+ * `random` se inyecta en los tests (`() => 1` = espera completa, determinista).
+ */
+export function conJitter(ms: number, random: () => number = Math.random): number {
+  const r = Math.min(1, Math.max(0, random()));
+  return Math.round(ms / 2 + (ms / 2) * r);
 }
 
 export function uuid(): string {
@@ -107,11 +124,13 @@ export class ActionQueue {
   private againForce = false;
   private readonly opts: ActionQueueOptions;
   private readonly now: () => number;
+  private readonly random: () => number;
   private readonly newId: () => string;
 
   constructor(opts: ActionQueueOptions) {
     this.opts = opts;
     this.now = opts.now ?? Date.now;
+    this.random = opts.random ?? Math.random;
     this.newId = opts.newId ?? uuid;
     this.load();
   }
@@ -219,7 +238,7 @@ export class ActionQueue {
       }
       // retry: se queda al frente de la cola
       item.attempts += 1;
-      const delay = Math.max(backoffDelay(item.attempts), res.retryAfterMs ?? 0);
+      const delay = Math.max(conJitter(backoffDelay(item.attempts), this.random), res.retryAfterMs ?? 0);
       item.nextAttemptAt = this.now() + delay;
       events.push({ type: 'retry', item, delayMs: delay, message: res.message });
       this.save();

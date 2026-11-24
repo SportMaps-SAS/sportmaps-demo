@@ -526,6 +526,7 @@ export default function PostTrainingSelfEvalPage() {
                     setAnswers((a) => ({ ...a, focus: [] }));
                   }}
                 >
+                  {/* v2-gate: ok — «elegí» es pasado (habla el deportista), no voseo */}
                   Hoy nada: quitar lo que elegí
                 </Button>
               )}

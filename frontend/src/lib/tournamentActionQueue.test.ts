@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ActionQueue, classifyError, backoffDelay, type SendResult, type QueueStorage } from './tournamentActionQueue';
+import { ActionQueue, classifyError, backoffDelay, conJitter, type SendResult, type QueueStorage } from './tournamentActionQueue';
 import type { MatchDto } from './tournamentTypes';
 
 const match = (version: number): MatchDto => ({ id: 'm1', version } as MatchDto);
@@ -13,7 +13,7 @@ function setup(results: Array<SendResult | Error>, storage = memStorage()) {
   let t = 1000;
   let n = 0;
   const calls: Array<{ id: string; expected: number }> = [];
-  const q = new ActionQueue({
+  const q = new ActionQueue({ random: () => 1,
     key: 'k', storage, now: () => t, newId: () => `id${++n}`,
     send: async (item, expected) => {
       calls.push({ id: item.client_action_id, expected });
@@ -118,7 +118,7 @@ describe('ActionQueue', () => {
   });
 
   it('sin almacenamiento funciona en memoria', async () => {
-    const q = new ActionQueue({ key: 'x', storage: null, send: async () => ({ kind: 'ok', match: match(1) }) });
+    const q = new ActionQueue({ random: () => 1, key: 'x', storage: null, send: async () => ({ kind: 'ok', match: match(1) }) });
     q.enqueue('m1', { type: 'start' });
     expect((await q.flush())[0].type).toBe('sent');
   });
@@ -145,5 +145,25 @@ describe('classifyError / backoffDelay', () => {
   it('backoff exponencial con tope', () => {
     expect([1, 2, 3, 4].map(backoffDelay)).toEqual([1000, 2000, 4000, 8000]);
     expect(backoffDelay(20)).toBe(30000);
+  });
+});
+
+describe('conJitter', () => {
+  it('reparte la espera entre la mitad y el total (para que los teléfonos no reintenten a la vez)', () => {
+    expect(conJitter(8000, () => 0)).toBe(4000);
+    expect(conJitter(8000, () => 1)).toBe(8000);
+    expect(conJitter(8000, () => 0.5)).toBe(6000);
+    // valores fuera de [0,1] se recortan
+    expect(conJitter(8000, () => 7)).toBe(8000);
+    expect(conJitter(8000, () => -1)).toBe(4000);
+  });
+
+  it('con el azar real, 200 colas que fallan a la vez no reintentan en el mismo instante', () => {
+    const esperas = new Set(Array.from({ length: 200 }, () => conJitter(backoffDelay(3))));
+    expect(esperas.size).toBeGreaterThan(100);
+    for (const e of esperas) {
+      expect(e).toBeGreaterThanOrEqual(2000);
+      expect(e).toBeLessThanOrEqual(4000);
+    }
   });
 });
