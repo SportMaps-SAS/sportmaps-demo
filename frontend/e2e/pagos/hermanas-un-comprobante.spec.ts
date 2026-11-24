@@ -35,7 +35,13 @@ function sembrar() {
 
 async function abrirModal(page: Page) {
     await setActiveSchool(page, ESCUELA);
-    await loginAs(page, ADMIN);
+    // El Auth del gemelo da 504 si la máquina anda cargada: se reintenta el login.
+    for (let intento = 1; ; intento++) {
+        try { await loginAs(page, ADMIN); break; } catch (e) {
+            if (intento >= 5) throw e;
+            await page.waitForTimeout(5_000);
+        }
+    }
     await page.goto('/payments-automation', { waitUntil: 'domcontentloaded', timeout: 150_000 });
     await page.getByTestId('open-register-payment').click({ timeout: 90_000 });
 }
@@ -60,7 +66,7 @@ async function marcarLasDos(page: Page) {
 const campoRecibido = (page: Page) => page.getByTestId('cyp-monto-recibido').getByRole('textbox');
 
 test.describe('Hermanas con un comprobante (gemelo)', () => {
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
     test.beforeEach(() => sembrar());
 
     test('efectivo, recibido +$5.500: dos ajustes de $2.750 y las dos pagadas', async ({ page }) => {
@@ -115,5 +121,99 @@ test.describe('Hermanas con un comprobante (gemelo)', () => {
         expect(descuento('f3000000-0000-4000-8000-000000000012')).toBe('2750');
         // Y no queda saldo suelto: lo consumieron los siguientes cobros.
         expect(sql(`select public._saldo_a_favor_disponible('${ESCUELA}'::uuid, 'c:${H1}')::int`)).toBe('0');
+    });
+});
+
+// ── Transferencia con comprobante ────────────────────────────────────────────
+// El gemelo no levanta el BFF: el OCR y la lista de menores se simulan en el navegador. Lo que se
+// prueba es el camino del cliente + la base (huella, referencia, monto recibido, reparto).
+const PNG_1X1 = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+);
+const REF = 'F3-REF-0001';
+const SHA = 'f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3';
+
+async function simularBff(page: Page, ocrAmount: number) {
+    await page.route('**/api/v1/payments/extract-receipt', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                amount: ocrAmount, date: new Date().toISOString().slice(0, 10), reference: REF,
+                bank: 'Bancolombia', currency: 'COP', provider: 'simulado-f3',
+                time: '10:00', destination: null, destinationName: null, originName: 'Mamá F3',
+                verdict: 'verde', verdictReasons: [], referenceNorm: REF.toLowerCase(),
+                imageSha256: SHA, imageSha256Source: 'client_original',
+                rawResponse: '{}',
+            }),
+        }),
+    );
+    await page.route('**/api/v1/students/children-by-ids', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify([
+                { id: H1, full_name: 'Hermana Uno F3' },
+                { id: H2, full_name: 'Hermana Dos F3' },
+            ]),
+        }),
+    );
+}
+
+async function marcarLasDosPorTransferencia(page: Page, ocrAmount: number) {
+    await simularBff(page, ocrAmount);
+    await abrirModal(page);
+    await page.getByRole('button', { name: /^Transferencia/ }).click();
+    await page.getByText('Selecciona a quién aplica').click();
+    await page.getByRole('button', { name: /^Hermana Uno F3/ }).click();
+    await page.getByRole('button', { name: /Pagar varios cobros a la vez/ }).click();
+    await expect(page.getByTestId('cyp-hermanas')).toBeVisible({ timeout: 30_000 });
+    await page.getByLabel(/Mensualidad Uno F3/).click();
+    await page.getByTestId('cyp-hermana-cobro-' + P2).click();
+    await page.locator('input[type=file]').first().setInputFiles({ name: 'comprobante-f3.png', mimeType: 'image/png', buffer: PNG_1X1 });
+    // Sin esperar la subida y el OCR, «Confirmar» se pulsa sin soporte y no hace nada.
+    await expect(page.getByText('Soporte adjunto')).toBeVisible({ timeout: 90_000 });
+}
+
+test.describe('Transferencia con comprobante (gemelo)', () => {
+    test.setTimeout(240_000);
+    test.beforeEach(() => {
+        sembrar();
+        sql(`delete from payments where receipt_image_sha256 = '${SHA}' or ocr_reference = '${REF}'`);
+    });
+
+    test('un comprobante para las dos: mismo soporte, huella solo en el primero y el sobrante repartido', async ({ page }) => {
+        await marcarLasDosPorTransferencia(page, 205500);
+        // El monto recibido se precarga con lo que leyó el OCR y avisa que no coincide con la suma.
+        await expect(campoRecibido(page)).toHaveValue(/205\.?500/, { timeout: 30_000 });
+        await expect(page.getByTestId('cyp-recibido-ocr')).toContainText('205.500');
+        await expect(page.getByTestId('cyp-aviso-reparto')).toContainText('2.750');
+        await page.screenshot({ path: 'test-results/f3-05-transferencia.png', fullPage: true });
+        await page.getByRole('button', { name: /Confirmar Registro/ }).click();
+        await expect.poll(() => sql(`select count(*) from payments where id in ('${P1}','${P2}') and status='paid'`), { timeout: 30_000 }).toBe('2');
+        expect(sql(`select count(distinct receipt_url) from payments where id in ('${P1}','${P2}') and receipt_url is not null`)).toBe('1');
+        expect(sql(`select count(*) from payments where id in ('${P1}','${P2}') and receipt_url is not null`)).toBe('2');
+        // La huella y la referencia viajan en UNA sola fila (los índices únicos no dejan en dos).
+        expect(sql(`select count(*) from payments where id in ('${P1}','${P2}') and receipt_image_sha256 = '${SHA}'`)).toBe('1');
+        expect(sql(`select count(*) from payments where id in ('${P1}','${P2}') and ocr_reference = '${REF}'`)).toBe('1');
+        expect(sql(`select string_agg(amount::int::text, ',' order by amount) from payment_adjustments where kind='saldo_a_favor' and payment_id in ('${P1}','${P2}')`)).toBe('2750,2750');
+        expect(sql(`select string_agg(distinct payment_method, ',') from payments where id in ('${P1}','${P2}')`)).toBe('transfer');
+    });
+
+    test('el mismo comprobante otra vez se rechaza con mensaje claro y no paga nada', async ({ page }) => {
+        // Otro cobro de la escuela ya tiene esa huella y esa referencia.
+        sql(`insert into payments(id,amount,concept,due_date,status,school_id,child_id,payment_type,receipt_image_sha256,ocr_reference)
+             values ('f3000000-0000-4000-8000-0000000000d1',50000,'Ya pagado con este soporte','2025-01-15','paid','${ESCUELA}','00000000-0000-4000-c000-000000000001','subscription','${SHA}','${REF}')`);
+        try {
+            await marcarLasDosPorTransferencia(page, 200000);
+            await page.getByRole('button', { name: /Confirmar Registro/ }).click();
+            await expect(page.getByText('Comprobante ya registrado').first()).toBeVisible({ timeout: 30_000 });
+            expect(sql(`select count(*) from payments where id in ('${P1}','${P2}') and status='paid'`)).toBe('0');
+            expect(sql(`select count(*) from payment_adjustments where payment_id in ('${P1}','${P2}')`)).toBe('0');
+            await page.screenshot({ path: 'test-results/f3-06-duplicado.png', fullPage: true });
+        } finally {
+            sql(`delete from payments where id = 'f3000000-0000-4000-8000-0000000000d1'`);
+        }
     });
 });
