@@ -38,6 +38,7 @@ function alcanceDe(req: AuthenticatedRequest) {
         schoolId: req.schoolId,
         headerSchoolId: req.headers['x-school-id'] as string | undefined,
         rolSesion: req.role,
+        authorization: req.headers.authorization ?? null,
     }).catch((err) => {
         req.log?.warn({ err }, 'mapi-agente: no se pudo armar el alcance; sigue modo soporte');
         return null;

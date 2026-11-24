@@ -400,14 +400,13 @@ export function notasPorCobro(
     return out;
 }
 
-router.get('/:schoolId/notas-de-comprobantes', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const { schoolId } = req.params as { schoolId: string };
-    if (!(await administraEstaEscuela(req.user.id, schoolId))) {
-        return res.status(403).json({ error: 'forbidden' });
-    }
-    const ids = [...new Set(String(req.query.payment_ids ?? '').split(',').map((x) => x.trim()).filter((x) => UUID_RE.test(x)))]
-        .slice(0, MAX_IDS_NOTAS);
-    if (!ids.length) return res.json({ notas: {} });
+/**
+ * El pie de foto de cada cobro de la escuela (hasta MAX_IDS_NOTAS ids válidos).
+ * La usan esta ruta y Mapi (`auditar_pendientes`). Lanza si falla la lectura.
+ */
+export async function notasDeComprobantes(schoolId: string, paymentIds: string[]): Promise<Record<string, NotaDeComprobante>> {
+    const ids = [...new Set(paymentIds.map((x) => String(x ?? '').trim()).filter((x) => UUID_RE.test(x)))].slice(0, MAX_IDS_NOTAS);
+    if (!ids.length) return {};
     const { data, error } = await supabase.from('whatsapp_inbound_queue')
         .select('result_ref_id, media_caption, created_at')
         .eq('school_id', schoolId)
@@ -415,8 +414,21 @@ router.get('/:schoolId/notas-de-comprobantes', requireAuth, async (req: Authenti
         .in('result_ref_id', ids)
         .not('media_caption', 'is', null)
         .limit(MAX_IDS_NOTAS * 3);
-    if (error) return res.status(500).json({ error: error.message });
-    return res.json({ notas: notasPorCobro((data ?? []) as any[]) });
+    if (error) throw new Error(error.message);
+    return notasPorCobro((data ?? []) as any[]);
+}
+
+router.get('/:schoolId/notas-de-comprobantes', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const { schoolId } = req.params as { schoolId: string };
+    if (!(await administraEstaEscuela(req.user.id, schoolId))) {
+        return res.status(403).json({ error: 'forbidden' });
+    }
+    const ids = String(req.query.payment_ids ?? '').split(',');
+    try {
+        return res.json({ notas: await notasDeComprobantes(schoolId, ids) });
+    } catch (e: any) {
+        return res.status(500).json({ error: e?.message || 'error' });
+    }
 });
 
 // ── Bandeja de comprobantes ─────────────────────────────────────────────────

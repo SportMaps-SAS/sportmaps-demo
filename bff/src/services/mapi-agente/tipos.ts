@@ -29,6 +29,14 @@ export interface Alcance {
     };
     /** Fecha de hoy en America/Bogota (YYYY-MM-DD). */
     hoy: string;
+    /**
+     * Header Authorization de ESTA request (turno del chat o Confirmar). Solo
+     * para las RPC que autorizan con auth.uid() (pausa, baja, evaluar, kudos,
+     * clases de prueba…): se llaman como la persona, igual que la pantalla.
+     * NO enumerable (alcanceDelTurno): no sale en JSON.stringify ni en logs,
+     * nunca va al modelo ni al borrador. Sin él, esas herramientas no se ofrecen.
+     */
+    authorization?: string | null;
 }
 
 /** Rechazo que se le explica a la persona (y al modelo) tal cual. */

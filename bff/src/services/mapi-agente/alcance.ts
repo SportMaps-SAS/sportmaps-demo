@@ -54,6 +54,8 @@ export interface EntradaAlcance {
     headerSchoolId: string | null | undefined;
     /** req.role: el super admin de plataforma no usa el agente en esta fase. */
     rolSesion?: string | null;
+    /** req.headers.authorization: para las RPC que autorizan con auth.uid(). */
+    authorization?: string | null;
     ahora?: Date;
 }
 
@@ -80,7 +82,7 @@ export async function alcanceDelTurno(e: EntradaAlcance): Promise<Alcance | null
     if (!rol) return null;
 
     const s = ajustes as any;
-    return {
+    const alcance: Alcance = {
         schoolId: e.schoolId,
         userId: e.userId,
         rol,
@@ -92,4 +94,11 @@ export async function alcanceDelTurno(e: EntradaAlcance): Promise<Alcance | null
         },
         hoy: fechaColombia(e.ahora ?? new Date()),
     };
+    // El token va NO enumerable: un log o un JSON.stringify del alcance no lo filtra.
+    Object.defineProperty(alcance, 'authorization', {
+        value: typeof e.authorization === 'string' && e.authorization.trim() ? e.authorization : null,
+        enumerable: false,
+        writable: false,
+    });
+    return alcance;
 }

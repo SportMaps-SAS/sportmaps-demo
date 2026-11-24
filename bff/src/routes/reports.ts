@@ -113,6 +113,110 @@ const schoolHasManyBranches = async (schoolId: string | undefined | null): Promi
     return (count || 0) > 1;
 };
 
+/**
+ * Ocupación por equipo y crecimiento de los últimos 6 meses (nuevos y retiros
+ * por mes de creación de la inscripción): la parte de inscripciones de
+ * GET /school/summary, sin Express. La usan esa ruta y el reporte
+ * «inscripciones» de Mapi (services/mapi-agente/herramientas/informes.ts).
+ * `meses` trae el AAAA-MM de cada punto de `growthDataList`; la ruta no lo devuelve.
+ */
+export async function ocupacionYCrecimiento(schoolId: string, branchFilterId: string | null) {
+    // 1. Obtener equipos (Teams) para capacidad total y lista de IDs
+    let teamsQuery = supabase
+        .from('teams')
+        .select('id, name, max_students')
+        .eq('school_id', schoolId)
+        .eq('status', 'active');
+
+    if (branchFilterId) teamsQuery = teamsQuery.eq('branch_id', branchFilterId);
+
+    const { data: allTeams, error: teamsError } = await teamsQuery;
+    if (teamsError) throw teamsError;
+
+    const teams = allTeams || [];
+    let realTotalCapacity = 0;
+    const teamCapacityMap = new Map<string, number>();
+    const teamIdToName = new Map<string, string>();
+
+    allTeams?.forEach(t => {
+        const cap = t.max_students || 0; // Changed from max_capacity to max_students to match select
+        if (cap > 0) {
+            // Agrupar por nombre (ej. "Pre-infantil") ignorando la sede
+            teamCapacityMap.set(t.name, (teamCapacityMap.get(t.name) || 0) + cap);
+            realTotalCapacity += cap; // Added this line to correctly calculate total capacity
+        }
+        teamIdToName.set(t.id, t.name);
+    });
+
+    // 2. Obtener inscripciones (Enrollments) — SIN join a teams para evitar PGRST201.
+    //    La relación ambigua ocurre porque enrollments tiene múltiples FK a teams.
+    //    Solución: filtrar por los team_ids ya obtenidos en el paso anterior.
+    const teamIds = teams.map((t: any) => t.id);
+
+    const allEnrollmentsSet = new Set<string>(); // para deportistas únicos 
+
+    const teamOccupiedMap = new Map<string, number>();
+    let totalStudents = 0;
+    const growthMap = new Map<string, { nuevos: number; retiros: number; sortKey: number }>();
+    const mesDeClave = new Map<string, string>();
+    const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    const now = new Date();
+    const currentMonthIndex = now.getMonth();
+    const currentYear = now.getFullYear();
+    let netGrowthThisMonth = 0;
+
+    for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const mKey = MONTHS[d.getMonth()];
+        growthMap.set(mKey, { nuevos: 0, retiros: 0, sortKey: d.getTime() });
+        mesDeClave.set(mKey, `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+
+    if (teamIds.length > 0) {
+        // Usamos `team_id` directamente — columna plana, sin join, sin ambigüedad
+        const { data: enrollmentsData, error: enrollError } = await supabase
+            .from('enrollments')
+            .select('status, created_at, team_id')
+            .in('team_id', teamIds);
+
+        if (enrollError) throw enrollError;
+
+        (enrollmentsData || []).forEach((e: any) => {
+            const teamName = teamIdToName.get(e.team_id) || 'Varios';
+            const d = new Date(e.created_at);
+            const mKey = MONTHS[d.getMonth()];
+
+            if (e.status === 'active') {
+                if (teamName) {
+                    teamOccupiedMap.set(teamName, (teamOccupiedMap.get(teamName) || 0) + 1);
+                }
+                totalStudents++;
+                if (d.getMonth() === currentMonthIndex && d.getFullYear() === currentYear) {
+                    netGrowthThisMonth++;
+                }
+                if (growthMap.has(mKey)) growthMap.get(mKey)!.nuevos++;
+            } else if (e.status === 'inactive' || e.status === 'dropped') {
+                if (growthMap.has(mKey)) growthMap.get(mKey)!.retiros++;
+            }
+        });
+    }
+
+    // 4) Combinar Mapas: Capacidad vs Ocupación
+    const occupancyData = Array.from(teamCapacityMap.entries()).map(([name, capacity]) => ({
+        name,
+        occupied: teamOccupiedMap.get(name) || 0,
+        vacant: Math.max(0, capacity - (teamOccupiedMap.get(name) || 0)),
+        total_capacity: capacity
+    })).slice(0, 10);
+
+    const growthDataList = Array.from(growthMap.entries())
+        .sort((a, b) => a[1].sortKey - b[1].sortKey)
+        .map(([month, data]) => ({ month, nuevos: data.nuevos, retiros: data.retiros }));
+
+    const meses = growthDataList.map((g) => mesDeClave.get(g.month) ?? null);
+    return { realTotalCapacity, totalStudents, netGrowthThisMonth, occupancyData, growthDataList, meses };
+}
+
 // ── GET /api/v1/reports/school/summary ───────────────────────────────────────
 router.get(
     '/school/summary',
@@ -123,95 +227,8 @@ router.get(
             const { schoolId } = req;
             const branchFilterId = getBranchFilter(req);
 
-            // 1. Obtener equipos (Teams) para capacidad total y lista de IDs
-            let teamsQuery = supabase
-                .from('teams')
-                .select('id, name, max_students')
-                .eq('school_id', schoolId)
-                .eq('status', 'active');
-
-            if (branchFilterId) teamsQuery = teamsQuery.eq('branch_id', branchFilterId);
-
-            const { data: allTeams, error: teamsError } = await teamsQuery;
-            if (teamsError) throw teamsError;
-
-            const teams = allTeams || [];
-            let realTotalCapacity = 0;
-            const teamCapacityMap = new Map<string, number>();
-            const teamIdToName = new Map<string, string>();
-
-            allTeams?.forEach(t => {
-                const cap = t.max_students || 0; // Changed from max_capacity to max_students to match select
-                if (cap > 0) {
-                    // Agrupar por nombre (ej. "Pre-infantil") ignorando la sede
-                    teamCapacityMap.set(t.name, (teamCapacityMap.get(t.name) || 0) + cap);
-                    realTotalCapacity += cap; // Added this line to correctly calculate total capacity
-                }
-                teamIdToName.set(t.id, t.name);
-            });
-
-            // 2. Obtener inscripciones (Enrollments) — SIN join a teams para evitar PGRST201.
-            //    La relación ambigua ocurre porque enrollments tiene múltiples FK a teams.
-            //    Solución: filtrar por los team_ids ya obtenidos en el paso anterior.
-            const teamIds = teams.map((t: any) => t.id);
-
-            const allEnrollmentsSet = new Set<string>(); // para deportistas únicos 
-
-            const teamOccupiedMap = new Map<string, number>();
-            let totalStudents = 0;
-            const growthMap = new Map<string, { nuevos: number; retiros: number; sortKey: number }>();
-            const MONTHS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-            const now = new Date();
-            const currentMonthIndex = now.getMonth();
-            const currentYear = now.getFullYear();
-            let netGrowthThisMonth = 0;
-
-            for (let i = 5; i >= 0; i--) {
-                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-                const mKey = MONTHS[d.getMonth()];
-                growthMap.set(mKey, { nuevos: 0, retiros: 0, sortKey: d.getTime() });
-            }
-
-            if (teamIds.length > 0) {
-                // Usamos `team_id` directamente — columna plana, sin join, sin ambigüedad
-                const { data: enrollmentsData, error: enrollError } = await supabase
-                    .from('enrollments')
-                    .select('status, created_at, team_id')
-                    .in('team_id', teamIds);
-
-                if (enrollError) throw enrollError;
-
-                (enrollmentsData || []).forEach((e: any) => {
-                    const teamName = teamIdToName.get(e.team_id) || 'Varios';
-                    const d = new Date(e.created_at);
-                    const mKey = MONTHS[d.getMonth()];
-
-                    if (e.status === 'active') {
-                        if (teamName) {
-                            teamOccupiedMap.set(teamName, (teamOccupiedMap.get(teamName) || 0) + 1);
-                        }
-                        totalStudents++;
-                        if (d.getMonth() === currentMonthIndex && d.getFullYear() === currentYear) {
-                            netGrowthThisMonth++;
-                        }
-                        if (growthMap.has(mKey)) growthMap.get(mKey)!.nuevos++;
-                    } else if (e.status === 'inactive' || e.status === 'dropped') {
-                        if (growthMap.has(mKey)) growthMap.get(mKey)!.retiros++;
-                    }
-                });
-            }
-
-            // 4) Combinar Mapas: Capacidad vs Ocupación
-            const occupancyData = Array.from(teamCapacityMap.entries()).map(([name, capacity]) => ({
-                name,
-                occupied: teamOccupiedMap.get(name) || 0,
-                vacant: Math.max(0, capacity - (teamOccupiedMap.get(name) || 0)),
-                total_capacity: capacity
-            })).slice(0, 10);
-
-            const growthDataList = Array.from(growthMap.entries())
-                .sort((a, b) => a[1].sortKey - b[1].sortKey)
-                .map(([month, data]) => ({ month, nuevos: data.nuevos, retiros: data.retiros }));
+            const { realTotalCapacity, totalStudents, netGrowthThisMonth, occupancyData, growthDataList } =
+                await ocupacionYCrecimiento(schoolId, branchFilterId);
 
             // 3. Obtener Pagos confirmados (histórico completo, paginado)
             //    `partial` entra por lo abonado: un abono también es plata que entró.

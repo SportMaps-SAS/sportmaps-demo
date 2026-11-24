@@ -206,6 +206,8 @@ export interface PagoPorValidar {
     period_month: number | null;
     /** Cuándo entró el comprobante (ISO): el mismo criterio que receipt-review-alerts. */
     enviado_en: string;
+    /** Sede del cobro (payments.branch_id). NULL = «Sin sede». Lo usa Mapi para filtrar por sede. */
+    branch_id?: string | null;
 }
 
 /** Lo que falta por cubrir del cobro: amount − abonos − pronto pago (utils/saldo-cobro). Pura. */
@@ -429,7 +431,7 @@ export function textosDelAviso(r: ResumenPagos, escuela: string, tramo: Tramo, a
 // ─── I/O ─────────────────────────────────────────────────────────────────────
 
 const SELECT_PAGOS = 'id, school_id, amount, amount_paid, early_payment_discount_applied, concept, payment_category, receipt_verdict, receipt_url, '
-    + 'ocr_amount, requires_review, child_id, period_year, period_month, receipt_submitted_at, receipt_verdict_at, created_at';
+    + 'ocr_amount, requires_review, child_id, period_year, period_month, receipt_submitted_at, receipt_verdict_at, created_at, branch_id';
 
 function aPago(f: any): PagoPorValidar {
     return {
@@ -448,11 +450,15 @@ function aPago(f: any): PagoPorValidar {
         period_year: f.period_year ?? null,
         period_month: f.period_month ?? null,
         enviado_en: f.receipt_submitted_at ?? f.receipt_verdict_at ?? f.created_at,
+        branch_id: f.branch_id ?? null,
     };
 }
 
-/** LA lectura agregada: todos los comprobantes por validar de todas las escuelas. */
-async function leerPendientes(escuela?: string): Promise<PagoPorValidar[]> {
+/**
+ * LA lectura agregada: todos los comprobantes por validar de todas las escuelas.
+ * Con `escuela`, solo esa (la usa también Mapi: `pagos_por_validar`).
+ */
+export async function leerPendientes(escuela?: string): Promise<PagoPorValidar[]> {
     let q = supabase.from('payments').select(SELECT_PAGOS)
         .eq('status', 'awaiting_approval')
         .not('receipt_url', 'is', null)
@@ -464,7 +470,7 @@ async function leerPendientes(escuela?: string): Promise<PagoPorValidar[]> {
 }
 
 /** Meses ya pagados por otro cobro, solo para los verdes con periodo (una lectura). */
-async function periodosYaPagados(lista: readonly PagoPorValidar[]): Promise<Set<string>> {
+export async function periodosYaPagados(lista: readonly PagoPorValidar[]): Promise<Set<string>> {
     const candidatos = lista.filter((p) => p.receipt_verdict === 'verde' && p.child_id && p.period_year && p.period_month);
     if (!candidatos.length) return new Set();
     const hijos = [...new Set(candidatos.map((p) => p.child_id!))];
