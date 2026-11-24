@@ -5,6 +5,7 @@ import { invalidateDeviceCache, invalidateMappingCache, reprocessPinEventsForHou
 import { getAccessBlockMechanism, buildBlockCommand, computeIsBlocked, athleteKey, BLOCK_COMMAND_TYPES } from '../utils/accessBlockMechanism';
 import { confirmarSugeridas } from '../services/hour-bank-overage-auto.service';
 import { normalizarEscalones } from '../services/hour-bank-balance-notices.shared';
+import { HourBankExemptError, listarDiasDeEvento, crearDiaDeEvento, cancelarDiaDeEvento, devolverHorasDeVisita } from '../services/hour-bank-exempt-days.service';
 import { wakeSchool } from '../services/bridgeWsHub';
 import fs from 'fs';
 import path from 'path';
@@ -1152,6 +1153,13 @@ router.patch('/hour-bank-visits/:id/correct', requireAuth, async (req: Authentic
     const { error: recomputeError } = await supabase.rpc('recompute_hour_bank_overage', { p_period_id: visit.period_id });
     if (recomputeError) console.error('[hour-bank] no se pudo recalcular el cargo por horas de más:', recomputeError.message);
 
+    // Día de evento (20261123083815): si la visita empezó en un día marcado como
+    // evento, el trigger de la base la dejó en 0 y devolvió el consumo.
+    const { data: finalVisit } = await supabase.from('hour_bank_visits').select('billed_minutes').eq('id', id).maybeSingle();
+    if (billedMinutes > 0 && finalVisit?.billed_minutes === 0) {
+      return res.json({ success: true, billed_minutes: 0, exempt_day: true });
+    }
+
     // D-10: mismo patrón de notificación que closeHourBankVisit (F3) y que
     // payment_overdue — solo avisa, sin bloqueo automático.
     const available = (moveResult as any)?.available_minutes;
@@ -1172,6 +1180,53 @@ router.patch('/hour-bank-visits/:id/correct', requireAuth, async (req: Authentic
     return res.json({ success: true, billed_minutes: billedMinutes, available_minutes: available });
   } catch (err: any) {
     return res.status(500).json({ error: 'Error al corregir la visita' });
+  }
+});
+
+// ─── Banco de horas — días de evento sin descuento y devolución de una visita ─
+// Migración 20261123083815. Solo owner, igual que el resto de la bandeja (D-8).
+// El día de evento lo hace cumplir un trigger en la base; acá solo se administra.
+
+function responderErrorDeEvento(res: Response, err: unknown, porDefecto: string) {
+  if (err instanceof HourBankExemptError) return res.status(err.status).json({ error: err.message });
+  return res.status(500).json({ error: porDefecto });
+}
+
+router.get('/hour-bank-exempt-days', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.role !== 'owner') return res.status(403).json({ error: 'Solo el owner de la escuela puede ver los días de evento' });
+    return res.json({ days: await listarDiasDeEvento(req.schoolId) });
+  } catch (err) {
+    return responderErrorDeEvento(res, err, 'Error al listar los días de evento');
+  }
+});
+
+router.post('/hour-bank-exempt-days', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.role !== 'owner') return res.status(403).json({ error: 'Solo el owner de la escuela puede marcar un día de evento' });
+    return res.json(await crearDiaDeEvento(req.schoolId, req.user.id, req.body));
+  } catch (err) {
+    return responderErrorDeEvento(res, err, 'Error al guardar el día de evento');
+  }
+});
+
+router.delete('/hour-bank-exempt-days/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.role !== 'owner') return res.status(403).json({ error: 'Solo el owner de la escuela puede quitar un día de evento' });
+    await cancelarDiaDeEvento(req.schoolId, req.user.id, String(req.params.id));
+    return res.json({ success: true });
+  } catch (err) {
+    return responderErrorDeEvento(res, err, 'Error al quitar el día de evento');
+  }
+});
+
+router.post('/hour-bank-visits/:id/waive', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    if (req.role !== 'owner') return res.status(403).json({ error: 'Solo el owner de la escuela puede devolver las horas de una visita' });
+    const r = await devolverHorasDeVisita(req.schoolId, req.user.id, String(req.params.id), (req.body ?? {}).reason);
+    return res.json({ success: true, ...r });
+  } catch (err) {
+    return responderErrorDeEvento(res, err, 'Error al devolver las horas de la visita');
   }
 });
 
@@ -1636,13 +1691,18 @@ router.get('/student-report/:enrollmentId', requireAuth, async (req: Authenticat
     let hourBank: any = { has_hours_plan: false };
     const { data: periodId } = await supabase.rpc('get_or_open_hour_bank_period', { p_enrollment_id: enrollmentId });
     if (periodId) {
-      const { data: visits } = await supabase
+      // waived_* llegan con la migración 20261123083815; si aún no está
+      // aplicada, el reporte sigue saliendo con las columnas de siempre.
+      const leerVisitas = (columnas: string) => supabase
         .from('hour_bank_visits')
-        .select('id, status, started_at, ended_at, billed_minutes, auto_closed')
+        .select(columnas)
         .eq('enrollment_id', enrollmentId)
         .gte('started_at', startUTC)
         .lt('started_at', endUTC)
         .order('started_at', { ascending: false });
+      const BASE_VISITA = 'id, status, started_at, ended_at, billed_minutes, auto_closed';
+      let { data: visits, error: errVisitas } = await leerVisitas(`${BASE_VISITA}, waived_minutes, waive_reason`);
+      if (errVisitas) ({ data: visits } = await leerVisitas(BASE_VISITA));
 
       const { data: reservations } = await supabase
         .from('hour_bank_reservations')
@@ -1652,7 +1712,8 @@ router.get('/student-report/:enrollmentId', requireAuth, async (req: Authenticat
         .lte('reservation_date', to)
         .order('reservation_date', { ascending: false });
 
-      hourBank = { has_hours_plan: true, visits: visits || [], reservations: reservations || [] };
+      // can_waive: «No descontar» es solo del owner (el BFF lo vuelve a exigir).
+      hourBank = { has_hours_plan: true, visits: visits || [], reservations: reservations || [], can_waive: req.role === 'owner' };
     }
 
     return res.json({

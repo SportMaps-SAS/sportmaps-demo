@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { AlertTriangle, Check } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { HourBankOverageCharges } from './HourBankOverageCharges';
+import { HourBankEventDays } from './HourBankEventDays';
 
 /**
  * F6 — docs/specs/dreamers-banco-de-horas-torniquete.md
@@ -108,6 +109,7 @@ export function HourBankSchoolSection() {
 
   return (
     <>
+    <HourBankEventDays />
     {pending.length > 0 && (
     <Card className="border-amber-500/30">
       <CardHeader className="pb-2">
