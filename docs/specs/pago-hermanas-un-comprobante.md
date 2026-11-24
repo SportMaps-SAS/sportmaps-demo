@@ -96,3 +96,12 @@ Q1 solo hermanas vinculadas, con acceso para vincular · Q2 reparto igual por de
 - ¿El pago de Emily cubría también a una hermana? El sistema no tiene ninguna vinculada. Si la hay, hay que vincularlas antes de repartir.
 - ¿Fue consignación? Hoy `editar pago` no existe; ¿se deja el método como está con una nota, o se espera esa pantalla?
 - Monto exacto del comprobante (la transcripción del audio es confusa).
+
+## 7. F3 — prueba real en el gemelo (2026-11-24)
+Modal real en el navegador (Playwright contra el gemelo, `frontend/e2e/pagos/hermanas-un-comprobante.spec.ts`), con las migraciones A/B/C ya aplicadas. 5/5 verdes, verificando después en la base del gemelo:
+- Efectivo con $5.500 de más: las dos pagadas, dos ajustes de $2.750 con el mismo `grupo_registro` (pruebas 2 y 3 del §4, camino efectivo).
+- Excedente impar $5.501: $2.751 a la hermana con la que se abrió y $2.750 a la otra (4).
+- Suma exacta: sin saldo a favor (1).
+- Recibido menor que la suma: botón bloqueado, mensaje de abono y nada escrito (15).
+- El siguiente cobro de cada hermana recibe su descuento de $2.750 y no queda saldo suelto (9).
+Notas: la familia sale solo de hermanas con **inscripción activa** (`_sibling_family`); la pantalla de Pagos pide el BFF para el listado, que el gemelo no levanta (toast «Error en suscripciones», ajeno a este cambio). Sin cubrir en navegador: transferencia con comprobante (subida de imagen), 8, 13, 16 y 17, que siguen probados solo por SQL.

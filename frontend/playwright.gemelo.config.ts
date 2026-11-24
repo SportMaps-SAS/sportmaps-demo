@@ -34,7 +34,7 @@ Object.assign(process.env, twinEnv, { PLAYWRIGHT_SUPABASE_URL: twinEnv.VITE_SUPA
 
 export default defineConfig({
     testDir: './e2e',
-    testMatch: ['tienda/**/*.spec.ts', 'contabilidad/**/*.spec.ts'],
+    testMatch: ['tienda/**/*.spec.ts', 'contabilidad/**/*.spec.ts', 'pagos/**/*.spec.ts'],
     globalSetup: './e2e/helpers/guard-no-prod.ts',
     fullyParallel: false,
     retries: 0,
@@ -50,7 +50,7 @@ export default defineConfig({
     webServer: {
         command: `npx vite --port ${PORT} --strictPort`,
         url: `http://localhost:${PORT}`,
-        reuseExistingServer: false,
+        reuseExistingServer: process.env.QA_TWIN_REUSE === '1', // solo con un Vite propio ya apuntando al gemelo
         env: twinEnv,
         timeout: 120_000,
     },
