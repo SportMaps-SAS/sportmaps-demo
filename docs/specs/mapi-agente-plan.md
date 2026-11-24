@@ -1,7 +1,33 @@
 # Plan — Mapi agente: el motor y las primeras herramientas
 
-> Estado: **propuesta 2026-10-30, con los complementos integrados; pendiente de
-> aprobación.** Desarrolla §4 y §5 de [`mapi-asistente-por-rol.md`](mapi-asistente-por-rol.md)
+> **APROBADO el 2026-11-23** con las propuestas de §16, más estas decisiones del usuario:
+> - **Aviso a la familia cuando el staff excusa: «por todo medio».** App (que dispara el
+>   push), correo, y WhatsApp con texto libre si la familia escribió en las últimas 24 h.
+>   Fuera de esa ventana Meta exige plantilla aprobada por escuela: **pendiente pedirla**.
+> - **Regla de plata: los niveles del roadmap** (§21). Mapi nunca aprueba solo; desde la
+>   oleada 3 un admin podrá aprobar desde el chat solo comprobantes de nivel 2, con tope.
+> - **Migración en dos partes** (hallazgo 2026-11-23, §5): el índice parcial de
+>   `collection_notices` rompía el `onConflict` del cron de cobranza (42P10).
+>
+> Construido (sin desplegar): motor, consultas y excusas en `bff/src/services/mapi-agente/`,
+> rutas `/api/v1/mapi/acciones/:id/{confirmar,cancelar}`, tarjeta en el chat.
+>
+> **Estado 2026-11-24:**
+> - Migración `20261123115649_mapi_agente_motor` **APLICADA** y registrada. `seguridad:invariantes`
+>   sin críticas. El agente está apagado en todas las escuelas (`mapi_agent_enabled = false`).
+> - `enviar_recordatorio_pago` construida y **apagada** (`MAPI_RECORDATORIO_MANUAL`). Orden para
+>   prenderla: desplegar el BFF → aplicar `20261123120036` → prender la variable. Corre en
+>   segundo plano (`segundoPlano`): el Confirmar responde 202 «en curso» y el resultado llega
+>   al chat, que refresca el hilo mientras haya acciones en curso.
+> - **Evals (§14): PASAN 48/48** con `claude-sonnet-5-5` (`npm run mapi:evals` en `bff`).
+>   Seguridad 100 %. Cada turno cuesta US$0,013 en promedio y US$0,017 en p95; la latencia
+>   es de 4,5 s en p50 y 7,5 s en p95, con 2,25 rondas por turno. Arreglos que salieron de
+>   los evals: apodos en `buscar_deportista`, «quedó» en `textoSeguro`, el coach no ofrece
+>   «si está al día», corte de caché móvil (−28 % de costo por turno) y `feature: 'mapi_evals'`.
+> - Falta: QA con usuarios de prueba en una escuela de pruebas, conectar `useEntidadParaMapi` en
+>   las fichas, elegir la escuela piloto y pedir la plantilla Meta del aviso fuera de ventana.
+>
+> Estado anterior: propuesta 2026-10-30, con los complementos integrados. Desarrolla §4 y §5 de [`mapi-asistente-por-rol.md`](mapi-asistente-por-rol.md)
 > (aprobado 2026-10-27).
 > Origen: el usuario quiere que Mapi «funcione como Claude Code: uno le da la
 > instrucción —recordatorios de pago, excusar a un deportista, el reporte de una
@@ -181,6 +207,18 @@ spec: si la pantalla no lo deja, Mapi tampoco, y al revés.
 Todo en una migración por el ledger (`npm run migrations:new`), estados en
 `text + CHECK`, sin RPC nuevas en esta fase (el BFF escribe con `service_role` después
 de validar). `seguridad:invariantes` antes de cerrar. Retención de datos en §12.3.
+
+**Cómo quedó (2026-11-23): dos migraciones.**
+
+- `20261123115649_mapi_agente_motor`: #1, #2, #3, #5 y #6. Se agregó `message_id` (el
+  mensaje de Mapi bajo el que se dibuja la tarjeta) y un trigger que impide que un admin de
+  escuela prenda `mapi_agent_enabled` por su cuenta: las policies de `school_settings` son
+  `FOR ALL` y RLS no filtra columnas. Se puede aplicar en cualquier momento.
+- `20261123120036_cobranza_recordatorio_manual`: #4. **Se aplica solo DESPUÉS de desplegar
+  el BFF** donde `enviarContacto` ya no usa `upsert(..., { onConflict: 'payment_id,notice_type' })`.
+  Con el índice parcial, PostgreSQL no infiere ese `ON CONFLICT` sin su `WHERE` y el cron
+  fallaría con 42P10 en cada familia con más de un cobro. El código nuevo inserta las filas
+  hermanas una por una e ignora 23505: sirve con el índice viejo y con el nuevo.
 
 ## 6. Frontend
 
@@ -729,3 +767,18 @@ la plata**, sin una foto de por medio.
 En Mapi esto se vuelve un aviso proactivo: «Te pagaron hoy: Mariana, mensualidad de
 noviembre, $145.000 (Nequi, confirmado por el banco)…». Va en paralelo con el rediseño
 V2. Se prioriza después de cerrar lo del bot de ventas.
+
+## 21. Regla de plata: niveles de comprobante (aprobada 2026-11-23)
+
+Sale del roadmap consolidado del 2026-11-20 (§3, «Pagos confirmados»). Resuelve §19.6 #1.
+
+| Nivel | Cuándo | Qué puede hacer Mapi |
+|---|---|---|
+| 1 · Confirmado por el banco | Hay un movimiento en la cuenta de la escuela con el mismo monto y fecha | Nada: se aprueba solo, fuera de Mapi |
+| 2 · Coincide, sin banco | Monto igual al cobro, cuenta destino de la escuela, fecha reciente, referencia y foto nunca vistas | Desde la oleada 3: tarjeta con la foto y las verificaciones que pasó; aprueba un admin suscrito al tocar; tope $400.000 por pago; queda a su nombre |
+| 3 · Dudoso | Falla cualquier regla | Nada: solo en la pantalla Aprobar, con la foto al lado |
+
+- El nivel lo calcula el **servidor**, nunca el modelo: la foto viene del papá y puede
+  traer texto pensado para engañar a Mapi.
+- Registrar un pago en efectivo desde el chat (§19.6 #2) sigue fuera hasta la oleada 3.
+- Siguen fuera siempre: anular o editar pagos.

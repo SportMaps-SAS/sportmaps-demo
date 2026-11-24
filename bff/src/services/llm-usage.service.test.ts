@@ -170,5 +170,7 @@ describe('chatWithTools registra el consumo con el contexto que se le pasa', () 
             school_id: 'esc-9', feature: 'sportbot', provider: 'gemini', input_tokens: 300, output_tokens: 12,
         });
         if (prevAnthropic) process.env.ANTHROPIC_API_KEY = prevAnthropic;
-    });
+    // El `await import('./llm.service')` transforma un módulo pesado DENTRO de la
+    // prueba: con la máquina cargada pasaba los 5 s por defecto sin fallar nada.
+    }, 30_000);
 });

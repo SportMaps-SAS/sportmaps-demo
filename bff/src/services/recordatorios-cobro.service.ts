@@ -139,6 +139,19 @@ export function escalonDelDia(delta: number, unico = false): Escalon | null {
     return (unico ? ESCALONES_UNICO : ESCALONES).find((e) => delta >= e.desde && delta <= e.hasta) ?? null;
 }
 
+/**
+ * Escalón del recordatorio A PEDIDO (Mapi, plan §4): no sale de la ventana del día
+ * sino de si el cobro ya venció. Decide la PLANTILLA (`recordatorio_previo` si no ha
+ * vencido, `pendiente_suave` si ya venció); el registro va como 'recordatorio_manual'
+ * (ver `tipoRegistro` en enviarContacto). Solo mensualidades: un cobro único no tiene
+ * plantilla que sea cierta cualquier día (ESCALONES_UNICO cubre la víspera y +3..+9).
+ */
+export function escalonManual(delta: number, unico = false): Escalon | null {
+    if (unico) return null;
+    const concepto: ConceptoRecordatorio = delta > 0 ? 'pendiente_suave' : 'recordatorio_previo';
+    return ESCALONES.find((e) => e.concepto === concepto) ?? null;
+}
+
 /** Fecha 'YYYY-MM-DD' corrida n días. */
 export function sumarDias(iso: string, n: number): string {
     const d = new Date(`${iso}T12:00:00Z`);
@@ -236,6 +249,12 @@ export interface EntradaPlan {
     diaCorte?: number | null;
     /** Aviso de política de cobranza de la escuela, destacado en el correo. */
     avisoPolitica?: string | null;
+    /**
+     * Recordatorio a pedido (Mapi): el escalón sale de escalonManual y NO aplican los
+     * candados propios de la cadencia (escalón ya registrado, previo reciente, vencido ya
+     * avisado, interruptores previo/mora). Sí aplican el candado familia-día y el opt-in.
+     */
+    manual?: boolean;
 }
 
 /**
@@ -260,16 +279,19 @@ export function planificar(e: EntradaPlan): Plan {
             if (!r.vence) continue;
             const delta = diasDesdeVencimiento(r.vence, e.hoy);
             const unico = r.unico === true;
-            const esc = escalonDelDia(delta, unico);
+            const esc = e.manual ? escalonManual(delta, unico) : escalonDelDia(delta, unico);
             if (!esc) { descartes.sin_escalon_hoy++; continue; }
-            if (esc.mora ? e.tipos?.mora === false : e.tipos?.previo === false) { descartes.sin_escalon_hoy++; continue; }
-            if (e.enviados.has(`${r.paymentId}|${esc.concepto}`)) { descartes.ya_enviado++; continue; }
+            // Candados propios de la CADENCIA. El manual no los usa: lo pidió la escuela y
+            // su tope (1 por cobro cada 7 días) lo pone quien lo prepara.
+            const cadencia = !e.manual;
+            if (cadencia && (esc.mora ? e.tipos?.mora === false : e.tipos?.previo === false)) { descartes.sin_escalon_hoy++; continue; }
+            if (cadencia && e.enviados.has(`${r.paymentId}|${esc.concepto}`)) { descartes.ya_enviado++; continue; }
             const p = e.pagos.get(r.paymentId);
-            if (esc.concepto === 'recordatorio_previo' && p?.charge_notice_sent_at && p.charge_notice_sent_at >= limitePrevio) {
+            if (cadencia && esc.concepto === 'recordatorio_previo' && p?.charge_notice_sent_at && p.charge_notice_sent_at >= limitePrevio) {
                 descartes.previo_ya_recibido++; continue;
             }
             // El aviso de vencido (pendiente_suave o su correo) ya salió por payment-lifecycle.
-            if (esc.concepto === 'pendiente_suave' && p?.overdue_notice_sent_at) {
+            if (cadencia && esc.concepto === 'pendiente_suave' && p?.overdue_notice_sent_at) {
                 descartes.vencido_ya_avisado++; continue;
             }
             cands.push({
@@ -543,8 +565,21 @@ export interface DiagnosticoEscuela {
     duplicadosExcluidos: number;
     /** Cobros de atletas que la escuela dio de baja: no se recuerdan. */
     atletaDadoDeBaja: number;
+    /** Cobros sin correo ni teléfono de contacto (agruparPorFamilia los deja fuera). */
+    sinContacto: number;
     migracionAplicada: boolean;
 }
+
+/** Columnas de `payments` que lee la cadencia (y el recordatorio a pedido, que las necesita iguales). */
+export const COLUMNAS_PAGO_RECORDATORIO = 'id, school_id, parent_id, user_id, child_id, unregistered_athlete_id, concept, amount, amount_paid, early_payment_discount_applied, late_fee_amount, status, due_date, payment_type, payment_category, period_year, period_month, charge_notice_sent_at, overdue_notice_sent_at, requires_review';
+
+/**
+ * Recordatorio a pedido (Mapi, plan §4): en vez de leer los cobros de la ventana
+ * de la escalera, se planifica sobre ESTOS (filas de `payments` con
+ * COLUMNAS_PAGO_RECORDATORIO, ya filtradas por escuela, periodo y equipo) y
+ * `planificar` corre en modo manual.
+ */
+export interface PedidoManual { cobros: Record<string, any>[] }
 
 /**
  * Arma el plan de una escuela para el día de `ahora`. No escribe nada.
@@ -554,6 +589,7 @@ export interface DiagnosticoEscuela {
 export async function planDeEscuela(
     schoolId: string, ahora: Date, hoyOverride?: string,
     canales: CanalesEscuela = { whatsapp: true, correo: false },
+    manual?: PedidoManual,
 ): Promise<{ plan: Plan; diag: DiagnosticoEscuela }> {
     const hoy = hoyOverride ?? fechaColombia(ahora);
     const desde = sumarDias(hoy, -ESCALONES[ESCALONES.length - 1].hasta);
@@ -575,15 +611,21 @@ export async function planDeEscuela(
     // Mensualidades (escalera principal) y cobros únicos (ESCALONES_UNICO), con saldo y sin
     // comprobante en revisión: a quien ya pagó y espera aprobación no se le cobra. Sin filtrar
     // por `payment_type` en la consulta (no es fiable): la partición se hace abajo, en código.
-    const { data: crudos, error } = await supabase.from('payments')
-        .select('id, school_id, parent_id, user_id, child_id, unregistered_athlete_id, concept, amount, amount_paid, early_payment_discount_applied, late_fee_amount, status, due_date, payment_type, payment_category, period_year, period_month, charge_notice_sent_at, overdue_notice_sent_at, requires_review')
-        .eq('school_id', schoolId)
-        .in('status', ['pending', 'overdue', 'partial'])
-        .gte('due_date', desde)
-        .lte('due_date', hasta)
-        .limit(5000);
-    if (error) throw new Error(`payments: ${error.message}`);
-    const candidatos = ((crudos as any[]) ?? []).filter((p) => p.requires_review !== true);
+    let crudos: any[];
+    if (manual) {
+        crudos = manual.cobros;
+    } else {
+        const { data, error } = await supabase.from('payments')
+            .select(COLUMNAS_PAGO_RECORDATORIO)
+            .eq('school_id', schoolId)
+            .in('status', ['pending', 'overdue', 'partial'])
+            .gte('due_date', desde)
+            .lte('due_date', hasta)
+            .limit(5000);
+        if (error) throw new Error(`payments: ${error.message}`);
+        crudos = (data as any[]) ?? [];
+    }
+    const candidatos = crudos.filter((p) => p.requires_review !== true);
     const unicosCandidatos = candidatos.filter(esUnicoRecordable);
     // Un cobro único de un lote silencioso al que nunca se avisó no se recuerda (ver arriba).
     const silenciosos = await cobrosDeLotesSilenciosos(unicosCandidatos.filter((p) => !p.charge_notice_sent_at).map((p) => p.id));
@@ -615,7 +657,7 @@ export async function planDeEscuela(
     const cobrables = vivos.filter((p) => !inactivos.has(p.id));
 
     const ahoraDelDia = hoyOverride ? new Date(`${hoyOverride}T13:00:00Z`) : ahora;
-    const { familias } = agruparPorFamilia(cobrables, {
+    const { familias, sinContacto } = agruparPorFamilia(cobrables, {
         perfiles: new Map(perfiles.map((x) => [x.id, x])),
         hijos: new Map(hijos.map((x) => [x.id, x])),
         noRegistrados: new Map(noReg.map((x) => [x.id, x])),
@@ -653,12 +695,14 @@ export async function planDeEscuela(
         tipos: { previo: canales.previo !== false, mora: canales.mora !== false },
         diaCorte,
         avisoPolitica,
+        manual: !!manual,
     });
     return {
         plan,
         diag: {
             escuela: nombreEscuela, integracion, plantillas, telefonosConOptin: optin.size,
-            cobrosEnVentana: cobrables.length, duplicadosExcluidos: duplicados.size, atletaDadoDeBaja: inactivos.size, migracionAplicada,
+            cobrosEnVentana: cobrables.length, duplicadosExcluidos: duplicados.size, atletaDadoDeBaja: inactivos.size,
+            sinContacto, migracionAplicada,
         },
     };
 }
@@ -666,6 +710,9 @@ export async function planDeEscuela(
 // ─── Envío ───────────────────────────────────────────────────────────────────
 
 export type ResultadoContacto = 'enviado' | 'ya_reclamado' | `no_enviado:${string}`;
+
+/** Valores de collection_notices.notice_type: los seis escalones y el recordatorio a pedido (migración 20261123120036). */
+export type TipoAviso = ConceptoRecordatorio | 'recordatorio_manual';
 
 type EnvioCanal = { enviado: true; waMessageId?: string | null; plantilla?: string | null } | { enviado: false; motivo: string };
 
@@ -706,16 +753,43 @@ async function enviarPorCorreo(schoolId: string, c: ContactoPlaneado, lider: str
 }
 
 /**
+ * Filas del resto de cobros de un mismo mensaje: una por una, ignorando 23505
+ * (ese cobro ya tenía este escalón). Sin `upsert(..., { onConflict })` a
+ * propósito: desde la migración 20261123120036 el índice único
+ * (payment_id, notice_type) es PARCIAL (deja fuera 'recordatorio_manual') y
+ * PostgreSQL no lo usa para un `ON CONFLICT (payment_id, notice_type)` sin su
+ * WHERE: fallaría con 42P10. Esto funciona con el índice viejo y con el nuevo,
+ * por eso se despliega ANTES de aplicar esa migración. Son 1–3 filas por familia.
+ */
+export async function reclamarFilasHermanas(filas: Record<string, unknown>[]): Promise<void> {
+    for (const fila of filas) {
+        const { error } = await supabase.from('collection_notices').insert(fila);
+        if (error && (error as any).code !== '23505') {
+            console.warn('[recordatorios-cobro] fila de cobro hermano no registrada:', error.message);
+        }
+    }
+}
+
+/**
  * Reclama el contacto en la base y lo manda. Orden:
  *   1. fila líder (candado familia-día + cobro-escalón). 23505 = otro BFF o ya hecho.
- *   2. filas del resto de cobros del mensaje (ignoreDuplicates).
+ *   2. filas del resto de cobros del mensaje (reclamarFilasHermanas, ignora 23505).
  *   3. enviarCobroPorPlantilla (vuelve a validar opt-in, plantilla y horario).
  *   4. Salió: status 'sent' + estampa charge/overdue_notice_sent_at.
  *      No salió: se borran las filas (la familia no fue contactada; otro día
  *      dentro de la ventana puede intentarse).
+ *
+ * `tipoRegistro` es lo que queda en collection_notices.notice_type. Por defecto,
+ * el escalón (`c.concepto`), que además decide la plantilla, el correo y qué se
+ * estampa. El recordatorio a pedido de Mapi manda la plantilla de su escalón y
+ * registra 'recordatorio_manual' (plan §4): así no gasta el escalón del cron y
+ * queda fuera del índice único (payment_id, notice_type) desde 20261123120036.
  */
-export async function enviarContacto(schoolId: string, c: ContactoPlaneado, ahora: Date, hoy = fechaColombia(ahora)): Promise<ResultadoContacto> {
-    const base = { school_id: schoolId, notice_type: c.concepto, channel: c.canal, family_key: c.familyKey, contact_day: hoy, status: 'claimed' };
+export async function enviarContacto(
+    schoolId: string, c: ContactoPlaneado, ahora: Date, hoy = fechaColombia(ahora),
+    tipoRegistro: TipoAviso = c.concepto,
+): Promise<ResultadoContacto> {
+    const base = { school_id: schoolId, notice_type: tipoRegistro, channel: c.canal, family_key: c.familyKey, contact_day: hoy, status: 'claimed' };
     const [lider, ...resto] = c.paymentIds;
     const { data: filaLider, error: errLider } = await supabase.from('collection_notices')
         .insert({ ...base, payment_id: lider, is_lead: true }).select('id').maybeSingle();
@@ -723,10 +797,7 @@ export async function enviarContacto(schoolId: string, c: ContactoPlaneado, ahor
         if ((errLider as any).code === '23505') return 'ya_reclamado';
         return `no_enviado:reserva ${errLider.message}`;
     }
-    if (resto.length) {
-        await supabase.from('collection_notices')
-            .upsert(resto.map((payment_id) => ({ ...base, payment_id, is_lead: false })), { onConflict: 'payment_id,notice_type', ignoreDuplicates: true });
-    }
+    if (resto.length) await reclamarFilasHermanas(resto.map((payment_id) => ({ ...base, payment_id, is_lead: false })));
     const r = c.canal === 'email'
         ? await enviarPorCorreo(schoolId, c, lider)
         : await enviarCobroPorPlantilla({
@@ -737,7 +808,7 @@ export async function enviarContacto(schoolId: string, c: ContactoPlaneado, ahor
     if (!r.enviado) {
         await supabase.from('collection_notices').delete()
             .eq('school_id', schoolId).eq('family_key', c.familyKey).eq('contact_day', hoy)
-            .eq('notice_type', c.concepto).in('payment_id', c.paymentIds);
+            .eq('notice_type', tipoRegistro).in('payment_id', c.paymentIds);
         return `no_enviado:${r.motivo}`;
     }
 
@@ -745,7 +816,7 @@ export async function enviarContacto(schoolId: string, c: ContactoPlaneado, ahor
     await supabase.from('collection_notices')
         .update({ status: 'sent', sent_at: ahoraIso, wa_message_id: r.waMessageId ?? null, detail: r.plantilla })
         .eq('school_id', schoolId).eq('family_key', c.familyKey).eq('contact_day', hoy)
-        .eq('notice_type', c.concepto).in('payment_id', c.paymentIds);
+        .eq('notice_type', tipoRegistro).in('payment_id', c.paymentIds);
     const esMora = ESCALONES.find((e) => e.concepto === c.concepto)!.mora;
     const columna = esMora ? 'overdue_notice_sent_at' : 'charge_notice_sent_at';
     await supabase.from('payments').update({ [columna]: ahoraIso }).in('id', c.paymentIds).is(columna, null);

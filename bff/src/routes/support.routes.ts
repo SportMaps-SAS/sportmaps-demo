@@ -22,8 +22,27 @@ import { supabase } from '../config/supabase';
 import { runSupportBotTurn } from '../services/inapp-support-bot.service';
 import { avisarTicketSoportePorCorreo } from '../services/avisos-correo.service';
 import { calificarRespuesta, feedbackDelTicket } from '../services/mapi-feedback.service';
+import { alcanceDelTurno } from '../services/mapi-agente/alcance';
+import { tarjetasDelTicket } from '../services/mapi-agente/borradores';
+import { runTurnoAgenteEnChat, superoTope } from '../services/mapi-agente/turno-chat';
 
 const router = Router();
+
+/**
+ * Alcance del modo agente para esta request (docs/specs/mapi-agente-plan.md):
+ * null = Mapi responde en modo soporte, como siempre. Nunca tumba la request.
+ */
+function alcanceDe(req: AuthenticatedRequest) {
+    return alcanceDelTurno({
+        userId: req.user.id,
+        schoolId: req.schoolId,
+        headerSchoolId: req.headers['x-school-id'] as string | undefined,
+        rolSesion: req.role,
+    }).catch((err) => {
+        req.log?.warn({ err }, 'mapi-agente: no se pudo armar el alcance; sigue modo soporte');
+        return null;
+    });
+}
 
 router.use(requireAuth);
 
@@ -73,7 +92,8 @@ router.get('/thread', async (req: AuthenticatedRequest, res: Response) => {
         req.log?.error({ err: ticketErr }, 'support/thread: error leyendo ticket');
         return res.status(500).json({ error: 'No se pudo cargar tu conversación de soporte.' });
     }
-    if (!ticket) return res.json({ ticket: null, messages: [] });
+    const agente = (await alcanceDe(req)) !== null;
+    if (!ticket) return res.json({ ticket: null, messages: [], acciones: [], agente });
 
     const { data: messages, error: msgErr } = await client
         .from('support_messages')
@@ -86,7 +106,11 @@ router.get('/thread', async (req: AuthenticatedRequest, res: Response) => {
         return res.status(500).json({ error: 'No se pudo cargar tu conversación de soporte.' });
     }
 
-    res.json({ ticket, messages: messages || [], feedback: await feedbackDelTicket(ticket.id).catch(() => ({})) });
+    const [feedback, acciones] = await Promise.all([
+        feedbackDelTicket(ticket.id).catch(() => ({})),
+        tarjetasDelTicket(req.user.id, ticket.id).catch(() => []),
+    ]);
+    res.json({ ticket, messages: messages || [], feedback, acciones, agente });
 });
 
 // ─── POST /api/v1/support/open ────────────────────────────────────────────
@@ -167,11 +191,23 @@ router.post('/messages', async (req: AuthenticatedRequest, res: Response) => {
         // informativa. Con esa, a quien está en dos escuelas Mapi le respondía
         // con los datos (pagos, equipos, módulos) de la otra (2026-11-14).
         try {
-            await runSupportBotTurn({
-                ticketId,
-                requesterId: req.user.id,
-                schoolId: req.schoolId || null,
-            });
+            // Modo agente (admin/coach de una escuela con el agente prendido):
+            // consulta datos y prepara acciones con Confirmar. Si no aplica, pasó
+            // el tope de turnos o Claude no respondió, responde el modo soporte.
+            const alcance = await alcanceDe(req);
+            const respondioAgente = alcance && !(await superoTope(ticketId))
+                ? await runTurnoAgenteEnChat({ ticketId, alcance, pantallaCruda: req.body?.pantalla }).catch((err) => {
+                    req.log?.error({ err }, 'support/messages: el turno del agente falló; sigue modo soporte');
+                    return false;
+                })
+                : false;
+            if (!respondioAgente) {
+                await runSupportBotTurn({
+                    ticketId,
+                    requesterId: req.user.id,
+                    schoolId: req.schoolId || null,
+                });
+            }
         } catch (err: any) {
             // El mensaje del usuario ya quedó guardado (S0 no depende del bot);
             // un fallo acá no debe tumbar la respuesta HTTP.
@@ -200,7 +236,11 @@ router.post('/messages', async (req: AuthenticatedRequest, res: Response) => {
         return res.status(500).json({ error: 'Mensaje enviado, pero no se pudo recargar la conversación.' });
     }
 
-    res.json({ messages: messages || [], ticket, feedback: await feedbackDelTicket(ticketId).catch(() => ({})) });
+    const [feedback, acciones] = await Promise.all([
+        feedbackDelTicket(ticketId).catch(() => ({})),
+        tarjetasDelTicket(req.user.id, ticketId).catch(() => []),
+    ]);
+    res.json({ messages: messages || [], ticket, feedback, acciones });
 });
 
 // ─── POST /api/v1/support/feedback ────────────────────────────────────────

@@ -37,6 +37,7 @@ vi.mock('../utils/emailTemplates', () => ({
 import {
     ESCALONES, diasDesdeVencimiento, escalonDelDia, unirNombres, planificar, esHoraDeRecordatorios,
     enviarContacto, runRecordatoriosCobro, cobrosDeAtletaDadoDeBaja, esUnicoRecordable, ESCALONES_UNICO, type EntradaPlan, type ContactoPlaneado,
+    escalonManual,
 } from './recordatorios-cobro.service';
 import type { Familia, PagoEstado } from './estado-de-cuenta.service';
 
@@ -275,7 +276,10 @@ describe('enviarContacto', () => {
         expect(await enviarContacto('s', contacto('vence_manana'), AHORA)).toBe('enviado');
         const lider = ops('collection_notices', 'insert')[0].args[0];
         expect(lider).toMatchObject({ payment_id: 'p1', is_lead: true, contact_day: '2026-10-09', notice_type: 'vence_manana' });
-        expect(ops('collection_notices', 'upsert')[0].args[0]).toEqual([expect.objectContaining({ payment_id: 'p2', is_lead: false })]);
+        // El hermano va con insert simple, sin upsert/onConflict: el índice
+        // (payment_id, notice_type) es parcial desde 20261123120036 (42P10).
+        expect(ops('collection_notices', 'upsert')).toHaveLength(0);
+        expect(ops('collection_notices', 'insert')[1].args[0]).toMatchObject({ payment_id: 'p2', is_lead: false, notice_type: 'vence_manana' });
         expect(h.enviar.mock.calls[0][0]).toMatchObject({ concepto: 'vence_manana', tokenBoton: 'tok', paymentId: 'p1' });
         expect(ops('payments', 'update')[0].args[0]).toHaveProperty('charge_notice_sent_at');
     });
@@ -452,5 +456,69 @@ describe('cobros únicos en la escalera (cobro_unico_*)', () => {
         expect(h.enviar.mock.calls[0][0]).toMatchObject({ concepto: 'cobro_unico_vence_manana', paymentId: 't1' });
         expect(ops('collection_notices', 'insert')[0].args[0]).toMatchObject({ notice_type: 'vence_manana', payment_id: 't1' });
         expect(ops('payments', 'update')[0].args[0]).toHaveProperty('charge_notice_sent_at');
+    });
+});
+
+// ─── Recordatorio a pedido (Mapi, plan §4): plantilla del escalón, registro propio ──
+
+describe('recordatorio manual (Mapi)', () => {
+    const noticeTypes = () => ops('collection_notices', 'eq').filter((l) => l.args[0] === 'notice_type').map((l) => l.args[1]);
+
+    it('escalonManual: la plantilla sale de si ya venció, no de la ventana del día; cobros únicos no', () => {
+        expect(escalonManual(-20)?.concepto).toBe('recordatorio_previo');
+        expect(escalonManual(0)?.concepto).toBe('recordatorio_previo');   // vence hoy: todavía no ha vencido
+        expect(escalonManual(1)?.concepto).toBe('pendiente_suave');
+        expect(escalonManual(45)?.concepto).toBe('pendiente_suave');      // deuda vieja: el cron ya no la toca
+        expect(escalonManual(5, true)).toBeNull();
+    });
+
+    it('planificar manual: ignora ventanas y candados de la cadencia, respeta familia-día y opt-in', () => {
+        // +15 (escalón del cron sería pendiente_directo), ya registrado, vencido ya avisado y la mora apagada.
+        const vencida = familia('caro@x.co', '573001112233', [{ id: 'p1', atleta: 'Samuel', vence: '2026-09-24' }]);
+        // -10: el cron no tiene escalón; previo reciente.
+        const porVencer = familia('dia@x.co', '573009998877', [{ id: 'p2', atleta: 'Tomás', vence: '2026-10-19' }]);
+        const avisada = familia('e@x.co', '573001112233', [{ id: 'p3', atleta: 'Eva', vence: '2026-09-24' }]);
+        const pagos = [
+            pago('p1', '2026-09-24', { status: 'overdue', overdue_notice_sent_at: '2026-09-25T13:00:00Z' }),
+            pago('p2', '2026-10-19', { charge_notice_sent_at: '2026-10-08T13:00:00Z' }),
+            pago('p3', '2026-09-24', { status: 'overdue' }),
+        ];
+        const base = entrada([vencida, porVencer], pagos, {
+            enviados: new Set(['p1|pendiente_directo', 'p1|pendiente_suave']), tipos: { previo: false, mora: false },
+        });
+        expect(planificar(base).contactos).toHaveLength(0); // el cron no manda nada de esto
+        const plan = planificar({ ...base, manual: true });
+        expect(plan.contactos.map((c) => [c.familyKey, c.concepto, c.paymentIds])).toEqual([
+            ['wa:573001112233', 'pendiente_suave', ['p1']],
+            ['wa:573009998877', 'recordatorio_previo', ['p2']],
+        ]);
+        // Familia-día compartido con el cron y opt-in: siguen mandando.
+        const conCandado = planificar({ ...entrada([avisada], pagos, { contactadosHoy: new Set(['wa:573001112233']) }), manual: true });
+        expect(conCandado.contactos).toHaveLength(0);
+        expect(conCandado.descartes.ya_contactada_hoy).toBe(1);
+        const sinOptin = planificar({ ...entrada([vencida], pagos, { optin: new Set() }), manual: true });
+        expect(sinOptin.descartes.sin_optin).toBe(1);
+    });
+
+    it('enviarContacto con tipoRegistro: envía la plantilla del escalón y registra recordatorio_manual', async () => {
+        h.enviar.mockResolvedValue({ enviado: true, waMessageId: 'wamid', plantilla: 'pago_pendiente_suave' });
+        expect(await enviarContacto('s', contacto('pendiente_suave'), AHORA, '2026-10-09', 'recordatorio_manual')).toBe('enviado');
+        expect(h.enviar.mock.calls[0][0]).toMatchObject({ concepto: 'pendiente_suave', paymentId: 'p1' });
+        const [lider, hermana] = ops('collection_notices', 'insert').map((l) => l.args[0]);
+        expect(lider).toMatchObject({ payment_id: 'p1', is_lead: true, notice_type: 'recordatorio_manual', family_key: 'wa:573001112233' });
+        expect(hermana).toMatchObject({ payment_id: 'p2', is_lead: false, notice_type: 'recordatorio_manual' });
+        expect(ops('collection_notices', 'update')[0].args[0]).toMatchObject({ status: 'sent', detail: 'pago_pendiente_suave' });
+        expect(noticeTypes()).toEqual(['recordatorio_manual']); // el update filtra por el tipo registrado
+        // El estampado sigue a la plantilla: ya salió el «quedó pendiente», el job de vencido no lo repite.
+        expect(ops('payments', 'update')[0].args[0]).toHaveProperty('overdue_notice_sent_at');
+    });
+
+    it('enviarContacto con tipoRegistro: si no sale, libera SOLO las filas del manual', async () => {
+        h.enviar.mockResolvedValue({ enviado: false, motivo: 'sin_optin' });
+        expect(await enviarContacto('s', contacto('recordatorio_previo'), AHORA, '2026-10-09', 'recordatorio_manual')).toBe('no_enviado:sin_optin');
+        expect(h.enviar.mock.calls[0][0]).toMatchObject({ concepto: 'recordatorio_previo' });
+        expect(ops('collection_notices', 'delete')).toHaveLength(1);
+        expect(noticeTypes()).toEqual(['recordatorio_manual']);
+        expect(ops('payments', 'update')).toHaveLength(0);
     });
 });

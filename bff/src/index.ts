@@ -48,6 +48,7 @@ import adminPaymentsRouter from './routes/admin-payments.routes';
 import adminSupportRouter from './routes/admin-support.routes';
 import adminTacticalAiRouter from './routes/admin-tactical-ai.routes';
 import supportRouter from './routes/support.routes';
+import mapiAgenteRouter from './routes/mapi-agente.routes';
 import platformInvoicingRouter from './routes/platform-invoicing.routes';
 import paymentTokensRouter from './routes/payment-tokens.routes';
 import { vendorPayoutsRouter, adminPayoutsRouter } from './routes/vendor-payouts.routes';
@@ -560,6 +561,7 @@ app.use('/api/v1/admin/support', generalLimiter, adminSupportRouter);
 // Uso de IA de la pizarra (super_admin): consumo por escuela/coach y «Dar más cupo».
 app.use('/api/v1/admin/tactical-ai', generalLimiter, adminTacticalAiRouter);
 app.use('/api/v1/support', generalLimiter, supportRouter);
+app.use('/api/v1/mapi', generalLimiter, mapiAgenteRouter);
 // Facturación SaaS SportMaps → escuelas (super_admin).
 app.use('/api/v1/platform/invoices', generalLimiter, platformInvoicingRouter);
 
