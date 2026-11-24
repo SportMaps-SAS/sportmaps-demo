@@ -19,7 +19,9 @@
     "test:coverage": "vitest run --coverage",
     "cap:sync": "vite build && cap sync",
     "cap:android": "vite build && cap sync android && cap open android",
-    "cap:ios": "vite build && cap sync ios && cap open ios"
+    "cap:ios": "vite build && cap sync ios && cap open ios",
+    "qa:visual": "playwright test -c playwright.visual-qa.config.ts",
+    "qa:visual:resumen": "node e2e/visual-qa/resumen.mjs"
   },
   "dependencies": {
     "@aparajita/capacitor-biometric-auth": "^10.0.0",
