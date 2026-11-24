@@ -26,7 +26,8 @@ import { supabase } from '../config/supabase';
 
 // 'sportbot' es la clave de Mapi en llm_usage: nombre viejo conservado a propósito
 // (CHECK de la tabla + filas históricas). Renombrarla exige migración y reescribir el histórico.
-export type FuncionLlm = 'bot' | 'ocr' | 'transcripcion' | 'sportbot' | 'pizarra_ia';
+// 'mapi_agente' / 'mapi_evals': modo agente de Mapi y sus evals (migración 20261123115649).
+export type FuncionLlm = 'bot' | 'ocr' | 'transcripcion' | 'sportbot' | 'pizarra_ia' | 'mapi_agente' | 'mapi_evals';
 
 export interface ContextoUsoLlm {
     schoolId?: string | null;

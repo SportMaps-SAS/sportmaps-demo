@@ -5,6 +5,12 @@
 **Roles cubiertos:** `athlete` **sin** afiliación a ninguna escuela (`profiles.role='athlete'` sin fila en `school_members`) — ver §0 decisión 1 sobre por qué el diseño termina sirviendo a cualquier atleta, tenga o no escuela detrás
 **Relacionado:** [[project_performance_metrics_model]] (por qué esto NO se modela como `sport_metric_definitions`/`performance_entries`), [[project_math_audit_census]] (once divergencias de cálculo ya encontradas — no repetir el patrón de calcular en el navegador), `docs/specs/profesionales-independientes-agentes-ia.md` (precedente de "cuenta sin escuela real", descartado acá — ver §0 decisión 2), [[project_saas_roadmap]] (billing individual, hoy inexistente)
 
+> **Nota 2026-11-20.** Nutrición quedó **fuera de alcance** del track `BOD`
+> ([body-biblioteca-tecnicas-y-rendimiento.md](body-biblioteca-tecnicas-y-rendimiento.md)) hasta cerrar `BOD-5`.
+> Idea anotada para cuando entre, tomada de la revisión de Calor.IA: registrar la comida por **foto con
+> corrección por texto** («eran 2, no 3»), montada sobre este mismo modelo y con el patrón «la IA solo extrae, una
+> persona confirma» que ya usan los servicios de OCR. Este spec no contempla foto hoy.
+
 ---
 
 ## 0. Decisiones cerradas

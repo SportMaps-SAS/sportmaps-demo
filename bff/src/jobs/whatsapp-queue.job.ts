@@ -28,6 +28,8 @@ import {
     downloadMedia, sendTextMessage, sendInteractiveButtons, aFormatoWhatsApp, type WhatsAppIntegration,
 } from '../services/whatsapp.service';
 import { estaDadoDeBaja, AVISO_DADO_DE_BAJA } from '../services/whatsapp-optin.service';
+import { acusarReciboDeComprobante, PASO_ACUSE_RECIBO } from '../services/whatsapp-acuse-recibo';
+import { grupoDelServicio, textoGrupo } from '../services/whatsapp-grupo-servicio';
 import { extractReceipt } from '../services/ocr.service';
 import { conContextoLlm } from '../services/llm-usage.service';
 import { extractEnrollmentForm, type EnrollmentFormResult } from '../services/enrollment-ocr.service';
@@ -2176,9 +2178,14 @@ export function textoVentaRecibida(e: {
     const para = paraElServicio(e.servicio);
     const aNombre = e.nombre ? ` a nombre de *${e.nombre}*` : '';
     if (e.aprobado && e.saldo) {
+        // El saldo completa un abono que ya recibió el link: no se repite.
         return `¡Listo! ✅ Quedó registrado el saldo${valor} ${para}${aNombre}: completaste *${pesos(e.saldo.total)}*. Tu cupo está confirmado.`;
     }
-    if (e.aprobado) return `¡Listo! ✅ Quedó registrado tu pago${valor} ${para}${aNombre}. Tu cupo está confirmado.`;
+    if (e.aprobado) {
+        // Pago completo o abono aprobado por la escuela: la invitación al grupo del servicio, si lo tiene.
+        const grupo = grupoDelServicio(e.servicio);
+        return `¡Listo! ✅ Quedó registrado tu pago${valor} ${para}${aNombre}. Tu cupo está confirmado.${grupo ? `\n\n${textoGrupo(grupo)}` : ''}`;
+    }
     const cierre = 'La escuela lo valida y te confirma el cupo por aquí.';
     if (e.abono) {
         const queda = e.abono.queda > 0 ? ` Quedan *${pesos(e.abono.queda)}* para completar *${pesos(e.abono.total)}*.` : '';
@@ -5037,6 +5044,43 @@ export async function resolverDeportistaDeLaFila(
 }
 
 /**
+ * «Recibido» siempre (regla de producto, Monster 2026-11-19): un comprobante que queda en la bandeja de la escuela sin
+ * que el bot hable (contacto que no atiende, conversación tomada, modo discreto) igual recibe UN acuse. Va directo,
+ * sin `deliver` (que calla si la escuela escribió hace poco). Apagado salvo en las escuelas de WA_ACUSE_RECIBO_SCHOOL_IDS.
+ */
+async function acusarReciboSilencioso(
+    fila: FilaCola, wa: WhatsAppIntegration, conversationId: string | null, log?: Logger,
+): Promise<void> {
+    const r = await acusarReciboDeComprobante(
+        { schoolId: fila.school_id, conversationId, llegoEn: fila.created_at ?? null },
+        {
+            yaAcuso: async (conv, minutos) => {
+                const desde = new Date(Date.now() - minutos * 60_000).toISOString();
+                const { count } = await supabase.from('whatsapp_messages')
+                    .select('id', { count: 'exact', head: true })
+                    .eq('conversation_id', conv).eq('direction', 'outbound')
+                    .eq('payload->>step', PASO_ACUSE_RECIBO).gte('created_at', desde);
+                return (count ?? 0) > 0;
+            },
+            enviar: async (texto, paso) => {
+                const enviado = await sendTextMessage(wa, fila.wa_phone_number, texto);
+                if (enviado?.ok && conversationId) {
+                    await supabase.rpc('wa_record_outbound_message', {
+                        p_conversation_id: conversationId, p_integration_id: fila.integration_id,
+                        p_wa_message_id: enviado.waMessageId || `local-${crypto.randomUUID()}`,
+                        p_type: 'text', p_text_body: texto,
+                        p_payload: { step: paso, queue_id: fila.id, acuse_de: 'comprobante_en_silencio' },
+                        p_ai_generated: true, p_to_wa_id: fila.wa_phone_number,
+                    });
+                }
+                return { ok: !!enviado?.ok };
+            },
+        },
+    );
+    log?.info?.({ queueId: fila.id, acuse: r }, '[wa-queue] acuse de recibido en silencio');
+}
+
+/**
  * Contacto que el bot NO atiende (personal, negocio, otro club, conversación
  * tomada por una persona…) manda un archivo. Antes se cerraba SIEMPRE como
  * `contacto_no_atendido`, aunque fuera un pago real (Dynasty: 117 archivos; 3
@@ -5102,10 +5146,16 @@ async function comprobanteDeContactoNoAtendido(
             pregunta_ocr: huellasConLectura({ sha, ocr, storagePath: guardada.storagePath, parentId: null }),
         });
         log?.info?.({ queueId: fila.id, tipo: tipoDeContacto }, '[wa-queue] contacto no atendido con un comprobante: a la bandeja');
+        // «Recibido» siempre: quedó en la bandeja sin que el bot hablara; la persona sabe que llegó.
+        // Un contacto marcado (personal, negocio, profe…) manda plata por otras razones: a él no se le acusa.
+        if (!esContactoMarcado(tipoDeContacto)) await acusarReciboSilencioso(fila, wa, conversationId, log);
         return true;
     };
     if (!pareceComprobanteDePago(ocr)) {
-        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) {
+            await acusarReciboSilencioso(fila, wa, conversationId, log);
+            return;
+        }
         if (montoDelOcr(ocr) !== null && await rastroDeLaPlata(await destinoSeguro(fila.school_id, ocr), false)) return;
         await silencio();
         return;
@@ -5119,7 +5169,10 @@ async function comprobanteDeContactoNoAtendido(
     // personal restringido de la dueña, un contacto personal manda plata por otras razones.
     // (I-1) Destino sin leer en un contacto sin marcar: el comprobante completo se guarda y queda en la bandeja.
     if (destino !== 'general') {
-        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) return;
+        if (await capturaDeVentaDeContactoNoAtendido(fila, wa, conversationId, archivo, ocr, log)) {
+            await acusarReciboSilencioso(fila, wa, conversationId, log);
+            return;
+        }
         if (destino === null && await rastroDeLaPlata(destino, true)) return;
         await silencio();
         return;
@@ -5486,7 +5539,18 @@ async function procesarFilaInterna(
         // el comprobante igual crea el cobro del servicio (sin escribirle). Sin
         // venta, como siempre (abajo).
         if (atencion.tipo === 'desconocido' && tomada
-            && await comprobanteDeNumeroSinFicha(fila, wa, conversationId, responder, log, { tomada: true })) return;
+            && await comprobanteDeNumeroSinFicha(fila, wa, conversationId, responder, log, { tomada: true })) {
+            // «Recibido» siempre: con la escuela en el chat el bot no habló; si la fila quedó con un pago real
+            // (cobro aplicado o bandeja), la persona se entera de que llegó. Una captura que no es comprobante no.
+            const { data: cierre } = await supabase.from('whatsapp_inbound_queue')
+                .select('status, result_type, error_message').eq('id', fila.id).maybeSingle();
+            const c = cierre as any;
+            if (c && c.status !== 'pending' && c.result_type && c.result_type !== 'none'
+                && !/imagen_de_quien_espera_pago/.test(String(c.error_message ?? ''))) {
+                await acusarReciboSilencioso(fila, wa, conversationId, log);
+            }
+            return;
+        }
         // Número desconocido que ANUNCIA un pago («Mira mile mi pago de este
         // mes», 06-oct: Helen, Andrés Vargas, Mauricio…): no se le responde,
         // pero el archivo se guarda (`storage_path`) para que la escuela lo vea

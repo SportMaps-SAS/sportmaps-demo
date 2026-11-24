@@ -3,6 +3,8 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 // v2.1 — polls, reports, events docs
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { configurarRetencionOffline } from "@/lib/offline/queryPersistence";
+import { configurarReconexionEscalonada } from "@/lib/offline/reconexion";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
@@ -37,6 +39,7 @@ const PageLoader = () => (
 );
 
 // ─── Public pages (lazy) ──────────────────────────────────────────────────────
+const PendientesPage = lazy(() => import("./components/coach/v2/PendientesPage"));
 const Index = lazy(() => import("./pages/Index"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
@@ -300,6 +303,11 @@ const queryClient = new QueryClient({
   },
 });
 
+// Modo offline (docs/specs/modo-offline-y-sincronizacion.md): las consultas del entrenador viven en
+// memoria tanto como vale su copia guardada, y al volver la red React Query se entera escalonado.
+configurarRetencionOffline(queryClient);
+configurarReconexionEscalonada();
+
 const EnvironmentBanner = () => {
   const env = import.meta.env.VITE_APP_ENV;
   if (!env || env === 'production') return null;
@@ -500,6 +508,12 @@ const App = () => (
                         <ModuleGate moduleKey="gestion_deportiva_equipos_planes">
                           <EquiposSegunRol />
                         </ModuleGate>
+                      } />
+                      {/* Pendientes por enviar (modo offline): listas y evaluaciones guardadas sin señal. */}
+                      <Route path="pendientes" element={
+                        <ProtectedRoute allowedRoles={['coach']}>
+                          <PendientesPage />
+                        </ProtectedRoute>
                       } />
                       {/* Entrenador V2: evaluar al equipo en una pantalla. */}
                       {ENTRENADOR_V2 && (

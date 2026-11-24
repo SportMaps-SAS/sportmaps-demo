@@ -314,7 +314,7 @@ async function botEnabled(): Promise<boolean> {
 // caller). Escribe directo con el cliente de service role — mismo patrón que
 // whatsapp-bot.service.ts usa para whatsapp_message_drafts.
 
-async function postBotMessage(ticketId: string, body: string): Promise<void> {
+export async function postBotMessage(ticketId: string, body: string): Promise<void> {
     await supabase.from('support_messages').insert({
         ticket_id: ticketId,
         author_type: 'bot',
@@ -323,11 +323,11 @@ async function postBotMessage(ticketId: string, body: string): Promise<void> {
     });
 }
 
-async function setStatus(ticketId: string, status: 'bot_handled' | 'waiting_human'): Promise<void> {
+export async function setStatus(ticketId: string, status: 'bot_handled' | 'waiting_human'): Promise<void> {
     await supabase.from('support_tickets').update({ status, updated_at: new Date().toISOString() }).eq('id', ticketId);
 }
 
-async function postBotMessageAndEscalate(ticketId: string, reason: string): Promise<void> {
+export async function postBotMessageAndEscalate(ticketId: string, reason: string): Promise<void> {
     await postBotMessage(
         ticketId,
         'Voy a pasar tu caso con una persona del equipo de soporte para ayudarte mejor. En breve te responden por aquí mismo. 🙌',

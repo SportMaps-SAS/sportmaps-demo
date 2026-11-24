@@ -5,6 +5,18 @@ Lo marcado *(decisión)* necesita tu respuesta; lo marcado *(por verificar)* es 
 
 > Alcance: **solo** el catálogo de ejercicios con el lémur. Lo de la V2 del dueño es otro tema (ver `notas-dueno-v2-uso-y-escondido-2026-11-14.md`).
 
+> **Actualización 2026-11-20.** Este plan quedó enlazado al track `BOD` del roadmap
+> ([body-biblioteca-tecnicas-y-rendimiento.md](body-biblioteca-tecnicas-y-rendimiento.md)):
+> - El piloto **B1** es el paso 4 de ese spec (`BOD-4`). Allá se propone animar a Mapi con **movimiento capturado
+>   de un entrenador** (los 33 puntos de MediaPipe que Body ya extrae) como alternativa a los clips de Mixamo; la
+>   misma captura sirve de referencia para comparar al deportista. D1, D2 y D3 siguen abiertas (`D-BOD-5`).
+> - **Corrección al «por verificar» de §0:** `ExerciseLibraryPanel` y `ExercisePacksTab` son de la biblioteca de la
+>   **pizarra** (`training_exercises` + `exercise_packs`). `exercise_library` es otra tabla: la de prescripción del
+>   fisioterapeuta, con `exercise_assignments` y `exercise_logs`. Y el catálogo de gimnasio (wger) no tiene tabla
+>   local. Son tres bibliotecas.
+> - **B2 cambia:** la ficha técnica va en tabla propia (`technique_sheets`) con vínculo opcional a
+>   `training_exercises`; los medios del lémur se cuelgan de la ficha, no de una biblioteca.
+
 ---
 
 ## 0. Qué se busca

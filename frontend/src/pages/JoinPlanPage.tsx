@@ -290,12 +290,12 @@ export default function JoinPlanPage() {
 
             <div className="space-y-1.5">
               <Label htmlFor="email">Correo electronico *</Label>
-              <Input id="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" />
+              <Input id="email" type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="tu@correo.com" />
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="password">Contraseña (min 8) *</Label>
-              <Input id="password" type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="********" />
+              <Input id="password" type="password" autoComplete="new-password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="********" />
             </div>
 
             <div className="space-y-1.5">

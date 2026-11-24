@@ -769,6 +769,53 @@ export function pideTarifaDeNoAfiliado(texto: string | null | undefined): boolea
     return NO_AFILIADO.test(normalizarFrase(texto));
 }
 
+// ─── Auditoría del vacacional (Monster 2026-11-22, antes de prender anuncios) ───────────────
+
+const NUMERO_DE_CUPOS = '(?:dos|tres|cuatro|cinco|2|3|4|5)';
+const QUIENES = '(?:ninos|ninas|hijos|hijas|hermanos|hermanas|hermanitos|hermanitas|cupos|personas|inscripciones|jovenes|chicos|chicas|sobrinos|sobrinas|primos|primas)';
+const VARIOS_CUPOS = new RegExp(
+    `\\b${NUMERO_DE_CUPOS} ${QUIENES}\\b|\\bson ${NUMERO_DE_CUPOS}\\b(?! (?:semanas?|dias?|horas?|meses|mil))|\\b(?:para|a|de) (?:los|las|mis) ${NUMERO_DE_CUPOS}\\b(?! (?:semanas?|dias?))`
+    + `|\\bmis (?:hijos|hijas|ninos|ninas|sobrinos|sobrinas)\\b|\\bpara una y\\b|\\bpara uno y\\b|\\bl[oa]s hermanit?[oa]s\\b`);
+
+/**
+ * ¿Habla de inscribir a MÁS de una persona? («para dos hermanos cuánto es», «son dos niñas, 3 semanas cada una»,
+ * «2 cupos», «mis hijos»). El cobro es por persona y lo arma la escuela: el bot cotizaba el valor de UNO
+ * («Listo 🙌 3 semanas: $170.000») y el pago de los dos no cuadraba con nada. Pura.
+ */
+export function pideVariosCupos(texto: string | null | undefined): boolean {
+    return VARIOS_CUPOS.test(normalizarFrase(texto));
+}
+export const TEXTO_VARIOS_CUPOS = 'Con gusto 🙌 El cupo es por persona. Escríbeme el nombre completo y la fecha de nacimiento de cada uno, y qué va a tomar cada quien; '
+    + 'la escuela te confirma por aquí el valor total y te pasa los datos de pago.';
+
+const PIDE_ABONAR = /\b(abonar|abono|abonando|abonamos|la mitad|mitad y mitad|en cuotas|a cuotas|por cuotas|por partes|en dos pagos|en 2 pagos|pagar una parte|una parte ahora|(guardan|guardar|guarden|apartan|apartar|aparten|reservan|reservar|reserven) (el|un|mi) cupo sin pagar|el resto (despues|luego|mas adelante))\b/;
+
+/**
+ * ¿Pide ABONAR o pagar por partes? En un servicio que no admite abonos el bot respondía con los datos de pago
+ * («Ya te envié los datos de pago arriba») y el abono llegaba sin cuadrar con ningún valor. Pura.
+ */
+export function pideAbonar(texto: string | null | undefined): boolean {
+    return PIDE_ABONAR.test(normalizarFrase(texto));
+}
+export function textoSinAbonos(item: ItemConFicha): string {
+    return `El cupo ${deLaDelServicio(item)} se separa con el pago total de lo que vayas a tomar: no manejamos abonos ni se guarda el cupo sin el pago. `
+        + 'Cuando quieras, te paso los datos de pago 🙌';
+}
+
+const DICE_SER_AFILIADO = /\b((soy|somos|es|son|esta|estan|estoy|estamos) (ya )?(afiliad[oa]s?|del club|parte del club|de la escuela|alumn[oa]s?|deportistas? del club)|(ya )?(entren[ao]|entrenan|entrenamos|juega|juego|juegan) (en|con) (el club|ustedes|la escuela|monster\w*)|(mi|mis) (hij[oa]s?|nin[oa]s?) (ya )?(es|son|esta|estan|entrena|entrenan|juega|juegan)\b[a-z ]{0,20}\b(afiliad[oa]s?|club|ustedes|escuela))\b/;
+
+/**
+ * «Soy afiliado», «mi hija entrena en el club»: la respuesta a «cuéntame cuál es tu caso». El precio NO cambia por
+ * decirlo (eso lo decide el número y lo valida la escuela), pero tampoco se manda a la escuela una pregunta que el
+ * bot mismo hizo. Solo cuando NO es la negación («no soy afiliado»). Pura.
+ */
+export function diceSerAfiliado(texto: string | null | undefined): boolean {
+    const t = normalizarFrase(texto);
+    return DICE_SER_AFILIADO.test(t) && !NO_AFILIADO.test(t) && !/\bno (es|son|esta|estan|entrena|entrenan|juega|juegan)\b/.test(t);
+}
+export const TEXTO_DICE_SER_AFILIADO = 'Perfecto 🙌 Entonces aplica el valor de afiliados. La escuela confirma que ya entrenas en el club cuando valide tu comprobante. '
+    + '¿Te paso los datos de pago?';
+
 /** «¿los entrenos serían normales?»: pregunta por los entrenamientos de siempre del club, que el servicio no trae. */
 const ENTRENOS = '(?:entreno|entrenos|entrenamiento|entrenamientos)';
 const NORMALES = '(?:normal|normales|regular|regulares|convencional|convencionales|de siempre|habitual|habituales|ordinario|ordinarios)';
@@ -1505,6 +1552,36 @@ export async function atenderVentaDeServicio(
     const ruta: IntencionVenta = conDatosDeAsistente && !colaEnYaPago ? 'detalle' : intencion;
     // «3 semanas», «Pago 2 semanas», «Del 23 al 27 nov / Del 30 al 04 dic»: eligió una opción del servicio.
     const eleccion = intencion === 'detalle' || intencion === 'pago' || intencion === 'ya_pago' ? opcionElegidaEnVenta(texto, item) : null;
+
+    // (2026-11-22) Tres respuestas fijas ANTES de cotizar o de pasar a la IA, solo sin comprobante en curso.
+    if ((intencion === 'detalle' || intencion === 'pago') && !(await colaContesta())) {
+        const dichoHace = (clave: string, minutos: number) => ctx.recientes.some((f) => f.direction === 'outbound'
+            && f.payload?.fija_de_venta === clave && momento(f) >= ahora - minutos * 60_000);
+        // «Para dos hermanos», «son dos niñas, 3 semanas cada una»: el cobro por persona lo arma la escuela.
+        if (pideVariosCupos(texto) && !dichoHace('varios_cupos', 30)) {
+            await ctx.enviar(TEXTO_VARIOS_CUPOS, {
+                ...marca, step: PASO_VENTA.A_LA_ESCUELA, fija_de_venta: 'varios_cupos', repetible: true,
+                pendiente_escuela: `varios cupos: ${texto}`.slice(0, 300), ...payloadDeOpcion(eleccion),
+            });
+            await seguro(() => ctx.avisarEscuela(
+                `En «${item.name}» quiere inscribir a más de una persona: «${texto.slice(0, 300)}». El cobro es por persona: confírmale el valor total y los datos de pago.`), undefined);
+            return 'venta_a_la_escuela';
+        }
+        // «¿Puedo abonar la mitad?» en un servicio sin abonos: se dice que no, no se mandan los datos de pago.
+        if (item.allow_installments !== true && pideAbonar(texto) && !pagoRecibidoEnVenta(ctx.recientes, venta, ahora)) {
+            if (dichoHace('sin_abonos', 5)) return 'venta_silencio';
+            await ctx.enviar(textoSinAbonos(item), { ...marca, step: PASO_VENTA.RESPUESTA, fija_de_venta: 'sin_abonos', repetible: true },
+                botonesDeVenta(item, ['separar', 'humano']));
+            return 'venta_respuesta';
+        }
+        // «Soy afiliado», «mi hija entrena en el club»: lo que el propio bot preguntó («cuéntame cuál es tu caso»).
+        if (!eleccion && diceSerAfiliado(texto) && tienePrecioDeAfiliado(item)) {
+            if (dichoHace('dice_ser_afiliado', 5)) return 'venta_silencio';
+            await ctx.enviar(TEXTO_DICE_SER_AFILIADO, { ...marca, step: PASO_VENTA.RESPUESTA, fija_de_venta: 'dice_ser_afiliado', repetible: true },
+                botonesDeVenta(item, ['separar', 'humano']));
+            return 'venta_respuesta';
+        }
+    }
 
     // «Ya me sale en la aplicación que estoy al día»: un acuse corto (antes caía en «detalle» y no recibía nada).
     if (intencion === 'detalle' && !/[?¿]/.test(texto) && DICE_ESTAR_AL_DIA.test(normalizarFrase(texto))) {

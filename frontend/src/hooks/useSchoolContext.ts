@@ -7,6 +7,8 @@ import { bffClient } from '@/lib/api/bffClient';
 import { normalizeText } from '@/lib/normalizeText';
 import { nombresParecidos } from '@/lib/nombreParecido';
 import { readStoredContextKey, fetchRoleContexts } from '@/lib/roleContexts';
+import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
+import { guardarCopiaArranque, leerCopiaArranque, leerSesionGuardada } from '@/lib/offline/arranqueSinRed';
 
 /**
  * Represents a sports team or group offered by a school.
@@ -121,6 +123,10 @@ function useSchoolContextManager(): SchoolContext {
     const [totalBranchesCount, setTotalBranchesCount] = useState(0);
     const [branches, setBranches] = useState<{ id: string; name: string; status?: string | null; is_main?: boolean | null }[]>([]);
     const [resolveCounter, setResolveCounter] = useState(0);
+    // Modo offline: las escuelas salieron de la copia del último arranque (no de la base).
+    // Al volver la red se resuelve de nuevo, EN SILENCIO (sin `loading`, que desmontaría el árbol).
+    const arrancoDesdeCopiaRef = useRef(false);
+    const resolverEnSilencioRef = useRef(false);
 
     const queryClient = useQueryClient();
 
@@ -184,8 +190,15 @@ function useSchoolContextManager(): SchoolContext {
 
         const resolveUserContext = async () => {
             try {
-                setLoading(true);
-                const { data: { user } } = await supabase.auth.getUser();
+                if (!resolverEnSilencioRef.current) setLoading(true);
+                resolverEnSilencioRef.current = false;
+                let { data: { user } } = await supabase.auth.getUser();
+                // Sin red getUser() (valida contra el servidor) devuelve null aunque la sesión siga
+                // guardada: se usa la guardada para no tratar a la persona como visitante.
+                if (!user) {
+                    const guardada = leerSesionGuardada();
+                    if (guardada) user = guardada.user as unknown as typeof user;
+                }
 
                 if (!user) {
                     // Fallback: Try to find Default Demo School if no user (Guest Mode)
@@ -207,7 +220,10 @@ function useSchoolContextManager(): SchoolContext {
                     .eq('profile_id', user.id)
                     .eq('status', 'active');
 
-                if (memberError) throw memberError;
+                // Sin red: las escuelas de la última vez que se resolvieron con éxito.
+                const copiaEscuelas = memberError ? leerCopiaArranque<SchoolRole[]>('escuelas', user.id) : null;
+                if (memberError && !copiaEscuelas) throw memberError;
+                if (copiaEscuelas) arrancoDesdeCopiaRef.current = true;
 
                 // Persona multirol: el rol elegido en el selector (lib/roleContexts.ts)
                 // manda en SU escuela. Este provider corre EN PARALELO con AuthContext,
@@ -226,8 +242,8 @@ function useSchoolContextManager(): SchoolContext {
                     }
                 }
 
-                if (memberships && memberships.length > 0) {
-                    const mappedSchools: SchoolRole[] = memberships.map((m: any) => {
+                if (copiaEscuelas ? copiaEscuelas.length > 0 : (memberships && memberships.length > 0)) {
+                    const mappedSchools: SchoolRole[] = copiaEscuelas ?? memberships!.map((m: any) => {
                         // Owners and super_admins are ALWAYS global, regardless of branch_id
                         const isAlwaysGlobal = m.role === 'owner' || m.role === 'super_admin';
                         // school_admin and admin are global only if they have no branch_id set
@@ -253,6 +269,10 @@ function useSchoolContextManager(): SchoolContext {
                     });
 
                     setAvailableSchools(mappedSchools);
+                    if (!copiaEscuelas) {
+                        arrancoDesdeCopiaRef.current = false;
+                        guardarCopiaArranque<SchoolRole[]>('escuelas', user.id, mappedSchools);
+                    }
 
                     // Determine active school
                     const storedId = localStorage.getItem(STORAGE_KEY_ACTIVE_SCHOOL);
@@ -320,9 +340,25 @@ function useSchoolContextManager(): SchoolContext {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [resolveCounter]);
 
+    // 1a. Modo offline: volvió la red tras arrancar con la copia → se resuelve de nuevo, en silencio.
+    useEffect(() => {
+        if (!OFFLINE_ENABLED) return;
+        const alVolverLaRed = () => {
+            if (!arrancoDesdeCopiaRef.current) return;
+            arrancoDesdeCopiaRef.current = false;
+            resolverEnSilencioRef.current = true;
+            setResolveCounter((c) => c + 1);
+        };
+        window.addEventListener('online', alVolverLaRed);
+        return () => window.removeEventListener('online', alVolverLaRed);
+    }, []);
+
     // 1b. Listen for auth changes to reset state on sign-out / re-resolve on new sign-in
     useEffect(() => {
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            // Sin red y con el token vencido llega INITIAL_SESSION sin sesión aunque la sesión SIGA
+            // guardada: no es un cierre de sesión, no se borran las escuelas ya resueltas.
+            if (event !== 'SIGNED_OUT' && !session && leerSesionGuardada()) return;
             if (event === 'SIGNED_OUT' || !session?.user) {
                 // INITIAL_SESSION sin sesión = visitante anónimo que recién
                 // carga: no hay datos de otro usuario que borrar, y clear()

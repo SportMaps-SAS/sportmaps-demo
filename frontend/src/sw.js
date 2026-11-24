@@ -2,6 +2,8 @@
 // Lo asignamos a self para evitar que el minificador (esbuild) lo borre
 self.__precacheManifest = [].concat(self.__WB_MANIFEST || []);
 
+import { precachearBuild } from './pwa/precacheBuild'
+
 // La versión de cache se DERIVA del manifiesto del build, no se escribe a mano.
 //
 // Antes era la constante 'sportmaps-v3' y el filtro de 'activate'
@@ -22,6 +24,9 @@ const BUILD_ID = (() => {
   return (h >>> 0).toString(36);
 })();
 const CACHE_NAME = `sportmaps-${BUILD_ID}`
+// Caché ESTABLE de los archivos del build con hash (precarga offline). No cambia con el deploy:
+// un deploy solo descarga lo que cambió y poda lo que ya no existe (src/pwa/precacheBuild.ts).
+const ASSETS_CACHE = 'sportmaps-assets'
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -47,9 +52,31 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
+      Promise.all(keys.filter(k => k !== CACHE_NAME && k !== ASSETS_CACHE).map(k => caches.delete(k)))
     ).then(() => self.clients.claim())
   )
+})
+
+// Precarga del build para abrir sin señal (modo offline, Fase 1).
+// NO en 'install': competiría con la carga inicial (medido 2026-08-17: login de 8 s a 16 s).
+// La página, ya cargada y ociosa, manda PRECACHE_BUILD; se baja de a pocos y solo lo que falta.
+// Va a ASSETS_CACHE (estable); el fetch de abajo ya busca en TODAS las cachés al fallar la red.
+let precargando = null
+self.addEventListener('message', (event) => {
+  const msg = event.data
+  if (!msg || msg.type !== 'PRECACHE_BUILD') return
+  if (precargando) return
+  precargando = caches.open(ASSETS_CACHE)
+    .then(cache => precachearBuild({
+      entradas: self.__precacheManifest,
+      origen: self.location.origin,
+      cache,
+      traer: (url) => fetch(url, { cache: 'no-cache' }),
+    }))
+    .then(r => { if (event.source) event.source.postMessage({ type: 'PRECACHE_BUILD_DONE', ...r }) })
+    .catch(() => { /* se reintenta en la próxima pasada */ })
+    .finally(() => { precargando = null })
+  event.waitUntil(precargando)
 })
 
 // Fetch — Network first para API, Cache first para assets
@@ -59,30 +86,14 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url)
 
-  // Supabase API y Edge Functions → Network First, NO CACHEAR Auth ni Realtime
+  // Supabase API y Edge Functions → NO se interceptan ni se cachean aquí.
+  //
+  // Antes se guardaba cada GET por URL, SIN el token: dos usuarios que piden la misma URL compartían
+  // entrada y, sin red, el segundo recibía los datos del primero (celular de una familia, tablet de
+  // recepción). Las lecturas offline ahora van por React Query persistido en IndexedDB, con la copia
+  // por usuario y borrada al cerrar sesión (src/lib/offline). Sin red el fetch falla de forma
+  // natural y la app muestra lo guardado, con su etiqueta de hora.
   if (url.hostname.includes('supabase.co')) {
-    // No interceptar peticiones de Auth o Realtime para evitar bloqueos del LockManager
-    if (url.pathname.includes('/auth/v1/') || url.pathname.includes('/realtime/v1/')) {
-      return; 
-    }
-
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          if (response.ok && event.request.method === 'GET') {
-            const clone = response.clone()
-            caches.open('supabase-api').then(cache => cache.put(event.request, clone))
-          }
-          return response
-        })
-        .catch(async () => {
-          const cached = await caches.match(event.request);
-          return cached || new Response('Supabase connection error', { 
-            status: 503, 
-            headers: { 'Content-Type': 'text/plain' } 
-          });
-        })
-    )
     return
   }
 

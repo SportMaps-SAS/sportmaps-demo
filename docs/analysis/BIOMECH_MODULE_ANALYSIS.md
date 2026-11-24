@@ -6,6 +6,18 @@
 **Fecha:** 2026-05-08
 **Autoría:** sesión de diseño Brayan + Claude
 
+> **Actualización 2026-11-20 — el estado de arriba ya no es vigente.** Leído en el repo, sin consultar la base:
+> - **Construido:** `BiomechCaptureModal` (MediaPipe en el dispositivo), cinco analizadores (`hack_squat`,
+>   `incline_press`, `row`, `volleyball_serve`, `volleyball_spike`), rutas `trainer/biomech.ts` y
+>   `athlete/biomech.ts`, la integración en `SessionExecution` y `ClientProgressTab`, el addon `biomech` y el piloto
+>   de vóley en `/coach/voleibol-pose` (`MOD-36`).
+> - **Deuda:** las tablas de §12 las usa el código pero **no tienen `CREATE TABLE` en `supabase/migrations`**.
+>   Verificarlas y versionarlas, con RLS por `school_id`, es `BOD-0`.
+> - **Tensión abierta:** este diseño pone al atleta como dueño del dato; falta decidir qué pasa con el historial
+>   cuando cambia de escuela (`D-BOD-4`).
+> - **Continúa en:** [body-biblioteca-tecnicas-y-rendimiento.md](../specs/body-biblioteca-tecnicas-y-rendimiento.md)
+>   y el track `BOD` de `docs/ROADMAP.md`.
+
 ---
 
 ## 1. Propuesta de valor en una frase

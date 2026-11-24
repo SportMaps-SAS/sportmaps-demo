@@ -440,9 +440,6 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
                   ? <>Al aprobar, {isGroup ? 'los cobros quedan pagados' : 'el cobro queda pagado'} y <strong>{formatCurrency(cmp.saldoAFavor)}</strong> quedan
                     como <strong>saldo a favor</strong> de {payment.athlete_name || 'la familia'}: se descuentan solos de sus cobros pendientes o del próximo.</>
                   : <>Al aprobar, ese sobrante <strong>no queda guardado</strong> en ningún lado.</>}
-                {cmp.sinAcreditar > 0 && cmp.saldoAFavor > 0 && (
-                  <> Los otros <strong>{formatCurrency(cmp.sinAcreditar)}</strong> no se guardan solos (el cobro ya tenía abonos): anótalos aparte.</>
-                )}
               </p>
               <p className="text-xs text-amber-800">
                 Si esa plata era para <strong>otra cosa</strong> (otro deportista, un torneo, una tarifa distinta), no apruebes todavía:
@@ -520,7 +517,7 @@ export function ApprovePaymentMethodSheet({ payment, open, onOpenChange, onSucce
               <span>
                 {sobra
                   ? (cmp.saldoAFavor > 0
-                    ? <>Revisé el comprobante: los {formatCurrency(cmp.diff)} de más son de esta familia y {cmp.sinAcreditar > 0 ? `${formatCurrency(cmp.saldoAFavor)} quedan` : 'quedan'} como saldo a favor.</>
+                    ? <>Revisé el comprobante: los {formatCurrency(cmp.diff)} de más son de esta familia y quedan como saldo a favor.</>
                     : <>Revisé el comprobante y ya anoté aparte los {formatCurrency(cmp.diff)} de más.</>)
                   : falta
                     ? <>El comprobante trae {formatCurrency(cmp.diff)} menos, pero verifiqué que el pago de {formatCurrency(remaining)} está completo (el resto llegó por otro medio).</>

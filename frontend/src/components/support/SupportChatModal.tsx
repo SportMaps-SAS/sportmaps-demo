@@ -19,6 +19,8 @@ import { Send, User, Loader2, Headset, ThumbsUp, ThumbsDown } from "lucide-react
 import { MapiAvatar } from "@/components/brand/MapiAvatar";
 import { bffClient } from "@/lib/api/bffClient";
 import { respuestaACalificar, type Feedback } from "./teSirvio";
+import { MapiAccionCard, type AccionMapi } from "./MapiAccionCard";
+import { pantallaParaMapi } from "@/lib/mapiPantalla";
 
 // El bot no manda markdown, pero SI puede citar un link de un artículo de
 // ayuda (/ayuda/slug) dentro del texto — sin esto quedaría como texto plano
@@ -77,6 +79,25 @@ interface ThreadResponse {
     ticket: SupportTicket | null;
     messages: SupportMessage[];
     feedback?: Feedback;
+    /** Tarjetas de acción del modo agente (vacío en modo soporte). */
+    acciones?: AccionMapi[];
+    /** ¿Mapi trabaja en modo agente para esta persona en esta escuela? */
+    agente?: boolean;
+}
+
+interface RespuestaAccion {
+    accion?: AccionMapi;
+    nueva?: AccionMapi;
+    messages?: SupportMessage[];
+    acciones?: AccionMapi[];
+    error?: string;
+}
+
+/** Une tarjetas por id (la respuesta de confirmar trae solo las que cambiaron). */
+function unirAcciones(previas: AccionMapi[], nuevas: (AccionMapi | undefined)[]): AccionMapi[] {
+    const porId = new Map(previas.map((a) => [a.id, a]));
+    for (const a of nuevas) if (a) porId.set(a.id, a);
+    return [...porId.values()].sort((x, y) => x.creadaEn.localeCompare(y.creadaEn));
 }
 
 interface SupportChatModalProps {
@@ -101,6 +122,9 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
     const [sending, setSending] = useState(false);
     const [feedback, setFeedback] = useState<Feedback>({});
     const [calificando, setCalificando] = useState(false);
+    const [acciones, setAcciones] = useState<AccionMapi[]>([]);
+    const [agente, setAgente] = useState(false);
+    const [accionEnCurso, setAccionEnCurso] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -113,6 +137,8 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                 setTicket(res.ticket);
                 setMessages(res.messages);
                 setFeedback(res.feedback ?? {});
+                setAcciones(res.acciones ?? []);
+                setAgente(res.agente === true);
             })
             .catch(() => {
                 // Sin hilo previo o error de red: arranca en blanco, el primer
@@ -120,9 +146,35 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                 setTicket(null);
                 setMessages([]);
                 setFeedback({});
+                setAcciones([]);
             })
             .finally(() => setLoadingThread(false));
     }, [isOpen]);
+
+    // Acciones largas (p. ej. recordatorios a muchas familias): el BFF responde
+    // «en curso» y termina en segundo plano. Mientras haya alguna, el hilo se
+    // refresca cada 4 s, hasta 12 min (a los 10 el BFF la marca «interrumpida»).
+    const hayEnCurso = acciones.some((a) => a.estado === "executing");
+    useEffect(() => {
+        if (!isOpen || !hayEnCurso || sending) return;
+        const inicio = Date.now();
+        const t = setInterval(() => {
+            if (Date.now() - inicio > 12 * 60_000) {
+                clearInterval(t);
+                return;
+            }
+            bffClient
+                .get<ThreadResponse>("/api/v1/support/thread")
+                .then((res) => {
+                    setMessages(res.messages);
+                    setAcciones(res.acciones ?? []);
+                    if (res.ticket) setTicket(res.ticket);
+                    if (res.feedback) setFeedback(res.feedback);
+                })
+                .catch(() => {});
+        }, 4000);
+        return () => clearInterval(t);
+    }, [isOpen, hayEnCurso, sending]);
 
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -155,13 +207,16 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                 setTicket(opened.ticket);
             }
 
+            // La ruta (y la entidad en pantalla, si la hay) viaja con el mensaje:
+            // «esta niña» se resuelve en el BFF, que la valida contra la escuela.
             const res = await bffClient.post<ThreadResponse>(
                 "/api/v1/support/messages",
-                { ticketId: activeTicketId, body },
+                { ticketId: activeTicketId, body, pantalla: pantallaParaMapi() },
             );
             setMessages(res.messages);
             if (res.ticket) setTicket(res.ticket);
             if (res.feedback) setFeedback(res.feedback);
+            if (res.acciones) setAcciones(res.acciones);
         } catch (err) {
             // El mensaje optimista queda, pero se marca el error sin perder lo escrito.
             setMessages((prev) => [
@@ -205,6 +260,39 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
         }
     };
 
+    // Confirmar: el BFF re-verifica permisos y datos, ejecuta una sola vez y
+    // escribe el resultado en el chat. 409 = cambió algo: llega una tarjeta nueva.
+    const responderAccion = async (id: string, que: "confirmar" | "cancelar") => {
+        if (accionEnCurso) return;
+        setAccionEnCurso(id);
+        try {
+            const res = await bffClient.post<RespuestaAccion>(`/api/v1/mapi/acciones/${id}/${que}`, {});
+            if (res.messages) setMessages(res.messages);
+            setAcciones((prev) => unirAcciones(res.acciones ?? prev, [res.accion]));
+        } catch (err) {
+            const cuerpo = (err as { status?: number; body?: RespuestaAccion })?.body;
+            if (cuerpo?.accion || cuerpo?.nueva) {
+                setAcciones((prev) => unirAcciones(prev, [cuerpo.accion, cuerpo.nueva]));
+            }
+            setMessages((prev) => [
+                ...prev,
+                {
+                    id: `aviso-${Date.now()}`,
+                    author_type: "bot",
+                    body: cuerpo?.error || "No pude completar la acción. Revisa tu conexión e intenta de nuevo.",
+                    created_at: new Date().toISOString(),
+                },
+            ]);
+        } finally {
+            setAccionEnCurso(null);
+        }
+    };
+
+    const accionesDe = (messageId: string) => acciones.filter((a) => a.mensajeId === messageId);
+    const idsMensajes = new Set(messages.map((m) => m.id));
+    // Tarjetas cuyo mensaje no está en pantalla (o sin mensaje): al final.
+    const accionesSueltas = acciones.filter((a) => !a.mensajeId || !idsMensajes.has(a.mensajeId));
+
     const aCalificar = respuestaACalificar(messages, ticket?.status);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -225,8 +313,12 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                         <div className="flex items-center gap-3">
                             <MapiAvatar className="w-10 h-10" />
                             <div className="text-left">
-                                <span className="text-base font-semibold">Mapi · Soporte SportMaps</span>
-                                <p className="text-xs text-muted-foreground font-normal">Un solo chat, siempre la misma conversación</p>
+                                <span className="text-base font-semibold">{agente ? "Mapi · Asistente de tu escuela" : "Mapi · Soporte SportMaps"}</span>
+                                <p className="text-xs text-muted-foreground font-normal">
+                                    {agente
+                                        ? "Consulta y prepara acciones; nada se hace sin que lo confirmes"
+                                        : "Un solo chat, siempre la misma conversación"}
+                                </p>
                             </div>
                         </div>
                         <Badge className={`${chip.className} border-0 shrink-0`}>{chip.label}</Badge>
@@ -263,6 +355,15 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                                     >
                                         <MessageBody body={m.body} />
                                     </div>
+                                    {accionesDe(m.id).map((a) => (
+                                        <MapiAccionCard
+                                            key={a.id}
+                                            accion={a}
+                                            ocupado={accionEnCurso !== null}
+                                            onConfirmar={(id) => responderAccion(id, "confirmar")}
+                                            onCancelar={(id) => responderAccion(id, "cancelar")}
+                                        />
+                                    ))}
                                     {m.id === aCalificar && (
                                         <TeSirvio
                                             valor={feedback[m.id]}
@@ -278,6 +379,23 @@ export function SupportChatModal({ isOpen, onClose }: SupportChatModalProps) {
                                 )}
                             </div>
                         ))}
+
+                        {accionesSueltas.length > 0 && (
+                            <div className="flex gap-3 justify-start">
+                                <BotAvatar />
+                                <div className="max-w-[80%] min-w-0 flex-1">
+                                    {accionesSueltas.map((a) => (
+                                        <MapiAccionCard
+                                            key={a.id}
+                                            accion={a}
+                                            ocupado={accionEnCurso !== null}
+                                            onConfirmar={(id) => responderAccion(id, "confirmar")}
+                                            onCancelar={(id) => responderAccion(id, "cancelar")}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
 
                         {sending && (
                             <div className="flex gap-3 justify-start">

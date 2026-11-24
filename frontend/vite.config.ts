@@ -121,6 +121,11 @@ export default defineConfig(({ mode }) => ({
           // Visor 3D: solo lo descarga quien lo abre (no al instalar la PWA).
           '**/vendor-three-*.js',
           '**/Tactical3DModal-*.js',
+          // Modo offline (Fase 1): lo que no es del flujo del entrenador en la cancha. Medido el
+          // 2026-11-23: el precache llegaba a 11,4 MB; exceljs (exportar a Excel) y el modelo de
+          // visión pesan ~1 MB y solo se usan con red.
+          '**/exceljs*.js',
+          '**/vision_bundle-*.js',
         ],
       },
       devOptions: {

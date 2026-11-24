@@ -21,6 +21,7 @@ import { VolverAcudiente } from "@/components/parent/v2/VolverAcudiente";
 import { pestanasDeRol } from "@/lib/acudienteTabs";
 import { useRolActivo } from "@/hooks/useRolActivo";
 import { CoachListasSync } from "@/components/coach/v2/CoachListasSync";
+import { BandaPendientes } from "@/components/coach/v2/BandaPendientes";
 import { useFabSoporteOculto } from "@/lib/supportFab";
 import { inicialesPersona } from "@/lib/iniciales";
 import { clasesCascaronV2 } from "@/layouts/cascaronV2";
@@ -187,6 +188,7 @@ export default function AuthLayout() {
           Va también con la reversa (VITE_ENTRENADOR_V2=false): si se apaga la V2 con
           listas en cola, no se pueden quedar sin subir. Con la cola vacía no hace nada. */}
       {(currentUserRole ?? profile?.role) === 'coach' && <CoachListasSync />}
+      {(currentUserRole ?? profile?.role) === 'coach' && <BandaPendientes />}
       <PushPermissionBanner />
       <SupportChatButton />
     </SidebarProvider>

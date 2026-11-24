@@ -5,7 +5,13 @@
 > Pedido del usuario: «en los videos, que ellos suban los del celular, o los de Veo, o de algo que haga videos;
 > tener esas opciones».
 > Estado: **fase 1 CONSTRUIDA detrás de un flag por escuela** (rama `pizarra-tp/m6h`). Migración
-> `20261015145434` **escrita y SIN aplicar**. Sin llaves reales: falta que el usuario cree la cuenta del proveedor (§9).
+> `20261015171131` (en `develop` y en el ledger; antes `20261015145434`, y `20261015125439` en la rama; verificado 2026-11-23) **APLICADA en la base** (consulta de solo lectura del 2026-11-23: las 3 tablas con RLS, las 7 policies y las 9 funciones existen; sin fila en `schema_migrations`). Sin llaves reales: falta que el usuario cree la cuenta del proveedor (§9).
+
+> **Actualización 2026-11-20.** El track `BOD`
+> ([body-biblioteca-tecnicas-y-rendimiento.md](body-biblioteca-tecnicas-y-rendimiento.md)) reutiliza esta subida
+> para el contenido real de la biblioteca de técnicas (`BOD-6`), en vez de construir otra. Si la migración
+> `20261015171131` está viva y si existen las llaves del proveedor se confirma en `BOD-0`. Sigue sin existir el
+> dibujo o la medición sobre el video.
 
 ## 1. Decisión en una línea
 
@@ -142,7 +148,7 @@ Decisiones:
 `school_addons` porque su `CHECK` de `addon_key` vive en la base con una lista que cambió varias veces; cuando se
 venda como adicional, `set_school_video_settings` se llama desde el flujo de adicionales. Solo SportMaps lo prende.
 
-**Base** (`20261015145434_pizarra_videos_subidos.sql`, sin aplicar):
+**Base** (`20261015171131_pizarra_videos_subidos.sql`, aplicada; verificado 2026-11-23):
 - `school_video_settings`: flag, cupo (por defecto 10 h y 25 GB **guardados**), máximo por archivo (4 GB) y por video
   (3 h), contadores `used_*`.
 - `school_videos`: `provider` (bunny|cloudflare|mux|apivideo), `provider_asset_id`, `status`
@@ -199,7 +205,7 @@ La barra de la pizarra tendrá dos botones de video (el de M6c y «Videos» de M
   tipos y tamaños, permisos por rol (padre/atleta 403 en todo; admin lee y no sube; autor vs. admin al borrar), flag
   apagado, **cupo con 20 subidas en paralelo y cupo para 15 → exactamente 15**, URL firmada con TTL acotado, clips, webhook
   idempotente y que asienta lo que dice el API (no el payload).
-- RLS: casos «esperado tras 20261015145434» en `scripts/rls-pruebas-pizarra.mjs` (§14), NO corridos contra la base.
+- RLS: casos «esperado tras 20261015145434» en `scripts/rls-pruebas-pizarra.mjs` (§14), NO corridos contra la base. La etiqueta del script conserva el número viejo; la migración es `20261015171131`.
   Concurrencia real del cupo (20 `begin_school_video_upload` en paralelo con cupo para 15) se prueba al aplicar, una vez.
 - Frontend (vitest): cliente tus (progreso, red caída → offline → HEAD → sigue sin reenviar, 5xx con reintentos,
   cancelar, 401 sin reintento), pestaña de subida, flag apagado, clips, puente player.js.
@@ -222,7 +228,7 @@ La barra de la pizarra tendrá dos botones de video (el de M6c y «Videos» de M
    `BUNNY_STREAM_TOKEN_KEY`; opcionales `BUNNY_STREAM_EMBED_BASE`, `VIDEO_UPLOAD_MAX_BYTES` (4 GB),
    `VIDEO_UPLOAD_MAX_DURATION_S` (10800), `VIDEO_PLAYBACK_TTL_S` (900), `VIDEO_UPLOADS_PER_MINUTE` (10).
    Una librería por ambiente (o al menos una aparte para dev) para no mezclar videos de prueba con los reales.
-6. Aplicar la migración `20261015145434` (una sola sesión; ver CLAUDE.md «Disk IO»), luego
+6. Aplicar la migración `20261015171131` (una sola sesión; ver CLAUDE.md «Disk IO»), luego
    `npm run seguridad:invariantes` y `npm run seguridad:rls-pizarra`.
 7. Prender una escuela piloto: `select public.set_school_video_settings('<school_id>', true);` como super admin.
    Hacer una subida real y confirmar en Bunny los campos `status`, `length` y `storageSize` (§3, riesgos).

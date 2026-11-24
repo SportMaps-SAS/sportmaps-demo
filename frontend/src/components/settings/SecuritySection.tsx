@@ -65,6 +65,7 @@ export function SecuritySection({ saving, onChangePassword }: SecuritySectionPro
                   <Input
                     id="new-password"
                     type="password"
+                    autoComplete="new-password"
                     className="pl-9"
                     value={passwords.new}
                     onChange={(e) => setPasswords(prev => ({ ...prev, new: e.target.value }))}
@@ -79,6 +80,7 @@ export function SecuritySection({ saving, onChangePassword }: SecuritySectionPro
                   <Input
                     id="confirm-password"
                     type="password"
+                    autoComplete="new-password"
                     className="pl-9"
                     value={passwords.confirm}
                     onChange={(e) => setPasswords(prev => ({ ...prev, confirm: e.target.value }))}
