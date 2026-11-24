@@ -39,6 +39,7 @@ import trialClassesSelfRouter from './routes/trial-classes-self.routes';
 import reservationsAdminRouter from './routes/reservations-admin.routes';
 import reservationsCheckoutRouter from './routes/reservations-checkout.routes';
 import reservationsBatchRouter from './routes/reservations-batch.routes';
+import { createGeneralRateLimit } from './middlewares/generalRateLimit';
 import { reservationsJsonBody, RESERVATIONS_BATCH_BODY_LIMIT_BYTES } from './middlewares/reservationsInput';
 import reservationsRouter from './routes/reservations.routes';
 import publicReservationsRouter from './routes/public-reservations.routes';
@@ -182,13 +183,9 @@ const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-const generalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: process.env.NODE_ENV === 'production' ? 200 : 2000,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: 'Demasiadas peticiones. Intenta de nuevo en 15 minutos.' },
-});
+// 200/15 min por cliente en producción. Llave = IP real (CF-Connecting-IP) y una
+// sola cuenta por request aunque se monte varias veces: ver generalRateLimit.ts.
+const generalLimiter = createGeneralRateLimit();
 
 // El manifest y el icono de la PWA son publicos, de solo lectura y cacheados
 // (5 min en proceso + 5 min en el navegador). Necesitan un limite MUCHO mas
