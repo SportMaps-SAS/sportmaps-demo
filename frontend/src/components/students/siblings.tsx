@@ -239,7 +239,7 @@ export function siblingRankText(m: SiblingFamilyMember): string {
  * (unlink_sibling, solo filas via='vinculo'). Solo admin/owner: el caller
  * decide si se monta; la base vuelve a exigirlo (42501).
  */
-export function SiblingFamilySection({ schoolId, childId }: { schoolId: string; childId: string }) {
+export function SiblingFamilySection({ schoolId, childId, onChanged }: { schoolId: string; childId: string; onChanged?: () => void }) {
   const { toast } = useToast();
   const [family, setFamily] = useState<SiblingFamilyMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -275,6 +275,7 @@ export function SiblingFamilySection({ schoolId, childId }: { schoolId: string; 
     setPickedId(null);
     setPickerOpen(false);
     load();
+    onChanged?.();
   };
 
   const handleUnlink = async (m: SiblingFamilyMember) => {
@@ -290,6 +291,7 @@ export function SiblingFamilySection({ schoolId, childId }: { schoolId: string; 
       ? { title: `${m.full_name} quedó desvinculado`, description: 'El cambio se refleja desde el próximo cobro.' }
       : { title: 'No había vínculo que quitar', description: 'Puede que alguien más ya lo haya quitado.' });
     load();
+    onChanged?.();
   };
 
   const excludeIds = [childId, ...family.map(f => f.child_id)];

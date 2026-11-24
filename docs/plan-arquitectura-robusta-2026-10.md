@@ -557,21 +557,6 @@ Consultas de la app que más pesan:
   - Una función gemela de `is_school_admin(school_id)` que devuelva `uuid[]`, para envolverla. `user_admin_school_ids()` NO es equivalente: incluye `super_admin` y `schools.owner_id`.
 - **R3.1 y R3.2:** el widget de Wompi se carga al pagar (`frontend/src/lib/wompiWidget.ts`) y Poppins ya no bloquea el render (preload).
 
-**Avance 2026-11-23.**
-- **R2.1, lote 2:** migración `20261123123742_rls_initplan_lote2_resto_e_is_school_admin`. SIN aplicar; va después del lote 1 aplicado y verificado, desde una sola sesión.
-  - Alcance: 511 policies en 210 tablas (todo `public` salvo las 9 del lote 1). Se envuelven `auth.*()` y los helpers sin argumentos; los **roles no se tocan**.
-  - `is_school_admin(x)` es plpgsql **VOLATILE** y corría una consulta por fila. En 87 policies pasa a `x = ANY ((SELECT public.is_school_admin_ids())::uuid[])`. `is_school_admin_ids()` es la gemela exacta (mismo filtro sobre `school_members`, SECURITY DEFINER, EXECUTE para anon y authenticated como la original).
-  - Cada ALTER va dentro de un guard: si la policy viva cambió desde que se generó, la migración se detiene en vez de pisarla; si ya está envuelta, la salta. Por eso es idempotente.
-  - Verificada así:
-    - prueba textual (511 policies, 0 fallas);
-    - plantilla probada en una base desechable (7 sesiones con los mismos resultados antes y después, re-aplicar salta, una policy cambiada detiene);
-    - ensayo de compilación en el gemelo con ROLLBACK (484 de 511; las otras 27 el gemelo no las tiene iguales a prod).
-- **Pendiente para después del lote 2:**
-  - Las 5 policies con `is_school_admin` de las tablas del lote 1.
-  - Funciones con argumento por fila (`school_is_operational` 44 usos, `can_manage_finances` 23, `get_personal_trainer_school_id` 23…).
-  - Unir policies duplicadas.
-  - Que `migrations:check` rechace `is_school_admin(` en policies nuevas una vez esté viva `is_school_admin_ids()`.
-
 ### 11.3 Verificación
 
 - Repetir con los mismos scripts: logs de Render (p50/p95 por endpoint), diferencia de `pg_stat_statements` contra la foto del 11-07, Lighthouse móvil y el recorrido con la cuenta demo.

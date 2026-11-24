@@ -33,6 +33,8 @@ import {
 } from '@/lib/paymentPeriod';
 import { chargeCategoryOf, type PaymentChargeCategory } from '@/lib/payment-accounts';
 import { todayColombia } from '@/lib/dateUtils';
+import { SiblingFamilySection, parseSiblingFamily } from '@/components/students/siblings';
+import { repartirExcedente, excedenteDeGrupo, recibidoMenorQueSuma, recibidoPorDefecto, avisoReparto, MENSAJE_RECIBIDO_MENOR } from '@/lib/payments/pagoFamilia';
 import { errorDeRecibido, notasConRecibido, lineaRecibido, type RecibidoSinComprobante } from '@/lib/payments/constanciaDeRecibido';
 import { RecibidoSinComprobanteCampos } from '@/components/payment/RecibidoSinComprobanteCampos';
 import {
@@ -166,6 +168,13 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
   // Pagar varios cobros pendientes del mismo deportista en una sola operación.
   const [multiMode, setMultiMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Hermanas vinculadas con cobros abiertos: un comprobante puede cubrir a varias
+  // (spec docs/specs/pago-hermanas-un-comprobante.md).
+  const [hermanas, setHermanas] = useState<{ child_id: string; full_name: string }[]>([]);
+  const [hermanasPending, setHermanasPending] = useState<any[]>([]);
+  const [hermanasKey, setHermanasKey] = useState(0);
+  const [showVincular, setShowVincular] = useState(false);
+  const [recibidoManual, setRecibidoManual] = useState<number | ''>('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'transfer'>('cash');
   const [concept, setConcept] = useState('Mensualidad');
   // Tipo de cobro del cobro NUEVO. null = se deduce del concepto (ver
@@ -276,6 +285,34 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
       fetchAthletes();
     }
   }, [open, schoolId]);
+
+  // Hermanas vinculadas (get_sibling_family) y sus cobros abiertos, en UNA lectura
+  // con .in(). Solo para menores: el saldo a favor de la RPC familiar es por child_id.
+  useEffect(() => {
+    setHermanas([]);
+    setHermanasPending([]);
+    const student = athletes.find(a => a.id === selectedAthleteId);
+    if (!selectedAthleteId || !schoolId || !student || student.athlete_type !== 'child') return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await (supabase as any).rpc('get_sibling_family', { p_school_id: schoolId, p_child_id: selectedAthleteId });
+      if (cancelled || error) return;
+      const otras = parseSiblingFamily(data)
+        .filter(m => m.via !== 'self')
+        .map(m => ({ child_id: m.child_id, full_name: m.full_name }));
+      if (otras.length === 0) return;
+      const { data: pend } = await (supabase.from('payments') as any)
+        .select('id, child_id, concept, amount, amount_paid, late_fee_amount, due_date, status, discount_pct')
+        .eq('school_id', schoolId)
+        .in('child_id', otras.map(o => o.child_id))
+        .in('status', ['pending', 'overdue'])
+        .order('due_date', { ascending: true });
+      if (cancelled) return;
+      setHermanas(otras);
+      setHermanasPending(pend || []);
+    })();
+    return () => { cancelled = true; };
+  }, [selectedAthleteId, schoolId, athletes, hermanasKey]);
 
   useEffect(() => {
     if (selectedAthleteId) {
@@ -496,13 +533,39 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
   // ('partial') quedan fuera: register_manual_payments salda el valor completo
   // de cada cobro y a esos solo les falta el saldo — se pagan de a uno.
   const multiCandidates = pendingPayments.filter(p => p.status !== 'partial');
-  const selectedMulti = multiCandidates.filter(p => selectedIds.includes(p.id));
+  // Cobros de hermanas vinculadas: se pueden marcar junto a los de la deportista.
+  const todosCandidatos = [...multiCandidates, ...hermanasPending];
+  const selectedMulti = todosCandidatos.filter(p => selectedIds.includes(p.id));
   const multiTotal = selectedMulti.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const multiLateFee = selectedMulti.reduce((s, p) => s + (Number(p.late_fee_amount) || 0), 0);
   const toggleSelected = (id: string) =>
     setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
   const allSelected = multiCandidates.length > 0 && selectedIds.length === multiCandidates.length;
   const [confirmAmountChange, setConfirmAmountChange] = useState(false);
+
+  // ── Hermanas y monto recibido (solo menores) ──────────────────────────────
+  const esMenor = selectedAthleteForPayer?.athlete_type === 'child';
+  const ownSelected = selectedMulti.some(p => !p.child_id);
+  const hermanasSelected = selectedMulti.filter(p => !!p.child_id);
+  const usaFamilia = hermanasSelected.length > 0;
+  const grupoChildIds: string[] = Array.from(new Set([
+    ...(ownSelected && selectedAthleteId ? [selectedAthleteId] : []),
+    ...hermanasSelected.map(p => p.child_id as string),
+  ]));
+  const anclaChild: string = ownSelected && selectedAthleteId ? selectedAthleteId : (grupoChildIds[0] ?? '');
+  const ocrMonto = paymentMethod === 'transfer' && receiptUrl ? (ocrResult?.extractedAmount ?? null) : null;
+  const recibidoSugerido = recibidoPorDefecto(multiTotal, ocrMonto);
+  const recibido = recibidoManual === '' ? recibidoSugerido : Number(recibidoManual);
+  const excedenteGrupo = esMenor && selectedMulti.length > 0 ? excedenteDeGrupo(recibido, multiTotal) : 0;
+  const recibidoMenor = esMenor && selectedMulti.length > 0 && recibidoMenorQueSuma(recibido, multiTotal);
+  const partesSaldo = repartirExcedente(excedenteGrupo, grupoChildIds, anclaChild);
+  const nombresGrupo: Record<string, string> = {
+    ...(selectedAthleteId ? { [selectedAthleteId]: selectedAthleteForPayer?.full_name || 'la deportista' } : {}),
+    ...Object.fromEntries(hermanas.map(h => [h.child_id, h.full_name])),
+  };
+  const avisoSaldo = avisoReparto(partesSaldo, nombresGrupo, excedenteGrupo);
+  // Si cambia la selección o el total, el monto recibido vuelve a su sugerencia.
+  useEffect(() => { setRecibidoManual(''); }, [multiTotal, paymentMethod, receiptUrl]);
   useEffect(() => { setConfirmAmountChange(false); }, [selectedPaymentId, amount]);
   // El cobro cambió en la base entre que se abrió el formulario y el clic
   // (típico: la mora de la noche). Se avisa y se pide confirmar de nuevo.
@@ -556,14 +619,20 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
       toast({ title: 'Falta la constancia del pago', description: receivedError, variant: 'destructive' });
       return;
     }
+    if (recibidoMenor) {
+      toast({ title: 'Monto recibido menor', description: MENSAJE_RECIBIDO_MENOR, variant: 'destructive' });
+      return;
+    }
 
     setLoading(true);
     try {
       const prefix = paymentMethod === 'cash' ? 'CASH' : 'TRF';
       const reference = `${prefix}-${Date.now().toString(36).toUpperCase()}`;
       const isTransfer = paymentMethod === 'transfer';
+      // RPC familiar: hermanas marcadas o excedente que queda como saldo a favor.
+      const usarFamilia = esMenor && (usaFamilia || excedenteGrupo > 0);
 
-      const { data, error } = await (supabase as any).rpc('register_manual_payments', {
+      const { data, error } = await (supabase as any).rpc(usarFamilia ? 'register_manual_payments_familia' : 'register_manual_payments', {
         p_school_id: schoolId,
         p_payment_ids: selectedMulti.map(p => p.id),
         p_method: paymentMethod,
@@ -571,6 +640,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
         p_reference_base: reference,
         p_receipt_url: isTransfer ? receiptUrl : null,
         p_receipt_fields: isTransfer && receiptUrl ? buildReceiptOcrFields(ocrResult) : null,
+        ...(usarFamilia ? { p_monto_recibido: recibido, p_ancla_child: anclaChild } : {}),
       });
       if (error) throw error;
 
@@ -628,6 +698,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
       toast({
         title: 'Pagos registrados',
         description: `${selectedMulti.length} cobro(s) por ${formatCurrency(total)} quedaron como pagados.${
+          Number(data?.excedente) > 0 ? ` ${avisoSaldo ?? `Saldo a favor: ${formatCurrency(Number(data.excedente))}.`}` : ''}${
           constanciaFallo ? ' No se pudo guardar quién recibió el pago: anótalo en las notas de cada cobro.' : ''
         }`,
         variant: constanciaFallo ? 'destructive' : undefined,
@@ -1226,7 +1297,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
               )}
 
               {/* Pagar varios cobros a la vez. */}
-              {multiCandidates.length > 1 && (
+              {(multiCandidates.length > 1 || hermanasPending.length > 0) && (
                 <button
                   type="button"
                   className="text-[11px] font-bold text-primary underline-offset-2 hover:underline"
@@ -1238,6 +1309,27 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
                 >
                   {multiMode ? 'Volver a pagar un solo cobro' : 'Pagar varios cobros a la vez'}
                 </button>
+              )}
+
+              {/* Hermana sin vincular: se vincula aquí mismo (link_siblings) y la lista se recarga. */}
+              {esMenor && selectedAthleteId && schoolId && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="cyp-vincular-hermana"
+                    className="block text-[11px] font-bold text-primary underline-offset-2 hover:underline"
+                    onClick={() => setShowVincular(v => !v)}
+                  >
+                    {showVincular ? 'Ocultar vínculo de hermanas' : '¿Falta una hermana? Vincúlala'}
+                  </button>
+                  {showVincular && (
+                    <SiblingFamilySection
+                      schoolId={schoolId}
+                      childId={selectedAthleteId}
+                      onChanged={() => setHermanasKey(k => k + 1)}
+                    />
+                  )}
+                </>
               )}
 
               {multiMode && (
@@ -1272,6 +1364,34 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
                       </label>
                     ))}
                   </div>
+                  {hermanasPending.length > 0 && (
+                    <div className="space-y-1 border-t border-border/40 pt-2" data-testid="cyp-hermanas">
+                      <p className="text-[11px] font-bold">¿Este pago también es de sus hermanas?</p>
+                      {hermanas.filter(h => hermanasPending.some(p => p.child_id === h.child_id)).map(h => (
+                        <div key={h.child_id} className="space-y-1">
+                          <p className="text-[11px] font-black text-muted-foreground">{h.full_name}</p>
+                          {hermanasPending.filter(p => p.child_id === h.child_id).map(p => (
+                            <label key={p.id} className="flex items-start gap-2 rounded-lg p-1.5 text-xs cursor-pointer hover:bg-muted/40">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5 h-4 w-4"
+                                data-testid={`cyp-hermana-cobro-${p.id}`}
+                                checked={selectedIds.includes(p.id)}
+                                onChange={() => toggleSelected(p.id)}
+                              />
+                              <span className="flex-1">
+                                <span className="block font-medium">{p.concept}</span>
+                                <span className="block text-muted-foreground">
+                                  {formatCurrency(Number(p.amount) || 0)} · Vence {format(new Date(p.due_date), 'd MMM yyyy', { locale: es })}
+                                  {p.status === 'overdue' ? ' · atrasado' : ''}
+                                </span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between border-t border-border/40 pt-2 text-sm font-black">
                     <span>Total a registrar ({selectedMulti.length})</span>
                     <span>{formatCurrency(multiTotal)}</span>
@@ -1280,6 +1400,30 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
                     <p className="text-[11px] font-bold text-amber-700 dark:text-amber-400">
                       Incluye recargo por mora: {formatCurrency(multiLateFee)}
                     </p>
+                  )}
+                  {esMenor && selectedMulti.length > 0 && (
+                    <div className="space-y-1 border-t border-border/40 pt-2" data-testid="cyp-monto-recibido">
+                      <Label htmlFor="monto-recibido" className="text-[11px] font-bold">Monto recibido ($ COP)</Label>
+                      <NumberStepper
+                        value={recibidoManual === '' ? recibidoSugerido : recibidoManual}
+                        onChange={setRecibidoManual}
+                        step={500}
+                        min={0}
+                        unit="COP"
+                        className="h-10"
+                      />
+                      {ocrMonto != null && Math.round(ocrMonto) !== Math.round(multiTotal) && (
+                        <p className="text-[11px] text-amber-700 dark:text-amber-400" data-testid="cyp-recibido-ocr">
+                          El comprobante dice {formatCurrency(Math.round(ocrMonto))} y los cobros suman {formatCurrency(multiTotal)}. Revisa que el monto recibido sea el correcto.
+                        </p>
+                      )}
+                      {recibidoMenor && (
+                        <p className="text-[11px] font-bold text-destructive" data-testid="cyp-recibido-menor">{MENSAJE_RECIBIDO_MENOR}</p>
+                      )}
+                      {avisoSaldo && (
+                        <p className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400" data-testid="cyp-aviso-reparto">{avisoSaldo}</p>
+                      )}
+                    </div>
                   )}
                   <p className="text-[10px] text-muted-foreground">
                     Cada cobro se registra por su propio valor (ya con descuento y mora). Si alguno falla, no se registra ninguno.
@@ -1649,7 +1793,7 @@ export function RegisterCashPaymentModal({ open, onOpenChange, onSuccess, initia
                 ? "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/20"
                 : "bg-blue-500 hover:bg-blue-600 shadow-blue-500/20"
             )}
-            disabled={loading || (multiMode && selectedMulti.length === 0) || (amountDiffersFromCharge && !confirmAmountChange)}
+            disabled={loading || (multiMode && selectedMulti.length === 0) || (multiMode && recibidoMenor) || (amountDiffersFromCharge && !confirmAmountChange)}
             onClick={multiMode ? handleSaveMulti : handleSave}
           >
             {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
