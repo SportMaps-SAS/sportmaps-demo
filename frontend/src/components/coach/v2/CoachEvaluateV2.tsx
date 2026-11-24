@@ -41,6 +41,10 @@ import { useFelicitarDisponible, usePresentesSesion, useSesionDetalle, type Pres
 import { cerrarListaSesion } from './useAsistenciaV2Data';
 import { useAccionConDeshacer } from './useAccionConDeshacer';
 import { FelicitarSheet } from './FelicitarSheet';
+import { useAuth } from '@/contexts/AuthContext';
+import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
+import { obtenerBandeja } from '@/lib/offline/useBandeja';
+import { esErrorDeRed, idEvaluar, TIPO_EVALUAR, type PayloadEvaluar } from '@/lib/offline/bandejaEvaluar';
 import { enviarFelicitacion, avisarResultadoFelicitacion, sujetoFelicitar, type ObjetivoFelicitar } from './felicitar';
 
 const TONO: Record<ComoLeFue, string> = {
@@ -71,6 +75,7 @@ export function CoachEvaluateV2({ sessionId, rutas: rutasProp, volverHref = '/da
   }, [presentes.data]);
   const felicitarOk = useFelicitarDisponible(sujetoPrueba);
   const qc = useQueryClient();
+  const { user } = useAuth();
   const { programar } = useAccionConDeshacer();
 
   const [como, setComo] = useState<Record<string, ComoLeFue>>({});
@@ -145,6 +150,22 @@ export function CoachEvaluateV2({ sessionId, rutas: rutasProp, volverHref = '/da
       `evaluar:${sessionId}`,
       'Se guarda en 8 segundos.',
       async () => {
+        // Sin señal (o la señal se cayó al enviar): se guarda en el teléfono y sube sola. La RPC es
+        // idempotente (upsert por sesión + deportista), así que reenviar no duplica nada.
+        const aLaBandeja = async (): Promise<boolean> => {
+          const sid = sesion.data?.schoolId;
+          if (!OFFLINE_ENABLED || !user?.id || !sid) return false;
+          const payload: PayloadEvaluar = { sessionId, ratings: p_ratings, notas: p_coach_notes };
+          await obtenerBandeja(user.id).bandeja.encolar({
+            id: idEvaluar(sessionId), tipo: TIPO_EVALUAR, schoolId: sid, payload,
+            etiqueta: `${sesion.data?.equipo ?? 'Equipo'}${sesion.data?.fecha ? ` · ${diaLargo(sesion.data.fecha)}` : ''}`,
+          });
+          setEstado('guardado');
+          toast.success('Evaluación guardada en el teléfono. Se envía sola cuando haya señal.', { id: `evaluar-ok-${sessionId}` });
+          onGuardado?.();
+          return true;
+        };
+        if (typeof navigator !== 'undefined' && navigator.onLine === false && await aLaBandeja()) return;
         let error: { code?: string; message?: string } | null = null;
         try {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -157,6 +178,7 @@ export function CoachEvaluateV2({ sessionId, rutas: rutasProp, volverHref = '/da
         } catch (e) {
           error = { message: e instanceof Error ? e.message : String(e) };
         }
+        if (error && esErrorDeRed(error) && await aLaBandeja()) return;
         if (error) {
           console.error('[evaluar] submit_post_training_coach_rating', error);
           const texto = mensajeErrorEvaluar(error);

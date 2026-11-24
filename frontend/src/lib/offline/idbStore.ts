@@ -94,6 +94,30 @@ export async function idbDelPrefix(prefix: string): Promise<void> {
   });
 }
 
+/** Valores de todas las claves que empiezan por `prefix` (la bandeja de salida lista lo suyo). */
+export async function idbListPrefix<T>(prefix: string): Promise<T[]> {
+  const db = await abrir();
+  if (!db) return [...memoria.entries()].filter(([k]) => k.startsWith(prefix)).map(([, v]) => v as T);
+  return new Promise<T[]>((resolve) => {
+    const out: T[] = [];
+    try {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).openCursor(IDBKeyRange.bound(prefix, `${prefix}￿`));
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return;
+        out.push(c.value as T);
+        c.continue();
+      };
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => resolve(out);
+      tx.onabort = () => resolve(out);
+    } catch {
+      resolve(out);
+    }
+  });
+}
+
 /** Solo para pruebas: reinicia el estado interno del módulo. */
 export function __reiniciarIdbParaPruebas(): void {
   memoria.clear();

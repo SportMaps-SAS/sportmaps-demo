@@ -39,6 +39,7 @@ const PageLoader = () => (
 );
 
 // ─── Public pages (lazy) ──────────────────────────────────────────────────────
+const PendientesPage = lazy(() => import("./components/coach/v2/PendientesPage"));
 const Index = lazy(() => import("./pages/Index"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
@@ -507,6 +508,12 @@ const App = () => (
                         <ModuleGate moduleKey="gestion_deportiva_equipos_planes">
                           <EquiposSegunRol />
                         </ModuleGate>
+                      } />
+                      {/* Pendientes por enviar (modo offline): listas y evaluaciones guardadas sin señal. */}
+                      <Route path="pendientes" element={
+                        <ProtectedRoute allowedRoles={['coach']}>
+                          <PendientesPage />
+                        </ProtectedRoute>
                       } />
                       {/* Entrenador V2: evaluar al equipo en una pantalla. */}
                       {ENTRENADOR_V2 && (

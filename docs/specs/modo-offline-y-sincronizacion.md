@@ -188,6 +188,21 @@ La base es **una sola** para dev/stg/prod; una ráfaga al reconectar es exactame
 2. Banda global y pantalla «Pendientes» (§3.4).
 3. Primer flujo nuevo: **evaluaciones/notas de sesión** **[D1]**, solo si pasa el checklist de §9.
 
+#### Qué se construyó en la Fase 2 (y en qué se desvió del plan)
+
+| Pieza | Dónde | Nota |
+|---|---|---|
+| Bandeja de salida común | `lib/offline/bandeja.ts`, `idbStore.ts` (`idbListPrefix`) | IndexedDB, **un registro por acción** (`ob:{userId}:{id}`) para que dos pestañas no se pisen. Una acción por `id` lógico: guardar de nuevo la reemplaza (versión sube, gana lo último). Envío de a una, una sola pestaña (`navigator.locks`), esperas crecientes, mismos 4 resultados que la cola de asistencia (`ok` · `rule` · `auth` · `retry`/atascada). Si la vuelven a guardar mientras viaja, la versión nueva sale a continuación. Un tipo desconocido se conserva intacto. |
+| **No se borra al cerrar sesión** | `limpiarDatosOffline` borra solo `rq:` | La bandeja es trabajo del usuario, no una copia de lectura. Cada acción lleva su `userId`: otra cuenta en el mismo celular no la ve ni la envía; espera a su dueño (spec §5). |
+| Primer flujo nuevo: **evaluar al equipo** | `lib/offline/bandejaEvaluar.ts`, `CoachEvaluateV2.tsx` | Pasa el checklist §9 **sin migración**: `submit_post_training_coach_rating` hace upsert por sesión + deportista (+ nota sobrescrita), valida adentro que seas coach del equipo y no mueve dinero ni cupos. Sin señal (o si la señal se cae al enviar) la evaluación se guarda en el teléfono y sube sola. Un rechazo de regla (no eres coach, informe ya publicado, dato inválido) queda visible con su motivo; «la sesión no se ha cerrado / no asistió» se reintenta (la lista de asistencia de esa sesión puede seguir en la cola) y, si no llega, queda atascada con ese motivo. |
+| Banda global y pantalla «Pendientes» | `BandaPendientes.tsx`, `PendientesPage.tsx` (`/pendientes`), `lib/offline/pendientesModel.ts`, `useBandeja.ts` | «Sin señal · 3 pendientes» / «Enviando 2 pendientes…» / «1 con problema · toca para ver». La pantalla junta **las dos fuentes** (listas de asistencia y evaluaciones), con motivo, «Volver a intentar» y «Descartar» (pide confirmación). Solo rol entrenador. |
+| Sincronizador | `CoachListasSync.tsx` → `useSincronizadorBandeja` | Envía al abrir, al volver la red, al volver a primer plano y cuando vence la espera del próximo intento (un solo temporizador, sin sondeo). Avisa «Se envió: …» o el rechazo con su motivo. |
+| Pruebas | `lib/offline/bandeja.test.ts` | 22 pruebas: reemplazo por id, orden, doble flush, rechazo visible, reintento con espera, atascada, sesión vencida, reguardado durante el envío, cambio de usuario, tipo desconocido, dos pestañas, clasificación de errores de la RPC, vista unificada. |
+
+**Desvío — `ColaAsistencia` NO se migró a la bandeja.** El plan decía migrarla primero. No se hizo a propósito: la cola de asistencia es síncrona (localStorage) y su fusión multi-pestaña tiene su propia red de pruebas (`colaAsistencia.multi.test.ts`, `asistenciaV2.test.ts`); pasarla a IndexedDB asíncrono arriesga el flujo que ya funciona sin ganar nada visible. Lo que el plan buscaba (una sola vista) se logra con `pendientesModel`, que presenta las dos juntas. Se migra solo si aparece una razón real (p. ej. listas con adjuntos que no caben en localStorage).
+
+**Pendiente de la Fase 2:** probar en un teléfono real el camino completo «evaluar sin señal → cerrar la app → recuperar señal → llega una vez» y ver la banda y la pantalla.
+
 ### Fase 3 — Más flujos y limpieza (según uso real)
 - Encuesta post-entreno, otros flujos del entrenador/atleta que pasen el checklist.
 - Migrar `LiveQueue` y `ActionQueue` a la cola común **solo si** hay una razón (hoy funcionan): no migrar por estética.
