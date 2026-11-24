@@ -34,6 +34,15 @@ export interface SubmitJoinResult {
   message?: string;
   request_id?: string;
   school_name?: string;
+  /**
+   * true = la solicitud se vinculó sola por coincidencia sin ambigüedad con una ficha ya
+   * cargada (migración 20261123115126); vienen además los campos de ReclamarFichaResult.
+   */
+  auto_approved?: boolean;
+  school_id?: string;
+  kind?: 'child' | 'self';
+  child_id?: string | null;
+  athlete_name?: string;
 }
 
 /** Candidato de ficha precargada (migración 20261105124322). Sin datos de contacto. */
@@ -69,6 +78,9 @@ export interface MyJoinStatus {
     school_name: string;
     logo_url: string | null;
     team_name: string | null;
+    /** Llegan con la migración 20261123115126; antes vienen undefined. */
+    auto_approved?: boolean;
+    school_whatsapp?: string | null;
   }>;
 }
 

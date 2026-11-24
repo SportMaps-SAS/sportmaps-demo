@@ -35,6 +35,7 @@ import { CoachHomeV2 } from '@/components/coach/v2/CoachHomeV2';
 import { AthleteHomeV2 } from '@/components/athlete/v2/AthleteHomeV2';
 import { useRolActivo } from '@/hooks/useRolActivo';
 import { resolveOnboardingGateStatus } from '@/lib/onboardingGate';
+import { shouldShowSchoolChecklist } from '@/lib/onboarding/schoolOnboardingRules';
 import { JoinSchoolCodeBanner } from '@/components/school-join/JoinSchoolCodeBanner';
 
 /**
@@ -232,8 +233,26 @@ function SchoolRoleDashboardPage() {
           setInvitation(null);
         }
 
+        // 2b. Academia: lo que el checklist necesita y el RPC de estado no trae
+        // (¿hay familias invitadas o vinculadas?). Solo mientras no haya cobro: es
+        // cuando el checklist se muestra, y así no se suma una consulta a quien ya opera.
+        let statusParaPasos: any = status;
+        if (['school', 'school_admin', 'owner'].includes(profile.role as string)
+          && status.school_id && status.has_charges === false) {
+          try {
+            const { data: extras } = await supabase.rpc(
+              'get_onboarding_checklist_extras' as never,
+              { p_school_id: status.school_id } as never,
+            );
+            const e = extras as { ok?: boolean; has_families?: boolean } | null;
+            if (e?.ok) statusParaPasos = { ...status, has_families: e.has_families };
+          } catch {
+            /* sin la migración, el paso «familias» queda pendiente */
+          }
+        }
+
         // 3. Generar pasos para la UI
-        const steps = getStepsForRole(profile.role as UserRole, status);
+        const steps = getStepsForRole(profile.role as UserRole, statusParaPasos);
         setOnboardingSteps(steps);
 
         if (steps.every(s => s.completed)) {
@@ -422,7 +441,12 @@ function SchoolRoleDashboardPage() {
             {/* Primeros pasos (vincular hijo, ficha médica, invitación…): el mismo
                 checklist que tenía el Inicio anterior, mientras no esté completo. */}
             {onboardingSteps.length > 0 && !onboardingSteps.every(s => s.completed) && onboardingStatus !== 'completed' && (
-              <DashboardChecklist steps={onboardingSteps} onStepClick={(step) => navigate(step.href)} />
+              <DashboardChecklist
+                steps={onboardingSteps}
+                title="Empieza con tu escuela"
+                collapsibleId="acudiente"
+                onStepClick={(step) => navigate(step.href)}
+              />
             )}
             {invitacionPendiente}
             <JoinSchoolCodeBanner />
@@ -746,6 +770,26 @@ function SchoolRoleDashboardPage() {
           </div>
         );
       })()}
+
+      {/* Checklist de la academia DESPUÉS del asistente y hasta su primer cobro.
+          Antes no existía: el de abajo se apaga con onboarding 'completed', y el
+          asistente bloquea el panel hasta ese estado (hallazgo E). */}
+      {['school', 'school_admin', 'owner'].includes(profile.role as string)
+        && shouldShowSchoolChecklist({
+          onboardingStatus,
+          steps: onboardingSteps,
+          hasCharges: rpcStatus?.has_charges,
+        }) && (
+        <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+          <DashboardChecklist
+            steps={onboardingSteps}
+            title="Pon a andar tu academia"
+            subtitle="Te faltan pocos pasos para ver tu primer cobro."
+            collapsibleId="escuela"
+            onStepClick={(step) => navigate(step.href)}
+          />
+        </div>
+      )}
 
       {/* Checklist genérico para otros roles (parent, coach, athlete) */}
       {onboardingSteps.length > 0 && !onboardingSteps.every(s => s.completed) && onboardingStatus !== 'completed'

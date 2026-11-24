@@ -8,6 +8,7 @@ import { Database } from '@/integrations/supabase/types';
 import { getUserFriendlyError } from '@/lib/error-translator';
 import { clearPwaTenant } from '@/pwa/tenant';
 import { clearBoardSettings } from '@/lib/school/tacticalBoardSettings';
+import { buildSignupMetadata, type SignupUserData } from '@/lib/auth/signupMetadata';
 import { fetchRoleContexts, readStoredContextKey, storeContextKey, clearStoredContexts, clearStoredContextKey, safeInternalPath, type RoleContext } from '@/lib/roleContexts';
 import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
 import { guardarCopiaArranque, leerCopiaArranque, leerSesionGuardada, limpiarDatosOffline } from '@/lib/offline/arranqueSinRed';
@@ -458,7 +459,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('online', alVolverLaRed);
   }, [user?.id, fetchProfile, fetchTrainerContext, loadRoleContexts]);
 
-  const signUp = async (email: string, password: string, userData: Partial<UserProfile> & { invitation_code?: string, school_name?: string }) => {
+  const signUp = async (email: string, password: string, userData: Partial<UserProfile> & { invitation_code?: string, school_name?: string, sport_id?: string | number, sport_name?: string, whatsapp_consent?: boolean }) => {
     try {
       const redirectUrl = `${window.location.origin}/`;
 
@@ -467,14 +468,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         password,
         options: {
           emailRedirectTo: redirectUrl,
-          data: {
-            full_name: userData.full_name,
-            phone: userData.phone,
-            date_of_birth: userData.date_of_birth,
-            role: userData.role,
-            invitation_code: userData.invitation_code,
-            school_name: userData.school_name,
-          }
+          // Antes era un literal con 6 campos y el deporte de la academia se
+          // perdía acá (hallazgo A del análisis de onboarding).
+          data: buildSignupMetadata(userData as SignupUserData),
         }
       });
 

@@ -15,6 +15,7 @@ import { getUserFriendlyError } from '@/lib/error-translator';
 import { toast } from 'sonner';
 import { OnboardingSchoolCodeField } from '@/components/school-join/OnboardingSchoolCodeField';
 import { formatJoinCode, isJoinCodeShape, readPendingJoinCode } from '@/lib/schoolJoinCode';
+import { track } from '@/lib/onboarding/trackOnboardingEvent';
 
 export default function ParentOnboarding() {
   const { user, profile, loading: authLoading, updateProfile } = useAuth();
@@ -43,6 +44,11 @@ export default function ParentOnboarding() {
       }
     });
   }, [user]);
+
+  // Evento «paso visto» (uno por paso y sesión). Va antes de los retornos tempranos.
+  useEffect(() => {
+    if (user) track({ type: 'onboarding_step_viewed', flow: 'parent', step: step === 1 ? 'datos' : 'hijos' });
+  }, [step, user]);
 
   if (authLoading) {
     return (
@@ -75,6 +81,11 @@ export default function ParentOnboarding() {
       if (rpcError) throw rpcError;
 
       await updateProfile({}, { silent: true });
+      track({
+        type: 'onboarding_finished',
+        flow: 'parent',
+        extra: { how: next.startsWith('/unirse') ? 'join' : next === '/children' ? 'add_child' : 'later' },
+      });
       toast.success('¡Listo! Tu cuenta quedó configurada.');
       navigate(next, { replace: true });
     } catch (err) {
@@ -110,7 +121,13 @@ export default function ParentOnboarding() {
         <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
       </Button>
       {step < 2 ? (
-        <Button onClick={() => setStep(2)} disabled={!step1Done}>
+        <Button
+          onClick={() => {
+            track({ type: 'onboarding_step_completed', flow: 'parent', step: 'datos' });
+            setStep(2);
+          }}
+          disabled={!step1Done}
+        >
           Siguiente <ChevronRight className="h-4 w-4 ml-1" />
         </Button>
       ) : (

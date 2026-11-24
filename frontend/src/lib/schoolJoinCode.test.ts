@@ -4,7 +4,7 @@ import {
   validateJoinRequestForm, adultChildWarning, ageOn,
   buildPorAsignarInbox, buildEnrollPayload,
   savePendingJoinCode, readPendingJoinCode, clearPendingJoinCode, PENDING_JOIN_CODE_KEY,
-  joinErrorMessage,
+  joinErrorMessage, enviadaHaceTexto, waLinkEscuela,
   type JoinRequestRow,
 } from './schoolJoinCode';
 
@@ -203,5 +203,42 @@ describe('documento en la solicitud (identidad solo por datos únicos)', () => {
   });
   it('acepta un documento con puntos y lo normaliza', () => {
     expect(validateJoinRequestForm({ ...base, docNumber: '1.031.847.289' }, today)).toEqual({});
+  });
+});
+
+describe('enviadaHaceTexto', () => {
+  // 23-nov-2026 15:00 UTC = 10:00 en Colombia.
+  const ahora = Date.parse('2026-11-23T15:00:00.000Z');
+  it('hoy, ayer y hace N días, por día de calendario de Colombia', () => {
+    expect(enviadaHaceTexto('2026-11-23T14:00:00.000Z', ahora)).toBe('enviada hoy');
+    expect(enviadaHaceTexto('2026-11-22T20:00:00.000Z', ahora)).toBe('enviada ayer');
+    expect(enviadaHaceTexto('2026-11-05T15:00:00.000Z', ahora)).toBe('enviada hace 18 días');
+  });
+  it('23:00 de ayer ya es «ayer» a las 00:10, aunque no hayan pasado 24 h', () => {
+    // Enviada 04:00 UTC del 23 = 23:00 COT del 22; ahora 05:10 UTC = 00:10 COT del 23 → «ayer».
+    expect(enviadaHaceTexto('2026-11-23T04:00:00.000Z', Date.parse('2026-11-23T05:10:00.000Z'))).toBe('enviada ayer');
+  });
+  it('fecha inválida o futura no rompe', () => {
+    expect(enviadaHaceTexto('no es fecha', ahora)).toBe('');
+    expect(enviadaHaceTexto('2026-12-01T00:00:00.000Z', ahora)).toBe('enviada hoy');
+  });
+});
+
+describe('waLinkEscuela', () => {
+  it('celular colombiano de 10 dígitos → le pone 57', () => {
+    const url = waLinkEscuela('300 111 2233', 'Academia X', 'Ana')!;
+    expect(url.startsWith('https://wa.me/573001112233?text=')).toBe(true);
+    expect(decodeURIComponent(url)).toContain('Academia X');
+    expect(decodeURIComponent(url)).toContain('Ana');
+  });
+  it('con indicativo ya puesto lo respeta', () => {
+    expect(waLinkEscuela('+57 300 111 2233', 'X', 'Y')!.startsWith('https://wa.me/573001112233')).toBe(true);
+    expect(waLinkEscuela('+1 415 555 0100', 'X', 'Y')!.startsWith('https://wa.me/14155550100')).toBe(true);
+  });
+  it('sin número usable no hay enlace', () => {
+    expect(waLinkEscuela(null, 'X', 'Y')).toBeNull();
+    expect(waLinkEscuela('', 'X', 'Y')).toBeNull();
+    expect(waLinkEscuela('12345', 'X', 'Y')).toBeNull();
+    expect(waLinkEscuela('2111112233', 'X', 'Y')).toBeNull(); // 10 dígitos que no son celular
   });
 });

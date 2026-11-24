@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { construirHorario } from './venueMetrics';
 import { SportMapsPaySettings } from '@/components/settings/SportMapsPaySettings';
+import { track } from '@/lib/onboarding/trackOnboardingEvent';
 
 // Mismos tipos que ofrece el formulario de instalaciones de la escuela
 // (FacilityFormDialog.facilityTypes, no exportado). Si allá se agrega uno,
@@ -66,6 +67,11 @@ export default function VenueOnboardingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schoolName]);
 
+  // Evento «paso visto» (uno por paso y sesión). Va antes de los retornos tempranos.
+  useEffect(() => {
+    track({ type: 'onboarding_step_viewed', flow: 'venue', step: paso === 1 ? 'espacio' : paso === 2 ? 'cancha' : 'cobros' });
+  }, [paso]);
+
   if (loading) {
     return (
       <div className="min-h-[60dvh] flex items-center justify-center">
@@ -94,6 +100,7 @@ export default function VenueOnboardingPage() {
         .update({ name: nombreEspacio.trim(), city: ciudad.trim() || null })
         .eq('id', schoolId);
       if (error) throw error;
+      track({ type: 'onboarding_step_completed', flow: 'venue', step: 'espacio' });
       setPaso(2);
     } catch (e) {
       toast({ title: 'No pudimos guardar tu espacio', description: (e as Error).message, variant: 'destructive' });
@@ -128,6 +135,7 @@ export default function VenueOnboardingPage() {
       });
       if (error) throw error;
       await queryClient.invalidateQueries({ queryKey: ['school-facilities', schoolId] });
+      track({ type: 'onboarding_step_completed', flow: 'venue', step: 'cancha' });
       setPaso(3);
     } catch (e) {
       toast({ title: 'No pudimos guardar la instalación', description: (e as Error).message, variant: 'destructive' });
@@ -137,6 +145,7 @@ export default function VenueOnboardingPage() {
   };
 
   const terminar = async () => {
+    track({ type: 'onboarding_finished', flow: 'venue', extra: { how: 'complete' } });
     setGuardando(true);
     // Mejor esfuerzo: si la RLS no deja marcar el onboarding, el panel igual abre
     // (no depende de este estado para un dueño de espacios).
