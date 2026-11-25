@@ -8,10 +8,10 @@ export function estadoConstancia(status: string): { label: string; tono: TonoEst
   switch (status) {
     case 'issued':
       return { label: 'Lista', tono: 'ok', detalle: null };
+    // 'pending_payment' es heredado: desde 2026-11-24 no se cobran constancias.
     case 'pending_review':
-      return { label: 'En revisión', tono: 'info', detalle: 'La escuela la está revisando. Te avisamos cuando esté lista.' };
     case 'pending_payment':
-      return { label: 'Falta el pago', tono: 'aviso', detalle: 'La escuela te dirá cómo pagarla.' };
+      return { label: 'En revisión', tono: 'info', detalle: 'La escuela la está revisando. Te avisamos cuando esté lista.' };
     case 'revoked':
       return { label: 'Anulada', tono: 'neutro', detalle: 'La escuela la anuló. Si la necesitas, pide una nueva.' };
     default:

@@ -391,6 +391,7 @@ export function getNavigationByRole(
         title: 'Documentos',
         items: [
           { title: 'Mis Carnets', href: '/my-cards', icon: IdCard },
+          { title: 'Mis Constancias', href: '/my-certificates', icon: FileCheck2 },
         ]
       },
       {

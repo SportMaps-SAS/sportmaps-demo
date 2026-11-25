@@ -110,6 +110,8 @@ export function AthleteMorePage({ pagosHref = '/athlete-payments' }: AthleteMore
     { label: 'Torneos y eventos', to: '/my-event-registrations' },
     { label: 'Mis objetivos', to: '/goals' },
     { label: 'Mis documentos', nota: d.edad === 'menor' ? 'Los sube tu acudiente' : 'Pronto', onClick: () => setDocs(true) },
+    // El deportista adulto pide sus constancias; las del menor las pide el acudiente.
+    ...(d.edad === 'menor' ? [] : [{ label: 'Constancias', nota: 'Inscripción, deportista activo', to: '/my-certificates' }]),
   ];
   const bienestar: Fila[] = [
     { label: 'Mi salud', to: '/salud' },

@@ -428,7 +428,9 @@ export function CardTemplatesManager({ schoolId }: { schoolId: string | null | u
                   onChange={(url) => patch({ background_url: url })}
                   onRemove={() => patch({ background_url: null })}
                   bucket="school-assets"
-                  path={`carnets/${schoolId}`}
+                  // La policy de school-assets solo deja subir a logos/, covers/ y
+                  // qr/ + <escuela>/: con `carnets/…` la subida fallaba SIEMPRE (RLS).
+                  path={`covers/${schoolId}`}
                   compact
                   hideHint
                 />
