@@ -136,7 +136,7 @@ export function HourBankEventDays() {
     setQuitando(d.id);
     try {
       await bffClient.delete(`/api/v1/access/hour-bank-exempt-days/${d.id}`);
-      toast({ title: 'Evento quitado', description: `El ${fechaLarga(d.exempt_date)} vuelve a descontar horas normalmente.` });
+      toast({ title: 'Evento quitado', description: `El ${fechaLarga(d.exempt_date)} ya no es evento: los ingresos nuevos descuentan horas. Lo que ya se devolvió no se vuelve a descontar.` });
       refrescar();
     } catch (err) {
       toast({ title: 'No se pudo quitar', description: err instanceof BFFError ? err.message : 'Intenta de nuevo', variant: 'destructive' });

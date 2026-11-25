@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 959,
-  "head": "20261124100705",
+  "count": 960,
+  "head": "20261124113656",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -962,6 +962,7 @@
     {"v":"20261123123730","file":"20261123123730_saldo_a_favor_sin_huella_a_revision.sql","sha256":"237ef4661d0ab13996a8415966c3ce9b273dae63f2f19bc8726d10d3c90fbf19","added":"2026-11-23","by":"Brayan Steven Lopez"},
     {"v":"20261123123742","file":"20261123123742_rls_initplan_lote2_resto_e_is_school_admin.sql","sha256":"0343081c1e186e5e798a61c4445e080b70d4dedbd7ac84744e66f909a1870506","added":"2026-11-23","by":"Brayan Steven Lopez"},
     {"v":"20261123155851","file":"20261123155851_huella_comprobante_pasa_al_anular.sql","sha256":"b11bc466904d6d60e824b61b1c8e9c365a56a383b2132609dc7624d226e4ee6e","added":"2026-11-23","by":"Brayan Steven Lopez"},
-    {"v":"20261124100705","file":"20261124100705_body_versionado_y_rls.sql","sha256":"efb0e60be18c099aa7b814227d6049f403abb4029e3ed7a720b117cc8ba0bb98","added":"2026-11-24","by":"Brayan Steven Lopez"}
+    {"v":"20261124100705","file":"20261124100705_body_versionado_y_rls.sql","sha256":"efb0e60be18c099aa7b814227d6049f403abb4029e3ed7a720b117cc8ba0bb98","added":"2026-11-24","by":"Brayan Steven Lopez"},
+    {"v":"20261124113656","file":"20261124113656_hours_plan_enabled_solo_super_admin.sql","sha256":"6d7adf97ed8ab955007f8c3c08cd755db8d2840757d125edb6c11a5194730edd","added":"2026-11-24","by":"Brayan Steven Lopez"}
   ]
 }
