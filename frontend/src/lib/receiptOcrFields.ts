@@ -2,10 +2,17 @@
  * receiptOcrFields — Mapea el resultado del validador de comprobantes a las
  * columnas ocr_* / receipt_* de `payments`.
  *
- * El mismo bloque estaba duplicado en PaymentCheckoutModal y ParentCheckoutPage;
- * cualquier flujo nuevo que persista un comprobante debe usar este helper para
- * no dejar campos sueltos (los índices de dedup dependen de ocr_reference y
- * receipt_image_sha256, así que omitirlos desactiva el guard de reuso).
+ * SOLO PARA ADMINISTRACIÓN DE LA ESCUELA (registrar pago, «Cobros y pagos»).
+ * Desde el 2026-11-25 (docs/specs/seguridad-veredicto-comprobante-plan.md) la
+ * lectura, el veredicto y la huella del comprobante los escriben solo el
+ * servidor y la administración: la familia, el atleta y el coach NO deben usar
+ * este helper (y la base ignora esas columnas si las mandan, fn_guard_payments_client).
+ * Sus pantallas (ParentCheckoutPage, PaymentCheckoutModal) guardan el archivo y
+ * piden el sellado (lib/api/sellarComprobante).
+ *
+ * En los caminos de administración, usarlo completo para no dejar campos sueltos:
+ * los índices de dedup dependen de ocr_reference y receipt_image_sha256, así que
+ * omitirlos desactiva el guard de reuso.
  */
 
 import type { ReceiptValidationResult } from '@/hooks/useReceiptValidator';
