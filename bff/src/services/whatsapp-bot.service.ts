@@ -107,7 +107,11 @@ import {
     FLUJO_CORTESIA, type CtxCortesia, ofrecerHorariosDeCortesia, leerPerfil, normalizar as normalizarCortesia,
     responderGrupoPorEdad, perfilReciente, listadoDeHorariosReciente,
     recordatorioDePasoCortesia, PASO_CORTESIA_RECORDATORIO, type EstadoCortesia,
+    preguntaPorConvocatoria, textoParaConvocatoria, textoSinClaseDePrueba,
 } from './whatsapp-clase-cortesia.service';
+import {
+    estadoDeOfertas, estadoCerrado, reglasDeOfertasParaIa, textoOfertasParaIa, type EstadoOfertas,
+} from './bot-ofertas.service';
 import { preguntaGrupoPorEdad, rangosDeEscuela, elegirGrupo, elegirGrupoEmbudo, textoGrupoParaEdad, tituloGrupo } from './grupos-por-edad.service';
 import {
     anunciaComprobante, nombreDelCobroAnunciado, yaPagoYReclama, textoYaPague, pideALaPersona,
@@ -262,6 +266,8 @@ interface EscuelaDelTurno {
     pasoSoltado?: { flujo: 'cortesia'; estado: EstadoCortesia } | { flujo: 'embudo'; estado: EstadoEmbudo };
     /** Pasos (`step`) de lo que `deliver` mandó o dejó en borrador en este turno. */
     entregas?: string[];
+    /** Lo que la escuela ofrece hoy por el bot (bot-ofertas.service), leído UNA vez por turno. */
+    ofertas?: Promise<EstadoOfertas>;
 }
 const escuelaDelTurno = new AsyncLocalStorage<EscuelaDelTurno>();
 
@@ -312,6 +318,27 @@ async function textosClase(schoolId: string): Promise<TextosClase> {
     } catch {
         return TEXTOS_POR_DEFECTO;
     }
+}
+
+/**
+ * Lo que la escuela ofrece hoy por el bot (bot-ofertas.service): ¿clase de prueba abierta HOY? (interruptor de la
+ * escuela y bloqueos por fecha; falla cerrado), sus bloqueos y las ofertas vigentes (convocatorias…). Una lectura
+ * por turno (el servicio además cachea 60 s). Nunca lanza. Monster, 2026-11-25: en diciembre y enero no hay
+ * clases de prueba y la oferta estaba escrita en ~15 sitios; todos preguntan aquí.
+ */
+function ofertasDeLaEscuela(schoolId: string): Promise<EstadoOfertas> {
+    const leer = () => Promise.resolve()
+        .then(() => estadoDeOfertas(schoolId))
+        .then((e) => e ?? estadoCerrado(schoolId))
+        .catch(() => estadoCerrado(schoolId));
+    const s = escuelaDelTurno.getStore();
+    if (s && s.schoolId === schoolId) return (s.ofertas ??= leer());
+    return leer();
+}
+
+/** ¿Hoy se puede ofrecer la clase de prueba en esta escuela? Nunca lanza (falla cerrado). */
+async function claseDePruebaAbierta(schoolId: string): Promise<boolean> {
+    return (await ofertasDeLaEscuela(schoolId))?.claseDePrueba?.disponible === true;
 }
 
 /**
@@ -1888,6 +1915,11 @@ function ctxCortesia(
         textosPrevios: () => entrantesDeTexto(conversationId, 7),
         // Una pregunta a mitad de la reserva: la contesta el camino de siempre y el paso se recuerda después.
         alSoltar: (estado) => anotarPasoSoltado({ flujo: 'cortesia', estado }),
+        // Clase de prueba abierta/cerrada y ofertas vigentes: la misma lectura del turno (bot-ofertas).
+        ofertas: (schoolId) => ofertasDeLaEscuela(schoolId),
+        // «Hoy no hay clase de prueba»: la conversación queda para la escuela (buzón y aviso).
+        dejarPendiente: () => abrirEnBuzon(integration, conversationId, contactWaId,
+            parentId ? undefined : { motivo: 'prospecto' }),
     };
 }
 
@@ -2783,7 +2815,8 @@ function ctxEmbudo(integration: WhatsAppIntegration, conversationId: string, con
         avisarEscuela: async (motivo, detalle) => {
             await abrirEnBuzon(integration, conversationId, contactWaId, {
                 motivo: 'puerta_otro',
-                detalle: `Clase de prueba por WhatsApp (${motivo.replace(/_/g, ' ')}): ${detalle ?? 'pasa a una persona.'}`,
+                detalle: `${motivo === 'inscripcion_oferta' ? 'Inscripción por WhatsApp' : 'Clase de prueba por WhatsApp'} `
+                    + `(${motivo.replace(/_/g, ' ')}): ${detalle ?? 'pasa a una persona.'}`,
             });
         },
         // «Ya soy del club» escrito: lo atiende la puerta de siempre, como si tocara su botón.
@@ -3360,7 +3393,11 @@ async function avisarClubAparteDeLaVenta(
         const recientes = await mensajesRecientes(conversationId);
         if (discretoEnBot() ? escuelaActivaEn(recientes) : humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return;
         await deliver(integration, conversationId, contactWaId,
-            textoClubAparteDeLaVenta(venta.item, await textosClase(integration.school_id)),
+            // Sin clase de prueba hoy (bot-ofertas) el texto no la nombra.
+            textoClubAparteDeLaVenta(venta.item, {
+                ...await textosClase(integration.school_id),
+                disponible: await claseDePruebaAbierta(integration.school_id),
+            }),
             { step: PASO_VENTA.CLUB_APARTE, servicio_aparte_id: venta.item.id });
     } catch (e: any) {
         console.warn('[whatsapp-bot] no se pudo avisar que el club va aparte de la venta', { conversationId, err: e?.message });
@@ -3864,12 +3901,14 @@ async function aclararPagoDeMensualidad(
                 }
             }
             const ajustes = await ajustesDeLaEscuela(schoolId);
-            const [valores, clase] = await Promise.all([
+            const [valores, clase, ofertas] = await Promise.all([
                 preciosParaProspecto(schoolId, ajustes.responderPrecios).catch(() => null),
                 textosClase(schoolId),
+                // Sin clase de prueba hoy (bot-ofertas) no se dice «primero se hace la clase de prueba».
+                ofertasDeLaEscuela(schoolId),
             ]);
             await deliver(integration, conversationId, contactWaId,
-                textoInscribirmeTrasPago({ valores, nombreClase: clase.nombre }),
+                textoInscribirmeTrasPago({ valores, nombreClase: clase.nombre, ofertas }),
                 { step: 'pago_mensualidad_inscribirme', ...payloadDeEstado(estado) });
             await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
             return 'pago_mensualidad_inscribirme';
@@ -4386,6 +4425,8 @@ export type ResultadoDesconocido =
     | 'otp_codigo' | 'otp_correo' | 'inscripcion' | 'inscripcion_sin_enlace' | 'pagos'
     | 'pagos_y_precio' | 'pagos_y_precio_sin_enlace'
     | 'clase_cortesia' | 'clase_cortesia_en_curso' | 'cortesia_semana' | 'ayuda_app' | 'precios'
+    /** Convocatorias / ofertas vigentes, o «hoy no hay clase de prueba» (bot-ofertas, 2026-11-25). */
+    | 'ofertas_vigentes'
     | 'prospecto_seguimiento' | 'escuela_atendiendo'
     | 'prospecto_horarios' | 'prospecto_precios' | 'prospecto_info' | 'prospecto_persona' | 'prospecto_ia'
     | 'venta_consulta' | 'medios_de_pago' | 'medios_de_pago_escalado'
@@ -4430,7 +4471,9 @@ async function darBienvenidaAlDesconocido(
 
         const saludo = await saludoDePresentacion(conversationId, escuela);
         await deliver(integration, conversationId, contactWaId,
-            (saludo ? `${saludo}\n\n` : '') + textoDeBienvenida((await textosClase(integration.school_id)).nombre),
+            // Lo que la escuela ofrece hoy (bot-ofertas): sin clase de prueba, la bienvenida no la nombra.
+            (saludo ? `${saludo}\n\n` : '') + textoDeBienvenida((await textosClase(integration.school_id)).nombre,
+                await ofertasDeLaEscuela(integration.school_id)),
             { step: PASO_BIENVENIDA_DESCONOCIDO });
         return true;
     } catch (err) {
@@ -4763,7 +4806,17 @@ async function atenderDesconocidoEnEscuela(
         const precios = await textoDePreciosDeEscuela(integration.school_id);
         if (precios) {
             const tClasePrecios = await textosClase(integration.school_id);
-            const semana = await mensajeSemanaDeCortesia(integration.school_id, ajustesEscuela);
+            // (2026-11-25) Con la clase de prueba cerrada hoy (bot-ofertas) no va «La primera clase es…»: van las
+            // ofertas vigentes (convocatorias…) si las hay, o la línea neutra de siempre.
+            const ofertasPrecios = await ofertasDeLaEscuela(integration.school_id);
+            const primeraClase = ofertasPrecios.claseDePrueba.disponible
+                ? lineaPrimeraClase(tClasePrecios)
+                : (() => {
+                    const vigentes = textoParaConvocatoria(ofertasPrecios, text);
+                    return vigentes ? `\n\n${vigentes}`
+                        : '\n\nSi quieres inscribirte o tienes dudas, escríbelas por aquí y la escuela te responde.';
+                })();
+            const semana = await mensajeSemanaDeCortesia(integration.school_id, ajustesEscuela, ofertasPrecios);
             const saludoPrecios = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
             // «Estoy interesada en inscribir a mi hija» (…6376, 2026-10-26) recibía
             // solo la lista de precios y «escríbeme el correo»: sin próximo paso.
@@ -4775,7 +4828,7 @@ async function atenderDesconocidoEnEscuela(
                 (semana
                     ? `\n\nY antes de decidir:\n\n${semana}`
                     : inscribir
-                        ? lineaPrimeraClase(tClasePrecios)
+                        ? primeraClase
                         : '\n\nSi quieres inscribirte o tienes dudas, escríbelas por aquí y la escuela te responde.') +
                 (enlaceIns ? `\n\nPara inscribirte: ${enlaceIns}` : '') +
                 // Modo discreto: al interesado no se le pide el correo.
@@ -4832,6 +4885,14 @@ async function atenderDesconocidoEnEscuela(
         && (await ajustesDeAtencion(integration.id)).responderProspectos
         && await botLeDioLaBienvenida(conversationId)) {
         prospecto = 'seguimiento';
+    }
+    // (2026-11-25, Monster) «¿Cuándo son las convocatorias?» no usa el vocabulario de la puerta de prospecto: con
+    // ofertas vigentes en la escuela (bot-ofertas) es un interesado y se le contesta con ellas (abajo). Sin ofertas,
+    // nada cambia.
+    if (!tema && !prospecto && !botonId && preguntaPorConvocatoria(rafaga || text)
+        && (await ofertasDeLaEscuela(integration.school_id)).ofertas.length > 0
+        && (await ajustesDeAtencion(integration.id)).responderProspectos) {
+        prospecto = 'prospecto';
     }
     // «Ya no quiero entrenar vóley»: el tema «inscripción» tampoco abre la puerta si dijo que no (Monster 2026-11-12).
     if ((!tema && !prospecto) || (tema === 'inscripcion' && !prospecto && desisteDeProspecto(text))) {
@@ -5063,6 +5124,22 @@ async function atenderDesconocidoEnEscuela(
         await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
         return 'escuela_atendiendo';
     }
+    // (2026-11-25, Monster) Pregunta por CONVOCATORIAS (pruebas para entrar a un equipo) y la escuela tiene ofertas
+    // vigentes (bot-ofertas): sus fechas, horas, lugares y cómo inscribirse, de la base y filtradas por el género que
+    // nombre. Nunca la clase de prueba (aunque hoy esté abierta). Mismo step: cuenta para el freno de 30 días. La
+    // escuela la ve (el cupo lo confirma ella). Sin ofertas cargadas, nada cambia. Va ANTES del embudo: con la clase
+    // abierta (26–30 nov) el embudo es el de la clase de prueba, y a quien pregunta por una convocatoria no se le
+    // ofrece la clase (la queja de Monster del 25-nov).
+    const ofertasHoy = await ofertasDeLaEscuela(integration.school_id);
+    const convocatorias = !botonId && preguntaPorConvocatoria(rafaga || text)
+        ? textoParaConvocatoria(ofertasHoy, todoElTexto) : null;
+    if (convocatorias) {
+        await deliver(integration, conversationId, contactWaId, S + convocatorias + bloquePrecios,
+            { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'ofertas_vigentes', con_precios: Boolean(preciosPrimera) });
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+        return contestar('ofertas_vigentes');
+    }
+
     if (embudoActivo(ajustesEscuela) && await iniciarEmbudoEnBot(integration, conversationId, contactWaId,
         { saludo, step: PASO_DESCONOCIDO_ESCOLAR })) {
         return contestar('embudo');
@@ -5120,7 +5197,31 @@ async function atenderDesconocidoEnEscuela(
     // con step PASO_DESCONOCIDO_ESCOLAR. Lo que siga (nombre, edad…) lo
     // atiende el paso 0 de arriba.
     const pideCortesia = pideClaseDeCortesia(text) || (prospecto !== null && intereses.includes('cortesia'));
-    const hayFranjas = filtrarVigentes(await franjasDeSupabase(integration.school_id), new Date()).length > 0;
+    // (2026-11-25) HOY sin clase de prueba (bloqueo por fechas o interruptor apagado, bot-ofertas): no se ofrece ni
+    // se presenta. A quien la pide, o quiere inscribirse y la escuela tiene ofertas vigentes (convocatorias…), se le
+    // contesta con lo que hay (o el mensaje de la escuela, o el neutro) y queda para la escuela. Lo demás sigue al
+    // enlace / acuse de siempre, que no la menciona.
+    const claseAbierta = ofertasHoy.claseDePrueba.disponible;
+    if (!claseAbierta) {
+        const vigentes = textoParaConvocatoria(ofertasHoy, todoElTexto);
+        const quiereEntrar = intereses.includes('inscripcion') || quiereInscribirse(text);
+        if (pideCortesia || (quiereEntrar && vigentes)) {
+            const tClase = await textosClase(integration.school_id);
+            const cuerpo = pideCortesia
+                ? textoSinClaseDePrueba(ofertasHoy, todoElTexto, tClase, { pidioLaClase: true })
+                : vigentes!;
+            // Con ofertas, cómo inscribirse lo dice cada una (su `cta`); sin ofertas, el enlace de siempre.
+            const lineaEnlaceSinOfertas = !ofertasHoy.ofertas.length && enlace
+                ? `\n\nEn este enlace ves los grupos y los valores, y puedes hacer la inscripción: ${enlace}` : '';
+            await deliver(integration, conversationId, contactWaId, S + cuerpo + bloquePrecios + lineaEnlaceSinOfertas,
+                { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'ofertas_vigentes', con_enlace: Boolean(lineaEnlaceSinOfertas),
+                    con_precios: Boolean(preciosPrimera) });
+            await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+            return contestar('ofertas_vigentes');
+        }
+    }
+    const hayFranjas = claseAbierta
+        && filtrarVigentes(await franjasDeSupabase(integration.school_id), new Date()).length > 0;
     if (pideCortesia || hayFranjas) {
         const lineaEnlace = enlace
             ? `\n\nEn este enlace ves los grupos y los valores, y puedes hacer la inscripción: ${enlace}`
@@ -5215,6 +5316,8 @@ async function precioConCortesiaAbierta(
     try {
         const estado = await leerEstadoDeSupabase(conversationId);
         if (!estado || estado.paso === 'recordatorio') return null;
+        // Con la clase de prueba cerrada hoy no se dice «seguimos con la reserva»: el precio lo contesta el camino de siempre.
+        if (!(await claseDePruebaAbierta(integration.school_id))) return null;
         if (await pasoReciente(conversationId, PASO_PROSPECTO_PRECIOS, 24)) return null;
         const ajustes = await ajustesDeLaEscuela(integration.school_id);
         const precios = await preciosParaProspecto(integration.school_id, ajustes.responderPrecios, leerPerfil(text));
@@ -5251,6 +5354,8 @@ export const PASO_PROSPECTO_HORARIOS = 'prospecto_seguimiento_horarios';
 export const PASO_PROSPECTO_PRECIOS = 'prospecto_seguimiento_precios';
 export const PASO_PROSPECTO_INFO = 'prospecto_seguimiento_info';
 export const PASO_PROSPECTO_PERSONA = 'prospecto_seguimiento_persona';
+/** Convocatorias / ofertas vigentes, o «hoy no hay clase de prueba», al prospecto que sigue escribiendo. */
+export const PASO_PROSPECTO_OFERTAS = 'prospecto_seguimiento_ofertas';
 
 /**
  * ¿El último entrante es POSTERIOR a la última respuesta automática? Si no,
@@ -5302,6 +5407,21 @@ async function responderSeguimientoDeProspecto(
             { step: PASO_PROSPECTO_AFILIADO });
         await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
         return 'prospecto_afiliado';
+    }
+
+    // 1c. (2026-11-25, Monster) Pregunta por CONVOCATORIAS y la escuela tiene ofertas vigentes, o pide la clase de
+    //     prueba y HOY no hay (bot-ofertas): lo que la escuela tiene, nunca la clase ni sus horarios. Una vez cada
+    //     24 h; si insiste, lo contesta el modelo (sus reglas traen lo mismo) o el acuse.
+    const ofertasHoy = await ofertasDeLaEscuela(integration.school_id);
+    const convocatorias = preguntaPorConvocatoria(nuevo) ? textoParaConvocatoria(ofertasHoy, p.todo) : null;
+    const pideLaClase = pideClaseDeCortesia(nuevo) || interesesDeProspecto(nuevo).includes('cortesia');
+    if (convocatorias || (pideLaClase && !ofertasHoy.claseDePrueba.disponible)) {
+        if (await pasoReciente(conversationId, PASO_PROSPECTO_OFERTAS, 24)) return 'frenado';
+        await deliver(integration, conversationId, contactWaId,
+            convocatorias ?? textoSinClaseDePrueba(ofertasHoy, p.todo, await textosClase(integration.school_id), { pidioLaClase: true }),
+            { step: PASO_PROSPECTO_OFERTAS });
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+        return 'ofertas_vigentes';
     }
 
     const intereses = interesesDeProspecto(nuevo);
@@ -5765,6 +5885,8 @@ async function recordarPasoPendiente(
         if (entregas.some((p) => !sueltas.has(p))) return;
         const texto = (inboundText || '').trim();
         if (suelto.flujo === 'cortesia') {
+            // Con la clase de prueba cerrada hoy no se recuerda un agendamiento (el flujo ya no lo sigue).
+            if (!(await claseDePruebaAbierta(integration.school_id))) return;
             const estado = suelto.estado;
             const payload = (datos: EstadoCortesia['datos']) =>
                 ({ flujo: FLUJO_CORTESIA, paso_cortesia: estado.paso, datos_cortesia: datos ?? {} });
@@ -6435,10 +6557,55 @@ export async function nombreDeEscuela(schoolId: string): Promise<string> {
  * El prompt de siempre y, SOLO si la escuela llama distinto su clase de prueba o
  * la cobra (B3, textos-clase-prueba), una línea al final: «nunca digas que es
  * gratis». Con la cortesía gratis de siempre devuelve SYSTEM_PROMPT tal cual.
+ * (2026-11-25) Y lo que la escuela ofrece hoy (bot-ofertas): con la clase de
+ * prueba cerrada, el prompt no la anuncia; con ofertas, bloqueos o la clase
+ * cerrada, van sus reglas y <ofertas_vigentes> al final (`promptConOfertas`).
  */
 async function promptDelSistema(schoolId: string): Promise<string> {
-    const regla = reglaDeClaseParaPrompt(await textosClase(schoolId));
-    return regla ? `${SYSTEM_PROMPT}\nCLASE DE PRUEBA DE ESTA ESCUELA: ${regla}` : SYSTEM_PROMPT;
+    const ofertas = await ofertasDeLaEscuela(schoolId);
+    const regla = ofertas.claseDePrueba.disponible ? reglaDeClaseParaPrompt(await textosClase(schoolId)) : '';
+    return promptConOfertas(regla ? `${SYSTEM_PROMPT}\nCLASE DE PRUEBA DE ESTA ESCUELA: ${regla}` : SYSTEM_PROMPT, ofertas);
+}
+
+// Las dos piezas del prompt que anuncian la clase de prueba: van aparte para cambiarlas cuando la escuela no la
+// tiene HOY (bloqueo por fechas o interruptor, bot-ofertas). SYSTEM_PROMPT queda letra por letra como antes.
+const PROMPT_SABE_HACER = `- No ofrezcas nada que no puedas hacer. Sabes cuatro cosas: consultar los pagos del
+  acudiente, decirle como pagar, agendar la CLASE DE CORTESIA (ver abajo) y pasar la
+  conversacion a un humano. No ofrezcas inscribir, agendar otra cosa, enviar
+  documentos ni cambiar nada en el sistema.`;
+const PROMPT_SABE_HACER_SIN_CLASE = `- No ofrezcas nada que no puedas hacer. Sabes tres cosas: consultar los pagos del
+  acudiente, decirle como pagar y pasar la conversacion a un humano. Hoy la escuela NO
+  tiene clase de prueba (ver abajo). No ofrezcas inscribir, agendar nada, enviar
+  documentos ni cambiar nada en el sistema.`;
+const PROMPT_CLASE_CORTESIA = `CLASE DE CORTESIA (clase de prueba):
+- Para «clase de cortesia», «clase de prueba», «clase gratis», «puedo ir a probar»,
+  «quiero que mi hijo pruebe una clase», «agendar una clase» o «cancelar mi clase de
+  prueba» usa SIEMPRE get_trial_class_info. Ella responde sola con las franjas reales
+  y agenda paso a paso.
+- NUNCA digas que no tienes esa informacion sin haber usado la herramienta, ni
+  inventes fechas, horarios, precios o cupos de la clase de cortesia.`;
+const PROMPT_SIN_CLASE = `CLASE DE PRUEBA (clase de cortesia):
+- HOY LA ESCUELA NO TIENE CLASES DE PRUEBA. No la ofrezcas, no la agendes, no des sus
+  horarios ni su valor, aunque la conversacion anterior la mencione.
+- Si preguntan por clase de prueba, de cortesia o gratis, o por cancelar una ya
+  reservada, usa get_trial_class_info: ella contesta sola con lo que la escuela tiene.
+  Mira OFERTAS DE LA ESCUELA HOY, al final.`;
+
+/**
+ * El prompt con lo que la escuela ofrece hoy (bot-ofertas). Clase abierta, sin
+ * ofertas ni bloqueos próximos → el mismo texto (regresión: letra por letra).
+ * Clase cerrada → sin «agendar la CLASE DE CORTESIA» ni su sección. Con algo que
+ * decir → al final, sus reglas (`reglasDeOfertasParaIa`) y <ofertas_vigentes>. Pura.
+ */
+export function promptConOfertas(prompt: string, ofertas: EstadoOfertas): string {
+    const reglas = reglasDeOfertasParaIa(ofertas);
+    const bloque = textoOfertasParaIa(ofertas);
+    if (ofertas.claseDePrueba.disponible && !reglas.length && !bloque) return prompt;
+    const base = ofertas.claseDePrueba.disponible ? prompt
+        : prompt.replace(PROMPT_SABE_HACER, () => PROMPT_SABE_HACER_SIN_CLASE)
+            .replace(PROMPT_CLASE_CORTESIA, () => PROMPT_SIN_CLASE);
+    return `${base}\n\nOFERTAS DE LA ESCUELA HOY (mandan sobre lo anterior en clases de prueba, convocatorias e inscripciones):\n`
+        + [...reglas, ...(bloque ? [bloque] : [])].join('\n');
 }
 
 export const SYSTEM_PROMPT = `Eres el asistente automático de una escuela deportiva en WhatsApp, hablando con el padre/acudiente (ya verificado).
@@ -6472,10 +6639,7 @@ Reglas estrictas:
 - Formatea montos en pesos colombianos y fechas en formato legible.
 - Formato de WhatsApp, NO Markdown: negrita con UN asterisco (*asi*), cursiva con _asi_.
   Nunca uses ** ni ## ni tablas ni enlaces [texto](url): WhatsApp los muestra literales.
-- No ofrezcas nada que no puedas hacer. Sabes cuatro cosas: consultar los pagos del
-  acudiente, decirle como pagar, agendar la CLASE DE CORTESIA (ver abajo) y pasar la
-  conversacion a un humano. No ofrezcas inscribir, agendar otra cosa, enviar
-  documentos ni cambiar nada en el sistema.
+${PROMPT_SABE_HACER}
 - Lo que NO sabes y te van a preguntar igual: edades de cada categoria, lista de
   precios de la escuela (mensualidad de otros planes, uniforme, inscripcion nueva),
   entrenadores, competencias, asistencia y rendimiento. No tienes esos datos. Dilo
@@ -6579,13 +6743,7 @@ SOBRE LA ESCUELA:
   · Si no sabes de que grupo habla, pregunta cual, o lista los que si tienen
     horario cargado.
 
-CLASE DE CORTESIA (clase de prueba):
-- Para «clase de cortesia», «clase de prueba», «clase gratis», «puedo ir a probar»,
-  «quiero que mi hijo pruebe una clase», «agendar una clase» o «cancelar mi clase de
-  prueba» usa SIEMPRE get_trial_class_info. Ella responde sola con las franjas reales
-  y agenda paso a paso.
-- NUNCA digas que no tienes esa informacion sin haber usado la herramienta, ni
-  inventes fechas, horarios, precios o cupos de la clase de cortesia.
+${PROMPT_CLASE_CORTESIA}
 
 COMO PAGAR:
 - Para «medios de pago», «como pago», «a que cuenta», «acepta Nequi» o «donde mando el
@@ -6884,6 +7042,9 @@ async function handleIntent(
         try {
             // «Cancelar mi clase» llega acá cuando la regla no lo atrapó: el
             // flujo lo atiende si hay reserva; si no, se informa la oferta.
+            // (2026-11-25) Con la clase de prueba cerrada hoy (bot-ofertas) no se agenda nada: `iniciarCortesia`
+            // contesta «por ahora no hay (vuelven el …)» con las ofertas vigentes y deja la conversación a la
+            // escuela; un agendamiento a medias tampoco sigue. Cancelar una reserva sí.
             if (!(await atenderTurnoCortesia(ctx, text, null, { iniciar: false }))) {
                 await iniciarCortesia(ctx, { texto: text });
             }
@@ -7478,12 +7639,15 @@ export const presentacionDelAsistente = (escuela: string) =>
 // Sin emoji: el tope de 3 por mensaje (`recortarEmojis`) se los quitaba al cuerpo.
 export const AVISO_PRIVACIDAD_DESCONOCIDO =
     'Política de datos: https://app.sportmaps.co/politica-de-privacidad';
-export const presentacionLarga = (escuela: string, clase = TEXTOS_POR_DEFECTO.nombre, servicio?: { name: string } | null) =>
+export const presentacionLarga = (escuela: string, clase: string | null = TEXTOS_POR_DEFECTO.nombre, servicio?: { name: string } | null) =>
     // En la venta de un servicio (frente A, Monster 2026-11-08) la presentación no
     // ofrece la clase de prueba: «una venta de servicio es solo una venta».
+    // `clase` null = HOY la escuela no tiene clase de prueba (bot-ofertas, 2026-11-25): no se nombra.
     servicio
         ? `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con la información y el cupo ${deLaDelServicio(servicio, { negrita: true })}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`
-        : `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
+        : clase === null
+            ? `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos e inscripciones.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`
+            : `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
 
 /**
  * ¿El texto ya es una presentación del asistente? Cuenta la de antes del
@@ -7537,7 +7701,10 @@ export async function saludoDePresentacion(
     const s = escuelaDelTurno.getStore();
     const servicio = o.servicio ?? s?.ventaServicio ?? null;
     if (servicio) return presentacionLarga(escuela, undefined, servicio);
-    return presentacionLarga(escuela, s ? (await textosClase(s.schoolId)).nombre : TEXTOS_POR_DEFECTO.nombre);
+    if (!s) return presentacionLarga(escuela, TEXTOS_POR_DEFECTO.nombre);
+    // Sin clase de prueba hoy (bot-ofertas) la presentación no la nombra.
+    if (!(await claseDePruebaAbierta(s.schoolId))) return presentacionLarga(escuela, null);
+    return presentacionLarga(escuela, (await textosClase(s.schoolId)).nombre);
 }
 
 /**

@@ -18,6 +18,17 @@ vi.mock('../config/supabase', () => ({
 }));
 const llm = vi.hoisted(() => ({ chatWithTools: vi.fn() }));
 vi.mock('./llm.service', () => llm);
+// Ofertas de la escuela (bot-ofertas): por defecto, ninguna y sin bloqueos (la clase de siempre).
+// El mock de supabase de este archivo no encadena dos `.eq()`: sin esto, la lectura fallaría cerrada.
+const ofertasMock = vi.hoisted(() => ({ estado: null as any }));
+vi.mock('./bot-ofertas.service', async (orig) => {
+    const real = await orig<typeof import('./bot-ofertas.service')>();
+    return {
+        ...real,
+        estadoDeOfertas: vi.fn(async (schoolId: string) => ofertasMock.estado
+            ?? real.armarEstado(schoolId, { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null })),
+    };
+});
 
 import {
     redactarRespuestaDeProspecto, topeDeRespuestasIa, transcripcion, limpiarRespuesta, textoLargoLimpio,
@@ -239,5 +250,199 @@ describe('prompt del prospecto con los textos de la clase', () => {
             recientes: [] as any[], grupos: null, precios: null, enlace: null,
         });
         expect(llm.chatWithTools.mock.calls[0][0].system).toContain('- Clase de cortesía:');
+    });
+});
+
+// ─── Ofertas y clase de prueba por fecha (bot-ofertas, Monster 2026-11-25) ──
+//
+// En diciembre y enero Monster no tiene clases de prueba y llegaban por las
+// convocatorias: la ficha dice «Para empezar en el club se agenda una clase de
+// prueba, que cuesta $15.000» y el modelo la ofrecía. Datos de ejemplo.
+
+import { armarEstado, type FilasCrudas } from './bot-ofertas.service';
+import {
+    MARCA_INSCRIPCION, extraerInscripcion, fechaIsoDeNacimiento, permitidosDeOfertas, interesDeOfertas,
+} from './whatsapp-prospecto-ia.service';
+
+const CTA = 'Para inscribirte escríbenos el nombre completo del deportista, su fecha de nacimiento y la convocatoria (día y hora) a la que quiere ir.';
+const FILAS_MONSTER: FilasCrudas = {
+    ofertas: [
+        { id: 'o-suba', tipo: 'convocatoria', titulo: 'Convocatorias Sede Suba', sede: 'Sede Suba', publico: null, genero: 'mixto',
+            estado: 'activa', vigente_desde: '2026-11-25', vigente_hasta: '2026-12-13', prioridad: 10, requiere_inscripcion: true,
+            requiere_pago: false, valor: null, cta: CTA },
+    ],
+    sesiones: [
+        { id: 's1', oferta_id: 'o-suba', fecha: '2026-12-05', hora_inicio: '07:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba',
+            genero: 'mixto', publico: 'Nacidos 2015 y 2016', notas: null },
+    ],
+    bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: 'Diciembre y enero sin clases de prueba' }],
+    ajustesClasePrueba: null,
+    mensajeSinOfertas: null,
+};
+const SIN_NADA: FilasCrudas = { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null };
+// 3-dic-2026 10:00 y 28-nov-2026 10:00 en Bogotá.
+const DIC_3 = Date.parse('2026-12-03T15:00:00Z');
+const NOV_28 = Date.parse('2026-11-28T15:00:00Z');
+const FICHA_MONSTER = 'Para empezar en el club se agenda una clase de prueba, que cuesta $15.000.';
+
+describe('prompt del prospecto con las ofertas de la escuela (bot-ofertas)', () => {
+    const P = { escuela: 'MONSTER', ficha: FICHA_MONSTER, estilo: null, grupos: null, precios: null, enlace: null, atencion: null };
+    const MONSTER = textosDeClase({ nombre_clase: 'prueba', trial_price: 15000 });
+    const DIC = armarEstado('monster', FILAS_MONSTER, DIC_3);
+
+    it('sin clase hoy: ninguna instrucción de la clase, <ofertas_vigentes> junto al catálogo y las reglas que mandan sobre la ficha', () => {
+        const s = promptDeProspecto({ ...P, textos: MONSTER, ofertas: DIC, catalogo: '[Servicio 1]\nServicio: Clínica' });
+        expect(s).not.toContain('- Clase de prueba: que te escriba el día');
+        expect(s).not.toContain('tiene un valor de *$15.000*');
+        expect(s).not.toContain('(clase de prueba o inscripción)');
+        expect(s).toContain('invitando al siguiente paso (lo de <ofertas_vigentes> o la inscripción)');
+        expect(s).toContain('- HOY NO HAY CLASES DE PRUEBA. Vuelven el lunes 1 de febrero de 2027.');
+        expect(s).toContain('A quien pregunte por una convocatoria NO le ofrezcas clase de prueba.');
+        expect(s).toContain('[convocatoria] Convocatorias Sede Suba');
+        expect(s).toContain(`Cómo inscribirse: ${CTA}`);
+        expect(s).toContain(MARCA_INSCRIPCION);
+        // Las reglas van en su sección, antes del tono; las ofertas, después del catálogo y antes de <atencion>.
+        expect(s.indexOf('OFERTAS Y CLASE DE PRUEBA (estas reglas MANDAN sobre <ficha>')).toBeLessThan(s.indexOf('\nTONO\n'));
+        expect(s.indexOf('</catalogo>')).toBeLessThan(s.indexOf('<ofertas_vigentes hoy='));
+        expect(s.indexOf('</ofertas_vigentes>')).toBeLessThan(s.indexOf('<atencion></atencion>'));
+        // La ficha dice «se agenda una clase de prueba»: lo último que lee el modelo es la regla.
+        expect(s.trim().split('\n').pop()).toContain('HOY NO HAY CLASES DE PRUEBA');
+        expect(s).toContain('<catalogo>, <ofertas_vigentes>, <grupos>');
+    });
+
+    it('sin clase y sin ofertas: tampoco la clase; «la escuela le escribe»', () => {
+        const s = promptDeProspecto({ ...P, textos: MONSTER, ofertas: armarEstado('m', { ...FILAS_MONSTER, ofertas: [], sesiones: [] }, DIC_3) });
+        expect(s).not.toContain('- Clase de prueba:');
+        expect(s).not.toContain('<ofertas_vigentes');
+        expect(s).toContain('(la inscripción)');
+        expect(s).toContain('No hay ofertas para nuevos deportistas en este momento.');
+        expect(s).not.toContain(MARCA_INSCRIPCION);
+    });
+
+    it('antes del bloqueo (28-nov): la clase sigue, con su fecha límite, y las convocatorias', () => {
+        const s = promptDeProspecto({ ...P, textos: MONSTER, ofertas: armarEstado('monster', FILAS_MONSTER, NOV_28) });
+        expect(s).toContain('- Clase de prueba: que te escriba el día que quiere venir');
+        expect(s).toContain('solo se pueden agendar hasta el lunes 30 de noviembre');
+        expect(s).toContain('(clase de prueba, lo de <ofertas_vigentes> o inscripción)');
+        expect(s).toContain('[convocatoria] Convocatorias Sede Suba');
+        expect(s.trim().split('\n').pop()).not.toContain('HOY NO HAY CLASES DE PRUEBA');
+    });
+
+    it('regresión: clase disponible, sin ofertas ni bloqueos → el prompt y el seguimiento de siempre, letra por letra', () => {
+        const nada = armarEstado('dynasty', SIN_NADA, NOV_28);
+        for (const extra of [{}, { textos: MONSTER }, { catalogo: '[Servicio 1]\nServicio: Clínica' }, { valoresDeCampos: true }]) {
+            expect(promptDeProspecto({ ...P, ...extra, ofertas: nada })).toBe(promptDeProspecto({ ...P, ...extra }));
+        }
+        expect(instruccionSeguimiento(MONSTER, nada)).toBe(instruccionSeguimiento(MONSTER));
+        expect(instruccionSeguimiento(undefined, nada)).toBe(INSTRUCCION_SEGUIMIENTO);
+    });
+
+    it('seguimiento de 20 h sin clase: invita a las fechas de las ofertas, nunca «el día para su clase»', () => {
+        const con = instruccionSeguimiento(MONSTER, DIC);
+        expect(con).toContain('(decirte a cuál de las fechas de <ofertas_vigentes> quiere ir, o inscribirse)');
+        expect(con).toContain('no la vuelvas a ofrecer: hoy no hay');
+        expect(con).not.toContain('para su clase de prueba');
+        const sin = instruccionSeguimiento(MONSTER, armarEstado('m', { ...FILAS_MONSTER, ofertas: [], sesiones: [] }, DIC_3));
+        expect(sin).toContain('(inscribirse)');
+    });
+
+    it('la escuela con la clase apagada (whatsapp_enabled = false) tampoco la ofrece', () => {
+        const apagada = armarEstado('x', { ...SIN_NADA, ajustesClasePrueba: { enabled: true, whatsapp_enabled: false } }, NOV_28);
+        const s = promptDeProspecto({ ...P, ofertas: apagada });
+        expect(s).not.toContain('- Clase de cortesía:');
+        expect(s).toContain('- HOY NO HAY CLASES DE PRUEBA.');
+    });
+});
+
+describe('redactarRespuestaDeProspecto con las ofertas', () => {
+    const DIC = armarEstado('monster', FILAS_MONSTER, DIC_3);
+    const base = {
+        schoolId: 'monster', conversationId: 'c1', escuela: 'MONSTER', nuevo: 'Hola, ¿cuándo son las convocatorias?',
+        recientes: [{ direction: 'inbound', text_body: 'Hola, ¿cuándo son las convocatorias?', created_at: new Date().toISOString() }] as any[],
+        grupos: null, precios: null, enlace: null, textos: textosDeClase({ nombre_clase: 'prueba', trial_price: 15000 }),
+    };
+
+    beforeEach(() => {
+        llm.chatWithTools.mockReset();
+        fila.settings = { wa_ficha_prospectos: FICHA_MONSTER };
+        ofertasMock.estado = null;
+    });
+
+    it('sin inyectarlas, lee las de la escuela y el prompt no trae la clase', async () => {
+        ofertasMock.estado = DIC;
+        llm.chatWithTools.mockResolvedValue({ text: 'Las convocatorias de Suba son el sábado 5 de diciembre a las 7:00 a. m.', provider: 'claude' });
+        expect(await redactarRespuestaDeProspecto(base)).toContain('sábado 5 de diciembre');
+        const system: string = llm.chatWithTools.mock.calls[0][0].system;
+        expect(system).toContain('<ofertas_vigentes');
+        expect(system).not.toContain('- Clase de prueba: que te escriba');
+    });
+
+    it('la marca de inscripción nunca sale; con ella, la inscripción (lead + aviso) y el pase a la escuela', async () => {
+        llm.chatWithTools.mockResolvedValue({
+            text: '¡Listo! Ya le pasé tus datos a la escuela y la escuela te confirma el cupo por aquí.\n'
+                + `${MARCA_INSCRIPCION} Mariana Gómez Ruiz | 14/03/2015 | sábado 5 de diciembre, 7:00 a. m.`,
+            provider: 'claude',
+        });
+        const alInscribirse = vi.fn(async () => {});
+        const r = await redactarRespuestaDeProspecto({ ...base, nuevo: 'Mariana Gómez Ruiz, 14/03/2015, la del sábado', ofertas: DIC, alInscribirse });
+        expect(r).toBe('¡Listo! Ya le pasé tus datos a la escuela y la escuela te confirma el cupo por aquí.');
+        expect(alInscribirse).toHaveBeenCalledWith({
+            deportista: 'Mariana Gómez Ruiz', nacimiento: '14/03/2015', fechaNacimiento: '2015-03-14', sesion: 'sábado 5 de diciembre, 7:00 a. m.',
+        }, DIC);
+    });
+
+    it('si el modelo no dijo que la escuela confirma, se agrega (la conversación queda pendiente de la escuela)', async () => {
+        llm.chatWithTools.mockResolvedValue({ text: `Perfecto, quedó anotado.\n${MARCA_INSCRIPCION} Ana Ruiz | 2015-03-14 | domingo 6`, provider: 'claude' });
+        const r = await redactarRespuestaDeProspecto({ ...base, ofertas: DIC, alInscribirse: async () => {} });
+        expect(r).toBe('Perfecto, quedó anotado.\n\nLa escuela te confirma el cupo por aquí 🙌');
+    });
+
+    it('una marca sin ofertas vigentes no inscribe a nadie (y tampoco sale)', async () => {
+        llm.chatWithTools.mockResolvedValue({ text: `Listo.\n${MARCA_INSCRIPCION} Ana Ruiz | 2015-03-14 | domingo 6`, provider: 'claude' });
+        const alInscribirse = vi.fn(async () => {});
+        const r = await redactarRespuestaDeProspecto({ ...base, ofertas: armarEstado('m', SIN_NADA, NOV_28), alInscribirse });
+        expect(r).toBe('Listo.');
+        expect(alInscribirse).not.toHaveBeenCalled();
+    });
+
+    it('seguimiento de 20 h sin clase: la instrucción y el prompt sin la clase', async () => {
+        llm.chatWithTools.mockResolvedValue({ text: '¿Pudiste mirar las fechas de las convocatorias?', provider: 'claude' });
+        await redactarRespuestaDeProspecto({ ...base, seguimiento: true, ofertas: DIC });
+        const llamada = llm.chatWithTools.mock.calls[0][0];
+        expect(llamada.system).not.toContain('- Clase de prueba:');
+        expect(llamada.messages[0].content).toContain('a cuál de las fechas de <ofertas_vigentes>');
+    });
+});
+
+describe('piezas puras de la inscripción a una oferta', () => {
+    it('extraerInscripcion: tolera negritas y la marca pegada a la frase; sin marca, el texto tal cual', () => {
+        expect(extraerInscripcion('Hola\n\n\n¿qué tal?')).toEqual({ texto: 'Hola\n\n\n¿qué tal?', inscripcion: null });
+        expect(extraerInscripcion(null)).toEqual({ texto: null, inscripcion: null });
+        const r = extraerInscripcion('Listo. *[INSCRIPCIÓN]* Ana Ruiz | 2015-03-14 | domingo 6, 7 a. m.*');
+        expect(r.texto).toBe('Listo.');
+        expect(r.inscripcion).toEqual({ deportista: 'Ana Ruiz', nacimiento: '2015-03-14', fechaNacimiento: '2015-03-14', sesion: 'domingo 6, 7 a. m.' });
+        // Incompleta (sin sesión): no inscribe, pero tampoco sale.
+        expect(extraerInscripcion('Ok\n[INSCRIPCION] Ana Ruiz | 2015-03-14')).toEqual({ texto: 'Ok', inscripcion: null });
+    });
+
+    it('fechaIsoDeNacimiento: solo fechas válidas y pasadas', () => {
+        expect(fechaIsoDeNacimiento('14/03/2015')).toBe('2015-03-14');
+        expect(fechaIsoDeNacimiento('2015-3-4')).toBe('2015-03-04');
+        expect(fechaIsoDeNacimiento('31/02/2015')).toBeNull();
+        expect(fechaIsoDeNacimiento('14 de marzo de 2015')).toBeNull();
+        expect(fechaIsoDeNacimiento('01/01/2099')).toBeNull();
+    });
+
+    it('permitidosDeOfertas: el valor de la oferta y sus fechas como días de evento', () => {
+        const con = armarEstado('m', {
+            ...FILAS_MONSTER,
+            ofertas: [{ ...FILAS_MONSTER.ofertas[0], requiere_pago: true, valor: 50000 }],
+        }, DIC_3);
+        const p = permitidosDeOfertas(con);
+        expect(p.montos.has(50000)).toBe(true);
+        expect(p.diasDeEvento.has('12-05')).toBe(true);
+        expect(permitidosDeOfertas(null).montos.size).toBe(0);
+        expect(interesDeOfertas(con)).toBe('convocatoria');
+        expect(interesDeOfertas({ ofertas: [...con.ofertas, { ...con.ofertas[0], tipo: 'clinica' }] })).toBe('oferta');
     });
 });

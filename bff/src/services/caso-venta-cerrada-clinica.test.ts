@@ -143,7 +143,8 @@ const VACACIONAL = {
     allow_installments: false, precio_afiliado: null, precios_por_fecha: null, abono_minimo_pct: null, opciones: null,
     description: 'Vacacional de verano: deporte y juego para los niños.',
 };
-const FIJO = 'Las inscripciones de la *Clínica de armadores y atacantes* ya cerraron: la clínica es mañana y el domingo (21 y 22 de noviembre). '
+// (2026-11-25) Genérico, del nombre del ítem: sin la frase fija de Monster con sus fechas (que seguía saliendo pasadas).
+const FIJO = 'Las inscripciones de la *Clínica de armadores y atacantes* ya cerraron. '
     + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
     + 'Para cualquier otra pregunta, ya le pasé tu mensaje a la escuela y te responde por aquí 🙌';
 const PROHIBIDO = /elige la sede|sede que te queda|clase de prueba|5 preguntas|\$15\.000|\$300\.000|\$332\.500|datos de pago|Nequi/i;
@@ -166,10 +167,13 @@ beforeEach(() => {
     h.state.filas = [];
     h.state.lead = null;
     h.state.pagos = [];
-    // Se cierra YA por la variable (la fecha real de la prueba es anterior al 21-nov).
+    // El caso es el 20-nov (venta cerrada, clínica el 21 y 22). Se fija el reloj: con
+    // Date.now() real, desde el 23-nov la clínica ya terminó y los tests se caían solos.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-20T15:00:00Z') });
+    // Se cierra YA por la variable (la fecha de la prueba es anterior al 21-nov).
     vi.stubEnv('WA_VENTAS_CERRADAS_ITEMS', ID_CLINICA);
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe('ventaCerradaDeItem (pura)', () => {
     const base = { id: 'x', kind: 'clase_extra', starts_at: '2026-11-21T05:00:00Z' };
@@ -193,9 +197,16 @@ describe('ventaCerradaDeItem (pura)', () => {
         expect(ventaCerradaDeItem({ id: 'c', kind: 'clase_extra', starts_at: null }, despues, '')).toBe(false);
         expect(ventaCerradaDeItem(null, despues, '')).toBe(false);
     });
-    it('el mensaje fijo de la clínica es exactamente el del dueño', () => {
+    it('el mensaje fijo sale del NOMBRE del ítem: sin fechas, precio ni texto de una escuela en el código', () => {
         expect(textoVentaCerrada(CLINICA as any)).toBe(FIJO);
-        expect(textoVentaCerrada({ name: 'Taller de saque' })).toContain('*Taller de saque* ya cerraron');
+        expect(textoVentaCerrada({ name: 'Taller de saque' })).toContain('del *Taller de saque* ya cerraron');
+        expect(textoVentaCerrada({ name: 'Copa Relámpago' })).toContain('de la *Copa Relámpago* ya cerraron');
+        expect(textoVentaCerrada({ name: 'Fénix 2027' })).toContain('de *Fénix 2027* ya cerraron');
+        expect(textoVentaCerrada(null)).toContain('de este servicio ya cerraron');
+        // Otra escuela con un servicio del mismo nombre recibe lo mismo: nada de «mañana y el domingo (21 y 22 de noviembre)».
+        for (const t of [textoVentaCerrada(CLINICA as any), textoVentaCerrada({ name: 'Clínica de armadores' })]) {
+            expect(t).not.toMatch(/mañana|domingo|noviembre|\$\d/);
+        }
     });
 });
 

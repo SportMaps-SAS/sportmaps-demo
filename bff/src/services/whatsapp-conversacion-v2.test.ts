@@ -111,8 +111,9 @@ import {
 import { textoSinRespuesta, textoDelAvisoAlEquipo } from './whatsapp-escalaciones.service';
 import {
     leerOpcionDePuerta, leerQueQuiere, leerNombreDeDeportista, leerVariosDeportistas, mensajeDePuerta, iniciarPuerta, atenderTurnoPuerta,
-    BOTON_PUERTA, PASO_PUERTA_MENU, FLUJO_PUERTA, type CtxPuerta, type EstadoPuerta, type LeadCompleto,
+    BOTON_PUERTA, PASO_PUERTA_MENU, FLUJO_PUERTA, botonesQueQuiere, type CtxPuerta, type EstadoPuerta, type LeadCompleto,
 } from './whatsapp-puerta-desconocido';
+import { armarEstado, type EstadoOfertas, type FilasCrudas } from './bot-ofertas.service';
 
 // ─── 1. Lecturas puras de la puerta ──────────────────────────────────────────
 
@@ -180,7 +181,11 @@ describe('puerta única: lectura de respuestas', () => {
 
 describe('puerta única: motor', () => {
     interface Salida { texto: string; step: string; estado: EstadoPuerta | null; botones: string[]; titulos: string[]; contexto?: any }
-    function falso(op: { perfil?: string | null; edadPrevia?: number | null; enlace?: string | null; precios?: string | null } = {}) {
+    function falso(op: {
+        perfil?: string | null; edadPrevia?: number | null; enlace?: string | null; precios?: string | null;
+        /** Qué se puede ofrecer hoy (bot-ofertas). Sin la clave, el contexto no lo trae (se lee de la base falsa). */
+        ofertas?: EstadoOfertas;
+    } = {}) {
         const salidas: Salida[] = [];
         const avisos: { motivo: string; detalle: string | null }[] = [];
         const leads: LeadCompleto[] = [];
@@ -201,6 +206,7 @@ describe('puerta única: motor', () => {
             precios: async () => (op.precios === undefined ? '💰 Estos son los valores:\n• Plan pro: *$150.000* · 8 clases al mes' : op.precios),
             enlace: async () => (op.enlace === undefined ? 'https://app.example/join/dynasty' : op.enlace),
             cortesia: async (datos, encabezado) => { cortesias.push({ datos, encabezado }); },
+            ...(op.ofertas ? { ofertas: async () => op.ofertas! } : {}),
             leerEstado: async () => estado,
             ahora: () => new Date('2026-10-24T12:00:00-05:00'),
         };
@@ -406,6 +412,131 @@ describe('puerta única: motor', () => {
         await f.turno('', BOTON_PUERTA.INFO);
         expect(await f.turno('Ver mis pagos', 'sm_ver_pagos')).toBe(false);
         expect(await f.turno('necesito hablar con una persona')).toBe(false);
+    });
+
+    // ── Sin clase de prueba hoy (bot-ofertas, Monster 2026-11-25) ───────────
+    // Datos de ejemplo: una convocatoria con una sesión y diciembre-enero sin clase.
+    const FILAS: FilasCrudas = {
+        ofertas: [{ id: 'o1', tipo: 'convocatoria', titulo: 'Convocatorias Sede Suba', sede: 'Sede Suba', publico: null, genero: 'mixto',
+            estado: 'activa', vigente_desde: '2026-11-25', vigente_hasta: '2026-12-13', prioridad: 10, requiere_inscripcion: true,
+            requiere_pago: false, valor: null, cta: 'Escríbenos el nombre, la fecha de nacimiento y la convocatoria (día y hora).' }],
+        sesiones: [{ id: 's1', oferta_id: 'o1', fecha: '2026-12-05', hora_inicio: '07:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba',
+            genero: 'mixto', publico: 'Nacidos 2015 y 2016', notas: null }],
+        bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null }],
+        ajustesClasePrueba: null, mensajeSinOfertas: null,
+    };
+    const DIC_3 = Date.parse('2026-12-03T15:00:00Z');
+    const NOV_28 = Date.parse('2026-11-28T15:00:00Z');
+    const SIN_CLASE = armarEstado('s1', FILAS, DIC_3);
+    const SIN_CLASE_NI_OFERTAS = armarEstado('s1', { ...FILAS, ofertas: [], sesiones: [] }, DIC_3);
+
+    async function hastaQueQuiere(f: ReturnType<typeof falso>) {
+        await iniciarPuerta(f.ctx, '');
+        await f.turno('', BOTON_PUERTA.INFO);
+        await f.turno('Sofía Gómez Uribe, 9 años');
+        await f.turno('', BOTON_PUERTA.SOY);
+    }
+
+    it('sin clase y con convocatorias: «Convocatorias» en lugar de «Clase de cortesía»; tocarlo muestra las ofertas y pide la fecha', async () => {
+        const f = falso({ ofertas: SIN_CLASE });
+        await hastaQueQuiere(f);
+        expect(f.ultimo().botones).toEqual([BOTON_PUERTA.OFERTAS, BOTON_PUERTA.INSCRIBIRME, BOTON_PUERTA.PRECIOS]);
+        expect(f.ultimo().titulos).toEqual(['Convocatorias', 'Inscribirme', 'Solo precios']);
+
+        expect(await f.turno('', BOTON_PUERTA.OFERTAS)).toBe(true);
+        const m = f.ultimo();
+        expect(m.step).toBe('puerta_info_ofertas');
+        expect(m.estado).toMatchObject({ paso: 'info_oferta' });
+        expect(m.texto).toContain('registré a *Sofía Gómez Uribe* (9 años)');
+        expect(m.texto).toContain('*Convocatorias Sede Suba*');
+        expect(m.texto).toContain('Parque Pinar de Suba');
+        expect(m.texto).toContain('Escríbenos el nombre, la fecha de nacimiento y la convocatoria');
+        expect(m.texto).toContain('¿A cuál fecha quieres inscribir a *Sofía*?');
+        expect(m.texto).not.toMatch(/cortes[ií]a|clase de prueba/i);
+        expect(f.leads).toEqual([expect.objectContaining({ deportista: 'Sofía Gómez Uribe', quiere: 'convocatoria' })]);
+
+        // Una pregunta no es la fecha: la contesta el bot de siempre.
+        expect(await f.turno('¿Y cuánto cuesta?')).toBe(false);
+        expect(await f.turno('La del sábado 5 a las 7')).toBe(true);
+        const cierre = f.ultimo();
+        expect(cierre.step).toBe('puerta_info_listo');
+        expect(cierre.estado).toBeNull();
+        expect(cierre.texto).toContain('«La del sábado 5 a las 7»');
+        expect(cierre.texto).toContain('La escuela te confirma el cupo por aquí');
+        expect(cierre.contexto).toEqual({ pendiente_escuela: 'inscripción: La del sábado 5 a las 7' });
+        expect(f.avisos).toEqual([{
+            motivo: 'otro',
+            detalle: 'Inscripción (convocatorias): «La del sábado 5 a las 7». Deportista: Sofía Gómez Uribe (9 años). Acudiente: Laura Gómez.',
+        }]);
+        expect(f.cortesias).toHaveLength(0);
+    });
+
+    it('sin clase y sin ofertas: ni la clase ni ofertas, solo «Inscribirme» y «Solo precios»', async () => {
+        const f = falso({ ofertas: SIN_CLASE_NI_OFERTAS });
+        await hastaQueQuiere(f);
+        expect(f.ultimo().botones).toEqual([BOTON_PUERTA.INSCRIBIRME, BOTON_PUERTA.PRECIOS]);
+    });
+
+    it('sin clase: «clase de prueba» escrito (o el botón viejo) no arranca la cortesía', async () => {
+        const f = falso({ ofertas: SIN_CLASE });
+        await hastaQueQuiere(f);
+        await f.turno('quiero la clase de prueba');
+        expect(f.cortesias).toHaveLength(0);
+        expect(f.ultimo().texto).toContain('Por ahora no estamos agendando clases de prueba.');
+        expect(f.ultimo().texto).toContain('*Convocatorias Sede Suba*');
+
+        const g = falso({ ofertas: SIN_CLASE_NI_OFERTAS });
+        await hastaQueQuiere(g);
+        await g.turno('', BOTON_PUERTA.CORTESIA);
+        expect(g.cortesias).toHaveLength(0);
+        expect(g.ultimo().step).toBe('puerta_info_listo');
+        expect(g.ultimo().texto).toContain('Por ahora no estamos agendando clases de prueba.');
+        expect(g.ultimo().texto).toContain('Plan pro');
+        expect(g.leads[0].quiere).toBe('precios');
+    });
+
+    it('con la clase disponible (28-nov), los botones de siempre; «convocatoria» escrito muestra las ofertas', async () => {
+        const f = falso({ ofertas: armarEstado('s1', FILAS, NOV_28) });
+        await hastaQueQuiere(f);
+        expect(f.ultimo().botones).toEqual([BOTON_PUERTA.CORTESIA, BOTON_PUERTA.INSCRIBIRME, BOTON_PUERTA.PRECIOS]);
+        await f.turno('lo de la convocatoria');
+        expect(f.ultimo().step).toBe('puerta_info_ofertas');
+        expect(f.cortesias).toHaveLength(0);
+    });
+
+    it('el botón de ofertas de un mensaje viejo (sin flujo) muestra las de hoy', async () => {
+        const f = falso({ ofertas: SIN_CLASE });
+        expect(await f.turno('', BOTON_PUERTA.OFERTAS)).toBe(true);
+        expect(f.ultimo().texto).toContain('*Convocatorias Sede Suba*');
+        expect(f.ultimo().texto).toContain('¿A cuál fecha quieres ir?');
+    });
+});
+
+describe('puerta única: lecturas con ofertas (puras)', () => {
+    it('leerQueQuiere: el botón y el título escrito de las ofertas; «convocatoria» solo si hay ofertas', () => {
+        expect(leerQueQuiere('', BOTON_PUERTA.OFERTAS)).toBe('ofertas');
+        expect(leerQueQuiere('Convocatorias', null, { hayOfertas: true, etiqueta: 'Convocatorias' })).toBe('ofertas');
+        expect(leerQueQuiere('Clínicas', null, { hayOfertas: true, etiqueta: 'Clínicas' })).toBe('ofertas');
+        expect(leerQueQuiere('info de la convocatoria', null, { hayOfertas: true })).toBe('ofertas');
+        expect(leerQueQuiere('info de la convocatoria')).toBeNull();
+        expect(leerQueQuiere('clase de prueba', null, { hayOfertas: true })).toBe('cortesia');
+    });
+
+    it('botonesQueQuiere: sin estado o con la clase, los de siempre; títulos ≤ 20', () => {
+        expect(botonesQueQuiere(null).botones.map((b) => b.id)).toEqual([BOTON_PUERTA.CORTESIA, BOTON_PUERTA.INSCRIBIRME, BOTON_PUERTA.PRECIOS]);
+        expect(botonesQueQuiere(null).enTexto).toBe('Responde *Clase de cortesía*, *Inscribirme* o *Solo precios*.');
+        const hoy = Date.parse('2026-12-03T15:00:00Z');
+        const varias = armarEstado('s', {
+            ofertas: [
+                { id: 'a', tipo: 'convocatoria', titulo: 'A', estado: 'activa' },
+                { id: 'b', tipo: 'clinica', titulo: 'B', estado: 'activa' },
+            ],
+            sesiones: [], bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31' }], ajustesClasePrueba: null, mensajeSinOfertas: null,
+        }, hoy);
+        const b = botonesQueQuiere(varias);
+        expect(b.botones.map((x) => x.title)).toEqual(['Próximas fechas', 'Inscribirme', 'Solo precios']);
+        expect(b.enTexto).toBe('Responde *Próximas fechas*, *Inscribirme* o *Solo precios*.');
+        for (const x of b.botones) expect(x.title.length).toBeLessThanOrEqual(20);
     });
 });
 

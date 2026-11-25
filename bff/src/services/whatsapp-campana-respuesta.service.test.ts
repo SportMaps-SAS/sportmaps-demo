@@ -100,7 +100,7 @@ vi.mock('./plataforma-wa.service', () => ({
 
 import {
     atenderRespuestaDeCampana, esNoMeInteresa, esPosibleRespuestaDeCampana, parsearBotonDeCampana, TEXTO_LUEGO,
-    TEXTO_NO_INTERESA,
+    TEXTO_NO_INTERESA, TEXTO_CAMPANA_TERMINADA, PASO_CAMPANA_TERMINADA,
 } from './whatsapp-campana-respuesta.service';
 
 const ESC = 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c';
@@ -287,6 +287,171 @@ describe('botones', () => {
         expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('no_aplica');
         expect(est.enviados).toHaveLength(0);
         expect(db.t.whatsapp_campana_envios[0].estado).toBe('enviado');
+    });
+});
+
+describe('«Sí» a una campaña cuya oferta ya terminó (Monster 2026-11-25: «la clínica tampoco debe salir»)', () => {
+    const ITEM = '16766d2e-f8b0-4285-88e3-b1e67dda6d45';
+    const VAC = '33333333-3333-4333-8333-333333333333';
+    const dias = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString();
+    const TEXTO_CLINICA = '🏐 ¡CLÍNICA DE ARMADORES Y ATACANTES MONSTER’S VOLLEY! 21 y 22 de noviembre. Preventa: $300.000. ¿Qué quieres hacer?';
+    // La clínica pasó y la escuela la apagó (active=false); el vacacional sigue en venta.
+    const clinicaApagada = () => ({
+        id: ITEM, school_id: ESC, name: 'Clínica de armadores y atacantes', kind: 'clase_extra',
+        price: '300000.00', active: false, event_id: null, starts_at: dias(-4), ends_at: dias(-3),
+        allow_installments: true, abono_minimo_pct: 50, precio_afiliado: null, precios_por_fecha: null, opciones: null,
+    });
+    const vacacional = () => ({
+        id: VAC, school_id: ESC, name: 'Vacacional de voleibol — Sede Suba', kind: 'vacacional',
+        price: '400000.00', active: true, event_id: null, starts_at: dias(-8), ends_at: dias(16),
+        allow_installments: false, abono_minimo_pct: null, precio_afiliado: null, precios_por_fecha: null, opciones: null,
+    });
+    const sinVentaNiRespuesta = () => {
+        const textos = est.enviados.map((e) => e.texto).join('\n');
+        expect(textos).not.toMatch(/cl[ií]nica|armadores|300\.000|noviembre|Separar mi cupo/i);
+        expect(est.enviados.every((e) => !e.botones)).toBe(true);
+        expect(est.leads).toHaveLength(0);
+        expect(venta.esperados).toHaveLength(0);
+    };
+
+    beforeEach(() => {
+        venta.esperados = [];
+        db.t.school_tournament_items = [clinicaApagada(), vacacional()];
+        Object.assign(db.t.whatsapp_campanas[0], {
+            nombre: 'Clínica de armadores · Sede Norte', respuesta_si: TEXTO_CLINICA, estado: 'terminada', vence_at: null, servicio_id: null,
+        });
+    });
+
+    it('campaña terminada de la clínica APAGADA (sin servicio_id: por su texto) → no sale su respuesta: línea neutra, envío marcado, buzón abierto y aviso', async () => {
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        sinVentaNiRespuesta();
+        expect(db.t.whatsapp_campana_envios[0]).toMatchObject({ estado: 'respondio_si', respondido_at: expect.any(String) });
+        expect(db.t.whatsapp_conversations[0].status).toBe('open');
+        const saliente = db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!;
+        expect(saliente.args.p_payload).toMatchObject({
+            step: PASO_CAMPANA_TERMINADA, campana_id: CAMP, oferta_terminada: 'servicio_no_vigente', servicio_no_vigente: ITEM,
+            pendiente_escuela: expect.stringContaining('ya terminó'),
+        });
+        expect(saliente.args.p_payload.venta_servicio_id).toBeUndefined();
+        expect(db.t.notifications).toHaveLength(1);
+        expect(db.t.notifications[0]).toMatchObject({
+            user_id: 'admin-1', link: '/whatsapp?conversacion=conv-1',
+            title: expect.stringMatching(/respondió «Sí» a una campaña que ya terminó/),
+            message: expect.stringMatching(/ya no está vigente.*No se le envió la respuesta de la campaña/),
+        });
+        // Segundo toque: nada más.
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('repetido');
+        expect(est.enviados).toHaveLength(1);
+        expect(db.t.notifications).toHaveLength(1);
+    });
+
+    it('igual con la campaña CANCELADA y sin vence_at (la preventa de la clínica)', async () => {
+        Object.assign(db.t.whatsapp_campanas[0], {
+            nombre: 'Clínica de armadores y atacantes — preventa', estado: 'cancelada',
+            respuesta_si: '¡Hola! 🏐 Gracias por responder.\n\n*Clínica de Armadores y Atacantes* · sábado 21 de noviembre…',
+        });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        sinVentaNiRespuesta();
+    });
+
+    it('servicio_id de la campaña apagado → neutra aunque su texto calce con otro servicio EN VENTA (el texto era de aquel)', async () => {
+        Object.assign(db.t.whatsapp_campanas[0], {
+            nombre: 'Promo de noviembre', servicio_id: ITEM,
+            respuesta_si: '¡Genial! Vacacional de voleibol en la Sede Suba y la clínica del 21. Preventa: $300.000',
+        });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        expect(est.leads).toHaveLength(0);
+        expect(db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!.args.p_payload)
+            .toMatchObject({ oferta_terminada: 'servicio_no_vigente', servicio_no_vigente: ITEM });
+    });
+
+    it('campaña que no vende un servicio, terminada (con vence_at vencido o sin él) → neutra; activa y sin vencer → su texto, como siempre', async () => {
+        db.t.school_tournament_items = [];
+        const TEXTO = '¡Genial! 20 % en la matrícula hasta el 30 de noviembre.';
+        Object.assign(db.t.whatsapp_campanas[0], { nombre: 'Matrícula con 20 %', respuesta_si: TEXTO, vence_at: dias(-1) });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        expect(db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!.args.p_payload)
+            .toMatchObject({ step: PASO_CAMPANA_TERMINADA, oferta_terminada: 'vencida' });
+        expect(db.t.notifications[0].message).toMatch(/la campaña ya terminó o venció/);
+
+        const otraVez = (cambios: Record<string, unknown>) => {
+            est.enviados = []; est.leads = []; db.rpcLlamadas = []; db.t.notifications = [];
+            db.t.whatsapp_campana_envios[0].estado = 'enviado';
+            Object.assign(db.t.whatsapp_campanas[0], cambios);
+        };
+        // Terminada sin vence_at: tampoco sale su texto.
+        otraVez({ vence_at: null });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        // Enviándose pero con vence_at vencido: tampoco.
+        otraVez({ estado: 'enviando', vence_at: dias(-1) });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+        // Activa y sin vencer: su texto, lead y aviso, exactamente como hoy.
+        otraVez({ estado: 'enviando', vence_at: dias(5) });
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO]);
+        expect(est.leads).toHaveLength(1);
+    });
+
+    describe('su servicio SÍ está en venta', () => {
+        const TEXTO_VIEJO = '¡Genial! 🏐 El Vacacional de voleibol de la Sede Suba con 5 % hasta el jueves. ¿Qué quieres hacer?';
+        const SALUDO = '¿Te ayudo con algo del Vacacional de voleibol — Sede Suba? Si quieres separar tu cupo, te paso los datos.';
+        const venderVacacional = () => {
+            expect(est.enviados).toHaveLength(1);
+            expect(est.enviados[0].ids).toEqual([`vs:${VAC}:separar`, `vs:${VAC}:detalles`, `vs:${VAC}:humano`]);
+            expect(est.leads[0]).toMatchObject({ servicio: { id: VAC, tipo: 'vacacional' } });
+            expect(venta.esperados).toHaveLength(1);
+            expect(db.t.notifications[0].title).toMatch(/respondió «Sí»$/);
+        };
+        beforeEach(() => {
+            Object.assign(db.t.whatsapp_campanas[0], { nombre: 'Vacacional de voleibol', servicio_id: VAC, respuesta_si: TEXTO_VIEJO });
+        });
+
+        it('campaña TERMINADA → el saludo genérico de la venta con sus botones, NUNCA su texto viejo; lead y esperado como siempre', async () => {
+            expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+            venderVacacional();
+            expect(est.enviados[0].texto).toBe(SALUDO);
+            expect(est.enviados[0].texto).not.toContain('5 %');
+            expect(db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!.args.p_payload)
+                .toMatchObject({ step: 'campana_respuesta_si', venta_servicio_id: VAC, respuesta_campana_omitida: true });
+        });
+
+        it('campaña CANCELADA o con vence_at vencido → igual, el saludo genérico', async () => {
+            for (const cambios of [{ estado: 'cancelada', vence_at: null }, { estado: 'enviando', vence_at: dias(-1) }]) {
+                est.enviados = []; est.leads = []; venta.esperados = []; db.rpcLlamadas = []; db.t.notifications = [];
+                db.t.whatsapp_campana_envios[0].estado = 'enviado';
+                Object.assign(db.t.whatsapp_campanas[0], cambios);
+                expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+                venderVacacional();
+                expect(est.enviados[0].texto).toBe(SALUDO);
+            }
+        });
+
+        it('regresión: campaña ACTIVA y sin vencer → su texto con los botones de venta, lead y esperado (exactamente como hoy)', async () => {
+            Object.assign(db.t.whatsapp_campanas[0], { estado: 'enviando', vence_at: dias(3) });
+            expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si') })).toBe('si');
+            venderVacacional();
+            expect(est.enviados[0].texto).toBe(TEXTO_VIEJO);
+            const payload = db.rpcLlamadas.find((l) => l.fn === 'wa_record_outbound_message')!.args.p_payload;
+            expect(payload).toMatchObject({ step: 'campana_respuesta_si', venta_servicio_id: VAC });
+            expect(payload.respuesta_campana_omitida).toBeUndefined();
+        });
+    });
+
+
+    it('«Más adelante» y «No recibir más» de una campaña terminada siguen igual (la baja SIEMPRE se confirma)', async () => {
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('luego') })).toBe('luego');
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_LUEGO]);
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('baja') })).toBe('baja');
+        expect(est.enviados).toHaveLength(2);
+        expect(est.enviados[1].texto).toMatch(/no volverás a recibir promociones/);
+        expect(db.t.whatsapp_campana_envios[0].estado).toBe('baja');
+        expect(db.rpcLlamadas.some((l) => l.fn === 'wa_registrar_baja_promos')).toBe(true);
     });
 });
 

@@ -16,7 +16,9 @@
  *    sale directo por la ventana recién abierta aunque el bot esté en asistido
  *    (respeta conversación tomada y modo discreto); queda el lead en
  *    Deportistas (`registrarLeadDeProspecto`), la conversación abierta en el
- *    buzón y el aviso «X respondió Sí» a la administración.
+ *    buzón y el aviso «X respondió Sí» a la administración. Si la oferta de la
+ *    campaña ya terminó (su servicio no está vigente o sus fechas pasaron,
+ *    2026-11-25), NO sale ese texto: una línea neutra y a la escuela.
  *  - Texto libre «no me interesa / no más / no me escriban» con la plantilla de
  *    la campaña como último saliente (< 72 h) → `excluido='no_interesa'` (A-06
  *    de la auditoría 10-28: la baja de la ingesta reconoce 6 palabras exactas).
@@ -39,7 +41,9 @@ import {
     ACCIONES_CAMPANA, PREFIJO_BOTON_CAMPANA, avisarAdministracion, type AccionCampana,
 } from './whatsapp-campanas.service';
 import { entranteConIntencion } from './whatsapp-audiencias.service';
-import { motivoDeServicio, serviciosDeAnuncio, textoVentaCerrada, ventaCerradaDeItem, type ItemConFicha } from './whatsapp-anuncio-destino';
+import {
+    motivoDeServicio, serviciosDeAnuncio, serviciosNoVigentes, textoVentaCerrada, ventaCerradaDeItem, type ItemConFicha,
+} from './whatsapp-anuncio-destino';
 import { MARCA_VENTA, itemNombradoEn } from './whatsapp-venta-contexto';
 import {
     BOTONES_DE_ENTRADA, MAX_CUERPO_CON_BOTONES, botonesDeVenta, lineaDeSaludoDeVenta, type BotonDeVenta,
@@ -58,8 +62,16 @@ export const PASO_BAJA = 'opt_out_confirmado';
 /** Paso del mensaje fijo de una venta cerrada (el bot lo usa en el chat y la campaña). */
 export const PASO_VENTA_CERRADA = 'venta_cerrada';
 export const PASO_NO_INTERESA = 'campana_no_interesa';
+/** «Sí» a una campaña cuya oferta ya terminó: línea neutra y a la escuela (2026-11-25). */
+export const PASO_CAMPANA_TERMINADA = 'campana_si_oferta_terminada';
 
 export const TEXTO_LUEGO = '¡Entendido! 🙌 Cuando quieras, escríbenos por aquí y te contamos.';
+/**
+ * La respuesta al «Sí» de una campaña cuya oferta ya terminó. Neutra a propósito: no nombra el servicio, ni fechas,
+ * ni precios (Monster 2026-11-25, «la clínica tampoco debe salir»). Sale igual que el mensaje fijo de una venta
+ * cerrada (quien toca un botón espera respuesta; el silencio lo hace tocar otra vez o escribir de nuevo).
+ */
+export const TEXTO_CAMPANA_TERMINADA = '¡Gracias por escribirnos! 🙌 La escuela te responde por aquí.';
 export const TEXTO_NO_INTERESA = 'Entendido, no te escribiremos más sobre esto. ¡Gracias por avisarnos! 🙏';
 export const TEXTO_QUE_QUIERES = '¿Qué quieres hacer? 👇';
 export const textoBaja = (escuela: string) =>
@@ -106,7 +118,11 @@ export function esPosibleRespuestaDeCampana(msg: Pick<ParsedInboundMessage, 'typ
 
 export type ResultadoRespuesta = 'no_aplica' | 'baja' | 'luego' | 'si' | 'no_interesa' | 'repetido';
 
-interface CampanaMin { id: string; school_id: string; integration_id: string; nombre: string; respuesta_si: string | null }
+interface CampanaMin {
+    id: string; school_id: string; integration_id: string; nombre: string; respuesta_si: string | null;
+    /** (2026-11-25) Para saber si la oferta ya terminó. Pueden no venir (base vieja). */
+    estado?: string | null; vence_at?: string | null; servicio_id?: string | null;
+}
 
 /**
  * Manda un texto fuera de `deliver` y lo deja en el buzón. Respeta la
@@ -181,10 +197,55 @@ async function servicioCerradoDeLaCampana(schoolId: string, campana: CampanaMin)
     }
 }
 
+/**
+ * (2026-11-25) ¿La campaña ya terminó, se canceló o venció (`vence_at`: cuando las fechas de su texto pasan)?
+ * Entonces su `respuesta_si` NUNCA sale: era de una oferta que ya pasó (precios, fechas, descuentos). Pura.
+ */
+export function campanaYaNoVigente(c: Pick<CampanaMin, 'estado' | 'vence_at'>, ahora = Date.now()): boolean {
+    if (c.estado === 'terminada' || c.estado === 'cancelada') return true;
+    const vence = c.vence_at ? new Date(c.vence_at).getTime() : NaN;
+    return Number.isFinite(vence) && vence <= ahora;
+}
+
+/**
+ * (2026-11-25) ¿La oferta de la campaña ya terminó? null = sigue (con su servicio en venta, o el camino de
+ * siempre). Nunca lanza. Se pregunta después de buscar el servicio EN VENTA que nombra (`enVenta`) y la venta cerrada:
+ *  (a) el servicio que la campaña declara (`servicio_id`) ya no está vigente (inactivo o terminado), aunque su
+ *      texto calce con otro servicio en venta (el texto era de aquel);
+ *  (b) sin servicio en venta: su texto o su nombre nombran un servicio que ya no está vigente;
+ *  (c) sin servicio en venta: la campaña ya no está vigente (`campanaYaNoVigente`).
+ * Con su servicio EN VENTA (sin `servicio_id` distinto) no se lee nada más: si la campaña ya no está vigente, quien
+ * llama manda el saludo genérico de la venta en lugar de su `respuesta_si`.
+ *
+ * Monster 2026-11-25: cuatro campañas de la clínica (21–22 nov, `active=false`) contestaban su «Sí» con el texto de
+ * venta de la clínica, aun con el bot apagado (la respuesta a una campaña no depende del asistente).
+ */
+async function ofertaTerminadaDeLaCampana(
+    schoolId: string, campana: CampanaMin, enVenta: ItemConFicha | null, ahora = Date.now(),
+): Promise<{ razon: 'servicio_no_vigente' | 'vencida'; item: ItemConFicha | null } | null> {
+    try {
+        if (enVenta && (!campana.servicio_id || campana.servicio_id === enVenta.id)) return null;
+        const noVigentes = await serviciosNoVigentes(schoolId, ahora);
+        const declarado = campana.servicio_id ? noVigentes.find((it) => it.id === campana.servicio_id) ?? null : null;
+        if (declarado) return { razon: 'servicio_no_vigente', item: declarado };
+        if (enVenta) return null;
+        const nombrado = noVigentes.length
+            ? itemNombradoEn(campana.respuesta_si, noVigentes) ?? itemNombradoEn(campana.nombre, noVigentes)
+            : null;
+        if (nombrado) return { razon: 'servicio_no_vigente', item: nombrado };
+        return campanaYaNoVigente(campana, ahora) ? { razon: 'vencida', item: null } : null;
+    } catch {
+        return null;
+    }
+}
+
 async function campanaPorId(id: string): Promise<CampanaMin | null> {
-    const { data, error } = await supabase.from('whatsapp_campanas')
-        .select('id, school_id, integration_id, nombre, respuesta_si').eq('id', id).maybeSingle();
-    return error ? null : ((data as CampanaMin) ?? null);
+    const leer = (cols: string) => supabase.from('whatsapp_campanas').select(cols).eq('id', id).maybeSingle();
+    const base = 'id, school_id, integration_id, nombre, respuesta_si';
+    let { data, error } = await leer(`${base}, estado, vence_at, servicio_id`);
+    // Base vieja sin alguna de esas columnas: las de siempre (la campaña se atiende igual).
+    if (error) ({ data, error } = await leer(base));
+    return error ? null : ((data as unknown as CampanaMin) ?? null);
 }
 
 async function envioDe(campanaId: string, contactWaId: string): Promise<{ id: string; estado: string } | null> {
@@ -293,12 +354,43 @@ async function atenderBoton(
             return 'si';
         }
     }
-    const marca = item ? { [MARCA_VENTA]: item.id } : undefined;
+    // (2026-11-25) La oferta de la campaña ya terminó (su servicio ya no está vigente, o sus fechas pasaron): NO sale
+    // su respuesta al «Sí» (era la venta de algo que ya no existe), ni botones, ni lead, ni esperado. Una línea
+    // neutra, la conversación abierta para la escuela y el aviso a la administración, como en la venta cerrada.
+    const terminada = await ofertaTerminadaDeLaCampana(integration.school_id, campana, item);
+    if (terminada) {
+        await enviarDirecto({
+            integration, conversationId, contactWaId: msg.contactWaId, texto: TEXTO_CAMPANA_TERMINADA,
+            step: PASO_CAMPANA_TERMINADA, campanaId: campana.id,
+            extra: {
+                oferta_terminada: terminada.razon,
+                ...(terminada.item ? { servicio_no_vigente: terminada.item.id } : {}),
+                pendiente_escuela: `respondió «Sí» a una campaña que ya terminó: ${campana.nombre}`.slice(0, 300),
+            },
+        });
+        await supabase.from('whatsapp_conversations')
+            .update({ status: 'open', updated_at: new Date().toISOString() }).eq('id', conversationId);
+        const que = terminada.item ? `«${terminada.item.name}» ya no está vigente` : 'la campaña ya terminó o venció';
+        await avisarAdministracion({
+            schoolId: integration.school_id,
+            clave: `wa_campana_si:${campana.id}:${msg.contactWaId}`,
+            titulo: `${etiquetaDeContacto(msg.contactName, msg.contactWaId)} respondió «Sí» a una campaña que ya terminó`,
+            mensaje: `A la campaña «${campana.nombre}» (${que}). No se le envió la respuesta de la campaña; se le dijo que la escuela le responde: escríbele.`,
+            link: `/whatsapp?conversacion=${conversationId}`,
+            data: { tipo: 'whatsapp_campana_si', campana_id: campana.id, conversation_id: conversationId, oferta_terminada: terminada.razon },
+        });
+        return 'si';
+    }
+    // (2026-11-25) Campaña terminada, cancelada o vencida con su servicio EN VENTA: nunca su `respuesta_si` (fechas,
+    // precios o descuentos que ya pasaron); el saludo genérico de la venta con los mismos botones.
+    const vieja = campanaYaNoVigente(campana);
+    const marca: Record<string, unknown> | undefined = item
+        ? { [MARCA_VENTA]: item.id, ...(vieja ? { respuesta_campana_omitida: true } : {}) } : undefined;
     // Venta de un servicio (Monster 2026-11-09, «que todo sea más fácil y concreto, vender
     // más rápido»): la respuesta va con [Separar mi cupo] [Ver detalles] [Hablar con alguien];
     // los datos de pago salen al tocar «Separar mi cupo» (los atiende el bot: id `vs:`).
     // Texto largo (Meta no deja botones bajo más de 1024 caracteres): el texto y los botones aparte.
-    const textoSi = campana.respuesta_si?.trim() || (item ? lineaDeSaludoDeVenta(item) : '');
+    const textoSi = (!vieja && campana.respuesta_si?.trim()) || (item ? lineaDeSaludoDeVenta(item) : '');
     if (textoSi) {
         const botones = item ? botonesDeVenta(item, BOTONES_DE_ENTRADA) : undefined;
         const caben = !botones || textoSi.length <= MAX_CUERPO_CON_BOTONES;

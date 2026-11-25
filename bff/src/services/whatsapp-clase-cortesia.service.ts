@@ -56,6 +56,18 @@
  * Las franjas traen además la sede, los profes, el enlace de Maps y las
  * indicaciones de la cancha (facilities, migración M1), y no se ofrece una
  * sesión que el profe canceló o movió en «Mi semana» (semana-equipo).
+ *
+ * CLASE DE PRUEBA CERRADA (Monster, 2026-11-25): en diciembre y enero no hay
+ * clases de prueba y llegaba gente por las CONVOCATORIAS a la que el flujo le
+ * ofrecía la clase. Ahora todo pasa por bot-ofertas.service (`ctx.ofertas`):
+ *   · hoy cerrada (interruptor `enabled/whatsapp_enabled` o bloqueo por fechas;
+ *     falla cerrado) → no se ofrece, no se agenda ni se sigue un agendamiento a
+ *     medias (botones viejos incluidos): va `textoSinClaseDePrueba` —las ofertas
+ *     vigentes, el mensaje de la escuela o uno neutro— y la conversación queda
+ *     para la escuela (`ctx.dejarPendiente`). «Cancelar mi clase» sigue igual;
+ *   · hoy abierta → no se ofrece una franja de un día bloqueado (el 26-nov la
+ *     del 5-dic no sale).
+ * Sin bloqueos, sin ofertas y con la clase prendida, todo queda como antes.
  */
 
 import { supabase } from '../config/supabase';
@@ -76,6 +88,10 @@ import {
 import { excepcionesDeEscuela, ajusteDeSesion, diaDeLaSemana, type ExcepcionSemana } from './semana-equipo.service';
 import { esAliasDeUsuario } from './whatsapp-usuario-meta';
 import { leerDatosDeRegistro } from './whatsapp-datos-de-registro';
+import {
+    estadoDeOfertas, estadoCerrado, claseDePruebaPermitidaEn, textoOfertasParaPersona, detectarGenero,
+    fechaLegible as fechaDeOferta, sumarDias, type EstadoOfertas,
+} from './bot-ofertas.service';
 
 export const FLUJO_CORTESIA = 'clase_cortesia';
 /** Misma ventana de atención de Meta: pasada, el papá ya no recuerda la pregunta. */
@@ -278,6 +294,18 @@ export interface CtxCortesia {
      * cortesía» gratis, como siempre.
      */
     textos?: (schoolId: string) => Promise<TextosClase>;
+    /**
+     * Lo que la escuela ofrece hoy por el bot (bot-ofertas.service): si la clase
+     * de prueba está abierta, sus bloqueos por fecha y las ofertas vigentes
+     * (convocatorias…). Por defecto `estadoDeOfertas` (caché de 60 s; falla
+     * cerrado para la clase). El bot pasa la lectura de su turno.
+     */
+    ofertas?: (schoolId: string) => Promise<EstadoOfertas>;
+    /**
+     * Deja la conversación para la escuela (buzón y aviso), como una escalación.
+     * Se llama cuando se contesta «hoy no hay clase de prueba».
+     */
+    dejarPendiente?: () => Promise<void>;
 }
 
 /** Los textos de la clase de esta escuela. Nunca lanza: ante cualquier falla, los de siempre. */
@@ -286,6 +314,16 @@ async function textosDe(ctx: CtxCortesia): Promise<TextosClase> {
         return (await (ctx.textos ?? textosClaseDeEscuela)(ctx.schoolId)) ?? TEXTOS_POR_DEFECTO;
     } catch {
         return TEXTOS_POR_DEFECTO;
+    }
+}
+
+/** Las ofertas de la escuela para «ahora». Nunca lanza: ante una falla, cerrado para la clase de prueba. */
+async function ofertasDe(ctx: CtxCortesia, ahora: Date): Promise<EstadoOfertas> {
+    try {
+        const e = ctx.ofertas ? await ctx.ofertas(ctx.schoolId) : await estadoDeOfertas(ctx.schoolId, ahora.getTime());
+        return e ?? estadoCerrado(ctx.schoolId, ahora.getTime());
+    } catch {
+        return estadoCerrado(ctx.schoolId, ahora.getTime());
     }
 }
 
@@ -353,6 +391,77 @@ const PIDE_CORTESIA: RegExp[] = [
 export function pideClaseDeCortesia(texto: string | null | undefined): boolean {
     const n = normalizar(texto);
     return !!n && PIDE_CORTESIA.some((re) => re.test(n));
+}
+
+/**
+ * ¿Pregunta por CONVOCATORIAS (pruebas para entrar a un equipo)? «¿Cuándo son
+ * las convocatorias?», «convocatoria femenina», «pruebas de ingreso», «¿hay
+ * tryouts?». No es la clase de prueba: a quien pregunta esto no se le ofrece
+ * (Monster, 2026-11-25). Reglas, no modelo. Pura.
+ */
+const PIDE_CONVOCATORIA: RegExp[] = [
+    /\bconvocatorias?\b/,
+    /\btry ?outs?\b/,
+    /\bvisorias?\b/,
+    /\bselectiv[oa]s?\b/,
+    /\bpruebas? (de|para) (ingreso|admision|seleccion|entrar|equipos?|el equipo|la seleccion)\b/,
+    /\b(cuando|fecha|fechas|dia|dias|horario|horarios) (son |es |de |hay |seran )?(las )?pruebas\b/,
+    /\b(hay|habra|haran|van a hacer|van a haber) pruebas\b/,
+];
+export function preguntaPorConvocatoria(texto: string | null | undefined): boolean {
+    const n = normalizar(texto);
+    return !!n && PIDE_CONVOCATORIA.some((re) => re.test(n));
+}
+
+/** step del mensaje «hoy no hay clase de prueba» (con lo que la escuela tiene vigente). Terminal. */
+export const PASO_SIN_CLASE_DE_PRUEBA = 'cortesia_no_disponible';
+
+/** Solo las franjas que se pueden OFRECER hoy: ninguna si la clase está cerrada, y nunca en un día bloqueado. Pura. */
+export function franjasPermitidas<T extends { fecha: string }>(franjas: T[], estado: EstadoOfertas): T[] {
+    if (!estado.claseDePrueba.disponible) return [];
+    return franjas.filter((f) => claseDePruebaPermitidaEn(estado, f.fecha));
+}
+
+/**
+ * Las ofertas vigentes para quien pregunta por convocatorias o por cómo entrar:
+ * las convocatorias del género que nombre; si no queda ninguna, las demás
+ * ofertas de ese género; si tampoco, todas (cada sesión dice su género). null =
+ * la escuela no tiene ofertas. El contenido sale de la base. Pura.
+ */
+export function textoParaConvocatoria(estado: EstadoOfertas, texto: string | null | undefined): string | null {
+    if (!estado.ofertas.length) return null;
+    const genero = detectarGenero(String(texto ?? ''));
+    return textoOfertasParaPersona(estado, { tipo: 'convocatoria', genero })
+        ?? textoOfertasParaPersona(estado, { genero })
+        ?? textoOfertasParaPersona(estado);
+}
+
+/**
+ * Lo que se contesta cuando HOY no hay clase de prueba (bloqueo por fechas o
+ * interruptor apagado) y alguien la pide o toca un botón viejo del agendamiento:
+ *   1. las ofertas vigentes del género que nombre (convocatorias…), con «Por
+ *      ahora no tenemos clases de prueba (vuelven el …)» delante si pidió la clase;
+ *   2. si no hay, el mensaje que dejó la escuela (`mensajeSinOfertas`), tal cual;
+ *   3. si tampoco, «Por ahora no tenemos clases de prueba; la escuela te escribe…».
+ * Nunca ofrece la clase, sus horarios ni su valor. Pura.
+ */
+export function textoSinClaseDePrueba(
+    estado: EstadoOfertas,
+    texto: string | null | undefined,
+    t: TextosClase = TEXTOS_POR_DEFECTO,
+    op: { pidioLaClase?: boolean } = {},
+): string {
+    const plural = t.nombre.replace(/^clase\b/, 'clases');
+    const cp = estado.claseDePrueba;
+    const vuelven = cp.motivo === 'bloqueo' && cp.bloqueadaHasta
+        ? ` (vuelven el ${fechaDeOferta(sumarDias(cp.bloqueadaHasta, 1), estado.hoy)})` : '';
+    const ofertas = textoOfertasParaPersona(estado, { genero: detectarGenero(String(texto ?? '')) });
+    if (ofertas) {
+        const pidio = op.pidioLaClase ?? pideClaseDeCortesia(texto);
+        return pidio ? `Por ahora no tenemos ${plural}${vuelven} 🙏 Te cuento lo que tenemos:\n\n${ofertas}` : ofertas;
+    }
+    if (estado.mensajeSinOfertas) return estado.mensajeSinOfertas;
+    return `Por ahora no tenemos ${plural}${vuelven}; la escuela te escribe con las próximas fechas.`;
 }
 
 /**
@@ -991,6 +1100,8 @@ function siNo(texto: string, botonId: string | null, si: string, no: string): 's
 // ─── Motor del flujo ───────────────────────────────────────────────────────
 
 function deps(ctx: CtxCortesia) {
+    const ahora = (ctx.ahora ?? (() => new Date()))();
+    let ofertas: Promise<EstadoOfertas> | null = null;
     return {
         leerEstado: ctx.leerEstado ?? leerEstadoDeSupabase,
         franjas: ctx.franjas ?? franjasDeSupabase,
@@ -999,7 +1110,9 @@ function deps(ctx: CtxCortesia) {
         cancelar: ctx.cancelar ?? cancelarEnSupabase,
         avisar: ctx.avisarEscuela ?? avisarEscuelaCortesia,
         indicaciones: ctx.indicaciones ?? indicacionesCortesiaDeEscuela,
-        ahora: (ctx.ahora ?? (() => new Date()))(),
+        ahora,
+        /** Clase de prueba abierta/cerrada, bloqueos y ofertas: una lectura por turno. Nunca lanza. */
+        ofertas: (): Promise<EstadoOfertas> => (ofertas ??= ofertasDe(ctx, ahora)),
     };
 }
 
@@ -1021,6 +1134,35 @@ export function filtrarVigentes(franjas: FranjaCortesia[], ahora: Date): FranjaC
         .filter((f) => f.cupos > 0)
         .filter((f) => minutosAbsolutos(f.fecha, f.horaInicio) >= limite)
         .sort((a, b) => (a.fecha + a.horaInicio).localeCompare(b.fecha + b.horaInicio));
+}
+
+/**
+ * Las franjas que se pueden ofrecer AHORA: vigentes (`filtrarVigentes`), solo si
+ * hoy hay clase de prueba y nunca en un día bloqueado. Con la clase cerrada ni se
+ * leen las franjas.
+ */
+async function franjasOfrecibles(ctx: CtxCortesia, d: Deps): Promise<FranjaCortesia[]> {
+    const ofertas = await d.ofertas();
+    if (!ofertas.claseDePrueba.disponible) return [];
+    return franjasPermitidas(filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora), ofertas);
+}
+
+/**
+ * «Hoy no hay clase de prueba» (`textoSinClaseDePrueba`): mensaje terminal, sin
+ * botones ni estado, y la conversación queda para la escuela. Siempre true.
+ */
+async function responderSinClaseDePrueba(
+    ctx: CtxCortesia, d: Deps, texto: string | null | undefined,
+    op: { cabeza?: string; step?: string; pidioLaClase?: boolean } = {},
+): Promise<boolean> {
+    const ofertas = await d.ofertas();
+    const t = await textosDe(ctx);
+    // El género puede venir en otro mensaje de la misma ráfaga («convocatoria» + «es para mi niña»).
+    const dicho = [ctx.rafaga, texto].filter(Boolean).join('\n');
+    await ctx.enviar((op.cabeza ?? '') + textoSinClaseDePrueba(ofertas, dicho, t, { pidioLaClase: op.pidioLaClase ?? true }),
+        op.step ?? PASO_SIN_CLASE_DE_PRUEBA, null);
+    try { await ctx.dejarPendiente?.(); } catch { /* el aviso a la escuela nunca tumba el turno */ }
+    return true;
 }
 
 /** step del mensaje «no tengo un grupo para X años» (deja el caso para la escuela). */
@@ -1079,6 +1221,18 @@ export async function atenderTurnoCortesia(
         // «Necesito hablar con un asesor», «¿Milena?»: en cualquier paso se
         // suelta el flujo y lo atiende el bot general (escalación).
         if (!botonId && quiereSalirDelFlujo(texto)) return false;
+        // Agendamiento a medias y HOY la clase de prueba está cerrada (empezó el
+        // bloqueo, la escuela apagó el interruptor): no se sigue ni se reserva.
+        // Lo que contesta al paso recibe lo que la escuela tiene; otra conversación
+        // la atiende el bot de siempre, SIN recordar el paso después.
+        if (PASOS_QUE_PREGUNTAN.has(estado.paso) && !(await d.ofertas()).claseDePrueba.disponible) {
+            if (!botonId && abandona(texto)) {
+                await ctx.enviar('Listo, lo dejamos así. 🙌', 'cortesia_abandonada', null);
+                return true;
+            }
+            if (!botonId && pareceOtraConversacion(texto)) return false;
+            return responderSinClaseDePrueba(ctx, d, texto);
+        }
         const atendido = await continuar(ctx, d, estado, texto, botonId);
         // Soltó el turno con una pregunta pendiente (lo que llegó es otra conversación): quien llama
         // contesta por su camino y después recuerda el paso, una vez.
@@ -1089,8 +1243,14 @@ export async function atenderTurnoCortesia(
     }
 
     // Sin flujo abierto: un botón viejo del flujo (de un mensaje anterior) se
-    // atiende igual, revalidando contra las franjas de AHORA.
+    // atiende igual, revalidando contra las franjas de AHORA. Con la clase de
+    // prueba cerrada hoy, un botón viejo de agendar (franja, «dejar mis datos»,
+    // «Confirmar») no agenda nada; los de cancelar siguen su camino.
     if (esBotonCortesia(botonId)) {
+        const deCancelar = botonId === BOTON_CC.CANCELAR_SI || botonId === BOTON_CC.CANCELAR_NO;
+        if (!deCancelar && !(await d.ofertas()).claseDePrueba.disponible) {
+            return responderSinClaseDePrueba(ctx, d, texto);
+        }
         return continuar(ctx, d, { paso: 'elegir_franja', datos: {} }, texto, botonId);
     }
 
@@ -1119,6 +1279,15 @@ export async function iniciarCortesia(
 ): Promise<void> {
     const d = deps(ctx);
     const cabeza = opciones.encabezado ? `${opciones.encabezado}\n\n` : '';
+
+    // HOY no hay clase de prueba (bloqueo por fechas o interruptor apagado): no
+    // se ofrece, ni horarios ni «déjame tus datos». Va lo que la escuela tiene
+    // vigente y la conversación queda para ella. Lo que traía `intro` (la
+    // invitación a la clase) no sale.
+    if (!(await d.ofertas()).claseDePrueba.disponible) {
+        await responderSinClaseDePrueba(ctx, d, opciones.texto, { cabeza, step: opciones.step });
+        return;
+    }
     const t = await textosDe(ctx);
 
     // Ya tiene una reservada: se le recuerda en vez de reservarle otra.
@@ -1132,7 +1301,7 @@ export async function iniciarCortesia(
         return;
     }
 
-    const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
+    const franjas = await franjasOfrecibles(ctx, d);
     if (!franjas.length) {
         await ctx.enviar(
             cabeza + `Por ahora no tengo horarios de *${t.nombre}* publicados para agendarla por aquí. 🙏\n\n` +
@@ -1245,7 +1414,8 @@ export async function responderGrupoPorEdad(
     }
     const perfil = combinarPerfiles(perfilReciente(texto), await perfilPrevioSeguro(ctx));
     let franjas: FranjaCortesia[] = [];
-    try { franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora); } catch { franjas = []; }
+    // Con la clase de prueba cerrada hoy no hay franjas: se dice el grupo y nada de «¿te reservo?».
+    try { franjas = await franjasOfrecibles(ctx, d); } catch { franjas = []; }
     if (!perfil || (perfil.edad == null && !perfil.adulto)) {
         if (!rangos.length) return false;
         await ctx.enviar(cabeza + '¿Qué *edad* tiene? Con eso te digo qué grupo le corresponde.', opciones.step,
@@ -1280,7 +1450,8 @@ export async function ofrecerHorariosDeCortesia(
     opciones: { texto: string; textoDelDia?: string | null; intro: string; step: string },
 ): Promise<boolean> {
     const d = deps(ctx);
-    const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
+    // Con la clase de prueba cerrada hoy no hay franjas: false y quien llama contesta otra cosa.
+    const franjas = await franjasOfrecibles(ctx, d);
     if (!franjas.length) return false;
     const dia = leerDia(opciones.textoDelDia ?? null);
     const grupo = grupoMencionado(opciones.texto, franjas);
@@ -1603,8 +1774,9 @@ async function continuar(
                 // acudiente se conservan y solo se vuelven a ofrecer los horarios. Sin horario elegido
                 // (dejó sus datos para que la llamen) lo único que hay para cambiar son los datos.
                 if (datos.sinFranja) return pedirNombre(ctx, { sinFranja: true, franja: null, corrigiendo: true });
-                const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
+                const franjas = await franjasOfrecibles(ctx, d);
                 if (!franjas.length) {
+                    if (!(await d.ofertas()).claseDePrueba.disponible) return responderSinClaseDePrueba(ctx, d, texto);
                     await ctx.enviar('Ya no quedan franjas disponibles. ¿Quieres dejarme tus datos para que la escuela te contacte?',
                         'cortesia_sin_franjas', { paso: 'dejar_datos', datos: { sinFranja: true } }, BOTONES_DATOS);
                     return true;
@@ -1663,8 +1835,8 @@ async function responderPerfil(
     ctx: CtxCortesia, d: Deps, estado: EstadoCortesia, texto: string, botonId: string | null,
 ): Promise<boolean> {
     const datos = estado.datos ?? {};
-    const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
-    if (!franjas.length) return sinFranjasDisponibles(ctx);
+    const franjas = await franjasOfrecibles(ctx, d);
+    if (!franjas.length) return sinFranjasDisponibles(ctx, d);
     const dia = leerDia(texto) ?? datos.dia ?? null;
 
     const grupo = grupoMencionado(texto, franjas);
@@ -1742,11 +1914,11 @@ const PIDE_VER_MAS = new Set(['ver mas', 'mas', 'ver mas horarios', 'ver otros h
 async function elegirFranja(
     ctx: CtxCortesia, d: Deps, datos: DatosCortesia, texto: string, botonId: string | null,
 ): Promise<boolean> {
-    const franjas = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
+    const franjas = await franjasOfrecibles(ctx, d);
     const n = normalizar(texto);
 
     if (botonId === BOTON_CC.VER_MAS || (!botonId && PIDE_VER_MAS.has(n))) {
-        if (!franjas.length) return sinFranjasDisponibles(ctx);
+        if (!franjas.length) return sinFranjasDisponibles(ctx, d);
         const total = datos.lista?.length ?? 0;
         const porPagina = total > MAX_FILAS ? MAX_FILAS - 1 : MAX_FILAS;
         await ofrecerFranjas(ctx, franjas, (datos.desde ?? 0) + porPagina, datos,
@@ -1762,7 +1934,7 @@ async function elegirFranja(
     }
 
     if (!elegidaId && !botonId) {
-        if (!franjas.length) return sinFranjasDisponibles(ctx);
+        if (!franjas.length) return sinFranjasDisponibles(ctx, d);
         // «ver todos»: sin filtro de perfil ni de día.
         const perfil = leerPerfil(texto);
         if (perfil?.todos) {
@@ -1798,7 +1970,7 @@ async function elegirFranja(
     if (!franja) {
         // Se llenó, la cerraron o ya empieza en menos de 2 h entre la oferta y
         // el toque: se dice y se vuelve a ofrecer lo que haya de verdad AHORA.
-        if (!franjas.length) return sinFranjasDisponibles(ctx);
+        if (!franjas.length) return sinFranjasDisponibles(ctx, d);
         await ofrecerFranjas(ctx, franjas, 0, datos,
             'Uy, esa franja ya no está disponible. 😕 Estas siguen abiertas:', 'cortesia_ofrecer');
         return true;
@@ -1814,7 +1986,9 @@ async function elegirFranja(
     return true;
 }
 
-async function sinFranjasDisponibles(ctx: CtxCortesia): Promise<boolean> {
+async function sinFranjasDisponibles(ctx: CtxCortesia, d: Deps): Promise<boolean> {
+    // Sin franjas porque HOY no hay clase de prueba: nada de «déjame tus datos para agendarte».
+    if (!(await d.ofertas()).claseDePrueba.disponible) return responderSinClaseDePrueba(ctx, d, null);
     const t = await textosDe(ctx);
     await ctx.enviar(
         `En este momento no quedan franjas de ${t.nombre} con cupo. 😕\n\n` +
@@ -1828,16 +2002,24 @@ async function reservar(ctx: CtxCortesia, d: Deps, datos: DatosCortesia): Promis
     if (!datos.nombre || typeof datos.edad !== 'number') {
         return pedirNombre(ctx, { franja: datos.franja, sinFranja: datos.sinFranja });
     }
+    // Con la clase de prueba cerrada hoy no se reserva nada, ni se dejan datos para agendarla.
+    const ofertas = await d.ofertas();
+    if (!ofertas.claseDePrueba.disponible) return responderSinClaseDePrueba(ctx, d, null);
     const franja = datos.sinFranja ? null : datos.franja ?? null;
     // La franja se eligió hace rato: si ya empezó (o empieza en menos de 2 h)
     // no se reserva. Dynasty 2026-10-07 (…4680): eligió la de las 4:00 p. m. a
     // las 9:23 a. m., confirmó a las 4:53 p. m. y quedó «reservada».
     // Solo la HORA: el cupo lo resuelve `submit_school_lead` con FOR UPDATE.
-    if (franja && !filtrarVigentes([{ ...franja, cupos: 1 }], d.ahora).length) {
-        const vigentes = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora);
-        if (!vigentes.length) return sinFranjasDisponibles(ctx);
+    // Tampoco si su DÍA quedó bloqueado después de elegirla (bot-ofertas).
+    const diaBloqueado = !!franja && !claseDePruebaPermitidaEn(ofertas, franja.fecha);
+    if (franja && (diaBloqueado || !filtrarVigentes([{ ...franja, cupos: 1 }], d.ahora).length)) {
+        const vigentes = await franjasOfrecibles(ctx, d);
+        if (!vigentes.length) return sinFranjasDisponibles(ctx, d);
         await ofrecerFranjas(ctx, vigentes, 0, { ...datos, franja: null },
-            'Uy, ese horario ya pasó o empieza muy pronto. 😕 Estas franjas siguen abiertas:', 'cortesia_franja_vencida');
+            diaBloqueado
+                ? 'Uy, ese día ya no hay clases de prueba. 😕 Estas franjas siguen abiertas:'
+                : 'Uy, ese horario ya pasó o empieza muy pronto. 😕 Estas franjas siguen abiertas:',
+            'cortesia_franja_vencida');
         return true;
     }
     const r = await d.reservar({
@@ -1860,9 +2042,9 @@ async function reservar(ctx: CtxCortesia, d: Deps, datos: DatosCortesia): Promis
             // La carrera: dos familias por el último cupo. `submit_school_lead`
             // lo resolvió con FOR UPDATE; a quien perdió se le ofrece lo que
             // queda, conservando sus datos para no volver a preguntarlos.
-            const quedan = filtrarVigentes(await d.franjas(ctx.schoolId), d.ahora)
+            const quedan = (await franjasOfrecibles(ctx, d))
                 .filter((f) => f.id !== franja?.id);
-            if (!quedan.length) return sinFranjasDisponibles(ctx);
+            if (!quedan.length) return sinFranjasDisponibles(ctx, d);
             await ofrecerFranjas(ctx, quedan, 0, { ...datos, franja: null },
                 'Uy, ese horario se acaba de llenar. 😕 Estas franjas siguen con cupo:', 'cortesia_cupo_lleno');
             return true;
@@ -2062,6 +2244,13 @@ export async function franjasDeSupabase(schoolId: string): Promise<FranjaCortesi
         if (cfg && (cfg.enabled === false || cfg.whatsapp_enabled === false)) return [];
         diasSemana = diasSemanaValidos(cfg?.dias_semana);
     } catch { /* sin config legible: se comporta como antes */ }
+    // (2026-11-25) Lo que la escuela ofrece hoy por el bot (bot-ofertas.service):
+    // con la clase de prueba cerrada hoy (bloqueo por fechas, interruptor; falla
+    // cerrado) no hay cupos que ofrecer, y una franja en un día bloqueado no se
+    // ofrece aunque hoy esté abierta (el 26-nov, la del 5-dic). Sin bloqueos, igual.
+    let ofertas: EstadoOfertas;
+    try { ofertas = await estadoDeOfertas(schoolId); } catch { return []; }
+    if (!ofertas?.claseDePrueba?.disponible) return [];
     try {
         const hoy = hoyBogota(new Date()).iso;
         const { data, error } = await supabase.from('school_trial_slots')
@@ -2089,6 +2278,7 @@ export async function franjasDeSupabase(schoolId: string): Promise<FranjaCortesi
             for (const r of filas) {
                 const fecha = String(r.slot_date).slice(0, 10);
                 if (diasSemana && !diasSemana.includes(diaDeLaSemana(fecha))) continue;
+                if (!claseDePruebaPermitidaEn(ofertas, fecha)) continue;
                 const t = r.team_id ? edades.get(r.team_id) : null;
                 if (t?.recibeClasePrueba === false) continue;
                 const ajuste = r.team_id
@@ -2110,7 +2300,7 @@ export async function franjasDeSupabase(schoolId: string): Promise<FranjaCortesi
         if (!slug) return [];
         const { data, error } = await supabase.rpc('list_open_trial_slots_public', { p_slug: slug });
         if (error || !Array.isArray(data)) return [];
-        return (data as any[]).map(aFranja);
+        return franjasPermitidas((data as any[]).map(aFranja), ofertas);
     } catch {
         return [];
     }

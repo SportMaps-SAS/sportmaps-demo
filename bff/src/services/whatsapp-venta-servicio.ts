@@ -329,7 +329,9 @@ export function textoBotonDelClubEnVenta(item: ItemConFicha, o: { pagado: boolea
  * club»): antes de agendar nada se le dice que va aparte del servicio y cuánto cuesta
  * (Nicolás terminó pagando $15.000 creyendo que eran parte de la clínica). Pura.
  */
-export function textoClubAparteDeLaVenta(item: ItemConFicha, t: Pick<TextosClase, 'nombre' | 'precio' | 'gratis'>): string {
+export function textoClubAparteDeLaVenta(item: ItemConFicha, t: Pick<TextosClase, 'nombre' | 'precio' | 'gratis'> & { disponible?: boolean }): string {
+    // (2026-11-25) `disponible: false` = hoy no hay clase de prueba (`estadoDeOfertas`): no se nombra.
+    if (t.disponible === false) return `Claro 🙌 Lo del club va aparte ${deLaDelServicio(item)}: la escuela te cuenta por aquí cómo entrar.`;
     const valor = t.gratis || !t.precio ? 'que es gratis' : `que cuesta *${t.precio}*`;
     return `Claro 🙌 Lo del club va aparte ${deLaDelServicio(item)}: para empezar se agenda una *${t.nombre}*, ${valor}.`;
 }

@@ -85,7 +85,10 @@ vi.mock('./whatsapp-coexistence.service', () => ({
 vi.mock('./whatsapp-prospecto-lead.service', () => ({ registrarLeadDeProspecto: vi.fn(async () => {}) }));
 
 import { atenderDesconocido, _olvidarReservasDePaso } from './whatsapp-bot.service';
-import { esSaludoDeBienvenida, bienvenidaHabilitada, PASO_BIENVENIDA_DESCONOCIDO } from './whatsapp-bienvenida';
+import {
+    esSaludoDeBienvenida, bienvenidaHabilitada, PASO_BIENVENIDA_DESCONOCIDO, textoDeBienvenida, etiquetaDeOfertas,
+} from './whatsapp-bienvenida';
+import { armarEstado, type FilasCrudas } from './bot-ofertas.service';
 
 const INTEGRATION = { id: 'int-1', school_id: 'school-1' } as any;
 const CONV = 'conv-ejemplo';
@@ -161,6 +164,44 @@ describe('esSaludoDeBienvenida (pura)', () => {
 
     it('un texto largo nunca lo es', () => {
         expect(esSaludoDeBienvenida('Hola ' + 'buenas '.repeat(10), OPS)).toBe(false);
+    });
+});
+
+describe('textoDeBienvenida con las ofertas (bot-ofertas, Monster 2026-11-25)', () => {
+    const SIEMPRE = '¿En qué te puedo ayudar? Puedo contarte de la *clase de cortesía* y la *inscripción*, los *horarios*, ' +
+        'o dejar tu mensaje para que una persona de la escuela te responda. 🙌';
+    const filas = (o: Partial<FilasCrudas>): FilasCrudas => ({ ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null, ...o });
+    const CONVOCATORIA = { id: 'o1', tipo: 'convocatoria', titulo: 'Convocatorias', estado: 'activa' };
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31' };
+    const DIC_3 = Date.parse('2026-12-03T15:00:00Z');
+
+    it('regresión: sin estado, o con la clase y sin ofertas, el texto de siempre', () => {
+        expect(textoDeBienvenida()).toBe(SIEMPRE);
+        expect(textoDeBienvenida('clase de cortesía', armarEstado('s', filas({}), DIC_3))).toBe(SIEMPRE);
+    });
+
+    it('sin clase hoy: no la nombra; con convocatorias, las nombra', () => {
+        const sinClase = textoDeBienvenida('clase de prueba', armarEstado('s', filas({ bloqueos: [BLOQUEO], ofertas: [CONVOCATORIA] }), DIC_3));
+        expect(sinClase).toBe('¿En qué te puedo ayudar? Puedo contarte de las *convocatorias* y la *inscripción*, los *horarios*, ' +
+            'o dejar tu mensaje para que una persona de la escuela te responda. 🙌');
+        const sinNada = textoDeBienvenida('clase de prueba', armarEstado('s', filas({ bloqueos: [BLOQUEO] }), DIC_3));
+        expect(sinNada).toBe('¿En qué te puedo ayudar? Puedo contarte de la *inscripción* y los *horarios*, ' +
+            'o dejar tu mensaje para que una persona de la escuela te responda. 🙌');
+        expect(sinNada).not.toMatch(/clase/);
+    });
+
+    it('con la clase y convocatorias: las dos', () => {
+        expect(textoDeBienvenida('clase de prueba', armarEstado('s', filas({ ofertas: [CONVOCATORIA] }), DIC_3)))
+            .toContain('Puedo contarte de la *clase de prueba*, las *convocatorias* y la *inscripción*');
+    });
+
+    it('etiquetaDeOfertas: por tipo; varias de distinto tipo → «Próximas fechas»; botones ≤ 20', () => {
+        expect(etiquetaDeOfertas([])).toBeNull();
+        expect(etiquetaDeOfertas([{ tipo: 'convocatoria' }, { tipo: 'convocatoria' }])?.boton).toBe('Convocatorias');
+        expect(etiquetaDeOfertas([{ tipo: 'convocatoria' }, { tipo: 'torneo' }])?.boton).toBe('Próximas fechas');
+        for (const t of ['convocatoria', 'clase_prueba', 'clinica', 'vacacional', 'cambio_de_grupo', 'torneo', 'otro'] as const) {
+            expect(etiquetaDeOfertas([{ tipo: t }])!.boton.length).toBeLessThanOrEqual(20);
+        }
     });
 });
 

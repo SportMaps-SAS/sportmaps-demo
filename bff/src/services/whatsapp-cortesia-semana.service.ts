@@ -18,6 +18,7 @@
 import { supabase } from '../config/supabase';
 import { conMarca, sufijoMarcaEscuela } from '../utils/tenantLink';
 import type { AjustesWhatsAppEscuela } from './whatsapp-ajustes-escuela.service';
+import { estadoDeOfertas, type EstadoOfertas } from './bot-ofertas.service';
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://app.sportmaps.co';
 const DIA = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
@@ -174,13 +175,23 @@ export async function enlaceDeCortesia(schoolId: string, qrId: string | null): P
 
 /**
  * El mensaje completo de la semana de cortesía, o null si no aplica (modo
- * 'clase' o QR que no sirve). Nunca lanza.
+ * 'clase', QR que no sirve, o HOY la clase de prueba está cerrada: bloqueo por
+ * fechas o interruptor de la escuela, bot-ofertas.service, que falla cerrado).
+ * `ofertas`: la lectura del turno, si quien llama ya la tiene. Nunca lanza.
  */
 export async function mensajeSemanaDeCortesia(
     schoolId: string,
     ajustes: Pick<AjustesWhatsAppEscuela, 'modoCortesia' | 'cortesiaQrId' | 'cortesiaDias'>,
+    ofertas?: EstadoOfertas | null,
 ): Promise<string | null> {
     if (ajustes.modoCortesia !== 'semana_app') return null;
+    // (2026-11-25) La semana de cortesía es la clase de prueba de esta escuela: cerrada hoy, no se ofrece y
+    // quien llama sigue con lo de siempre (que tampoco la ofrece).
+    try {
+        if (!(ofertas ?? await estadoDeOfertas(schoolId))?.claseDePrueba?.disponible) return null;
+    } catch {
+        return null;
+    }
     const enlace = await enlaceDeCortesia(schoolId, ajustes.cortesiaQrId);
     if (!enlace) return null;
     let horarios: string | null = null;

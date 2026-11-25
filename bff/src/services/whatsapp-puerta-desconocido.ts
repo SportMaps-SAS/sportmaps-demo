@@ -25,11 +25,20 @@
  *
  * El motor no habla con la base ni con Meta: todo entra por `CtxPuerta`
  * (inyectable en pruebas). Las lecturas de texto son puras.
+ *
+ * Ofertas y clase de prueba por fecha (bot-ofertas, Monster 2026-11-25): si hoy
+ * no hay clase de prueba, «¿Qué quieres hacer?» no muestra «Clase de cortesía»;
+ * si hay ofertas vigentes (convocatorias…) muestra su botón, que responde con
+ * `textoOfertasParaPersona` y pregunta a cuál fecha quiere ir; con la respuesta,
+ * la escuela recibe el aviso y la conversación queda pendiente de ella. Con la
+ * clase disponible, los botones de siempre.
  */
 
 import type { BotonInteractivo } from './whatsapp.service';
 import { supabase } from '../config/supabase';
 import { leerEdad, nombreValido, normalizar } from './whatsapp-clase-cortesia.service';
+import { estadoDeOfertas, textoOfertasParaPersona, type EstadoOfertas, type TipoOferta } from './bot-ofertas.service';
+import { etiquetaDeOfertas } from './whatsapp-bienvenida';
 
 export const FLUJO_PUERTA = 'puerta_desconocido';
 
@@ -52,6 +61,8 @@ export const BOTON_PUERTA = {
     CORTESIA: 'sm_pd_cortesia',
     INSCRIBIRME: 'sm_pd_inscribirme',
     PRECIOS: 'sm_pd_precios',
+    /** Las ofertas vigentes (convocatorias…), en lugar de la clase cuando hoy no hay. */
+    OFERTAS: 'sm_pd_ofertas',
 } as const;
 
 export function esBotonPuerta(id: string | null | undefined): boolean {
@@ -73,8 +84,30 @@ const BOTONES_QUIERE: BotonInteractivo[] = [
 export const ENTEXTO_PUERTA = 'Responde *Ya soy del club*, *Quiero información* u *Otro tema*.';
 const ENTEXTO_QUIERE = 'Responde *Clase de cortesía*, *Inscribirme* o *Solo precios*.';
 
-export type PasoPuerta = 'menu' | 'club_nombre' | 'info_nombre' | 'info_edad' | 'info_acudiente' | 'info_quiere';
-export type QueQuiere = 'cortesia' | 'inscribirme' | 'precios';
+/** Lo que la puerta usa de bot-ofertas (`estadoDeOfertas`). */
+export type OfertasDePuerta = EstadoOfertas;
+
+/**
+ * Los botones de «¿Qué quieres hacer?». Con la clase de prueba disponible (o sin
+ * estado), los de siempre. Sin clase hoy: el botón de las ofertas vigentes (por su
+ * tipo: «Convocatorias») si hay, «Inscribirme» y «Solo precios». Pura.
+ */
+export function botonesQueQuiere(ofertas?: OfertasDePuerta | null): { botones: BotonInteractivo[]; enTexto: string } {
+    if (!ofertas || ofertas.claseDePrueba.disponible) return { botones: BOTONES_QUIERE, enTexto: ENTEXTO_QUIERE };
+    const etiqueta = etiquetaDeOfertas(ofertas.ofertas);
+    const botones: BotonInteractivo[] = [
+        ...(etiqueta ? [{ id: BOTON_PUERTA.OFERTAS, title: etiqueta.boton.slice(0, 20) }] : []),
+        { id: BOTON_PUERTA.INSCRIBIRME, title: 'Inscribirme' },
+        { id: BOTON_PUERTA.PRECIOS, title: 'Solo precios' },
+    ];
+    const enTexto = `Responde ${botones.map((b) => `*${b.title}*`).join(', ').replace(/, ([^,]*)$/, ' o $1')}.`;
+    return { botones, enTexto };
+}
+
+export type PasoPuerta = 'menu' | 'club_nombre' | 'info_nombre' | 'info_edad' | 'info_acudiente' | 'info_quiere'
+    /** Ya vio las ofertas: falta a cuál fecha quiere ir. */
+    | 'info_oferta';
+export type QueQuiere = 'cortesia' | 'inscribirme' | 'precios' | 'ofertas';
 
 export interface DatosPuerta {
     deportista?: string;
@@ -99,7 +132,8 @@ export interface LeadCompleto {
     edad: number | null;
     acudiente: string | null;
     grupoSugerido: string | null;
-    quiere: QueQuiere | null;
+    /** Con las ofertas, su tipo («convocatoria»; «oferta» si son de varios tipos). */
+    quiere: Exclude<QueQuiere, 'ofertas'> | TipoOferta | 'oferta' | null;
 }
 
 export interface GrupoSugerido { linea: string | null; nombre: string | null }
@@ -123,8 +157,21 @@ export interface CtxPuerta {
     enlace: () => Promise<string | null>;
     /** Clase de cortesía: arranca el flujo existente con lo que ya se sabe. */
     cortesia: (datos: DatosPuerta, encabezado: string) => Promise<void>;
+    /**
+     * Qué se puede ofrecer hoy (bot-ofertas). Sin él se lee `estadoDeOfertas(schoolId)`
+     * (caché de 60 s, falla cerrado para la clase de prueba). Pruebas: se inyecta.
+     */
+    ofertas?: () => Promise<OfertasDePuerta>;
     leerEstado?: (conversationId: string) => Promise<EstadoPuerta | null>;
     ahora?: () => Date;
+}
+
+/**
+ * El estado de ofertas del turno. Nunca lanza: `estadoDeOfertas` falla cerrado (sin
+ * clase de prueba) si no puede leer; null solo si la función inyectada lanza.
+ */
+async function ofertasDePuerta(ctx: CtxPuerta): Promise<OfertasDePuerta | null> {
+    return seguro(() => (ctx.ofertas ? ctx.ofertas() : estadoDeOfertas(ctx.schoolId)));
 }
 
 // ─── Textos ─────────────────────────────────────────────────────────────────
@@ -162,14 +209,24 @@ export function leerOpcionDePuerta(texto: string | null | undefined, botonId: st
     return null;
 }
 
-/** ¿Qué quiere hacer? Por botón o por palabra. Pura. */
-export function leerQueQuiere(texto: string | null | undefined, botonId: string | null = null): QueQuiere | null {
+/**
+ * ¿Qué quiere hacer? Por botón o por palabra. `o.etiqueta`: el título del botón de
+ * ofertas (el modo asistido lo manda como texto); con `o.hayOfertas`, «convocatoria»
+ * escrito también es 'ofertas'. Pura.
+ */
+export function leerQueQuiere(
+    texto: string | null | undefined, botonId: string | null = null,
+    o: { hayOfertas?: boolean; etiqueta?: string | null } = {},
+): QueQuiere | null {
     if (botonId === BOTON_PUERTA.CORTESIA) return 'cortesia';
     if (botonId === BOTON_PUERTA.INSCRIBIRME) return 'inscribirme';
     if (botonId === BOTON_PUERTA.PRECIOS) return 'precios';
+    if (botonId === BOTON_PUERTA.OFERTAS) return 'ofertas';
     const n = normalizar(texto);
     if (!n) return null;
     if (/\bsolo (los )?(precios?|valores?)\b/.test(n)) return 'precios';
+    if (o.hayOfertas && ((o.etiqueta && n === normalizar(o.etiqueta))
+        || /\b(convocatorias?|pruebas? (para|de) (entrar|ingreso|ingresar|seleccion)|tryouts?|proximas fechas)\b/.test(n))) return 'ofertas';
     if (/\b(cortesia|prueba|probar|conocer|gratis)\b/.test(n)) return 'cortesia';
     if (/\b(inscrib\w*|matricul\w*|inscripcion)\b/.test(n)) return 'inscribirme';
     if (/\b(precios?|valores?|costos?|cuanto|tarifas?|solo precios)\b/.test(n)) return 'precios';
@@ -270,6 +327,7 @@ export async function atenderTurnoPuerta(ctx: CtxPuerta, textoCrudo: string, bot
         case 'info_edad': return pasoInfoEdad(ctx, estado, texto);
         case 'info_acudiente': return pasoInfoAcudiente(ctx, estado, texto, botonId);
         case 'info_quiere': return pasoInfoQuiere(ctx, estado, texto, botonId);
+        case 'info_oferta': return pasoInfoOferta(ctx, estado, texto, botonId);
         default: return false;
     }
 }
@@ -278,6 +336,8 @@ async function continuarSinEstado(ctx: CtxPuerta, botonId: string): Promise<bool
     if (botonId === BOTON_PUERTA.CLUB) return elegirOpcion(ctx, 'club');
     if (botonId === BOTON_PUERTA.INFO) return elegirOpcion(ctx, 'info');
     if (botonId === BOTON_PUERTA.OTRO) return elegirOpcion(ctx, 'otro');
+    // El botón de ofertas de un mensaje viejo (flujo vencido): las ofertas de HOY, sin el registro.
+    if (botonId === BOTON_PUERTA.OFERTAS) return mostrarOfertas(ctx, {}, await ofertasDePuerta(ctx), []);
     return false;
 }
 
@@ -412,35 +472,61 @@ async function pasoInfoAcudiente(ctx: CtxPuerta, estado: EstadoPuerta, texto: st
 
 async function pedirQueQuiere(ctx: CtxPuerta, datos: DatosPuerta): Promise<boolean> {
     const para = datos.deportista ? ` para *${primerNombre(datos.deportista)}*` : '';
+    const { botones, enTexto } = botonesQueQuiere(await ofertasDePuerta(ctx));
     await ctx.enviar(`¿Qué quieres hacer${para}?`, 'puerta_info_quiere',
-        { paso: 'info_quiere', datos }, BOTONES_QUIERE, ENTEXTO_QUIERE);
+        { paso: 'info_quiere', datos }, botones, enTexto);
     return true;
 }
 
 async function pasoInfoQuiere(ctx: CtxPuerta, estado: EstadoPuerta, texto: string, botonId: string | null): Promise<boolean> {
-    const quiere = leerQueQuiere(texto, botonId);
+    const ofertas = await ofertasDePuerta(ctx);
+    const quiere = leerQueQuiere(texto, botonId, {
+        hayOfertas: !!ofertas?.ofertas.length, etiqueta: ofertas ? etiquetaDeOfertas(ofertas.ofertas)?.boton : null,
+    });
     if (!quiere) {
         const intentos = (estado.datos.intentos ?? 0) + 1;
         // No eligió: se cierra con lo que pidió por defecto (los valores) y la escuela lo ve.
-        if (intentos >= MAX_INTENTOS) return cerrarMiniRegistro(ctx, { ...estado.datos, quiere: 'precios' });
+        if (intentos >= MAX_INTENTOS) return cerrarMiniRegistro(ctx, { ...estado.datos, quiere: 'precios' }, ofertas);
+        const { botones, enTexto } = botonesQueQuiere(ofertas);
         await ctx.enviar('Elige una opción para seguir:', 'puerta_info_quiere',
-            { paso: 'info_quiere', datos: { ...estado.datos, intentos } }, BOTONES_QUIERE, ENTEXTO_QUIERE);
+            { paso: 'info_quiere', datos: { ...estado.datos, intentos } }, botones, enTexto);
         return true;
     }
-    return cerrarMiniRegistro(ctx, { ...estado.datos, quiere });
+    return cerrarMiniRegistro(ctx, { ...estado.datos, quiere }, ofertas);
 }
+
+/** «convocatoria» si todas las ofertas son de un tipo; «oferta» si son de varios. Pura. */
+function interesDe(ofertas: OfertasDePuerta): TipoOferta | 'oferta' {
+    const tipos = [...new Set(ofertas.ofertas.map((o) => o.tipo))];
+    return tipos.length === 1 ? tipos[0] : 'oferta';
+}
+
+/** Lo que se le dice a quien pide la clase de prueba un día sin clase. */
+export const SIN_CLASE_DE_PRUEBA_HOY = 'Por ahora no estamos agendando clases de prueba.';
 
 /**
  * Cierre con los datos completos: lead COMPLETO, el grupo, los valores y el
  * enlace de inscripción. Con «Clase de cortesía» sigue el flujo de cortesía ya
  * sabiendo nombre, edad y acudiente (va directo al resumen al elegir horario).
+ * Sin clase de prueba hoy (`ofertas`), la clase nunca arranca: con ofertas
+ * vigentes se muestran ellas; sin ofertas, los valores y el enlace.
  */
-async function cerrarMiniRegistro(ctx: CtxPuerta, datos: DatosPuerta): Promise<boolean> {
+async function cerrarMiniRegistro(ctx: CtxPuerta, datos: DatosPuerta, ofertas?: OfertasDePuerta | null): Promise<boolean> {
+    const sinClase = !!ofertas && !ofertas.claseDePrueba.disponible;
+    const hayOfertas = !!ofertas?.ofertas.length;
+    // «Clase de cortesía» (botón de un mensaje viejo o escrito) un día sin clase: no se arranca.
+    const aviso = datos.quiere === 'cortesia' && sinClase ? SIN_CLASE_DE_PRUEBA_HOY : '';
+    if (aviso) datos = { ...datos, quiere: hayOfertas ? 'ofertas' : 'precios' };
+    if (datos.quiere === 'ofertas') {
+        if (hayOfertas) return mostrarOfertas(ctx, datos, ofertas!, [aviso]);
+        datos = { ...datos, quiere: 'precios' }; // las ofertas vencieron entre el botón y el toque
+    }
     const deportista = datos.deportista ?? '';
     const edad = datos.edad ?? null;
     await seguro(() => ctx.guardarLead({
         deportista, fechaNacimiento: datos.fechaNacimiento ?? null, edad,
-        acudiente: datos.acudiente ?? null, grupoSugerido: datos.grupoSugerido ?? null, quiere: datos.quiere ?? null,
+        acudiente: datos.acudiente ?? null, grupoSugerido: datos.grupoSugerido ?? null,
+        quiere: (datos.quiere as LeadCompleto['quiere']) ?? null,
     }));
     const grupo = edad != null ? await seguro(() => ctx.grupoPara(edad)) : null;
     const precios = await seguro(() => ctx.precios(edad));
@@ -449,6 +535,7 @@ async function cerrarMiniRegistro(ctx: CtxPuerta, datos: DatosPuerta): Promise<b
         (edad != null ? ` (${edad} años)` : '') + '. 🙌';
     const cuerpo = [
         registrado,
+        aviso,
         grupo?.linea ?? '',
         precios ?? '',
         enlace && datos.quiere !== 'precios'
@@ -467,6 +554,63 @@ async function cerrarMiniRegistro(ctx: CtxPuerta, datos: DatosPuerta): Promise<b
         return true;
     }
     await ctx.enviar(`${cuerpo}\n\nSi te queda alguna duda, escríbela por aquí y la escuela te responde.`, 'puerta_info_listo', null);
+    return true;
+}
+
+// ── Ofertas vigentes (convocatorias…) ───────────────────────────────────────
+
+/**
+ * Las ofertas de hoy (`textoOfertasParaPersona`: títulos, fechas, lugares y «cómo
+ * inscribirse» salen de la base) y la pregunta de a cuál fecha quiere ir. El lead
+ * queda con `quiere` = el tipo de la oferta. false si no hay ofertas (sigue lo de siempre).
+ */
+async function mostrarOfertas(ctx: CtxPuerta, datos: DatosPuerta, ofertas: OfertasDePuerta | null, previos: string[]): Promise<boolean> {
+    const texto = ofertas ? textoOfertasParaPersona(ofertas) : null;
+    if (!ofertas || !texto) return false;
+    const edad = datos.edad ?? null;
+    if (datos.deportista) {
+        await seguro(() => ctx.guardarLead({
+            deportista: datos.deportista!, fechaNacimiento: datos.fechaNacimiento ?? null, edad,
+            acudiente: datos.acudiente ?? null, grupoSugerido: datos.grupoSugerido ?? null, quiere: interesDe(ofertas),
+        }));
+    }
+    const registrado = datos.deportista
+        ? `Listo${datos.acudiente ? `, ${primerNombre(datos.acudiente)}` : ''}: registré a *${datos.deportista}*`
+            + (edad != null ? ` (${edad} años)` : '') + '. 🙌'
+        : '';
+    const pregunta = datos.deportista
+        ? `¿A cuál fecha quieres inscribir a *${primerNombre(datos.deportista)}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
+        : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
+    await ctx.enviar([registrado, ...previos, texto, pregunta].filter(Boolean).join('\n\n'), 'puerta_info_ofertas',
+        { paso: 'info_oferta', datos: { ...datos, quiere: 'ofertas', intentos: 0 } });
+    return true;
+}
+
+const SOLO_CORTESIA = /^(ok|okey|okay|oki|gracias|muchas gracias|mil gracias|listo|dale|vale|bueno|perfecto|genial|super|si|claro|de acuerdo|entendido|ya)( (gracias|muchas gracias))?$/;
+
+/**
+ * La fecha que eligió (como la escriba: «la del sábado 5 a las 7»): la escuela recibe el
+ * aviso con los datos del registro y la conversación queda pendiente de ella. Sin cobros.
+ * Una pregunta o un «gracias» no es la elección: lo atiende el bot de siempre.
+ */
+async function pasoInfoOferta(ctx: CtxPuerta, estado: EstadoPuerta, texto: string, botonId: string | null): Promise<boolean> {
+    if (botonId === BOTON_PUERTA.OFERTAS) return mostrarOfertas(ctx, estado.datos, await ofertasDePuerta(ctx), []);
+    if (botonId) return false;
+    const n = normalizar(texto);
+    if (!n || texto.includes('?') || SOLO_CORTESIA.test(n) || n.split(' ').length > 40) return false;
+    const d = estado.datos;
+    const eleccion = texto.replace(/\s+/g, ' ').trim().slice(0, 200);
+    const quien = d.deportista ? ` a *${primerNombre(d.deportista)}*` : '';
+    await ctx.enviar(`¡Listo! 🙌 Le pasé a la escuela que quieres inscribir${quien} en: «${eleccion}». La escuela te confirma el cupo por aquí.`,
+        'puerta_info_listo', null, undefined, undefined, { pendiente_escuela: `inscripción: ${eleccion}`.slice(0, 300) });
+    const ofertas = await ofertasDePuerta(ctx);
+    const que = (ofertas ? etiquetaDeOfertas(ofertas.ofertas)?.boton : null) ?? 'Oferta';
+    await ctx.avisarEscuela('otro', [
+        `Inscripción (${que.toLocaleLowerCase('es-CO')}): «${eleccion}».`,
+        d.deportista ? `Deportista: ${d.deportista}${d.edad != null ? ` (${d.edad} años)` : ''}.` : '',
+        d.fechaNacimiento ? `Nacimiento: ${d.fechaNacimiento}.` : '',
+        d.acudiente ? `Acudiente: ${d.acudiente}.` : '',
+    ].filter(Boolean).join(' '));
     return true;
 }
 

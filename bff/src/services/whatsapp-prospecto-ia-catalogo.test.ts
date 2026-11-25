@@ -37,6 +37,15 @@ vi.mock('./whatsapp-anuncio-destino', async (orig) => ({
 }));
 const medios = vi.hoisted(() => ({ mediosDePago: vi.fn() }));
 vi.mock('./whatsapp-medios-de-pago.service', () => medios);
+// Ofertas de la escuela (bot-ofertas): ninguna y sin bloqueos (el mock de supabase no encadena dos `.eq()`).
+vi.mock('./bot-ofertas.service', async (orig) => {
+    const real = await orig<typeof import('./bot-ofertas.service')>();
+    return {
+        ...real,
+        estadoDeOfertas: vi.fn(async (schoolId: string) =>
+            real.armarEstado(schoolId, { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null })),
+    };
+});
 
 import { redactarRespuestaDeProspecto, catalogoParaProspecto } from './whatsapp-prospecto-ia.service';
 import { verificarSalida } from './whatsapp-verificador-montos';
