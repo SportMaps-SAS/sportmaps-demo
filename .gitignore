@@ -199,8 +199,14 @@ mobile/android/local.properties
 mobile/analyze_output*.txt
 *.iml
 
-# Claude Code project config (local only)
-.claude/
+# Claude Code: se versiona solo lo compartido del equipo (ajustes, guardia,
+# skills, agentes). Lo personal va en .claude/settings.local.json y queda local.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+!.claude/agents/
+.claude/settings.local.json
 
 # Vite config cache (build artifact)
 frontend/vite.config.ts.timestamp-*.mjs
