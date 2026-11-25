@@ -10,6 +10,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../config/supabase', () => ({ supabase: {} }));
 vi.mock('./push.service', () => ({ sendToUser: vi.fn() }));
 vi.mock('./avisos-correo.service', () => ({ destinatariosDeEscuela: vi.fn(), enviarConReserva: vi.fn() }));
+// La clase de prueba ABIERTA, sin ofertas ni bloqueos (bot-ofertas.service): lo de siempre. Sin esto, con
+// Supabase vacío el servicio falla cerrado y no se ofrecería la clase. Lo cerrado: whatsapp-clase-cortesia-ofertas.test.ts.
+vi.mock('./bot-ofertas.service', async (importOriginal) => {
+    const real = await importOriginal<typeof import('./bot-ofertas.service')>();
+    return {
+        ...real,
+        estadoDeOfertas: async (schoolId: string, ahora?: number) => real.armarEstado(schoolId,
+            { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null }, ahora),
+    };
+});
 
 import {
     construirRangos, elegirGrupo, textoGrupoParaEdad, textoDesdeQueEdad, preguntaGrupoPorEdad,

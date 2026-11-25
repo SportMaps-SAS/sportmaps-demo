@@ -588,6 +588,15 @@ describe('Nicolás (308de503, •••7726): botones viejos del club en plena v
             .toBe('Claro 🙌 Lo del club va aparte de la Clínica de armadores y atacantes: para empezar se agenda una *clase de prueba*, que cuesta *$15.000*.');
         expect(textoClubAparteDeLaVenta(CLINICA, { nombre: 'clase de cortesía', precio: null, gratis: true })).toContain('que es gratis');
     });
+
+    it('(2026-11-25) sin clase de prueba hoy (`disponible: false`): no la nombra ni da su valor', () => {
+        const t = textoClubAparteDeLaVenta(CLINICA, { nombre: 'clase de prueba', precio: '$15.000', gratis: false, disponible: false });
+        expect(t).toBe('Claro 🙌 Lo del club va aparte de la Clínica de armadores y atacantes: la escuela te cuenta por aquí cómo entrar.');
+        expect(t).not.toMatch(/clase de prueba|\$15\.000|agenda/);
+        // `disponible: true` o sin el dato: como siempre.
+        expect(textoClubAparteDeLaVenta(CLINICA, { nombre: 'clase de prueba', precio: '$15.000', gratis: false, disponible: true }))
+            .toContain('se agenda una *clase de prueba*');
+    });
 });
 
 describe('los datos de quien asiste en una venta («Nicolás Cubides Ávila / 18 de Diciembre del 2006 / Opuesto»)', () => {

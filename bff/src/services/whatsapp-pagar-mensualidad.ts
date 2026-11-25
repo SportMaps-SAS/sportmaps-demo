@@ -29,6 +29,7 @@ import type { BotonInteractivo } from './whatsapp.service';
 import { normalizarFrase } from './whatsapp-reglas-turno';
 import { preguntaComoPagar } from './whatsapp-pago-publico';
 import { formatoPesos } from './textos-clase-prueba';
+import { textoOfertasParaPersona, type EstadoOfertas } from './bot-ofertas.service';
 
 /** step de la pregunta de aclaración (el freno «una sola vez» y la lectura de la respuesta por texto lo usan). */
 export const PASO_PAGO_ACLARACION = 'pago_mensualidad_aclaracion';
@@ -104,12 +105,30 @@ export function leerRespuestaAclaracion(texto: string | null | undefined, botonI
     return null;
 }
 
+/** Sin clase de prueba hoy y sin ofertas cargadas (mismo sentido que `reglasDeOfertasParaIa`). */
+export const TEXTO_SIN_OFERTAS_PARA_NUEVOS = 'Por ahora no tenemos fechas abiertas para nuevos deportistas. La escuela te escribe por aquí para contarte las próximas.';
+
 /**
  * «Quiero inscribirme»: la clase de prueba primero, la mensualidad después. `valores`:
  * la lista de precios de la escuela (o null). `nombreClase`: cómo la llama la escuela.
  * Nunca dice «gratis». Pura.
+ *
+ * `ofertas` (2026-11-25, Monster: en diciembre y enero no hay clases de prueba y llegan
+ * por las convocatorias): el `estadoDeOfertas` de la escuela. Si HOY no hay clase de
+ * prueba, no se nombra: van las ofertas vigentes (convocatorias…), o el mensaje de la
+ * escuela para cuando no hay, o que la escuela le escribe. Sin la lista de precios (puede
+ * traer el valor de la clase). Sin `ofertas`, como siempre.
  */
-export function textoInscribirmeTrasPago(p: { valores: string | null; nombreClase: string }): string {
+export function textoInscribirmeTrasPago(p: { valores: string | null; nombreClase: string; ofertas?: EstadoOfertas | null }): string {
+    if (p.ofertas && !p.ofertas.claseDePrueba.disponible) {
+        const vigentes = textoOfertasParaPersona(p.ofertas);
+        return [
+            vigentes
+                ? `¡Perfecto! 🙌 Esto es lo que tenemos abierto para nuevos deportistas:\n\n${vigentes}`
+                : `¡Perfecto! 🙌 ${p.ofertas.mensajeSinOfertas ?? TEXTO_SIN_OFERTAS_PARA_NUEVOS}`,
+            'Cualquier duda, la escuela te responde por aquí.',
+        ].join('\n\n');
+    }
     return [
         `¡Perfecto! 🙌 Para inscribirte, primero se hace la *${p.nombreClase}* y, después de ella, te inscribes y pagas la mensualidad.`,
         p.valores ? `Estos son los valores de la escuela:\n\n${p.valores}` : null,

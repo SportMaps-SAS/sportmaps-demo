@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 962,
-  "head": "20261124173412",
+  "count": 964,
+  "head": "20261125105034",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -965,6 +965,8 @@
     {"v":"20261124100705","file":"20261124100705_body_versionado_y_rls.sql","sha256":"efb0e60be18c099aa7b814227d6049f403abb4029e3ed7a720b117cc8ba0bb98","added":"2026-11-24","by":"Brayan Steven Lopez"},
     {"v":"20261124113656","file":"20261124113656_hours_plan_enabled_solo_super_admin.sql","sha256":"6d7adf97ed8ab955007f8c3c08cd755db8d2840757d125edb6c11a5194730edd","added":"2026-11-24","by":"Brayan Steven Lopez"},
     {"v":"20261124152343","file":"20261124152343_constancias_folio_privacidad_avisos_y_carnet.sql","sha256":"10fb23fe8ad36658bdb5b9f05aebd7bc5dcc7fd47b00632b3c18ac4df308b0a4","added":"2026-11-24","by":"Brayan Steven Lopez"},
-    {"v":"20261124173412","file":"20261124173412_saas_periodo_dia_1.sql","sha256":"9f821dd66698641444dd653b4e9840af47f15c9fa3910c65ae7e393bbe66f6fd","added":"2026-11-24","by":"Brayan Steven Lopez"}
+    {"v":"20261124173412","file":"20261124173412_saas_periodo_dia_1.sql","sha256":"9f821dd66698641444dd653b4e9840af47f15c9fa3910c65ae7e393bbe66f6fd","added":"2026-11-24","by":"Brayan Steven Lopez"},
+    {"v":"20261125105009","file":"20261125105009_bot_ofertas_bloqueos_y_sesiones.sql","sha256":"ee19a0cd9d41facb2438e91f035763f55701209f705165f6840ddfcbf766340c","added":"2026-11-25","by":"Brayan Steven Lopez"},
+    {"v":"20261125105034","file":"20261125105034_monster_convocatorias_dic_2026.sql","sha256":"2cc68e4006b125d0e699ee257bd7603efe842837d08763a1d22fd99f9c096a48","added":"2026-11-25","by":"Brayan Steven Lopez"}
   ]
 }

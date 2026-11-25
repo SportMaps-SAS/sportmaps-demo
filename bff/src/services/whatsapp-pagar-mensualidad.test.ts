@@ -6,8 +6,9 @@ import { describe, it, expect } from 'vitest';
 import {
     quierePagarMensualidad, leerRespuestaAclaracion, textoInscribirmeTrasPago, textoAclaracionDePago,
     BOTONES_PAGO_MENSUALIDAD, BOTON_PAGO_MENSUALIDAD, preguntaPorAfiliacionHipotetica, precioGeneralMostrado,
-    textoAfiliadoSinReconocer,
+    textoAfiliadoSinReconocer, TEXTO_SIN_OFERTAS_PARA_NUEVOS,
 } from './whatsapp-pagar-mensualidad';
+import { armarEstado, type FilasCrudas } from './bot-ofertas.service';
 
 describe('quierePagarMensualidad', () => {
     it.each([
@@ -59,6 +60,49 @@ describe('la aclaración', () => {
         expect(t).toContain('$120.000');
         expect(t).not.toMatch(/gratis/i);
         expect(textoInscribirmeTrasPago({ valores: null, nombreClase: 'clase de prueba' })).not.toContain('valores de la escuela');
+    });
+});
+
+describe('«quiero inscribirme» cuando HOY no hay clase de prueba (Monster 2026-11-25: dic–ene, convocatorias)', () => {
+    const ESC = 'esc-1';
+    const AHORA = new Date('2026-12-02T15:00:00Z').getTime(); // 2-dic, 10:00 en Bogotá
+    const filas = (extra: Partial<FilasCrudas> = {}): FilasCrudas => ({
+        ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null, ...extra,
+    });
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: 'vacaciones' };
+    const CONVOCATORIA = {
+        id: 'of-1', tipo: 'convocatoria', titulo: 'Convocatoria femenina', estado: 'activa', prioridad: 1,
+        requiere_inscripcion: true, requiere_pago: false, cta: 'Para inscribirte, escríbenos el nombre y el año de nacimiento.',
+    };
+    const SESION = { id: 's-1', oferta_id: 'of-1', fecha: '2026-12-05', hora_inicio: '09:00:00', hora_fin: '11:00:00', lugar: 'Coliseo Inventado', genero: 'femenino' };
+    const SIN_CLASE = /clase de prueba|primero se hace|\$15\.000|valores de la escuela|mensualidad/i;
+
+    it('con la clase disponible: el texto de siempre', () => {
+        const ofertas = armarEstado(ESC, filas(), AHORA);
+        expect(ofertas.claseDePrueba.disponible).toBe(true);
+        expect(textoInscribirmeTrasPago({ valores: null, nombreClase: 'clase de prueba', ofertas }))
+            .toBe(textoInscribirmeTrasPago({ valores: null, nombreClase: 'clase de prueba' }));
+    });
+
+    it('bloqueada y con una convocatoria vigente: la convocatoria (fechas, lugar y cómo inscribirse), sin nombrar la clase ni la lista de precios', () => {
+        const ofertas = armarEstado(ESC, filas({ bloqueos: [BLOQUEO], ofertas: [CONVOCATORIA], sesiones: [SESION] }), AHORA);
+        const t = textoInscribirmeTrasPago({ valores: '• Clase de prueba: *$15.000*\n• Mensualidad: *$120.000*', nombreClase: 'clase de prueba', ofertas });
+        expect(t).toContain('*Convocatoria femenina*');
+        expect(t).toContain('sábado 5 de diciembre');
+        expect(t).toContain('Coliseo Inventado');
+        expect(t).toContain(CONVOCATORIA.cta);
+        expect(t).not.toMatch(SIN_CLASE);
+    });
+
+    it('apagada y sin ofertas: el mensaje que dejó la escuela; sin él, el neutro', () => {
+        const apagada = { ajustesClasePrueba: { enabled: true, whatsapp_enabled: false } };
+        const conMensaje = armarEstado(ESC, filas({ ...apagada, mensajeSinOfertas: 'En enero abrimos convocatorias nuevas.' }), AHORA);
+        expect(textoInscribirmeTrasPago({ valores: null, nombreClase: 'clase de prueba', ofertas: conMensaje }))
+            .toContain('En enero abrimos convocatorias nuevas.');
+        const sinNada = armarEstado(ESC, filas(apagada), AHORA);
+        const t = textoInscribirmeTrasPago({ valores: '• Mensualidad: *$120.000*', nombreClase: 'clase de prueba', ofertas: sinNada });
+        expect(t).toContain(TEXTO_SIN_OFERTAS_PARA_NUEVOS);
+        expect(t).not.toMatch(SIN_CLASE);
     });
 });
 

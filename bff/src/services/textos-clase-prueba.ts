@@ -67,6 +67,10 @@ export function textosDeClase(a: AjustesTextosClase | null | undefined = {}): Te
 export const TEXTOS_POR_DEFECTO: TextosClase = Object.freeze(textosDeClase({})) as TextosClase;
 
 // ─── Frases (puras). Con los textos por defecto dan los literales de siempre. ──
+// `presentacionDeClase` y `ofertaDeReserva` OFRECEN la clase: quien las use tiene
+// que haber comprobado antes que hoy está abierta (bot-ofertas.service,
+// `claseDePrueba.disponible`). En whatsapp-clase-cortesia solo salen después de
+// `iniciarCortesia` / `franjasOfrecibles`, que ya lo comprueban (2026-11-25).
 
 /** «¡Claro! 🙌 La *clase de cortesía* es *gratis* y sirve para conocer la escuela.» */
 export function presentacionDeClase(t: TextosClase = TEXTOS_POR_DEFECTO): string {

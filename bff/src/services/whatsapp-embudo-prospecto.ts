@@ -37,6 +37,15 @@
  * pruebas). Las funciones de B3-motor (`elegirGrupoEmbudo`, `textosDeClase`,
  * franjas con las sesiones canceladas filtradas) llegan por el contexto: este
  * archivo no las importa. Nunca dice «gratis» cuando la clase tiene valor.
+ *
+ * Ofertas y clase de prueba por fecha (bot-ofertas, Monster 2026-11-25): en
+ * diciembre y enero no hay clase de prueba y llegan por las CONVOCATORIAS. Si hoy
+ * no hay clase (`ctx.ofertas`), al terminar las preguntas no se dice «se agenda
+ * una clase de prueba» ni se muestran horarios: van las ofertas vigentes
+ * (`textoOfertasParaPersona`, filtradas por el género que dio) y la pregunta de a
+ * cuál fecha quiere ir; con la respuesta, el lead (quiere = tipo de la oferta) y
+ * el aviso a la escuela. Sin ofertas, la escuela le escribe. Las franjas de un
+ * día bloqueado no se ofrecen nunca (`franjasDeEquipo`). Sin `ctx.ofertas`, como antes.
  */
 
 import type { BotonInteractivo } from './whatsapp.service';
@@ -60,6 +69,10 @@ import {
     type AjustesClasePrueba, type AjustesWhatsAppEscuela, type BotonSede, type PreguntaProspecto,
 } from './whatsapp-ajustes-escuela.service';
 import type { ResultadoCupo } from './clase-prueba-agenda.service';
+import {
+    estadoDeOfertas, claseDePruebaPermitidaEn, textoOfertasParaPersona, sumarDias,
+    fechaLegible as fechaLegibleDeOferta, type EstadoOfertas, type TipoOferta,
+} from './bot-ofertas.service';
 
 export const FLUJO_EMBUDO = 'embudo';
 
@@ -117,11 +130,17 @@ export const PASO_EMBUDO = {
     CAMBIO_SEDE: 'embudo_cambio_de_sede',
     /** Recordatorio del paso pendiente, tras contestar una pregunta a mitad del registro. */
     RECORDATORIO: 'embudo_recordar_paso',
+    /** Sin clase de prueba hoy: las ofertas vigentes y «¿a cuál fecha?». */
+    OFERTAS: 'embudo_ofertas',
+    /** Eligió fecha de una oferta: pasa a la escuela (cierra el flujo). */
+    INSCRIPCION_OFERTA: 'embudo_inscripcion_oferta',
 } as const;
 
 export type PasoEmbudo =
     | 'sede' | 'pregunta' | 'detalle' | 'otra_sede' | 'elegir_franja'
-    | 'consentimiento' | 'esperando_pago' | 'agendada' | 'reprogramar';
+    | 'consentimiento' | 'esperando_pago' | 'agendada' | 'reprogramar'
+    /** Vio las ofertas vigentes (sin clase de prueba hoy): falta a cuál fecha quiere ir. */
+    | 'elegir_oferta';
 
 export interface DatosEmbudo {
     branchId?: string | null;
@@ -222,10 +241,12 @@ export interface LeadEmbudo {
     grupo: string | null;
     /** Solo las claves NO reservadas (posición, trayectoria, detalle…). */
     respuestas: Record<string, string>;
+    /** Qué busca. Sin él, 'clase_prueba' (lo de siempre); con las ofertas, su tipo («convocatoria»). */
+    quiere?: TipoOferta | 'oferta' | null;
 }
 
 export type MotivoPersona = 'sin_grupo' | 'sin_horarios' | 'sin_cuentas_de_pago' | 'no_entendio' | 'error' | 'pide_persona'
-    | 'pide_matricula';
+    | 'pide_matricula' | 'inscripcion_oferta';
 
 /** Lo que `franjaDeAgenda` (clase-prueba-agenda) sabe de dónde es la clase. */
 export interface LugarDeClase {
@@ -299,6 +320,11 @@ export interface CtxEmbudo {
     lugarDeLaClase?: (slotId: string) => Promise<LugarDeClase | null>;
     leerEstado?: (conversationId: string) => Promise<EstadoEmbudo | null>;
     ahora?: () => Date;
+    /**
+     * Qué se puede ofrecer hoy (bot-ofertas `estadoDeOfertas`; lo trae `depsEmbudoDeSupabase`).
+     * Sin él, como antes: la clase de prueba disponible y sin ofertas.
+     */
+    ofertas?: () => Promise<EstadoOfertas>;
     /**
      * El embudo tenía una pregunta pendiente y SOLTÓ el turno porque lo que llegó es otra cosa (una
      * pregunta de precio u horario, un comentario). Quien llama contesta por el camino de siempre y
@@ -616,7 +642,7 @@ export function leadCompletoDeEmbudo(l: LeadEmbudo) {
     const hoy = new Date().getUTCFullYear();
     return {
         deportista: l.deportista, fechaNacimiento: l.fechaNacimiento,
-        edad: l.anio ? hoy - l.anio : null, categoriaSugerida: l.grupo, quiere: 'clase_prueba',
+        edad: l.anio ? hoy - l.anio : null, categoriaSugerida: l.grupo, quiere: l.quiere ?? 'clase_prueba',
         branchId: l.branchId, teamId: l.teamId, genero: l.genero, respuestas: l.respuestas, via: 'embudo' as const,
     };
 }
@@ -703,7 +729,9 @@ export function mensajeDeBienvenida(
 const hoyDe = (ctx: CtxEmbudo) => (ctx.ahora ?? (() => new Date()))();
 
 // Una lectura de ajustes por turno (Disk IO): el contexto vive lo que dura el turno.
-const memo = new WeakMap<CtxEmbudo, { aj?: Promise<AjustesWhatsAppEscuela>; clase?: Promise<AjustesClasePrueba | null> }>();
+const memo = new WeakMap<CtxEmbudo, {
+    aj?: Promise<AjustesWhatsAppEscuela>; clase?: Promise<AjustesClasePrueba | null>; ofertas?: Promise<EstadoOfertas | null>;
+}>();
 function memoDe(ctx: CtxEmbudo) {
     let m = memo.get(ctx);
     if (!m) { m = {}; memo.set(ctx, m); }
@@ -711,6 +739,13 @@ function memoDe(ctx: CtxEmbudo) {
 }
 const ajustesDe = (ctx: CtxEmbudo) => (memoDe(ctx).aj ??= ctx.ajustes());
 const claseDe = (ctx: CtxEmbudo) => (memoDe(ctx).clase ??= seguro(() => ctx.clase()));
+/** null = sin `ctx.ofertas` (como antes). `estadoDeOfertas` nunca lanza: falla cerrado para la clase. */
+const ofertasDe = (ctx: CtxEmbudo) => (memoDe(ctx).ofertas ??= ctx.ofertas ? seguro(() => ctx.ofertas!()) : Promise.resolve(null));
+/** ¿Hoy NO hay clase de prueba? (null si no hay estado: como antes). */
+async function sinClaseHoy(ctx: CtxEmbudo): Promise<EstadoOfertas | null> {
+    const of = await ofertasDe(ctx);
+    return of && !of.claseDePrueba.disponible ? of : null;
+}
 
 /**
  * Arranca el embudo (primer mensaje de un interesado). false = la escuela no
@@ -823,7 +858,7 @@ export async function atenderTurnoEmbudo(ctx: CtxEmbudo, textoCrudo: string, bot
 }
 
 /** Pasos en los que el embudo espera un dato de la persona (los que tiene sentido recordar). */
-const PASOS_QUE_PREGUNTAN: ReadonlySet<PasoEmbudo> = new Set<PasoEmbudo>(['sede', 'pregunta', 'detalle', 'elegir_franja']);
+const PASOS_QUE_PREGUNTAN: ReadonlySet<PasoEmbudo> = new Set<PasoEmbudo>(['sede', 'pregunta', 'detalle', 'elegir_franja', 'elegir_oferta']);
 
 async function despacharPaso(
     ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: EstadoEmbudo, texto: string, boton: string | null,
@@ -834,6 +869,7 @@ async function despacharPaso(
         case 'detalle': return pasoDetalle(ctx, aj, estado, texto);
         case 'otra_sede': return pasoOtraSede(ctx, aj, estado, texto, boton);
         case 'elegir_franja': return pasoFranja(ctx, estado, texto, boton);
+        case 'elegir_oferta': return pasoElegirOferta(ctx, estado, texto, boton);
         case 'consentimiento': return pasoConsentimiento(ctx, estado, texto, boton);
         case 'esperando_pago':
         case 'agendada':
@@ -877,6 +913,9 @@ export function recordatorioDePasoEmbudo(
     if (estado.paso === 'detalle' && preguntas[i]?.detalle) return { texto: `${cabeza}\n\n${preguntas[i].detalle!.texto}`, clave };
     if (estado.paso === 'elegir_franja' && d.lista?.length) {
         return { texto: `${cabeza} Elige tu horario en la lista de arriba 👆 o escríbeme su número.`, clave };
+    }
+    if (estado.paso === 'elegir_oferta') {
+        return { texto: `${cabeza} Escríbeme a cuál fecha quieres ir y se lo paso a la escuela.`, clave };
     }
     return null;
 }
@@ -1150,6 +1189,12 @@ export function grupoDeRango(r: RangoEmbudo): GrupoEmbudo {
 
 async function terminarPreguntas(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, d: DatosEmbudo, encabezado: string): Promise<boolean> {
     const eleccion = await seguro(() => ctx.elegirGrupo({ branchId: d.branchId ?? null, anio: d.anio ?? null, genero: d.genero ?? null }));
+    // Sin clase de prueba hoy: ni «se agenda una clase de prueba» ni horarios (con o sin grupo).
+    const sinClase = await sinClaseHoy(ctx);
+    if (sinClase) {
+        return ofrecerSinClaseDePrueba(ctx, d, eleccion?.principal ? grupoDeRango(eleccion.principal) : null, sinClase,
+            { encabezado, conGrupo: true });
+    }
     if (!eleccion?.principal) return sinGrupo(ctx, aj, d, eleccion);
     const grupo = grupoDeRango(eleccion.principal);
     const leadId = (await seguro(() => ctx.guardarLead(leadDeDatos(d, grupo)))) ?? d.leadId ?? null;
@@ -1209,10 +1254,110 @@ async function pasoOtraSede(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, estado: 
     return terminarPreguntas(ctx, aj, { ...estado.datos, branchId: b.branchId, sedeTitulo: b.titulo }, '');
 }
 
+// ── Sin clase de prueba hoy: las ofertas vigentes (bot-ofertas) ─────────────
+
+/** El grupo que ya quedó en los datos (para el lead). Pura. */
+function grupoDeDatos(d: DatosEmbudo): GrupoEmbudo | null {
+    return d.teamId && d.grupo ? { teamId: d.teamId, nombre: d.grupo, profe: d.profe ?? null } : null;
+}
+
+/** «convocatoria» si todas las ofertas son de un tipo; «oferta» si son de varios. Pura. */
+function interesDeOfertas(of: Pick<EstadoOfertas, 'ofertas'>): TipoOferta | 'oferta' {
+    const tipos = [...new Set(of.ofertas.map((o) => o.tipo))];
+    return tipos.length === 1 ? tipos[0] : 'oferta';
+}
+
+/** «Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).» Pura. */
+export function textoSinClaseDePrueba(of: Pick<EstadoOfertas, 'claseDePrueba' | 'hoy'>): string {
+    const cp = of.claseDePrueba;
+    const vuelve = cp.motivo === 'bloqueo' && cp.bloqueadaHasta
+        ? ` (vuelven el ${fechaLegibleDeOferta(sumarDias(cp.bloqueadaHasta, 1), of.hoy)})` : '';
+    return `Por ahora no estamos agendando clases de prueba${vuelve}.`;
+}
+
+/**
+ * Sin clase de prueba hoy. Con ofertas vigentes (filtradas por el género que dio): el
+ * lead con su tipo, las ofertas tal cual las cargó la escuela y «¿a cuál fecha?»
+ * (paso `elegir_oferta`). Sin ofertas: el lead y la escuela le escribe. Sin cobros.
+ * `conGrupo`: al terminar las preguntas, la línea del grupo que le corresponde.
+ */
+async function ofrecerSinClaseDePrueba(
+    ctx: CtxEmbudo, d: DatosEmbudo, grupo: GrupoEmbudo | null, of: EstadoOfertas,
+    o: { encabezado?: string; conGrupo?: boolean } = {},
+): Promise<boolean> {
+    const genero = d.genero === 'f' ? 'femenino' : d.genero === 'm' ? 'masculino' : null;
+    const ofertas = textoOfertasParaPersona(of, { genero });
+    const quiere = ofertas ? interesDeOfertas(of) : null;
+    const tieneDatos = !!(d.nombre || Object.keys(d.respuestas ?? {}).length);
+    const leadId = tieneDatos
+        ? (await seguro(() => ctx.guardarLead({ ...leadDeDatos(d, grupo), ...(quiere ? { quiere } : {}) }))) ?? d.leadId ?? null
+        : d.leadId ?? null;
+    const datos: DatosEmbudo = {
+        ...d, leadId, teamId: grupo?.teamId ?? d.teamId ?? null, grupo: grupo?.nombre ?? d.grupo ?? null,
+        profe: grupo?.profe ?? d.profe ?? null, intentos: 0, lista: undefined, desde: undefined, listaEn: undefined, recordado: null,
+    };
+    const nombre = primerNombre(d.nombre);
+    let lineaGrupo = '';
+    if (o.conGrupo && grupo) {
+        const sede = d.sedeTitulo ? ` en la ${sinEmojis(d.sedeTitulo)}` : '';
+        const porAnio = d.anio ? `Por su año (${d.anio}) a ${nombre || 'tu deportista'}` : `A ${nombre || 'tu deportista'}`;
+        lineaGrupo = `¡Listo! ✨ ${porAnio} le corresponde *${grupo.nombre}*${sede}.`;
+    }
+    const cabeza = [o.encabezado ?? '', lineaGrupo, textoSinClaseDePrueba(of)].filter(Boolean).join('\n');
+    if (!ofertas) {
+        const cierre = of.mensajeSinOfertas
+            ? `${of.mensajeSinOfertas}\n\nYa le pasé tus datos a la escuela y te escriben por aquí 🙌`
+            : 'Ya le pasé tus datos a la escuela y te escriben por aquí cuando haya fechas 🙌';
+        return aPersona(ctx, datos, 'sin_horarios', 'Sin clase de prueba hoy ni ofertas vigentes.', `${cabeza}\n\n${cierre}`);
+    }
+    const pregunta = nombre
+        ? `¿A cuál fecha quieres inscribir a *${nombre}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
+        : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
+    await ctx.enviar([cabeza, ofertas, pregunta].join('\n\n'), PASO_EMBUDO.OFERTAS, { paso: 'elegir_oferta', datos });
+    return true;
+}
+
+/**
+ * La fecha que eligió de las ofertas («la del sábado 5 a las 7»), como la escriba: queda
+ * en el lead (`respuestas.oferta_elegida`, quiere = tipo de la oferta), la escuela recibe
+ * el aviso y la conversación queda pendiente de ella. Una pregunta u otro tema lo
+ * contesta el bot de siempre (y el paso se recuerda); un «gracias», una vez.
+ */
+async function pasoElegirOferta(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: string, boton: string | null): Promise<boolean> {
+    if (boton) return false;
+    const d = estado.datos;
+    const n = normalizar(texto);
+    if (!n || texto.includes('?') || esOtroTema(texto) || n.split(' ').length > 40) return false;
+    if (esCortesiaSimple(texto)) {
+        if (d.recordado === 'elegir_oferta') return true;
+        await ctx.enviar('¡Con gusto! 🙌 Cuando quieras, escríbeme a cuál fecha quieres ir y se lo paso a la escuela.',
+            PASO_EMBUDO.RECORDATORIO, { paso: 'elegir_oferta', datos: { ...d, recordado: 'elegir_oferta' } });
+        return true;
+    }
+    const eleccion = recortar(texto.replace(/\s+/g, ' ').trim(), 200);
+    const of = await ofertasDe(ctx);
+    const quiere = of?.ofertas.length ? interesDeOfertas(of) : 'oferta';
+    const datos: DatosEmbudo = { ...d, respuestas: { ...(d.respuestas ?? {}), oferta_elegida: eleccion } };
+    await seguro(() => ctx.guardarLead({ ...leadDeDatos(datos, grupoDeDatos(datos)), quiere }));
+    const nombre = primerNombre(d.nombre);
+    await ctx.enviar(`¡Listo! 🙌 Le pasé a la escuela que quieres inscribir${nombre ? ` a *${nombre}*` : ''} en: «${eleccion}». `
+        + 'La escuela te confirma el cupo por aquí.', PASO_EMBUDO.INSCRIPCION_OFERTA, null, undefined, undefined,
+    { pendiente_escuela: `inscripción: ${eleccion}`.slice(0, 300) });
+    await seguro(() => ctx.avisarEscuela('inscripcion_oferta', [
+        d.nombre ? `Interesado: ${d.nombre}${d.anio ? ` (${d.anio})` : ''}.` : '',
+        `Quiere inscribirse (${quiere}): «${eleccion}».`,
+        d.sedeTitulo ? `Sede: ${sinEmojis(d.sedeTitulo)}.` : '',
+    ].filter(Boolean).join(' ')));
+    return true;
+}
+
 async function ofrecerFranjas(
     ctx: CtxEmbudo, d: DatosEmbudo, encabezado: string,
     o: { intentos?: number; soloDias?: number[] } = {},
 ): Promise<boolean> {
+    // Sin clase de prueba hoy no hay horarios que mostrar (más horarios, cambio, cupo lleno…): las ofertas.
+    const sinClase = await sinClaseHoy(ctx);
+    if (sinClase) return ofrecerSinClaseDePrueba(ctx, d, grupoDeDatos(d), sinClase);
     if (!d.teamId) return aPersona(ctx, d, 'sin_grupo', 'Sin grupo asignado.');
     const clase = await claseDe(ctx);
     const abiertas = franjasOfrecibles((await seguro(() => ctx.franjas(d.teamId!))) ?? [], {
@@ -1348,9 +1493,18 @@ function datosDeLead(l: LeadDelContacto): DatosEmbudo {
 // ── Cupo: agendar o separar ─────────────────────────────────────────────────
 
 async function tomar(ctx: CtxEmbudo, d: DatosEmbudo, slotId: string): Promise<boolean> {
+    // Un horario de una lista vieja un día sin clase de prueba: no se toma el cupo.
+    const sinClase = await sinClaseHoy(ctx);
+    if (sinClase) return ofrecerSinClaseDePrueba(ctx, d, grupoDeDatos(d), sinClase);
     if (!d.leadId) return aPersona(ctx, d, 'error', 'Sin registro para tomar el cupo.');
     // La franja se lee ANTES de tomar el cupo: si era el último, después ya no sale en la lista.
     const franja = ((await seguro(() => ctx.franjas(d.teamId ?? ''))) ?? []).find((f) => f.id === slotId) ?? null;
+    // Una franja de un día bloqueado (o que ya no se ofrece con la escuela en bloqueo) no se agenda.
+    const of = await ofertasDe(ctx);
+    if (of && ((franja && !claseDePruebaPermitidaEn(of, franja.fecha))
+        || (!franja && of.bloqueos.some((b) => b.tipo === 'clase_prueba')))) {
+        return ofrecerFranjas(ctx, { ...d, desde: 0 }, 'Ese horario ya no está disponible 😕 Elige otro:');
+    }
     const r = await seguro(() => ctx.tomarCupo(d.leadId!, slotId, { pagada: d.pagada === true }));
     const estado = r?.estado ?? 'error';
     if (estado === 'lleno' || estado === 'cerrada') {
@@ -1606,6 +1760,14 @@ export function textoDeMatricula(t: Pick<TextosClase, 'nombre'>, nombre: string 
         `la escuela te confirma el grupo y te escribe por aquí para ${para} 🙌`;
 }
 
+/** La matrícula un día sin clase de prueba: la escuela le escribe con los pasos. Pura. */
+export function textoDeMatriculaSinClase(nombre: string | null | undefined, genero: 'f' | 'm' | null | undefined): string {
+    const quien = primerNombre(nombre);
+    const para = genero === 'f' ? 'matricularla' : genero === 'm' ? 'matricularlo' : 'hacer la matrícula';
+    return `Le pasé a la escuela que quieres ${para}${quien && genero == null ? ` de ${quien}` : ''}: ` +
+        'te escriben por aquí con los pasos 🙌';
+}
+
 /** Cómo va la clase, para el aviso. */
 function estadoDeLaClase(paso: PasoEmbudo, d: DatosEmbudo): string {
     if (paso === 'esperando_pago' || (paso === 'consentimiento' && d.siguiente === 'pago')) return 'cupo separado, falta el pago';
@@ -1646,9 +1808,15 @@ async function responderMatricula(ctx: CtxEmbudo, aj: AjustesWhatsAppEscuela, es
         if (lead?.nombre) d = { ...d, nombre: lead.nombre, leadId: d.leadId ?? lead.leadId };
     }
     const { t } = await textos(ctx);
-    const respuesta = textoDeMatricula(t, d.nombre ?? d.respuestas?.nombre, d.genero ?? generoDelVerbo(texto));
+    // Sin clase de prueba hoy, «la matrícula se hace después de la clase de prueba» prometía una clase que no hay.
+    const sinClase = await sinClaseHoy(ctx);
+    const genero = d.genero ?? generoDelVerbo(texto);
+    const respuesta = sinClase
+        ? textoDeMatriculaSinClase(d.nombre ?? d.respuestas?.nombre, genero)
+        : textoDeMatricula(t, d.nombre ?? d.respuestas?.nombre, genero);
     if (!d.matriculaAvisada) await seguro(() => ctx.avisarEscuela('pide_matricula', detalleDeMatricula(paso, d, texto)));
     const datos: DatosEmbudo = { ...d, matriculaAvisada: true };
+    if (sinClase && paso === 'elegir_franja') return ofrecerSinClaseDePrueba(ctx, datos, grupoDeDatos(datos), sinClase, { encabezado: respuesta });
     if (paso === 'consentimiento') {
         await ctx.enviar(`${respuesta}\n\n${PREGUNTA_CONSENTIMIENTO}`, PASO_EMBUDO.MATRICULA,
             { paso, datos }, BOTONES_CONSENTIMIENTO, EN_TEXTO_CONSENTIMIENTO);
@@ -1810,10 +1978,12 @@ export function cupoSimulado(
  */
 export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pick<CtxEmbudo,
     'ajustes' | 'clase' | 'sedes' | 'franjas' | 'tomarCupo' | 'soltarCupo' | 'cuentasDePago'
-    | 'confirmarAgenda' | 'marcarLead' | 'leadDelContacto' | 'leerEstado' | 'lugarDeLaClase'> {
+    | 'confirmarAgenda' | 'marcarLead' | 'leadDelContacto' | 'leerEstado' | 'lugarDeLaClase' | 'ofertas'> {
     return {
         ajustes: async () => (await import('./whatsapp-ajustes-escuela.service')).ajustesWhatsAppDeEscuela(schoolId),
         clase: async () => (await import('./whatsapp-ajustes-escuela.service')).ajustesClasePrueba(schoolId),
+        // Qué se puede ofrecer hoy (caché de 60 s; falla cerrado para la clase de prueba).
+        ofertas: () => estadoDeOfertas(schoolId),
         sedes: async (ids) => {
             if (!ids.length) return [];
             const { data } = await supabase.from('school_branches').select('id, name, address').eq('school_id', schoolId).in('id', ids);
@@ -1860,9 +2030,16 @@ export function depsEmbudoDeSupabase(schoolId: string, contactWaId: string): Pic
  * Franjas abiertas con cupo de un equipo, desde hoy, sin las sesiones que el
  * profe canceló o movió en «Mi semana» (team_schedule_exceptions; sin la tabla,
  * todas). Nunca lanza.
+ *
+ * Clase de prueba por fecha (bot-ofertas, 2026-11-25): si hoy no se ofrece
+ * (apagada, bloqueada o sin poder leer), ninguna; y nunca una franja de un día
+ * bloqueado (el 5-dic no sale aunque hoy sea 28-nov). `ofertas`: el estado ya
+ * leído; sin él se lee (caché de 60 s).
  */
-export async function franjasDeEquipo(schoolId: string, teamId: string): Promise<FranjaEmbudo[]> {
+export async function franjasDeEquipo(schoolId: string, teamId: string, ofertas?: EstadoOfertas | null): Promise<FranjaEmbudo[]> {
     try {
+        const of = ofertas !== undefined ? ofertas : await estadoDeOfertas(schoolId);
+        if (of && !of.claseDePrueba.disponible) return [];
         const hoy = ahoraBogota(new Date()).fecha;
         const { data, error } = await supabase.from('school_trial_slots')
             .select('id, team_id, slot_date, start_time, end_time, location, max_capacity, reserved_count')
@@ -1886,7 +2063,7 @@ export async function franjasDeEquipo(schoolId: string, teamId: string): Promise
             id: r.id, fecha: String(r.slot_date).slice(0, 10), horaInicio: String(r.start_time).slice(0, 5),
             horaFin: r.end_time ? String(r.end_time).slice(0, 5) : null, lugar: r.location ?? null,
             cupos: Number(r.max_capacity) - Number(r.reserved_count ?? 0),
-        }));
+        })).filter((f) => !of || claseDePruebaPermitidaEn(of, f.fecha));
     } catch {
         return [];
     }
