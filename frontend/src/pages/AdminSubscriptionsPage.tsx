@@ -69,6 +69,23 @@ const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
   annual: 'Anual',
 };
 
+// La facturación SaaS va siempre del 1 al 1 (mig 20261124173412): el período se
+// reinicia eligiendo un MES, nunca un día. La base rechaza cualquier otro día.
+const PERIODO_SIN_CAMBIO = '__sin_cambio__';
+
+function mesesDeInicioDePeriodo(): { value: string; label: string }[] {
+  const hoy = new Date();
+  const meses: { value: string; label: string }[] = [];
+  for (let i = -3; i <= 12; i++) {
+    const d = new Date(hoy.getFullYear(), hoy.getMonth() + i, 1);
+    meses.push({
+      value: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`,
+      label: d.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' }),
+    });
+  }
+  return meses;
+}
+
 interface SchoolRow { id: string; name: string; city: string | null; }
 
 interface MerchItem {
@@ -1052,6 +1069,11 @@ export default function AdminSubscriptionsPage() {
                     </p>
                   )}
 
+                  <p className="text-xs text-muted-foreground">
+                    La facturación va siempre del 1 al 1. Al activarla, los días que faltan para el próximo 1 no se
+                    cobran; si el trato es cobrar el mes en curso completo, elige ese mes abajo antes de activar.
+                  </p>
+
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="space-y-1">
                       <label className="text-xs text-muted-foreground">Valor (COP)</label>
@@ -1076,13 +1098,19 @@ export default function AdminSubscriptionsPage() {
                       </Select>
                     </div>
                     <div className="space-y-1">
-                      <label className="text-xs text-muted-foreground">Reiniciar período desde</label>
-                      <Input
-                        type="date"
-                        value={periodStartDraft}
-                        onChange={(e) => setPeriodStartDraft(e.target.value)}
-                        className="w-40"
-                      />
+                      <label className="text-xs text-muted-foreground">Reiniciar período desde el 1 de</label>
+                      <Select
+                        value={periodStartDraft || PERIODO_SIN_CAMBIO}
+                        onValueChange={(v) => setPeriodStartDraft(v === PERIODO_SIN_CAMBIO ? '' : v)}
+                      >
+                        <SelectTrigger className="w-48"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={PERIODO_SIN_CAMBIO}>Sin cambio</SelectItem>
+                          {mesesDeInicioDePeriodo().map((m) => (
+                            <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
 

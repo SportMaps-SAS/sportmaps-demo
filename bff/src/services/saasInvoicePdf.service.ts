@@ -65,7 +65,9 @@ function formatCop(cents: number): string {
 }
 
 function formatDate(d: string | Date): string {
-    return new Date(d).toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' });
+    // Recibe fechas 'YYYY-MM-DD' (period_start/end, due_date), que new Date() lee como medianoche UTC:
+    // se formatean en UTC para que no salgan con un día menos fuera de Render (p. ej. en hora de Colombia).
+    return new Date(d).toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' });
 }
 
 export interface SaasInvoiceForPdf {
