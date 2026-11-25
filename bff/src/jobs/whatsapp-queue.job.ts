@@ -654,6 +654,45 @@ export type ResultadoEstampado =
     | { ok: false; duplicado: true; yaAplicado: { id: string; concept: string | null; amount: number; status: string } | null }
     | { ok: false; duplicado: false; error: string };
 
+/** La respuesta cruda del modelo como JSON si lo es; si no, el texto tal cual (la columna es jsonb). Pura. */
+function respuestaCruda(raw: string | null | undefined): unknown {
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return raw; }
+}
+
+/**
+ * Columnas de lectura, veredicto y huella que escribe el servidor al estampar.
+ *
+ * (2026-11-25, spec seguridad-veredicto-comprobante §3.4) Se agregan
+ * `ocr_currency`, `ocr_time`, `ocr_destination_name`, `ocr_raw_response` y
+ * `receipt_reference_norm`, que antes solo escribía el navegador: con el guard
+ * de la base, lo que mande la familia se ignora y, sin esto, quedarían en NULL
+ * en las subidas de la app. También sirven al bot (`receipt_reference_norm`
+ * alimenta el dedup de `buildVerdictContext`). Pura.
+ */
+export function columnasDeLectura(
+    ocr: Awaited<ReturnType<typeof extractReceipt>>,
+    veredicto: ReturnType<typeof evaluateVerdict>,
+    sha: string,
+): Record<string, unknown> {
+    return {
+        receipt_image_sha256: sha,
+        receipt_image_sha256_source: 'server_verified',
+        ocr_amount: ocr.amount, ocr_currency: ocr.currency ?? null,
+        ocr_date: ocr.date, ocr_time: ocr.time ?? null, ocr_bank: ocr.bank,
+        ocr_reference: ocr.reference, ocr_destination: ocr.destination,
+        ocr_destination_name: ocr.destinationName ?? null,
+        ocr_provider: ocr.provider,
+        // Quién hizo la transferencia (reporte «Torneos: quién pagó qué», 2026-10-24).
+        ocr_origin_name: ocr.originName ?? null,
+        ocr_raw_response: respuestaCruda(ocr.rawResponse),
+        receipt_reference_norm: veredicto.referenceNorm ?? normalizeReference(ocr.reference),
+        receipt_verdict: veredicto.verdict,
+        receipt_verdict_reasons: veredicto.reasons,
+        receipt_verdict_at: new Date().toISOString(),
+    };
+}
+
 /**
  * Deja el comprobante en el cobro: archivo, lectura, veredicto y
  * `awaiting_approval`. NADA más — ni aprueba, ni responde, ni cierra la fila.
@@ -680,8 +719,19 @@ export async function estamparComprobante(
      * Estados desde los que se estampa. Por defecto pending/overdue (el bot);
      * el enlace público /p/:token también acepta 'partial' (abono: el
      * comprobante es del saldo, que llega en `esperado`).
+     *
+     * `archivo` (sellado de la app, 2026-11-25): escritura optimista, solo si el
+     * cobro SIGUE con ese `receipt_url`. Si la familia cambió el archivo entre la
+     * lectura y la escritura, no se escribe nada (`actualizado: false`).
+     *
+     * `categoria`: la del cobro real (`payment_category` y `concept`) para las
+     * llaves restringidas. Sin ella, `buildVerdictContext` la lee del pago.
      */
-    opciones: { estados?: string[] } = {},
+    opciones: {
+        estados?: string[];
+        archivo?: string;
+        categoria?: { paymentCategory: string | null; concept: string | null };
+    } = {},
 ): Promise<ResultadoEstampado> {
     /**
      * El veredicto se calcula ACÁ y se persiste. No es opcional.
@@ -705,6 +755,7 @@ export async function estamparComprobante(
         imageSha256: ctx.sha,
         expectedAmount: esperado ?? pago.amount,
         paymentId: pago.id,
+        ...(opciones.categoria ?? {}),
     });
     const veredicto = evaluateVerdict(ctx.ocr, ctxPago);
     ctx.log?.info?.(
@@ -712,21 +763,14 @@ export async function estamparComprobante(
         '[wa-queue] veredicto',
     );
 
-    const { data: estampados, error: stampErr } = await supabase.from('payments').update({
+    let estampar = supabase.from('payments').update({
         receipt_url: ctx.storagePath,
         receipt_storage_bucket: BUCKET,
-        receipt_image_sha256: ctx.sha,
-        receipt_image_sha256_source: 'server_verified',
-        ocr_amount: ctx.ocr.amount, ocr_date: ctx.ocr.date, ocr_bank: ctx.ocr.bank,
-        ocr_reference: ctx.ocr.reference, ocr_destination: ctx.ocr.destination,
-        ocr_provider: ctx.ocr.provider,
-        // Quién hizo la transferencia (reporte «Torneos: quién pagó qué», 2026-10-24).
-        ocr_origin_name: ctx.ocr.originName ?? null,
-        receipt_verdict: veredicto.verdict,
-        receipt_verdict_reasons: veredicto.reasons,
-        receipt_verdict_at: new Date().toISOString(),
+        ...columnasDeLectura(ctx.ocr, veredicto, ctx.sha),
         status: 'awaiting_approval',
-    }).eq('id', pago.id).in('status', opciones.estados ?? ['pending', 'overdue']).select('id');
+    }).eq('id', pago.id).in('status', opciones.estados ?? ['pending', 'overdue']);
+    if (opciones.archivo) estampar = estampar.eq('receipt_url', opciones.archivo);
+    const { data: estampados, error: stampErr } = await estampar.select('id');
 
     if (stampErr) {
         // 23505 sobre `uq_payments_school_ocr_reference` NO es un fallo: es la

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 968,
+  "count": 969,
   "head": "20261125150253",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -971,6 +971,7 @@
     {"v":"20261125135754","file":"20261125135754_cobranza_recordatorio_manual_restriccion.sql","sha256":"a8705339adc0cdbe8449581696e000c130818c902c7e5301c433ef5968d72d83","added":"2026-11-25","by":"Brayan Steven Lopez"},
     {"v":"20261125134852","file":"20261125134852_bot_ofertas_criterios_y_textos.sql","sha256":"96329778cb2e1b3eb10b2a39361412ef3e55007a57e08977a062d2d226efc899","added":"2026-11-25","by":"Brayan Steven Lopez"},
     {"v":"20261125140432","file":"20261125140432_monster_convocatoria_mayores_valor.sql","sha256":"78a7c81d1b9c0d8416e2b7776499dd0de4c7e601ee19f49f73c0a9158c453d28","added":"2026-11-25","by":"Brayan Steven Lopez"},
-    {"v":"20261125150253","file":"20261125150253_monster_suba_valor_y_promo_black_friday.sql","sha256":"5b76570e682787d82b55d5da5992b42826bd80478208aa6b3b3b114c4a68e11f","added":"2026-11-25","by":"Brayan Steven Lopez"}
+    {"v":"20261125150253","file":"20261125150253_monster_suba_valor_y_promo_black_friday.sql","sha256":"5b76570e682787d82b55d5da5992b42826bd80478208aa6b3b3b114c4a68e11f","added":"2026-11-25","by":"Brayan Steven Lopez"},
+    {"v":"20261125140410","file":"20261125140410_veredicto_comprobante_solo_servidor.sql","sha256":"ef06fc99aa3bc1da6f75de921048a22b93ae27a90b4fa26662e1323e27f53aaa","added":"2026-11-25","by":"Brayan Steven Lopez"}
   ]
 }

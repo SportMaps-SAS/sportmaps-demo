@@ -15,13 +15,7 @@ const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(amount);
 
 import { FileUpload } from '@/components/common/FileUpload';
-import type { ReceiptValidationResult } from '@/hooks/useReceiptValidator';
 import { calcEarlyPaymentDiscount, modoProntoPago, earlyDiscountAppliesToCategory, hasEarlierUnpaidPayment, type EarlyPaymentDiscountConfig } from '@/lib/earlyPaymentDiscount';
-
-/** Intenta parsear un string como JSON; devuelve null si no es JSON valido. */
-function safeParseJson(s: string): unknown | null {
-  try { return JSON.parse(s); } catch { return null; }
-}
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   AlertDialog,
@@ -66,7 +60,7 @@ import {
 } from '@/components/payment/checkoutConcepto';
 import { PaymentLinkButton } from '@/components/payment/PaymentLinkButton';
 import type { MpCreatePaymentResult } from '@/lib/api/mercadopago';
-import { autoEvaluate as autoEvaluateGlosa } from '@/lib/api/glosas';
+import { sellarSinEsperar } from '@/lib/api/sellarComprobante';
 import {
   useNextUnpaidPeriod,
   fetchPeriodStatus,
@@ -143,10 +137,9 @@ export function PaymentCheckoutModal({
   // ayer» aunque la escuela aceptara más (Monster 7 días, 2026-11-09).
   const [receiptWindowDays, setReceiptWindowDays] = useState<number | undefined>(undefined);
   const [proofUrl, setProofUrl] = useState<string | null>(null);
-  // Resultado del OCR del comprobante manual. Se persiste en el pago para que
-  // el admin vea el monto detectado y la alerta de discrepancia en Cobros por
-  // Aprobar (igual que el flujo QR / ParentCheckoutPage).
-  const [ocrResult, setOcrResult] = useState<ReceiptValidationResult | null>(null);
+  // La lectura del comprobante (vista previa de /extract-receipt) la muestra y la
+  // usa para bloquear FileUpload; ya no se guarda desde aquí: el veredicto y los
+  // ocr_* los escribe el BFF al sellar (spec seguridad-veredicto-comprobante §3.7).
   const [processing, setProcessing] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'idle' | 'processing' | 'success' | 'error' | 'awaiting_approval'>('idle');
 
@@ -711,7 +704,6 @@ export function PaymentCheckoutModal({
       setPaymentStatus('idle');
       setSelectedMethod(null);
       setProofUrl(null);
-      setOcrResult(null);
       setPendingPaymentDate(null);
       setSettingsLoaded(false);
       setAdvancedPeriod(null);
@@ -959,30 +951,11 @@ export function PaymentCheckoutModal({
 
       if (selectedMethod === 'transfer') {
         if (!proofUrl) throw new Error('Debes subir un comprobante de pago');
-        // Campos OCR + veredicto (modo sombra) del comprobante, comunes a insert/update.
-        const receiptOcrFields = {
-          ocr_amount: ocrResult?.extractedAmount ?? null,
-          ocr_currency: ocrResult?.extractedCurrency ?? null,
-          ocr_date: ocrResult?.extractedDate ?? null,
-          ocr_bank: ocrResult?.extractedBank ?? null,
-          ocr_reference: ocrResult?.extractedReference ?? null,
-          ocr_provider: ocrResult?.provider ?? null,
-          ocr_destination: ocrResult?.extractedDestination ?? null,
-          ocr_destination_name: ocrResult?.extractedDestinationName ?? null,
-          ocr_origin_name: ocrResult?.extractedOriginName ?? null,
-          ocr_time: ocrResult?.extractedTime ?? null,
-          ocr_raw_response: ocrResult?.rawResponse
-            ? safeParseJson(ocrResult.rawResponse) ?? ocrResult.rawResponse
-            : null,
-          // Veredicto de reglas: se guarda pero NO cambia el status (sombra).
-          receipt_verdict: ocrResult?.verdict ?? null,
-          receipt_verdict_reasons: ocrResult?.verdictReasons ?? null,
-          receipt_reference_norm: ocrResult?.referenceNorm ?? null,
-          receipt_image_sha256: ocrResult?.imageSha256 ?? null,
-          receipt_image_sha256_source: ocrResult?.imageSha256Source ?? null,
-          receipt_verdict_at: ocrResult?.verdict ? new Date().toISOString() : null,
-        };
-        let glosaPaymentId: string | null = targetId;
+        // NADA de la lectura del comprobante (ocr_*, receipt_verdict*, huella,
+        // receipt_amount_confirmed*): la escribe el servidor al sellar, con el
+        // archivo guardado y el cobro real. La base ignora lo que mande el
+        // navegador (fn_guard_payments_client, spec seguridad-veredicto-comprobante).
+        let cobroId: string | null = targetId;
         if (targetId) {
           const { error: updateError } = await supabase.from('payments').update({
             status: 'awaiting_approval',
@@ -991,7 +964,6 @@ export function PaymentCheckoutModal({
             receipt_url: proofUrl,
             ...(isExplicitPaymentUpdate ? {} : { period_year: periodYear, period_month: periodMonth }),
             early_payment_discount_applied: discountResult.eligible ? discountResult.discountAmount : null,
-            ...receiptOcrFields,
             updated_at: new Date().toISOString()
           } as any).eq('id', targetId);
           if (updateError) throw updateError;
@@ -1013,18 +985,20 @@ export function PaymentCheckoutModal({
             period_year: periodYear,
             period_month: periodMonth,
             early_payment_discount_applied: discountResult.eligible ? discountResult.discountAmount : null,
-            ...receiptOcrFields,
             reference: `TRF-${Date.now().toString(36).toUpperCase()}`,
             payment_category: paymentCategory,
             period_uniqueness_exempt: periodUniquenessExempt,
           } as any).select('id').single();
           if (ins.error) throw ins.error;
-          glosaPaymentId = ins.data?.id ?? null;
+          cobroId = ins.data?.id ?? null;
         }
-        // Evaluación post-insert (Fase 5). Fire-and-forget: el BFF auto-aprueba (verde) /
-        // abre glosa (amarillo) / deja manual, server-authoritative.
-        if (glosaPaymentId && (ocrResult?.verdict === 'verde' || ocrResult?.verdict === 'amarillo')) {
-          autoEvaluateGlosa(glosaPaymentId).catch(() => { /* dormant/no-op tolerado */ });
+        // Sellado (spec seguridad-veredicto-comprobante §3.3): SIEMPRE, con o sin
+        // veredicto en la vista previa. El BFF lee el archivo guardado, escribe
+        // lectura y veredicto, y decide (auto-aprobar / glosa / rechazo). Sin
+        // bloquear: la familia ve «recibido»; solo un duplicado se avisa (el toast
+        // sobrevive al cierre del modal).
+        if (cobroId) {
+          sellarSinEsperar(cobroId, (aviso) => toast({ ...aviso, variant: 'destructive' }));
         }
         // El comprobante por validar ya NO se avisa desde acá: lo avisa el job
         // receipt-review-alerts del BFF al dueño Y a los admins, para todos los
@@ -1053,6 +1027,9 @@ export function PaymentCheckoutModal({
       const err = error as { message?: string; code?: string };
       setPaymentStatus('error');
       // 23505 = comprobante ya usado (unique index de referencia o de hash de imagen).
+      // Desde el sellado en servidor la huella y la referencia ya no viajan desde
+      // aquí (el duplicado lo avisa el sellado); queda por si el cobro reabierto
+      // todavía trae los de un comprobante anterior.
       const dupMsg = err.message?.toLowerCase() ?? '';
       const isDuplicate = err.code === '23505'
         && (dupMsg.includes('ocr_reference') || dupMsg.includes('receipt_hash') || dupMsg.includes('receipt_image_sha256'));
@@ -1522,7 +1499,6 @@ export function PaymentCheckoutModal({
                       paymentId={mode === 'update' ? (paymentId || undefined) : undefined}
                       paymentCategory={accountsCategory}
                       onUploadComplete={(url) => setProofUrl(url)}
-                      onValidationResult={(r) => setOcrResult(r)}
                       expectedAmount={chargeAmount}
                       // Bloqueo estricto solo en concept fijo (mensualidad/inscripcion fija).
                       // Para abono / inscripcion variable / otros, OCR es advisory.

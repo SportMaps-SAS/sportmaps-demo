@@ -17,7 +17,7 @@ import { downloadReceipt } from '@/lib/receipt-generator';
 import { usePdfBranding } from '@/hooks/usePdfBranding';
 import { openWompiCheckout, generatePaymentReference, mensajeCheckoutNoDisponible } from '@/lib/api/wompi';
 import { bffClient } from '@/lib/api/bffClient';
-import { autoEvaluate as autoEvaluateGlosa } from '@/lib/api/glosas';
+import { sellarSinEsperar } from '@/lib/api/sellarComprobante';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import MercadoPagoBrick from '@/components/checkout/MercadoPagoBrick';
 import type { MpCreatePaymentResult } from '@/lib/api/mercadopago';
@@ -28,14 +28,9 @@ import { maskSensitive } from '@/lib/utils';
 import { resolvePaymentAccounts, resolvePaymentLink, accountDisplayLabel, chargeCategoryOf, isOneTimeCategory } from '@/lib/payment-accounts';
 import { PaymentLinkButton } from '@/components/payment/PaymentLinkButton';
 import { FileUpload } from '@/components/common/FileUpload';
-import type { ReceiptValidationResult, ConceptKind } from '@/hooks/useReceiptValidator';
+import type { ConceptKind } from '@/hooks/useReceiptValidator';
 import { blockPwaReload, unblockPwaReload } from '@/pwa/reloadGuard';
 import { useNextUnpaidPeriod, isPeriodActive, type PeriodStatus } from '@/hooks/usePaymentPeriod';
-
-/** Intenta parsear un string como JSON; devuelve null si no es JSON valido. */
-function safeParseJson(s: string): unknown | null {
-  try { return JSON.parse(s); } catch { return null; }
-}
 
 export default function ParentCheckoutPage() {
   const navigate = useNavigate();
@@ -63,7 +58,9 @@ export default function ParentCheckoutPage() {
   const [mpReference, setMpReference] = useState<string>('');
   const [showSensitive, setShowSensitive] = useState(false);
   const [manualReceiptUrl, setManualReceiptUrl] = useState('');
-  const [manualOcrResult, setManualOcrResult] = useState<ReceiptValidationResult | null>(null);
+  // La lectura del comprobante (vista previa de /extract-receipt) la muestra y la
+  // usa para bloquear FileUpload; ya no se guarda desde aquí: el veredicto y los
+  // ocr_* los escribe el BFF al sellar (spec seguridad-veredicto-comprobante §3.7).
 
   // En Android/iOS subir el comprobante abre el selector de archivos o la cámara del
   // sistema. Al volver al WebView el acudiente queda donde estaba —arriba, con los
@@ -82,8 +79,9 @@ export default function ParentCheckoutPage() {
    * (pagó $90.000 anticipado por Bre-B el 02-ago y el cobro seguía pendiente).
    *
    * Con esto el comprobante queda visible en "Validación de Cobros" desde la subida.
-   * El paso de confirmar sigue existiendo y reescribe esto mismo más el OCR completo;
-   * este adelanto es la red por si no llega.
+   * El paso de confirmar sigue existiendo, reescribe esto mismo y pide el sellado
+   * (el servidor lee el archivo guardado); este adelanto es la red por si no llega,
+   * y lo sella el barrido del BFF.
    *
    * DOS GUARDAS, y las dos vienen de errores reales:
    *
@@ -350,7 +348,6 @@ export default function ParentCheckoutPage() {
     next.delete('concept');
     setSuccess(false);
     setManualReceiptUrl('');
-    setManualOcrResult(null);
     setReceiptNumber('');
     setWompiTxId('');
     setPaymentMethodUsed('');
@@ -488,27 +485,10 @@ export default function ParentCheckoutPage() {
       receipt_number: reference,
       payment_method: paymentFlow === 'wompi' ? 'card' : 'transfer',
       receipt_url: manualReceiptUrl,
-      // Persistir OCR del comprobante (solo manual). Admin lo usa para detectar discrepancias.
-      ocr_amount:    manualOcrResult?.extractedAmount    ?? null,
-      ocr_currency:  manualOcrResult?.extractedCurrency  ?? null,
-      ocr_date:      manualOcrResult?.extractedDate      ?? null,
-      ocr_bank:      manualOcrResult?.extractedBank      ?? null,
-      ocr_reference: manualOcrResult?.extractedReference ?? null,
-      ocr_provider:  manualOcrResult?.provider           ?? null,
-      ocr_destination:      manualOcrResult?.extractedDestination     ?? null,
-      ocr_destination_name: manualOcrResult?.extractedDestinationName ?? null,
-      ocr_origin_name:      manualOcrResult?.extractedOriginName      ?? null,
-      ocr_time:             manualOcrResult?.extractedTime            ?? null,
-      ocr_raw_response: manualOcrResult?.rawResponse
-        ? safeParseJson(manualOcrResult.rawResponse) ?? manualOcrResult.rawResponse
-        : null,
-      // Veredicto de reglas (modo sombra): se guarda pero NO cambia el status.
-      receipt_verdict:             manualOcrResult?.verdict           ?? null,
-      receipt_verdict_reasons:     manualOcrResult?.verdictReasons    ?? null,
-      receipt_reference_norm:      manualOcrResult?.referenceNorm     ?? null,
-      receipt_image_sha256:        manualOcrResult?.imageSha256       ?? null,
-      receipt_image_sha256_source: manualOcrResult?.imageSha256Source ?? null,
-      receipt_verdict_at:          manualOcrResult?.verdict ? new Date().toISOString() : null,
+      // NADA de la lectura del comprobante (ocr_*, receipt_verdict*, huella,
+      // receipt_amount_confirmed*): la escribe el servidor al sellar, con el
+      // archivo guardado y el cobro real. La base ignora lo que mande el
+      // navegador (fn_guard_payments_client, spec seguridad-veredicto-comprobante).
     };
 
     let insertError;
@@ -548,6 +528,9 @@ export default function ParentCheckoutPage() {
       // Conflicto de unique index: el comprobante ya fue usado en otro pago de
       // esta escuela — sea por numero de operacion (uq_payments_school_ocr_reference)
       // o por hash de imagen re-subida (uq_payments_school_receipt_hash).
+      // Desde el sellado en servidor la huella y la referencia ya no viajan desde
+      // aquí: el duplicado lo informa la respuesta del sellado. Queda por si el
+      // cobro reabierto todavía trae los de un comprobante anterior.
       const dupMsg = insertError.message?.toLowerCase() ?? '';
       const isOcrDuplicate = insertError.code === '23505'
         && (dupMsg.includes('ocr_reference') || dupMsg.includes('receipt_hash') || dupMsg.includes('receipt_image_sha256'));
@@ -565,10 +548,12 @@ export default function ParentCheckoutPage() {
       return false;
     }
 
-    // Evaluación post-insert (Fase 5). Fire-and-forget: el BFF decide server-side
-    // auto-aprobar (verde+doble extracción+toggle+tope) / abrir glosa (amarillo) / nada.
-    if (resolvedPaymentId && (manualOcrResult?.verdict === 'verde' || manualOcrResult?.verdict === 'amarillo')) {
-      autoEvaluateGlosa(resolvedPaymentId).catch(() => { /* dormant/no-op tolerado */ });
+    // Sellado (spec seguridad-veredicto-comprobante §3.3): SIEMPRE que quedó un
+    // comprobante, con o sin veredicto en la vista previa. El BFF lee el archivo
+    // guardado, escribe lectura y veredicto, y decide (auto-aprobar / glosa /
+    // rechazo). Sin bloquear: la familia ve «recibido»; solo un duplicado se avisa.
+    if (resolvedPaymentId && paymentFlow === 'manual' && manualReceiptUrl) {
+      sellarSinEsperar(resolvedPaymentId, (aviso) => toast({ ...aviso, variant: 'destructive' }));
     }
 
     const periodSuffix = periodLabel ? ` — ${periodLabel}` : '';
@@ -1111,7 +1096,6 @@ export default function ParentCheckoutPage() {
                               path={`manual-payments/${user?.id}`}
                               accept="image/*,application/pdf"
                               onUploadComplete={(url) => { setManualReceiptUrl(url); void linkReceiptOnUpload(url); }}
-                              onValidationResult={(r) => setManualOcrResult(r)}
                               validateReceipt={true}
                               schoolId={resolvedSchoolId || undefined}
                               paymentId={paymentIdParam || undefined}
