@@ -68,6 +68,55 @@ export function cuentaDe(banco: string | null | undefined, metodo?: string | nul
 
 export interface LineaCuenta { cuenta: string; cantidad: number; monto: number }
 
+// ─── Tipo de pago (pura) ─────────────────────────────────────────────────────
+// 2026-11-25: Alejandra (Monster) cierra L/M/V y necesita saber CUÁNTO SE APROBÓ de cada tipo de pago
+// (mensualidad, clase de prueba, vacacional…), no solo por qué cuenta entró. Se clasifica por
+// `payments.payment_category`; los cobros de suscripción llegan sin categoría (null) y se reconocen por el
+// concepto («Suscripción — mensualidad completa…», «Plan tarifa plena…»). NO por `payment_type`, que no es fiable.
+
+export type TipoDePago = 'mensualidad' | 'clase_prueba' | 'vacacional' | 'clinica' | 'torneo' | 'inscripcion' | 'articulos' | 'otros';
+
+export const ETIQUETA_TIPO: Record<TipoDePago, string> = {
+    mensualidad: 'Mensualidad', clase_prueba: 'Clase de prueba', vacacional: 'Vacacional',
+    clinica: 'Clínicas y clases extra', torneo: 'Torneos', inscripcion: 'Inscripción',
+    articulos: 'Artículos y camisetas', otros: 'Otros',
+};
+/** Orden fijo en el correo: primero lo que se cierra todas las semanas. */
+const ORDEN_TIPO = Object.keys(ETIQUETA_TIPO) as TipoDePago[];
+
+/** Qué tipo de pago es: la categoría del cobro; sin categoría, el concepto. Pura. */
+export function tipoDePago(categoria: string | null | undefined, concepto?: string | null): TipoDePago {
+    const c = sinTildes(String(categoria ?? '')).trim();
+    if (c === 'mensualidad') return 'mensualidad';
+    if (c === 'clase_prueba') return 'clase_prueba';
+    if (c === 'vacacional') return 'vacacional';
+    if (c === 'clase_extra') return 'clinica';
+    if (c === 'torneo') return 'torneo';
+    if (c === 'inscripcion' || c === 'matricula') return 'inscripcion';
+    if (c === 'articulos' || c === 'uniforme') return 'articulos';
+    const t = sinTildes(String(concepto ?? ''));
+    if (/clase de prueba/.test(t)) return 'clase_prueba';
+    if (/vacacional/.test(t)) return 'vacacional';
+    if (/clinica/.test(t)) return 'clinica';
+    if (/torneo|copa /.test(t)) return 'torneo';
+    if (/mensualidad|tarifa plena|suscripcion/.test(t)) return 'mensualidad';
+    return 'otros';
+}
+
+export interface LineaTipo { tipo: TipoDePago; etiqueta: string; cantidad: number; monto: number }
+
+/** Suma por tipo de pago, en el orden fijo de ETIQUETA_TIPO; omite los tipos sin pagos. Pura. */
+export function sumarPorTipo(items: readonly { categoria?: string | null; concepto?: string | null; monto: number }[]): LineaTipo[] {
+    const m = new Map<TipoDePago, LineaTipo>();
+    for (const i of items) {
+        const tipo = tipoDePago(i.categoria, i.concepto);
+        const l = m.get(tipo) ?? { tipo, etiqueta: ETIQUETA_TIPO[tipo], cantidad: 0, monto: 0 };
+        l.cantidad++; l.monto += Number(i.monto) || 0;
+        m.set(tipo, l);
+    }
+    return ORDEN_TIPO.filter((t) => m.has(t)).map((t) => m.get(t)!);
+}
+
 /** Suma por cuenta, de mayor a menor monto. Pura. */
 export function sumarPorCuenta(items: readonly { banco?: string | null; metodo?: string | null; monto: number }[]): LineaCuenta[] {
     const m = new Map<string, LineaCuenta>();
@@ -105,7 +154,7 @@ export function inicioDelInforme(ms: number): number | null {
 // ─── Armado del resumen (puro) ───────────────────────────────────────────────
 
 export interface ItemPendiente { banco: string | null; metodo: string | null; monto: number; desde: string }
-export interface ItemAprobado { banco: string | null; metodo: string | null; monto: number }
+export interface ItemAprobado { banco: string | null; metodo: string | null; monto: number; categoria?: string | null; concepto?: string | null }
 
 export interface Resumen {
     porValidar: { cantidad: number; monto: number; cuentas: LineaCuenta[] };
@@ -113,7 +162,7 @@ export interface Resumen {
     masAntiguoMs: number | null;
     sinDecidir4h: number;
     /** Solo en el informe de L/M/V. */
-    aprobado: { cantidad: number; monto: number; cuentas: LineaCuenta[] } | null;
+    aprobado: { cantidad: number; monto: number; cuentas: LineaCuenta[]; tipos: LineaTipo[] } | null;
     desde: number | null;
 }
 
@@ -133,7 +182,7 @@ export function armarResumen(i: {
         porClasificar: { cantidad: cant(pc), monto: total(pc), cuentas: pc },
         masAntiguoMs: edades.length ? Math.min(...edades) : null,
         sinDecidir4h: edades.filter((t) => i.ahora - t >= UMBRAL_SIN_DECIDIR_MS).length,
-        aprobado: ap ? { cantidad: cant(ap), monto: total(ap), cuentas: ap } : null,
+        aprobado: ap ? { cantidad: cant(ap), monto: total(ap), cuentas: ap, tipos: sumarPorTipo(i.aprobados ?? []) } : null,
         desde: i.desde ?? null,
     };
 }
@@ -163,11 +212,26 @@ function tablaCuentas(titulo: string, bloque: { cantidad: number; monto: number;
             : '<p style="margin:0;color:#6b7280;font-size:14px">Nada pendiente.</p>');
 }
 
+/** Lo aprobado POR TIPO DE PAGO (mensualidad, clase de prueba, vacacional…): lo que Alejandra anota en su cierre. */
+function tablaTipos(bloque: { cantidad: number; monto: number; tipos: LineaTipo[] }, nota?: string): string {
+    const filas = bloque.tipos.map((t) =>
+        `<tr><td style="padding:6px 10px;border-bottom:1px solid #e5e7eb">${escaparHtml(t.etiqueta)}</td>`
+        + `<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right">${t.cantidad}</td>`
+        + `<td style="padding:6px 10px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600">${escaparHtml(cop(t.monto))}</td></tr>`).join('');
+    return `<h3 style="margin:22px 0 4px;font-size:16px;color:#123416">Aprobado por tipo de pago · ${bloque.cantidad} · ${escaparHtml(cop(bloque.monto))}</h3>`
+        + (nota ? `<p style="margin:0 0 8px;color:#6b7280;font-size:13px">${escaparHtml(nota)}</p>` : '')
+        + (bloque.cantidad
+            ? `<table style="border-collapse:collapse;width:100%;font-size:14px"><tr style="background:#f3f4f6"><th style="padding:6px 10px;text-align:left">Tipo</th><th style="padding:6px 10px;text-align:right">Pagos</th><th style="padding:6px 10px;text-align:right">Aprobado</th></tr>${filas}</table>`
+            : '<p style="margin:0;color:#6b7280;font-size:14px">Nada aprobado en este periodo.</p>');
+}
+
 export function htmlDelResumen(r: Resumen, escuela: string, esInforme: boolean, ahora: number): string {
     const partes: string[] = [];
     partes.push(`<h2 style="margin:0 0 4px;font-size:20px;color:#123416">${esInforme ? 'Informe de revisión' : 'Resumen de comprobantes'}</h2>`);
     partes.push(`<p style="margin:0;color:#6b7280;font-size:13px">${escaparHtml(escuela)} · corte ${escaparHtml(horaColombia(ahora))}</p>`);
     if (esInforme && r.aprobado) {
+        partes.push(tablaTipos(r.aprobado,
+            r.desde ? `Lo aprobado desde ${horaColombia(r.desde)}, separado por qué se pagó. Es el valor aprobado, no dónde entró.` : undefined));
         partes.push(tablaCuentas('Ingresó desde la revisión anterior (aprobado)', r.aprobado,
             r.desde ? `Aprobado desde ${horaColombia(r.desde)}. Es lo que hay para repartir entre cuentas.` : undefined));
     }
@@ -229,7 +293,7 @@ export async function runResumenCuentas(opts: OpcionesResumen = {}): Promise<Res
     let aprobadosFilas: any[] = [];
     if (esInforme && desde !== null) {
         const { data: ap, error: eAp } = await supabase.from('payments')
-            .select('school_id, amount_paid, ocr_bank, payment_method, approved_at')
+            .select('school_id, amount_paid, ocr_bank, payment_method, approved_at, payment_category, concept')
             .in('school_id', idsOk).in('status', ['paid', 'partial'])
             .gte('approved_at', new Date(desde).toISOString()).limit(LIMITE);
         if (eAp) throw new Error(`payments(aprobados): ${eAp.message}`);
@@ -252,7 +316,7 @@ export async function runResumenCuentas(opts: OpcionesResumen = {}): Promise<Res
             banco: p.banco ?? null, metodo: null, monto: Number(p.monto) || 0, desde: p.created_at,
         }));
         const aprobados: ItemAprobado[] | null = esInforme
-            ? aprobadosFilas.filter((p) => p.school_id === e.id).map((p) => ({ banco: p.ocr_bank ?? null, metodo: p.payment_method ?? null, monto: Number(p.amount_paid) || 0 }))
+            ? aprobadosFilas.filter((p) => p.school_id === e.id).map((p) => ({ banco: p.ocr_bank ?? null, metodo: p.payment_method ?? null, monto: Number(p.amount_paid) || 0, categoria: p.payment_category ?? null, concepto: p.concept ?? null }))
             : null;
         const resumen = armarResumen({ ahora, porValidar, porClasificar, aprobados, desde });
         if (!debeEnviar(resumen, esInforme)) { res.nadaQueAvisar++; continue; }

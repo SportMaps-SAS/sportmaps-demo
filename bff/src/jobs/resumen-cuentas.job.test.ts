@@ -4,7 +4,7 @@ vi.mock('../config/supabase', () => ({ supabase: { from: vi.fn() } }));
 
 import {
     cuentaDe, sumarPorCuenta, esDiaDeInforme, inicioDelInforme, armarResumen, debeEnviar, asuntoDe, htmlDelResumen,
-    resumenCuentasActivo, claveDeCorte, horaCO,
+    resumenCuentasActivo, claveDeCorte, horaCO, tipoDePago, sumarPorTipo,
 } from './resumen-cuentas.job';
 import { idsConResumenDeCuentas } from '../services/resumen-cuentas.config';
 
@@ -86,13 +86,53 @@ describe('armarResumen / debeEnviar', () => {
     });
 });
 
+describe('tipoDePago / sumarPorTipo — lo aprobado por qué se pagó, no por dónde entró', () => {
+    it('usa la categoría del cobro', () => {
+        expect(tipoDePago('mensualidad')).toBe('mensualidad');
+        expect(tipoDePago('clase_prueba')).toBe('clase_prueba');
+        expect(tipoDePago('vacacional')).toBe('vacacional');
+        expect(tipoDePago('clase_extra')).toBe('clinica');
+        expect(tipoDePago('torneo')).toBe('torneo');
+        expect(tipoDePago('articulos')).toBe('articulos');
+    });
+    it('sin categoría (suscripciones) lo reconoce por el concepto; lo demás es «otros»', () => {
+        expect(tipoDePago(null, 'Suscripción — mensualidad completa, vence el 5 de noviembre — Ana')).toBe('mensualidad');
+        expect(tipoDePago(null, 'Plan tarifa plena — Ana')).toBe('mensualidad');
+        expect(tipoDePago(null, 'Clase de prueba — Ana')).toBe('clase_prueba');
+        expect(tipoDePago('otro', 'Otro cobro — Ana')).toBe('otros');
+        expect(tipoDePago(undefined, undefined)).toBe('otros');
+    });
+    it('suma por tipo en orden fijo (mensualidad primero) y omite los vacíos', () => {
+        const l = sumarPorTipo([
+            { categoria: 'vacacional', monto: 150000 }, { categoria: 'clase_prueba', monto: 15000 },
+            { categoria: 'mensualidad', monto: 125000 }, { categoria: 'mensualidad', monto: 145000 },
+            { categoria: 'clase_prueba', monto: 15000 },
+        ]);
+        expect(l.map((x) => x.tipo)).toEqual(['mensualidad', 'clase_prueba', 'vacacional']);
+        expect(l[0]).toMatchObject({ cantidad: 2, monto: 270000, etiqueta: 'Mensualidad' });
+        expect(l[1]).toMatchObject({ cantidad: 2, monto: 30000 });
+    });
+    it('el total por tipo cuadra con el total por cuenta', () => {
+        const r = armarResumen({
+            ahora: col('2026-11-18T07:00:00'), porValidar: [], porClasificar: [],
+            aprobados: [
+                { banco: 'Nequi', metodo: null, monto: 125000, categoria: 'mensualidad' },
+                { banco: 'Daviplata', metodo: null, monto: 15000, categoria: 'clase_prueba' },
+                { banco: null, metodo: 'cash', monto: 150000, categoria: 'vacacional' },
+            ],
+        });
+        expect(r.aprobado!.tipos.reduce((s, t) => s + t.monto, 0)).toBe(r.aprobado!.monto);
+        expect(r.aprobado!.tipos.reduce((s, t) => s + t.cantidad, 0)).toBe(r.aprobado!.cantidad);
+    });
+});
+
 describe('correo', () => {
     const ahora = col('2026-11-18T07:00:00');
     const r = armarResumen({
         ahora, desde: col('2026-11-16T07:00:00'),
         porValidar: [{ banco: 'Nequi', metodo: null, monto: 150000, desde: new Date(ahora - 6 * 3600_000).toISOString() }],
         porClasificar: [{ banco: 'Daviplata', metodo: null, monto: 30000, desde: new Date(ahora - 1 * 3600_000).toISOString() }],
-        aprobados: [{ banco: 'Nequi', metodo: null, monto: 600000 }, { banco: 'Daviplata', metodo: null, monto: 200000 }],
+        aprobados: [{ banco: 'Nequi', metodo: null, monto: 600000, categoria: 'mensualidad' }, { banco: 'Daviplata', metodo: null, monto: 200000, categoria: 'clase_prueba' }],
     });
 
     it('el asunto dice el valor pendiente; el del informe, lo que ingresó', () => {
@@ -105,6 +145,9 @@ describe('correo', () => {
         expect(html).toContain('Nequi');
         expect(html).toContain('Daviplata');
         expect(html).toContain('Ingresó desde la revisión anterior');
+        expect(html).toContain('Aprobado por tipo de pago');
+        expect(html).toContain('Mensualidad');
+        expect(html).toContain('Clase de prueba');
         expect(html).toContain('más de 4 horas');
         expect(html).not.toContain('<b>x</b>');
         expect(html).toContain('&lt;b&gt;');
@@ -112,6 +155,7 @@ describe('correo', () => {
     it('el resumen de 4 h no trae la sección de lo aprobado', () => {
         const sin = armarResumen({ ahora, porValidar: [], porClasificar: [{ banco: 'Nequi', metodo: null, monto: 1000, desde: new Date(ahora).toISOString() }] });
         expect(htmlDelResumen(sin, 'Monster', false, ahora)).not.toContain('Ingresó desde la revisión anterior');
+        expect(htmlDelResumen(sin, 'Monster', false, ahora)).not.toContain('Aprobado por tipo de pago');
     });
 });
 

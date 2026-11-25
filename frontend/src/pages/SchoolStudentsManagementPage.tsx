@@ -312,7 +312,8 @@ export default function SchoolStudentsManagementPage() {
   const [showCreateAdultModal, setShowCreateAdultModal] = useState(false);
   // ?q= precarga la búsqueda (p. ej. "Cambiar plan" desde Ascensos, F-F).
   const [searchQuery, setSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('q') ?? '');
-  const [activeTab, setActiveTab] = useState('active');
+  // ?tab=prueba abre directo la pestaña «Clase de prueba» (desde el modal de Pagos → «Completar datos»).
+  const [activeTab, setActiveTab] = useState(() => (new URLSearchParams(window.location.search).get('tab') === 'prueba' ? 'prueba' : 'active'));
   // Pestaña «Clase de prueba»: prospecto que se está pasando a deportista por el alta normal.
   const [prospectoEnAlta, setProspectoEnAlta] = useState<ProspectoClasePrueba | null>(null);
   const [configPruebaOpen, setConfigPruebaOpen] = useState(false);
