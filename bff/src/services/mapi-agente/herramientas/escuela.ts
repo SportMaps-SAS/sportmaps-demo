@@ -834,6 +834,23 @@ export const crearCobroUnico: HerramientaAccion<ArgsCobroUnico> = {
     // Crea deuda: nace apagada hasta que el usuario la revise (regla 7 del encargo).
     habilitada: () => process.env.MAPI_COBROS_UNICOS === 'true',
     validar: (args) => {
+        // Mensajes por campo ANTES del genérico (evals 11-24): con $0 o $50.000.000
+        // el modelo recibía «faltan datos» y no podía explicar qué pasaba.
+        const crudo = (args ?? {}) as Record<string, unknown>;
+        const monto = typeof crudo.monto === 'number' ? crudo.monto : Number(crudo.monto);
+        if (Number.isFinite(monto)) {
+            if (monto <= 0) throw new RechazoHerramienta('El monto del cobro tiene que ser mayor que $0.');
+            if (!Number.isInteger(monto)) throw new RechazoHerramienta('El monto va en pesos enteros, sin centavos.');
+            if (monto > 20_000_000) {
+                throw new RechazoHerramienta(`$${monto.toLocaleString('es-CO')} por deportista supera el tope de $20.000.000. ¿Era otra cifra (por ejemplo $${Math.round(monto / 1000).toLocaleString('es-CO')})? Confírmalo con la persona.`);
+            }
+        }
+        if (typeof crudo.concepto === 'string' && crudo.concepto.trim().length < 3) {
+            throw new RechazoHerramienta('Falta el concepto del cobro: lo que verá la familia (ej. «Torneo Copa Navidad»).');
+        }
+        if (!crudo.equipo && !(Array.isArray(crudo.deportistas) && crudo.deportistas.length)) {
+            throw new RechazoHerramienta('Falta a quién se le cobra: un equipo o una lista de deportistas.');
+        }
         const r = validarCon(z.object({
             deportistas: z.array(z.string().min(5).max(80)).max(200).nullable().optional(),
             equipo: z.string().trim().max(120).nullable().optional(),

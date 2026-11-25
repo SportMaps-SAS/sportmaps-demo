@@ -14,10 +14,11 @@ export type EntidadMapi =
     | { tipo: 'deportista'; id: string }
     | { tipo: 'equipo'; id: string };
 
-let actual: EntidadMapi | null = null;
+/** Pila: la ficha abierta encima del equipo manda mientras está; al cerrarla vuelve el equipo. */
+const pila: EntidadMapi[] = [];
 
 export function entidadParaMapi(): EntidadMapi | null {
-    return actual;
+    return pila[pila.length - 1] ?? null;
 }
 
 /** Mientras el componente esté montado, Mapi sabe qué entidad hay en pantalla. */
@@ -25,9 +26,11 @@ export function useEntidadParaMapi(entidad: EntidadMapi | null | undefined): voi
     const clave = entidad ? `${entidad.tipo}|${entidad.id}` : '';
     useEffect(() => {
         if (!entidad) return;
-        actual = entidad;
+        const propia = entidad;
+        pila.push(propia);
         return () => {
-            if (actual && `${actual.tipo}|${actual.id}` === clave) actual = null;
+            const i = pila.lastIndexOf(propia);
+            if (i >= 0) pila.splice(i, 1);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clave]);
@@ -35,5 +38,6 @@ export function useEntidadParaMapi(entidad: EntidadMapi | null | undefined): voi
 
 /** Lo que el chat manda al BFF en cada mensaje. */
 export function pantallaParaMapi(ruta: string = typeof window !== 'undefined' ? window.location.pathname : ''): { ruta: string; entidad?: EntidadMapi } {
-    return actual ? { ruta, entidad: actual } : { ruta };
+    const entidad = entidadParaMapi();
+    return entidad ? { ruta, entidad } : { ruta };
 }

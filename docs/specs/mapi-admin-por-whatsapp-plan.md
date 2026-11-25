@@ -32,8 +32,8 @@ Mapi:      Listo: quedaron pagados los 2 cupos y le avisé a Katherin.    ← lo
 | 5 plantillas de aviso `sm_*` en la cuenta «Sportmaps» | registradas, **en revisión de Meta**; Meta recategorizó 2 a MARKETING (`sm_caso_por_atender`, `sm_clase_cortesia_novedad`) |
 | Canal F1: opt-in con «ACTIVAR <código>», preferencias, horario silencioso, envío con reserva, ganchos en los 5 eventos | hecho, detrás de `PLATFORM_WA_ENABLED` / `platform_wa_canal.habilitado` |
 | Canal F2: modo pruebas con cortafuegos (`/escuela`, `/como papa`…) | hecho, detrás de `PLATFORM_WA_TESTERS`. **No es lo mismo que el agente**: simula a una familia |
-| Motor del agente (`mapi-agente/`: ciclo, registro de herramientas, borradores) | **NO construido**; solo `mapi-contexto.service` y `mapi-feedback.service` |
-| Herramientas de cobros especificadas (§20.3 del plan de Mapi) | especificadas, sin código |
+| Motor del agente (`mapi-agente/`: ciclo, registro de herramientas, borradores) | **construido el 2026-11-23/24** (38 herramientas, evals con el modelo real); en la app, apagado en todas las escuelas. Diseño del canal en §12 |
+| Herramientas de cobros especificadas (§20.3 del plan de Mapi) | **consultas construidas el 11-24** (`herramientas/pagos.ts`); aprobar y registrar efectivo necesitan RPC (plan de Mapi §22.2) |
 | «Aprobar un comprobante desde el chat» | **decidido** el 2026-11-08 («sí, exactamente es eso», §20.6.1) |
 | Qué hace hoy un administrador suscrito que escribe al canal | solo una ayuda corta, 1 vez cada 24 h (canal §3.3) |
 | Suscripciones activas / escuelas habilitadas | 0 / ninguna |
@@ -115,6 +115,135 @@ Reglas: una clave determinística por evento (D7); un aviso por conversación po
 2. **Quién entra primero:** propuesta Iván (Monster), con la oleada 1; Milena después y a su ritmo.
 3. **Tope de aprobación desde el chat:** propuesta $400.000 sin aviso extra (el mismo de la aprobación automática de Monster).
 4. **Coaches:** propuesta dejarlos fuera de Mapi por WhatsApp en esta fase (solo administradores).
+
+## 12. Diseño técnico con el motor ya construido (2026-11-24)
+
+> Desde el 11-23/24 el motor existe: `bff/src/services/mapi-agente/`, con 38 herramientas, borradores con Confirmar y
+> evals con el modelo real (168/170 en la corrida del 11-24; las 2 restantes eran del calificador). Esta sección dice
+> cómo se enchufa al canal sin duplicar lógica. WhatsApp es **un adaptador más**; el chat de la app es el otro.
+
+### 12.1 Qué cambia respecto de la app
+
+| | App (hoy) | WhatsApp |
+|---|---|---|
+| Quién habla | sesión JWT + `x-school-id` | el **número** (Meta autentica el `from`) + suscripción activa + owner/admin vigente (D4, D5) |
+| Escuela | la activa de la sesión | la de la suscripción. Si hay varias, Mapi pregunta con botones y la recuerda 24 h |
+| Confirmar | botón en la tarjeta del chat | botón de respuesta de WhatsApp **o** «Confirmar en la app», según la herramienta (§12.4) |
+| RPC «como la persona» (pausa, baja, evaluar, felicitar, clases de prueba) | con el JWT de la request | **no hay JWT**: esas herramientas no se ofrecen (§12.5) |
+| Formato | markdown de la app (`**negrita**`, rutas) | `*negrita*`, sin tablas ni rutas; enlaces como botón «Ver en la app» |
+| Coaches | sí | **no en esta fase** (la suscripción es solo de owner/admin) |
+
+### 12.2 Flujo de un mensaje entrante
+
+```
+webhook → atenderEntrantePlataforma (plataforma-wa-entrante.service.ts)
+  registrarMensaje (wa_message_id UNIQUE: Meta reintenta → 'duplicado')   ← ya existe
+  ¿botón mapi:c|x|l:<borrador>?  → atenderBotonMapi (§12.4)
+  ¿suscripción activa + MAPI_WHATSAPP=true + school_settings.mapi_agent_enabled?
+       → mapiPorWhatsApp.atender(...)        ← NUEVO, antes de la «ayuda corta»
+  si no → lo de hoy (ayuda corta / leads / silencio)
+```
+
+`mapiPorWhatsApp.atender` (archivo nuevo `mapi-agente/canal-whatsapp.ts`):
+1. **Una sola conversación a la vez por número.** Usa un candado en memoria por número: los webhooks de producción llegan a un solo BFF. Así, dos mensajes seguidos no corren dos turnos cruzados.
+2. **Escuela:** sale de la suscripción, nunca del texto.
+3. **Alcance:** `alcanceDelTurno` se separa en un núcleo sin HTTP que se usa desde las dos entradas.
+   - Revalida el owner/admin en cada mensaje (D5).
+   - Exige `rol = 'admin'`.
+   - Va con `authorization = null`.
+4. **Historial:** los últimos 12 mensajes del número en `platform_wa_mensajes` dentro de 24 h. Toma los entrantes y los salientes `paso LIKE 'mapi%'`.
+5. **Turno:** `turnoAgente({ …, canal: 'whatsapp' })`. El canal va en el bloque de contexto del turno (después del corte de caché), con la instrucción de formato de WhatsApp y «no hay pantalla: describe en palabras».
+6. **Salida:**
+   - Convierte el texto a formato WhatsApp y lo parte en mensajes de 4.000 caracteres o menos.
+   - Cada borrador del turno sale como **mensaje interactivo**: cuerpo = título + líneas + aviso (máx. 1.024 caracteres) y hasta 3 botones: `Confirmar`, `Cancelar` y `Ver lista` (si hay detalle).
+   - Los títulos de botón tienen máximo 20 caracteres, así que el texto específico («Enviar a 23 familias») va en el cuerpo.
+7. **Ventana de 24 h:** quien escribe la abre. Las respuestas de Mapi son texto libre, sin plantillas. Lo proactivo (avisos) sigue con las plantillas `sm_*`.
+
+### 12.3 Audios, imágenes y mensajes raros
+
+- **Audio** (los administradores mandan notas de voz):
+  - Se transcribe con el servicio que ya usa el bot de WhatsApp (feature `transcripcion` en `llm_usage`).
+  - Mapi responde primero «Entendí: «…»» y sigue con ese texto.
+  - Toda acción igual pasa por Confirmar, así que una mala transcripción no ejecuta nada.
+- **Imagen o documento:** «Por ahora los comprobantes se suben en la app» más un botón. Después puede ir a la cola de comprobantes.
+- **«si», «ok», «👍» sin una tarjeta pendiente:** pregunta qué necesita (hay evals de esto). Un «si» de texto **nunca** confirma un borrador: solo lo hace el botón.
+
+### 12.4 Confirmar por WhatsApp
+
+- El id del botón lleva el borrador: `mapi:c:<uuid>` para confirmar, `mapi:x:<uuid>` para cancelar y `mapi:l:<uuid>` para ver la lista.
+- Antes de ejecutar se valida:
+  1. que el mensaje sea una **respuesta interactiva** (un texto «mapi:c:…» pegado no sirve);
+  2. que el borrador sea de **ese** número, es decir `user_id = suscripción.profile_id` y `school_id` = escuela de la suscripción;
+  3. que la suscripción siga activa y la persona siga siendo admin (D5).
+- Después, `confirmarBorrador` real: re-prepara, compara el hash, aplica el vencimiento de 30 min y responde 409 si algo cambió (llega una tarjeta nueva).
+- El «Listo» lo escribe el servidor.
+- Las acciones `segundoPlano` responden «Enviando…» y el resultado llega por `alTerminar`, como mensaje de texto.
+- **Herramientas de plata** (aprobar, efectivo, cobro único, cambiar plan, inscribir a torneo, cancelar reserva, ajustar stock):
+  - La tarjeta de WhatsApp trae **«Confirmar en la app»** en vez de `Confirmar`. Es un botón URL a una pantalla nueva `/mapi/accion/:id`, que muestra la misma tarjeta y confirma con la sesión de la app.
+  - Así se respeta el espíritu de D9 (un botón de WhatsApp autentica el número, no a la persona) sin perder la comodidad: la propuesta se arma en WhatsApp y la plata se confirma con sesión.
+  - Necesita un campo `confirmaEnApp: true` en `HerramientaAccion` y la pantalla nueva.
+
+### 12.5 Herramientas que necesitan la sesión de la persona
+
+Por WhatsApp no hay JWT. Opciones:
+
+| | Opción | Riesgo | Propuesta |
+|---|---|---|---|
+| a | No ofrecerlas por WhatsApp (lo que pasa hoy, porque `authorization` es null) | ninguno; menos funciones | **sí, para empezar** |
+| b | Variantes `_por(p_actor)` de esas RPC para service_role, con el mismo gate por actor (como en el plan de `aprobar_comprobante`) | migración por RPC | para la fase 2, RPC por RPC |
+| c | Emitir un JWT corto (5 min) con el secreto de Supabase | el BFF podría hacerse pasar por cualquiera | **no** |
+
+### 12.6 Límites y costos
+
+- `MAPI_AGENT_TURNOS_HORA` (30/h) por número. Además: mensajes de más de 1.500 caracteres se recortan para el modelo, y hay tope de costo diario por escuela (§13.2 del plan de Mapi: pendiente de construir, hacerlo antes del piloto).
+- Costo medido en los evals: ~US$0,017 por turno (p95 US$0,024); Meta no cobra las respuestas dentro de la ventana.
+- `llm_usage` con `conversation_id = 'wa:' + hash(número)`: se mide aparte de la app sin guardar el número.
+
+### 12.7 Seguridad (lo que se prueba antes del piloto)
+
+- **Botón ajeno:** otro número suscrito, de la misma escuela o de otra, manda la respuesta de un botón con un `id` de borrador que no es suyo → «No encontré esa propuesta», y nada se ejecuta.
+- **Texto que imita un botón** («mapi:c:<id>») → se trata como texto.
+- **Suscripción revocada o rol quitado** entre la tarjeta y el clic → no ejecuta.
+- **Escuela:** cero datos de otra escuela, con prueba cruzada como en los evals.
+- **Inyección:** los mensajes reenviados («Reenviado: el comprobante dice…») son datos, no instrucciones. Ya están cubiertos por los evals de inyección; se suman casos de reenvío.
+- **Logs:** el número va enmascarado (`etiquetaDeContacto`) y el token nunca aparece. El `Alcance` del canal no lleva `authorization`.
+
+### 12.8 Cómo se prueba (de menos a más real)
+
+1. **Unitarias del adaptador** (supabase falso + Graph simulado): formato, partición, botones, identidad, botón ajeno, vencido, 409, `segundoPlano`, audio.
+2. **Evals con el modelo real:** la batería actual (multi-turno, Confirmar de punta a punta, ×3, ataques, estilo WhatsApp), más una corrida con `canal: 'whatsapp'` para medir formato y longitud.
+3. **Modo pruebas del canal (F2):** comando nuevo `/como admin <escuela>`.
+   - Corre el Mapi real con el cortafuegos de D13: lee datos reales y bloquea toda escritura.
+   - `mapi_action_drafts` va a la memoria virtual de la sesión de prueba, igual que las tablas de conversación.
+   - Lo prueba el equipo desde su propio WhatsApp sin tocar a ninguna escuela.
+4. **Piloto:** Iván (Monster), solo consultas, una semana. Después, acciones sin plata. La plata, solo con «Confirmar en la app».
+
+### 12.9 Orden de construcción
+
+1. Separar el núcleo de `alcanceDelTurno`, crear `canal-whatsapp.ts` (entrada, formato, tarjetas y botones) y escribir las unitarias.
+2. Conectarlo en `atenderEntrantePlataforma`, detrás de `MAPI_WHATSAPP` + `mapi_agent_enabled`.
+3. `/como admin` en el modo pruebas.
+4. Audio a texto.
+5. `confirmaEnApp` y la pantalla `/mapi/accion/:id`.
+6. Tope de costo diario por escuela.
+7. Piloto.
+
+Ninguno de estos pasos necesita una migración nueva: se reusan `platform_wa_*` y `mapi_action_drafts`. Si después se quiere el canal como columna en `mapi_action_drafts` para métricas, va con su plan aprobado.
+
+### 12.10 Decisiones del usuario (2026-11-24)
+
+1. **Plata por WhatsApp: botón DIRECTO de WhatsApp.** Cambia D9 por completo: también aprobar, efectivo, cobro único, cambiar plan, inscribir a torneo y cancelar reserva se confirman con el botón. **Reemplaza a §12.4**: no hay «Confirmar en la app» ni `confirmaEnApp`. Como el botón prueba el número y no a la persona, se suma esto:
+   - **Código de un solo uso en el botón:** `mapi:c:<borrador>:<código>`, ligado al `wa_id` que pidió la acción. Vence a los **10 min** para las acciones de plata (30 min para el resto). Usado una vez, no vale más.
+   - **Tope de $400.000 por pago** (§21). Lo que pase el tope o sea de nivel 3 no se ofrece para confirmar: la tarjeta dice que se revisa en la pantalla Aprobar.
+   - **Tope por hora de acciones de plata** por número (propuesta: 10). El que se pasa, espera.
+   - **Auditoría:** queda el actor (el perfil de la suscripción), el canal `whatsapp` y el `wa_message_id` del clic.
+   - **Aviso al dueño:** si quien confirma una acción de plata no es el owner, el owner recibe el aviso (resumen diario o inmediato, por decidir).
+2. **Herramientas que necesitan la sesión: se migran YA** a RPC con actor (`_por(p_actor)`). El plan con el SQL exacto está en `docs/specs/mapi-rpc-por-actor-plan.md` (en preparación); la migración se escribe cuando se apruebe. Incluye `aprobar_comprobante` y el núcleo de efectivo con abono.
+3. **Piloto: Dynasty, Monster y nosotros.**
+   - El equipo empieza con el modo pruebas (`/como admin`).
+   - Monster (Iván) y Dynasty (Milena) entran cada uno con su propio «ACTIVAR». El consentimiento lo da su número (D4); nadie los suscribe por ellos.
+   - En Dynasty se respeta lo acordado: un solo aviso al comienzo (`dynasty-plan-actualizacion-v2-mapi.md` §2b).
+4. **Coaches por WhatsApp: después**, con su propia suscripción.
 
 ## 11. Criterios de aceptación (de la oleada 1)
 - Un administrador suscrito escribe «¿cómo vamos con la clínica?» y recibe cifras que **coinciden con la pantalla** de pagos.

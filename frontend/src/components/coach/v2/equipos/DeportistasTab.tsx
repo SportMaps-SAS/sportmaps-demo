@@ -36,6 +36,7 @@ import {
 import { useDeportistasEquipo, useEstadoPagoEquipo } from '../useCoachV2Data';
 import type { ObjetivoFelicitar } from '../felicitar';
 import { BotonesAltaDeportista } from './AltasDelProfe';
+import { useEntidadParaMapi } from '@/lib/mapiPantalla';
 
 const TONO_PAGO: Record<EstadoPago, string> = {
   al_dia: 'bg-primary/10 text-primary',
@@ -86,6 +87,7 @@ export function DeportistasTab({ schoolId, teamId, nombreProfe, puedeFelicitar, 
   const [q, setQ] = useState('');
   const [abierto, setAbierto] = useState<string | null>(null);
   const [ficha, setFicha] = useState<Deportista | null>(null);
+  useEntidadParaMapi(ficha ? { tipo: 'deportista', id: `${ficha.tipo}:${ficha.id}` } : null);
 
   const mapaPago = !coachHideFinancialInfo && pago.data?.disponible ? pago.data.mapa : null;
   const saludDe = (d: Deportista) => (d.tipo === 'child' ? salud.byChildId.get(d.id) : salud.byProfileId.get(d.userId ?? d.id)) ?? null;
