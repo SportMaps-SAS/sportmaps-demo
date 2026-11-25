@@ -22,7 +22,7 @@ import { cacheControlClaude } from '../llm.service';
 import { conContextoLlm, registrarUsoLlm, tokensDeRespuesta } from '../llm-usage.service';
 import { appMapParaRol } from '../../data/app-map';
 import { herramientasPara, buscarHerramienta, definicionesApi } from './registro';
-import { crearBorrador } from './borradores';
+import { crearBorrador, pendientesDelTicket, cancelarBorrador } from './borradores';
 import { RechazoHerramienta, type Alcance, type VistaPrevia } from './tipos';
 import { contextoDelTurno, type PantallaValidada } from './pantalla';
 
@@ -47,6 +47,56 @@ const DEF_ESCALAR = {
     },
 };
 
+/**
+ * Herramienta especial: descarta propuestas PENDIENTES de este mismo chat (las
+ * que el contexto del turno lista como p1, p2…). Nunca ejecuta nada: solo las
+ * cancela, como el botón Cancelar. Evals 2026-11-25: tras «mejor no» o «no, la
+ * otra» la tarjeta vieja quedaba viva (una «Dar de baja» a un toque).
+ */
+export const DESCARTAR = 'descartar_propuesta';
+const DEF_DESCARTAR = {
+    name: DESCARTAR,
+    description: 'Descarta propuestas que siguen pendientes en este chat (las del contexto del turno: p1, p2…). Úsala cuando la persona se arrepiente, corrige a quién o qué era, o pide algo que reemplaza la propuesta. No ejecuta nada.',
+    input_schema: {
+        type: 'object' as const,
+        properties: { propuestas: { type: 'array', items: { type: 'string' }, description: 'Referencias del contexto: ["p1"]' } },
+        required: ['propuestas'],
+        additionalProperties: false,
+    },
+};
+
+/** Propuestas pendientes del chat con su referencia corta para el modelo (nunca el id). */
+export interface PendienteDelTurno { ref: string; id: string; titulo: string; linea: string | null }
+
+/**
+ * Cancela las propuestas que el modelo nombró por referencia. Solo las de la lista
+ * del turno (este usuario, este chat, pendientes): `cancelarBorrador` además
+ * exige user_id y status 'draft', así que una confirmada o ajena no se toca.
+ */
+export async function descartarPendientes(userId: string, pendientes: PendienteDelTurno[], input: unknown): Promise<string> {
+    const refs = Array.isArray((input as any)?.propuestas) ? ((input as any).propuestas as unknown[]).map((r) => String(r).trim().toLowerCase()) : [];
+    const elegidas = pendientes.filter((p) => refs.includes(p.ref));
+    if (!elegidas.length) return 'No hay propuestas pendientes con esas referencias.';
+    const descartadas: string[] = [];
+    for (const p of elegidas) {
+        const t = await cancelarBorrador(userId, p.id).catch(() => null);
+        if (t?.estado === 'cancelled') descartadas.push(p.titulo);
+    }
+    return descartadas.length
+        ? `Descartadas (ya no se pueden confirmar): ${descartadas.join('; ')}.`
+        : 'No se pudo descartar: ya se confirmaron, se cancelaron o vencieron.';
+}
+
+export function bloquePendientes(ps: PendienteDelTurno[]): string {
+    if (!ps.length) return '';
+    return [
+        '',
+        'Propuestas PENDIENTES en este chat (ya se le muestran a la persona; todavía no tocó Confirmar ni Cancelar):',
+        ...ps.map((p) => `- ${p.ref}: ${p.titulo}${p.linea ? ` — ${p.linea}` : ''}`),
+        'Existen: no las rehagas ni digas que no las preparaste. Si la persona se arrepiente o corrige, descártalas con descartar_propuesta.',
+    ].join('\n');
+}
+
 export const REGLAS_AGENTE = `Eres Mapi, el asistente de SportMaps, en MODO AGENTE: además de explicar cómo se hace algo en la app, puedes consultar los datos de la escuela y PREPARAR acciones con tus herramientas.
 
 CÓMO TRABAJAS
@@ -54,7 +104,8 @@ CÓMO TRABAJAS
 - Para encontrar a un deportista usa buscar_deportista. Si devuelve más de uno posible, PREGUNTA cuál es (muestra las opciones) y no adivines.
 - Puedes pedir varias consultas a la vez cuando no dependen una de otra.
 - Cuando la persona pide un cambio (excusar, pasar lista, pausar, dar de baja, cambiar de plan, un cobro único, un recordatorio, convocar a un torneo…), llama la herramienta de esa acción. El sistema le muestra una tarjeta con la vista previa y el botón Confirmar. TÚ NUNCA EJECUTAS NADA: en ese turno nunca digas que quedó hecho, listo, enviado ni excusado, y no uses «listo», «ya está» ni «quedó» ni siquiera para describir la propuesta. Di, en una o dos líneas, que le dejaste la propuesta para revisar y confirmar.
-- Si una herramienta de acción te devuelve un rechazo (permiso, fechas fuera de rango, deportista de otro equipo), explícaselo con esas palabras y no insistas por otro camino.
+- Si una herramienta de acción te devuelve un rechazo (permiso, fechas fuera de rango, deportista de otro equipo), explícaselo con esas palabras y no insistas por otro camino. Tampoco prepares como atajo una acción distinta que nadie pidió (si no puedes pausar, no ofrezcas excusar semanas).
+- Si la persona se arrepiente («mejor no»), corrige a quién o qué era, o pide algo que reemplaza una propuesta pendiente, descarta la vieja con descartar_propuesta antes de preparar la nueva.
 - Fechas: el contexto del turno trae la fecha de hoy. A las herramientas les pasas fechas ISO (AAAA-MM-DD). «Del 3 al 10» sin mes es del mes en curso si todavía no pasó; si es ambiguo, pregunta.
 - «Esta niña», «este equipo», «este cobro»: si el contexto del turno trae la pantalla con una entidad, se refiere a ella.
 - Apodos y diminutivos (Majo, Juanes, Santi, Vale, Mafe): si buscar_deportista no encuentra a nadie, vuelve a buscar con el nombre completo probable o con una sola parte del nombre ANTES de preguntar.
@@ -215,7 +266,7 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
     const crear = p.crearMensaje ?? crearMensajeReal;
     const a = p.alcance;
     const disponibles = herramientasPara(a);
-    const tools = [...definicionesApi(disponibles), DEF_ESCALAR];
+    const tools: any[] = [...definicionesApi(disponibles), ...(p.ticketId ? [DEF_DESCARTAR] : []), DEF_ESCALAR];
     tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cacheControlClaude() };
 
     const consulta = p.historial.filter((m) => m.role === 'user').slice(-2).map((m) => m.content).join(' ');
@@ -223,7 +274,15 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
     const system: any[] = [{ type: 'text', text: REGLAS_AGENTE, cache_control: cacheControlClaude() }];
     if (mapa) system.push({ type: 'text', text: `MAPA DE LA APP (lo que este usuario ve y puede hacer)\n${mapa}` });
 
-    const messages = historialParaApi(p.historial, await contextoDelTurno(a, p.pantalla ?? null, p.nombreUsuario ?? null));
+    // Las propuestas vivas del chat van en el contexto del turno: sin esto el modelo
+    // solo veía su propio texto anterior y rehacía o desmentía las tarjetas (evals 11-25).
+    const pendientes: PendienteDelTurno[] = p.ticketId
+        ? (await pendientesDelTicket(a.userId, p.ticketId).catch(() => [])).map((t, i) => ({
+            ref: `p${i + 1}`, id: t.id, titulo: t.vista?.titulo ?? t.herramienta, linea: t.vista?.lineas?.[0] ?? null,
+        }))
+        : [];
+    const contexto = (await contextoDelTurno(a, p.pantalla ?? null, p.nombreUsuario ?? null)) + bloquePendientes(pendientes);
+    const messages = historialParaApi(p.historial, contexto);
     if (!messages.length) return { tipo: 'sin_agente', motivo: 'sin_mensaje_del_usuario' };
 
     const borradores: string[] = [];
@@ -281,6 +340,10 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
             messages.push({ role: 'assistant', content: bloques });
             const resultados = await Promise.all(llamadas.map(async (b) => {
                 usadas.push(b.name);
+                if (b.name === DESCARTAR) {
+                    const contenido = await descartarPendientes(a.userId, pendientes, b.input);
+                    return { type: 'tool_result', tool_use_id: b.id, content: contenido };
+                }
                 const r = await ejecutarLlamada(a, p.ticketId, b.name, b.input);
                 if (r.borradorId) borradores.push(r.borradorId);
                 return { type: 'tool_result', tool_use_id: b.id, content: r.contenido, ...(r.error ? { is_error: true } : {}) };

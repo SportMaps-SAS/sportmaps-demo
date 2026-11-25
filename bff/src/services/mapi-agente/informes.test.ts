@@ -285,7 +285,7 @@ describe('generar_reporte', () => {
 const informe = (mes: number, extra: Record<string, unknown> = {}) => ({
     id: `inf-${mes}`, school_id: ESCUELA, subject_type: 'child', subject_id: NINA, period_year: 2026, period_month: mes,
     status: 'publicado', team_id: TIB, published_at: `2026-${String(mes + 1).padStart(2, '0')}-02T15:00:00Z`, sent_at: null, viewed_at: null,
-    recipient_id: 'padre-aaaa', ...extra,
+    recipient_id: 'padre-aaaa', snapshot: { resumen: 'ok' }, ...extra,
 });
 
 describe('informes_del_atleta', () => {
@@ -431,7 +431,8 @@ describe('convocar_a_torneo', () => {
         expect(texto).toMatch(/1 ya estaba en la nómina/);
         expect(texto).toMatch(/Carlos Ruiz\. Agrégalos a mano/);
         expect(texto).toMatch(/No se le avisa a la familia ni se cobra nada/);
-        expect(p.args).toEqual({ torneo: TORNEO, equipo_torneo: EQ_TORNEO, deportistas: [`child:${NINA}`] });
+        // Se guarda la lista ORIGINAL: al confirmar se re-prepara igual y el hash coincide (evals 11-25).
+        expect(p.args).toEqual({ torneo: TORNEO, equipo_torneo: EQ_TORNEO, deportistas: args.deportistas });
         expect(p.huella).toEqual({ torneo: TORNEO, equipo: EQ_TORNEO, nuevos: [NINA] });
         expect(h.traer).not.toHaveBeenCalled();
     });
@@ -490,7 +491,8 @@ describe('inscribir_a_torneo', () => {
         expect(texto).toMatch(/Sin acudiente que pague, no se inscriben: Tomás Solo/);
         expect(texto).toMatch(/Fichas sin cuenta.*Pedro Sin Cuenta/);
         expect(p.vista.aviso).toMatch(/cobros se crean/);
-        expect(p.args).toEqual({ torneo: TORNEO, categoria: CAT, equipo: null, deportistas: [`adult:${ADULTO}`, `child:${NINA}`] });
+        // Args originales con torneo y categoría resueltos: el Confirmar vuelve a filtrar igual (evals 11-25).
+        expect(p.args).toEqual({ ...args, torneo: TORNEO, categoria: CAT });
         expect(p.huella).toMatchObject({ precio: 80000, gratis: false });
         expect(h.inscribir).not.toHaveBeenCalled();
     });
@@ -520,7 +522,9 @@ describe('inscribir_a_torneo', () => {
 
     it('por equipo: lee los deportistas activos del equipo de esta escuela', async () => {
         const p = await inscribirATorneo.preparar(a, { ...args, equipo: 'tiburones', deportistas: null });
-        expect(p.ok && p.args.deportistas?.length).toBe(2);
+        // El borrador guarda el equipo, no la lista: los 2 activos salen en la vista y el Confirmar los relee.
+        expect(p.ok && p.args.equipo).toBe('tiburones');
+        expect(p.ok && p.vista.lineas[0]).toMatch(/^2 deportistas/);
         const qs = de('school_athletes').filter((c) => eq(c, 'team_id') === TIB || eq(c, 'enrolled_team_id') === TIB);
         expect(qs.length).toBe(2);
         expect(qs.every((c) => eq(c, 'school_id') === ESCUELA)).toBe(true);

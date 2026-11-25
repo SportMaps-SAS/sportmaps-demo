@@ -74,7 +74,8 @@ describe('excusar_ausencia', () => {
         expect(p.ok).toBe(true);
         if (!p.ok) return;
         expect(p.vista.titulo).toBe('Excusar a Mariana López');
-        expect(p.vista.lineas[0]).toBe('Del martes 24 al viernes 27 de noviembre de 2026 · 4 días');
+        // La familia ya avisó el 25: la tarjeta cuenta lo que ESTA excusa agrega (evals 11-25).
+        expect(p.vista.lineas[0]).toBe('Del martes 24 al viernes 27 de noviembre de 2026 · se excusan 3 de 4 días');
         expect(p.vista.lineas.join(' ')).toContain('25 de noviembre: ya lo había avisado la familia');
         expect((p.huella as any).nuevos).toEqual(['2026-11-24', '2026-11-26', '2026-11-27']);
         expect(((globalThis as any).__consultas as any[]).some((c) => c.op !== 'select')).toBe(false);

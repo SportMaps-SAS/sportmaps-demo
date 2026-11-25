@@ -372,7 +372,9 @@ async function armarEnvio(a: Alcance, args: ArgsEnviarInforme): Promise<{ ok: tr
     }
 
     const { data, error } = await supabase.from('athlete_reports')
-        .select('id, status, sent_at, recipient_id, team_id')
+        // `snapshot` se lee solo para saber si existe (no va al modelo): sin él, el envío
+        // falla después del Confirmar («sin snapshot»), y la tarjeta ya prometió el correo.
+        .select('id, status, sent_at, recipient_id, team_id, snapshot')
         .eq('school_id', a.schoolId).eq('subject_type', SUJETO[d.tipo]).eq('subject_id', d.id)
         .eq('period_year', anio).eq('period_month', mes).maybeSingle();
     if (error) throw new Error(`athlete_reports: ${error.message}`);
@@ -385,6 +387,7 @@ async function armarEnvio(a: Alcance, args: ArgsEnviarInforme): Promise<{ ok: tr
         return { ok: false, motivo: `El informe de ${etiqueta} está ${ESTADO_INFORME[inf.status] ?? inf.status}: primero se publica en Informe mensual.` };
     }
     if (inf.sent_at) return { ok: false, motivo: `El informe de ${etiqueta} ya se envió el ${fechaLarga(String(inf.sent_at).slice(0, 10))}.` };
+    if (!inf.snapshot) return { ok: false, motivo: `El informe de ${etiqueta} figura publicado pero no tiene contenido: revísalo en Informe mensual antes de enviarlo.` };
     if (!inf.recipient_id) {
         return { ok: false, motivo: `${d.nombre} no tiene acudiente con cuenta en la app: el informe queda publicado y la familia lo verá cuando active su cuenta.` };
     }
@@ -681,7 +684,11 @@ export const convocarATorneo: HerramientaAccion<ArgsConvocar> = {
         const n = x.nuevos.length;
         return {
             ok: true,
-            args: { torneo: x.ev.id, equipo_torneo: x.equipo.id, deportistas: x.nuevos.map((d) => d.clave) },
+            // La lista ORIGINAL, no solo los nuevos: al confirmar se re-prepara con estos
+            // args y la vista tiene que salir igual («1 ya estaba en la nómina» incluido),
+            // o el hash no coincide y el primer Confirmar da 409 sin que nada cambie
+            // (evals de punta a punta, 2026-11-25). Si la realidad cambia, el hash lo detecta.
+            args: { torneo: x.ev.id, equipo_torneo: x.equipo.id, deportistas: args.deportistas },
             targetKey: `torneo:${x.ev.id}:equipo:${x.equipo.id}`,
             vista: {
                 titulo: `Convocar a ${x.ev.title}`,
@@ -888,8 +895,13 @@ export const inscribirATorneo: HerramientaAccion<ArgsInscribir> = {
         const total = x.precio ? x.precio * n : 0;
         return {
             ok: true,
-            // Ya resuelto: el Confirmar inscribe a estas mismas personas, no vuelve a leer el equipo.
-            args: { torneo: x.ev.id, categoria: x.categoria.id, equipo: null, deportistas: x.nuevos.map((d) => d.clave) },
+            // Los args ORIGINALES (equipo o lista), con torneo y categoría ya resueltos. El
+            // Confirmar re-prepara con ellos: la vista sale igual (ya inscritos, fichas sin
+            // cuenta…) y el hash coincide. Antes se guardaba solo a los nuevos con
+            // equipo: null, la vista perdía esas líneas y el primer Confirmar daba 409
+            // siempre (evals de punta a punta, 2026-11-25). Si alguien entra o sale del
+            // equipo entre la tarjeta y el clic, la huella cambia y se pide confirmar otra vez.
+            args: { ...args, torneo: x.ev.id, categoria: x.categoria.id },
             targetKey: `torneo:${x.ev.id}:categoria:${x.categoria.id}`,
             vista: {
                 titulo: `Inscribir en ${x.ev.title} · ${x.categoria.nombre}`,
