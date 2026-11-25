@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 964,
-  "head": "20261125105034",
+  "count": 967,
+  "head": "20261125150253",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -967,6 +967,9 @@
     {"v":"20261124152343","file":"20261124152343_constancias_folio_privacidad_avisos_y_carnet.sql","sha256":"10fb23fe8ad36658bdb5b9f05aebd7bc5dcc7fd47b00632b3c18ac4df308b0a4","added":"2026-11-24","by":"Brayan Steven Lopez"},
     {"v":"20261124173412","file":"20261124173412_saas_periodo_dia_1.sql","sha256":"9f821dd66698641444dd653b4e9840af47f15c9fa3910c65ae7e393bbe66f6fd","added":"2026-11-24","by":"Brayan Steven Lopez"},
     {"v":"20261125105009","file":"20261125105009_bot_ofertas_bloqueos_y_sesiones.sql","sha256":"ee19a0cd9d41facb2438e91f035763f55701209f705165f6840ddfcbf766340c","added":"2026-11-25","by":"Brayan Steven Lopez"},
-    {"v":"20261125105034","file":"20261125105034_monster_convocatorias_dic_2026.sql","sha256":"2cc68e4006b125d0e699ee257bd7603efe842837d08763a1d22fd99f9c096a48","added":"2026-11-25","by":"Brayan Steven Lopez"}
+    {"v":"20261125105034","file":"20261125105034_monster_convocatorias_dic_2026.sql","sha256":"2cc68e4006b125d0e699ee257bd7603efe842837d08763a1d22fd99f9c096a48","added":"2026-11-25","by":"Brayan Steven Lopez"},
+    {"v":"20261125134852","file":"20261125134852_bot_ofertas_criterios_y_textos.sql","sha256":"96329778cb2e1b3eb10b2a39361412ef3e55007a57e08977a062d2d226efc899","added":"2026-11-25","by":"Brayan Steven Lopez"},
+    {"v":"20261125140432","file":"20261125140432_monster_convocatoria_mayores_valor.sql","sha256":"78a7c81d1b9c0d8416e2b7776499dd0de4c7e601ee19f49f73c0a9158c453d28","added":"2026-11-25","by":"Brayan Steven Lopez"},
+    {"v":"20261125150253","file":"20261125150253_monster_suba_valor_y_promo_black_friday.sql","sha256":"5b76570e682787d82b55d5da5992b42826bd80478208aa6b3b3b114c4a68e11f","added":"2026-11-25","by":"Brayan Steven Lopez"}
   ]
 }

@@ -54,6 +54,8 @@ beforeEach(() => {
         enviarTexto: vi.fn(async () => ({ ok: true, waMessageId: 'wamid.T' })),
         registrarTexto: vi.fn(async () => undefined),
         enviarPlantilla: vi.fn(async () => ({ enviado: true, waMessageId: 'wamid.P', plantilla: 'recordatorio_clase_cortesia' })),
+        // Sin bloqueos: la escuela se comporta como siempre.
+        estadoOfertas: vi.fn(async () => ({ bloqueos: [] })),
     };
 });
 
@@ -337,5 +339,58 @@ describe('víspera de una escuela con embudo (B2/B3)', () => {
         expect(arg.concepto).toBe('recordatorio_clase_cortesia');
         expect(arg.datos.sede).toBe('Coliseo Dynasty (Cl. 12 Bis #71g-09)');
         expect(arg.payloadExtra).toMatchObject({ flujo: cortesia.FLUJO_CORTESIA, paso_cortesia: 'recordatorio' });
+    });
+});
+
+describe('clase de prueba en fecha bloqueada por la escuela', () => {
+    // Monster: vacaciones 2026-12-01..2027-01-31. La reserva es del sábado 5 de diciembre.
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: 'Vacaciones' };
+    const VISPERA_DIC = new Date('2026-12-04T23:00:00Z'); // viernes 18:00 COT
+    const enDiciembre = (extra: Partial<any> = {}) => reserva({
+        slot: { id: 'slot-dic', label: 'Sub-11', slot_date: '2026-12-05', start_time: '16:00', end_time: '17:30', location: 'Coliseo' },
+        ...extra,
+    });
+
+    it('víspera en fecha bloqueada: no sale ni texto ni plantilla y queda el motivo', async () => {
+        deps.reservasDelDia = vi.fn(async () => [enDiciembre(), enDiciembre({ leadId: 'lead-2', telefono: '3001112233' })]);
+        deps.estadoOfertas = vi.fn(async () => ({ bloqueos: [BLOQUEO] }));
+        const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA_DIC, deps });
+        expect(r).toMatchObject({ candidatas: 2, enviados: 0, omitidos: 2 });
+        expect(deps.enviarPlantilla).not.toHaveBeenCalled();
+        expect(deps.enviarTexto).not.toHaveBeenCalled();
+        expect(cierres.every((c) => c.estado === 'no_enviado' && c.motivo === 'clase_prueba_bloqueada')).toBe(true);
+        // Una sola lectura por escuela en la corrida.
+        expect(deps.estadoOfertas).toHaveBeenCalledTimes(1);
+    });
+
+    it('mismo día en fecha bloqueada con la ventana abierta: nada', async () => {
+        deps.reservasDelDia = vi.fn(async () => [enDiciembre()]);
+        deps.conversacion = vi.fn(async () => ({ id: 'conv-1', last_inbound_at: '2026-12-05T12:00:00Z' }));
+        deps.estadoOfertas = vi.fn(async () => ({ bloqueos: [BLOQUEO] }));
+        const r = await runRecordatorioCortesia('mismo_dia', { ahora: new Date('2026-12-05T18:00:00Z'), deps });
+        expect(r.enviados).toBe(0);
+        expect(deps.enviarTexto).not.toHaveBeenCalled();
+    });
+
+    it('falla cerrado: lectura con error o que lanza → nada, sin reservar (otro tick lo intenta)', async () => {
+        for (const estadoOfertas of [vi.fn(async () => ({ bloqueos: [], claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null } })), vi.fn(async () => { throw new Error('boom'); })]) {
+            deps.reservasDelDia = vi.fn(async () => [enDiciembre({ slot: { ...enDiciembre().slot, slot_date: '2026-12-05' } })]);
+            deps.estadoOfertas = estadoOfertas;
+            deps.reservar.mockClear(); deps.enviarPlantilla.mockClear();
+            const log = { warn: vi.fn() };
+            const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA_DIC, deps, log });
+            expect(r).toMatchObject({ enviados: 0, omitidos: 1 });
+            expect(deps.reservar).not.toHaveBeenCalled();
+            expect(deps.enviarPlantilla).not.toHaveBeenCalled();
+            expect(log.warn.mock.calls[0][0]).toMatchObject({ motivo: 'ofertas_sin_leer' });
+        }
+    });
+
+    it('regresión: con un bloqueo que no cubre la fecha, el recordatorio sale', async () => {
+        deps.reservasDelDia = vi.fn(async () => [enDiciembre()]);
+        deps.estadoOfertas = vi.fn(async () => ({ bloqueos: [{ ...BLOQUEO, desde: '2026-12-10' }] }));
+        const r = await runRecordatorioCortesia('vispera', { ahora: VISPERA_DIC, deps });
+        expect(r.enviados).toBe(1);
+        expect(deps.enviarPlantilla).toHaveBeenCalledTimes(1);
     });
 });

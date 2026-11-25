@@ -322,7 +322,7 @@ describe('prompt del prospecto con las ofertas de la escuela (bot-ofertas)', () 
     it('antes del bloqueo (28-nov): la clase sigue, con su fecha límite, y las convocatorias', () => {
         const s = promptDeProspecto({ ...P, textos: MONSTER, ofertas: armarEstado('monster', FILAS_MONSTER, NOV_28) });
         expect(s).toContain('- Clase de prueba: que te escriba el día que quiere venir');
-        expect(s).toContain('solo se pueden agendar hasta el lunes 30 de noviembre');
+        expect(s).toContain('NO hay clases de prueba (la última es el lunes 30 de noviembre)');
         expect(s).toContain('(clase de prueba, lo de <ofertas_vigentes> o inscripción)');
         expect(s).toContain('[convocatoria] Convocatorias Sede Suba');
         expect(s.trim().split('\n').pop()).not.toContain('HOY NO HAY CLASES DE PRUEBA');

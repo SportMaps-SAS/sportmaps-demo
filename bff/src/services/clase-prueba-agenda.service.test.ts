@@ -288,8 +288,15 @@ function depsEnvio(ahora: Date, op: { ultimoEntrante?: string | null } = {}) {
         enviarPlantilla: vi.fn(async () => ({ enviado: true as const, waMessageId: 'wamid.t', plantilla: 'x' })),
         reservar: vi.fn(async () => true),
         log: { info: vi.fn(), warn: vi.fn() },
+        // Sin bloqueos: la escuela se comporta como siempre.
+        estadoOfertas: vi.fn(async () => ({ bloqueos: [] }) as any),
     };
 }
+
+/** Bloqueo de la clase de prueba que cubre el sábado 31 de octubre. */
+const BLOQUEO_31 = { tipo: 'clase_prueba', desde: '2026-10-31', hasta: '2026-11-01', motivo: 'Vacaciones' };
+const conBloqueo = (b: any) => vi.fn(async () => ({ bloqueos: [b] }) as any);
+const motivoEnLog = (d: any) => (d.log.info as any).mock.calls.some((c: any[]) => c[1]?.motivo === 'clase_prueba_bloqueada');
 
 describe('runCuposSeparados', () => {
     // Viernes 30 de octubre, 2:00 p. m. en Bogotá; el cupo vence a las 4:00 p. m.
@@ -384,6 +391,46 @@ describe('runCuposSeparados', () => {
         expect((d.enviarTexto as any).mock.calls[0].slice(1, 3)).toEqual(['573005556677', 'La clase de prueba de *Ana* quedó agendada 🎉']);
         expect((d.registrarSaliente as any).mock.calls[0][0].payload).toMatchObject({ step: 'clase_prueba_agendada', paso_embudo: 'agendada' });
         expect(d.enviarPlantilla).not.toHaveBeenCalled();
+    });
+
+    it('fecha bloqueada por la escuela: ni «tu cupo vence» ni confirmación; la escuela igual se entera del liberado', async () => {
+        const d = deps({
+            porVencer: [LEAD_SEP, { ...LEAD_SEP, id: 'lead-9', phone: '3007778899' }],
+            vencidos: [
+                { lead_id: 'lead-2', school_id: 'monster', phone: '3009998877', accion: 'liberada', slot_id: 's-1' },
+                { lead_id: 'lead-3', school_id: 'monster', phone: '3005556677', accion: 'confirmada' },
+            ],
+        });
+        d.estadoOfertas = conBloqueo(BLOQUEO_31);
+        (d.alConfirmar as any).mockResolvedValueOnce({ texto: 'quedó agendada', telefono: '3005556677', slotId: 's-sab31', teamId: 't-1', fecha: '2026-10-31' });
+        const r = await runCuposSeparados({ deps: d });
+        expect(r).toMatchObject({ avisados: 0, omitidos: 2, liberados: 1, confirmados: 1 });
+        expect(d.reservar).not.toHaveBeenCalled();
+        expect(d.enviarTexto).not.toHaveBeenCalled();
+        expect(d.enviarPlantilla).not.toHaveBeenCalled();
+        expect(d.avisarLiberado).toHaveBeenCalled();
+        expect(d.estadoOfertas).toHaveBeenCalledTimes(1);
+        expect(motivoEnLog(d)).toBe(true);
+    });
+
+    it('falla cerrado: lectura de ofertas con error o que lanza → no se avisa ni se reserva', async () => {
+        for (const estadoOfertas of [vi.fn(async () => ({ bloqueos: [], claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null } }) as any), vi.fn(async () => { throw new Error('boom'); })]) {
+            const d = deps();
+            d.estadoOfertas = estadoOfertas;
+            const r = await runCuposSeparados({ deps: d });
+            expect(r).toMatchObject({ avisados: 0, omitidos: 1 });
+            expect(d.reservar).not.toHaveBeenCalled();
+            expect(d.enviarTexto).not.toHaveBeenCalled();
+            expect((d.log!.warn as any).mock.calls.some((c: any[]) => c[1]?.motivo === 'ofertas_sin_leer')).toBe(true);
+        }
+    });
+
+    it('regresión: un bloqueo que no cubre la fecha de la clase no cambia el aviso', async () => {
+        const d = deps();
+        d.estadoOfertas = conBloqueo({ ...BLOQUEO_31, desde: '2026-11-01' });
+        const r = await runCuposSeparados({ deps: d });
+        expect(r).toMatchObject({ avisados: 1, omitidos: 0 });
+        expect(d.enviarTexto).toHaveBeenCalledTimes(1);
     });
 
     it('sin la migración no hace nada; con el kill-switch tampoco', async () => {
@@ -494,6 +541,46 @@ describe('clases reprogramadas', () => {
 
     it('sin la tabla de la semana del profe: no hace nada', async () => {
         expect(await avisarClasesCanceladas({ schoolId: 'monster', deps: deps({ excepciones: 'sin_tabla' }) })).toMatchObject({ sinTabla: true, porTexto: 0 });
+    });
+
+    it('fecha bloqueada por la escuela: no sale «elegir otro horario» (ni texto ni plantilla)', async () => {
+        const d = deps();
+        d.estadoOfertas = conBloqueo(BLOQUEO_31);
+        const r = await avisarClasesCanceladas({ schoolId: 'monster', deps: d });
+        expect(r).toMatchObject({ porTexto: 0, porPlantilla: 0, bloqueadas: 2 });
+        expect(d.reservar).not.toHaveBeenCalled();
+        expect(d.enviarTexto).not.toHaveBeenCalled();
+        expect(d.enviarPlantilla).not.toHaveBeenCalled();
+        expect(d.estadoOfertas).toHaveBeenCalledTimes(1);
+        expect(motivoEnLog(d)).toBe(true);
+    });
+
+    it('regresión: un bloqueo de otro tipo o de otras fechas no cambia el aviso', async () => {
+        const d = deps();
+        d.estadoOfertas = vi.fn(async () => ({ bloqueos: [{ ...BLOQUEO_31, desde: '2026-12-01', hasta: '2027-01-31' }, { ...BLOQUEO_31, tipo: 'clinica' }] }) as any);
+        const r = await avisarClasesCanceladas({ schoolId: 'monster', deps: d });
+        expect(r).toMatchObject({ porTexto: 1, porPlantilla: 1 });
+        expect(r.bloqueadas).toBeUndefined();
+    });
+
+    it('falla cerrado: sin el estado de ofertas no sale «elegir otro horario»', async () => {
+        const d = deps();
+        d.estadoOfertas = vi.fn(async () => ({ bloqueos: [], claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null } }) as any);
+        const r = await avisarClasesCanceladas({ schoolId: 'monster', deps: d });
+        expect(r).toMatchObject({ porTexto: 0, porPlantilla: 0 });
+        expect(d.reservar).not.toHaveBeenCalled();
+        expect(d.estadoOfertas).toHaveBeenCalledTimes(1);
+    });
+
+    it('runClasesReprogramadas en fecha bloqueada: ningún aviso', async () => {
+        const d = deps();
+        d.estadoOfertas = conBloqueo(BLOQUEO_31);
+        const r = await runClasesReprogramadas({
+            deps: { ...d, recientes: async () => [{ school_id: 'monster', team_id: 't-1', fecha: '2026-10-31', tipo: 'cancelada', hora_original: null }] },
+        });
+        expect(r).toMatchObject({ escuelas: 1, avisos: 0 });
+        expect(d.enviarTexto).not.toHaveBeenCalled();
+        expect(d.enviarPlantilla).not.toHaveBeenCalled();
     });
 
     it('runClasesReprogramadas: una consulta, una pasada por escuela', async () => {

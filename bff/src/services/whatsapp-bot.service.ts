@@ -67,7 +67,7 @@ import {
 } from './whatsapp-desconocido-reglas';
 import {
     FLUJO_PUERTA, atenderTurnoPuerta, iniciarPuerta, esBotonPuerta, PASO_PUERTA_MENU, BOTON_PUERTA,
-    type CtxPuerta,
+    iniciarConvocatoria, type CtxPuerta,
 } from './whatsapp-puerta-desconocido';
 import {
     PASO_PAGO_ACLARACION, HORAS_FRENO_ACLARACION, BOTONES_PAGO_MENSUALIDAD, ENTEXTO_PAGO_MENSUALIDAD,
@@ -110,7 +110,8 @@ import {
     preguntaPorConvocatoria, textoParaConvocatoria, textoSinClaseDePrueba,
 } from './whatsapp-clase-cortesia.service';
 import {
-    estadoDeOfertas, estadoCerrado, reglasDeOfertasParaIa, textoOfertasParaIa, type EstadoOfertas,
+    estadoDeOfertas, estadoCerrado, reglasDeOfertasParaIa, textoOfertasParaIa, datosDeRespuesta, detectarGenero,
+    fechaLegible as fechaDeOferta, sumarDias as sumarDiasOferta, type EstadoOfertas,
 } from './bot-ofertas.service';
 import { preguntaGrupoPorEdad, rangosDeEscuela, elegirGrupo, elegirGrupoEmbudo, textoGrupoParaEdad, tituloGrupo } from './grupos-por-edad.service';
 import {
@@ -2683,7 +2684,7 @@ function ctxPuerta(integration: WhatsAppIntegration, conversationId: string, con
     const schoolId = integration.school_id;
     return {
         conversationId, schoolId, contactWaId,
-        enviar: (texto, step, estado, botones, enTexto, contexto) => {
+        enviar: (texto, step, estado, botones, enTexto, contexto, opciones) => {
             // El cierre del mini-registro cuenta como «ya se le contestó lo escolar»
             // (freno de 30 días): lo que escriba después lo ve la escuela, no una plantilla nueva.
             const cierre = step === 'puerta_info_listo';
@@ -2694,7 +2695,7 @@ function ctxPuerta(integration: WhatsAppIntegration, conversationId: string, con
                     ...(estado ? { flujo: FLUJO_PUERTA, paso_puerta: estado.paso, datos_puerta: estado.datos } : {}),
                     ...contexto,
                 },
-                botones?.length ? { botones, enTexto } : undefined);
+                botones?.length ? { botones, enTexto, ...(opciones?.textoLista ? { textoLista: opciones.textoLista } : {}) } : undefined);
         },
         avisarEscuela: (motivo, detalle) => abrirEnBuzon(integration, conversationId, contactWaId,
             motivo === 'prospecto_sin_enlace'
@@ -2748,6 +2749,41 @@ async function atenderPuertaEnBot(
         console.warn('[whatsapp-bot] puerta del desconocido falló', { conversationId, err: e?.message });
         return false;
     }
+}
+
+/**
+ * (2026-11-25, Monster) La escuela que configuró preguntas antes de sus ofertas (`preguntasOfertas`): la
+ * convocatoria guiada de la puerta (una pregunta a la vez con botones; muestra SOLO la oferta que le aplica e
+ * inscribe con nombre y fecha). `prefill`: lo que ya dijo (el género de «convocatorias femeninas»). `step`: el
+ * del freno de quien llama. false = la escuela no tiene preguntas u ofertas vigentes, o falló: quien llama sigue
+ * con lo de siempre. Nunca lanza.
+ */
+async function preguntarParaOfertasEnBot(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+    o: { ofertas: EstadoOfertas; encabezado: string; step: string; contexto?: Record<string, unknown>; texto?: string | null },
+): Promise<boolean> {
+    if (!o.ofertas.preguntasOfertas || !o.ofertas.ofertas.length) return false;
+    try {
+        const genero = o.texto ? detectarGenero(o.texto) : null;
+        return await iniciarConvocatoria(ctxPuerta(integration, conversationId, contactWaId), genero ? { genero } : {}, {
+            encabezado: o.encabezado, ofertas: o.ofertas, step: o.step, contexto: o.contexto,
+        });
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo arrancar la convocatoria guiada', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
+/**
+ * «Por ahora no tenemos clases de prueba (vuelven el lunes 1 de febrero de 2027) 🙏»: la línea de
+ * `textoSinClaseDePrueba` sin las ofertas (van las preguntas de la escuela detrás). Pura.
+ */
+function avisoSinClaseDePrueba(estado: EstadoOfertas, t: TextosClase = TEXTOS_POR_DEFECTO): string {
+    const plural = t.nombre.replace(/^clase\b/, 'clases');
+    const cp = estado.claseDePrueba;
+    const vuelven = cp.motivo === 'bloqueo' && cp.bloqueadaHasta
+        ? ` (vuelven el ${fechaDeOferta(sumarDiasOferta(cp.bloqueadaHasta, 1), estado.hoy)})` : '';
+    return `Por ahora no tenemos ${plural}${vuelven} 🙏`;
 }
 
 // ─── Embudo del interesado por escuela (B2/B3, Monster 2026-10-30) ───────────
@@ -2825,6 +2861,13 @@ function ctxEmbudo(integration: WhatsAppIntegration, conversationId: string, con
         },
         // Una pregunta a mitad del registro: la contesta el camino de siempre y el paso se recuerda después.
         alSoltar: (estado) => anotarPasoSoltado({ flujo: 'embudo', estado }),
+        // (2026-11-25) Convocatorias: el embudo le entrega a la convocatoria guiada de la puerta lo que ya contó.
+        // Sin clase de prueba hoy, el embudo no manda nada: el encabezado lo dice («Por ahora no tenemos…»).
+        iniciarOfertas: async (prefill) => {
+            const of = await ofertasDeLaEscuela(schoolId);
+            const encabezado = of.claseDePrueba.disponible ? '' : avisoSinClaseDePrueba(of, await textosClase(schoolId));
+            return iniciarConvocatoria(ctxPuerta(integration, conversationId, contactWaId), prefill, { encabezado, ofertas: of });
+        },
     };
 }
 
@@ -5131,8 +5174,18 @@ async function atenderDesconocidoEnEscuela(
     // abierta (26–30 nov) el embudo es el de la clase de prueba, y a quien pregunta por una convocatoria no se le
     // ofrece la clase (la queja de Monster del 25-nov).
     const ofertasHoy = await ofertasDeLaEscuela(integration.school_id);
-    const convocatorias = !botonId && preguntaPorConvocatoria(rafaga || text)
-        ? textoParaConvocatoria(ofertasHoy, todoElTexto) : null;
+    const pideConvocatoria = !botonId && preguntaPorConvocatoria(rafaga || text);
+    // Con preguntas de la escuela (`preguntas_ofertas`, flujo oficial de Monster): la convocatoria guiada de la
+    // puerta, una pregunta a la vez con botones (género, año, trayectoria, sede), SOLO la oferta que le aplica y la
+    // inscripción con nombre y fecha. Mismo step (freno de 30 días) y la escuela la ve. Sin preguntas, lo de siempre.
+    if (pideConvocatoria && await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
+        ofertas: ofertasHoy, encabezado: (saludo + bloquePrecios).trim(), step: PASO_DESCONOCIDO_ESCOLAR, texto: rafaga || text,
+        contexto: { intencion: 'ofertas_preguntas', con_precios: Boolean(preciosPrimera) },
+    })) {
+        await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+        return contestar('ofertas_vigentes');
+    }
+    const convocatorias = pideConvocatoria ? textoParaConvocatoria(ofertasHoy, todoElTexto) : null;
     if (convocatorias) {
         await deliver(integration, conversationId, contactWaId, S + convocatorias + bloquePrecios,
             { step: PASO_DESCONOCIDO_ESCOLAR, intencion: 'ofertas_vigentes', con_precios: Boolean(preciosPrimera) });
@@ -5207,6 +5260,17 @@ async function atenderDesconocidoEnEscuela(
         const quiereEntrar = intereses.includes('inscripcion') || quiereInscribirse(text);
         if (pideCortesia || (quiereEntrar && vigentes)) {
             const tClase = await textosClase(integration.school_id);
+            // Con preguntas de la escuela: «no tenemos clases de prueba (vuelven…)» (si la pidió) y la convocatoria
+            // guiada de la puerta (solo la oferta que le aplica). Sin preguntas, lo de siempre.
+            if (await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
+                ofertas: ofertasHoy, step: PASO_DESCONOCIDO_ESCOLAR, texto: todoElTexto,
+                encabezado: [saludo, pideCortesia ? avisoSinClaseDePrueba(ofertasHoy, tClase) : '', preciosPrimera ?? '']
+                    .filter(Boolean).join('\n\n'),
+                contexto: { intencion: 'ofertas_preguntas', con_precios: Boolean(preciosPrimera) },
+            })) {
+                await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+                return contestar('ofertas_vigentes');
+            }
             const cuerpo = pideCortesia
                 ? textoSinClaseDePrueba(ofertasHoy, todoElTexto, tClase, { pidioLaClase: true })
                 : vigentes!;
@@ -5417,6 +5481,20 @@ async function responderSeguimientoDeProspecto(
     const pideLaClase = pideClaseDeCortesia(nuevo) || interesesDeProspecto(nuevo).includes('cortesia');
     if (convocatorias || (pideLaClase && !ofertasHoy.claseDePrueba.disponible)) {
         if (await pasoReciente(conversationId, PASO_PROSPECTO_OFERTAS, 24)) return 'frenado';
+        // Con preguntas de la escuela: la convocatoria guiada (una pregunta a la vez). Si en estos días ya dijo su año
+        // de nacimiento (ya pasó por ella), no se le vuelve a hacer: lo contesta el modelo, cuyas reglas traen las
+        // ofertas y el «dale SOLO la que le aplica».
+        if (ofertasHoy.preguntasOfertas && ofertasHoy.ofertas.length) {
+            if (datosDeRespuesta(p.todo, ofertasHoy.hoy).anio != null) return null;
+            if (await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
+                ofertas: ofertasHoy, step: PASO_PROSPECTO_OFERTAS, texto: nuevo,
+                encabezado: convocatorias ? '' : avisoSinClaseDePrueba(ofertasHoy, await textosClase(integration.school_id)),
+                contexto: { intencion: 'ofertas_preguntas' },
+            })) {
+                await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+                return 'ofertas_vigentes';
+            }
+        }
         await deliver(integration, conversationId, contactWaId,
             convocatorias ?? textoSinClaseDePrueba(ofertasHoy, p.todo, await textosClase(integration.school_id), { pidioLaClase: true }),
             { step: PASO_PROSPECTO_OFERTAS });
@@ -7452,7 +7530,9 @@ export async function deliver(
         let sent = botones
             ? (imagen
                 ? await sendInteractiveButtons(integration, contactWaId, texto, botones, { imagenUrl: imagen })
-                : await sendInteractiveButtons(integration, contactWaId, texto, botones))
+                : conBotones?.textoLista
+                    ? await sendInteractiveButtons(integration, contactWaId, texto, botones, { textoLista: conBotones.textoLista })
+                    : await sendInteractiveButtons(integration, contactWaId, texto, botones))
             : cta
                 ? await sendCtaUrl(integration, contactWaId, texto, cta.texto, cta.url)
                 : formulario
@@ -7858,6 +7938,8 @@ async function hayPreguntaDeCobroAbierta(integration: WhatsAppIntegration, conta
 export interface ConBotones {
     botones: BotonInteractivo[];
     enTexto?: string;
+    /** Con más de 3 opciones salen como lista: el texto del botón que la abre (por defecto «Ver opciones»). */
+    textoLista?: string;
     /** Botón URL (cta_url). Solo se usa si no hay `botones`. */
     cta?: { texto: string; url: string };
     /**

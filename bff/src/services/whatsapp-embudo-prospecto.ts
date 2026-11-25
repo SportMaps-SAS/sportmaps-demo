@@ -46,6 +46,13 @@
  * cuál fecha quiere ir; con la respuesta, el lead (quiere = tipo de la oferta) y
  * el aviso a la escuela. Sin ofertas, la escuela le escribe. Las franjas de un
  * día bloqueado no se ofrecen nunca (`franjasDeEquipo`). Sin `ctx.ofertas`, como antes.
+ *
+ * Conversación de ofertas (Monster 2026-11-25): si la escuela tiene `preguntasOfertas` y
+ * el contexto trae `iniciarOfertas`, el embudo le entrega lo que ya contó (género, año,
+ * trayectoria, sede, nombre: `prefillDeOfertas`) y esa conversación compartida pregunta
+ * lo que falte y elige. Si no la toma, la reserva: con criterios en las ofertas (año,
+ * trayectoria) van solo las que le aplican por sus datos (`elegirOfertas`) con el texto
+ * de la escuela y su nota común; sin criterios, como antes.
  */
 
 import type { BotonInteractivo } from './whatsapp.service';
@@ -71,7 +78,8 @@ import {
 import type { ResultadoCupo } from './clase-prueba-agenda.service';
 import {
     estadoDeOfertas, claseDePruebaPermitidaEn, textoOfertasParaPersona, sumarDias,
-    fechaLegible as fechaLegibleDeOferta, type EstadoOfertas, type TipoOferta,
+    fechaLegible as fechaLegibleDeOferta, elegirOfertas, textoDeOfertas, datosDeRespuesta,
+    type EstadoOfertas, type TipoOferta, type DatosDePersona, type OfertaBot, type DatosOferta,
 } from './bot-ofertas.service';
 
 export const FLUJO_EMBUDO = 'embudo';
@@ -179,6 +187,8 @@ export interface DatosEmbudo {
     listaEn?: number;
     /** «Solo en la mañana»: la lista se ofrece filtrada por franja del día (se conserva con «Ver más»). */
     preferencia?: 'manana' | 'tarde' | null;
+    /** Las ofertas que se le mostraron por sus datos (van en el aviso a la escuela). */
+    ofertasMostradas?: { titulo: string; tipo: TipoOferta }[];
 }
 
 export interface EstadoEmbudo { paso: PasoEmbudo; datos: DatosEmbudo }
@@ -325,6 +335,12 @@ export interface CtxEmbudo {
      * Sin él, como antes: la clase de prueba disponible y sin ofertas.
      */
     ofertas?: () => Promise<EstadoOfertas>;
+    /**
+     * La conversación compartida de ofertas (bot-ofertas `siguientePreguntaOferta`; la cablea el bot):
+     * arranca con lo que el embudo ya sabe y pregunta lo que falte. false = no la tomó (el embudo
+     * manda su propio mensaje de ofertas). Solo se llama sin clase de prueba hoy y con `preguntasOfertas`.
+     */
+    iniciarOfertas?: (prefill: Partial<DatosOferta>) => Promise<boolean>;
     /**
      * El embudo tenía una pregunta pendiente y SOLTÓ el turno porque lo que llegó es otra cosa (una
      * pregunta de precio u horario, un comentario). Quien llama contesta por el camino de siempre y
@@ -1262,9 +1278,118 @@ function grupoDeDatos(d: DatosEmbudo): GrupoEmbudo | null {
 }
 
 /** «convocatoria» si todas las ofertas son de un tipo; «oferta» si son de varios. Pura. */
-function interesDeOfertas(of: Pick<EstadoOfertas, 'ofertas'>): TipoOferta | 'oferta' {
+function interesDeOfertas(of: { ofertas: ReadonlyArray<Pick<OfertaBot, 'tipo'>> }): TipoOferta | 'oferta' {
     const tipos = [...new Set(of.ofertas.map((o) => o.tipo))];
     return tipos.length === 1 ? tipos[0] : 'oferta';
+}
+
+/** «a», «a y b», «a, b y c». Pura. */
+const unirConY = (xs: string[]): string => (xs.length <= 1 ? xs[0] ?? '' : `${xs.slice(0, -1).join(', ')} y ${xs[xs.length - 1]}`);
+
+/** Margen bajo el tope de un texto de WhatsApp (4096): por encima, la nota común va en un mensaje aparte. */
+export const MAX_TEXTO_OFERTAS = 3900;
+
+/**
+ * ¿Alguna oferta vigente trae criterios para elegir (año de nacimiento o trayectoria)? Sin ellos
+ * van todas las de su género, como antes de los criterios (las demás escuelas). Pura.
+ */
+export function ofertasConCriterios(of: Pick<EstadoOfertas, 'ofertas'>): boolean {
+    return of.ofertas.some((o) => o.anioDesde != null || o.anioHasta != null || o.requiereTrayectoria);
+}
+
+/** Una pregunta (o su detalle) que habla de trayectoria: su clave o su texto nombran clubes, torneos… */
+const DE_TRAYECTORIA = /\b(trayectoria|club|clubes|torneo|torneos|liga|ligas|experiencia)\b/;
+/** Contesta derecho la pregunta de sí o no («Sí», «Claro, en Titanes», «No», «Nop»). */
+const SI_TRAYECTORIA = /^(si|sip|claro|obvio|por supuesto)\b/;
+const NO_TRAYECTORIA = /^(no|nop|nones|nunca|ninguno|ninguna)\b/;
+
+/**
+ * Trayectoria que dice una respuesta: la lectura de bot-ofertas (`datosDeRespuesta`: clubes,
+ * torneos, «nunca», «principiante»…), después un sí o un no a secas, y en una pregunta con
+ * opciones, haber elegido una que no habla de clubes ni torneos cuando otra sí lo hace
+ * («Estoy empezando» frente a «Club y torneos») = no tiene. null = no se sabe. Pura.
+ */
+export function trayectoriaDeTexto(
+    texto: string | null | undefined, hoy: string, opciones?: ReadonlyArray<{ titulo: string }>,
+): boolean | null {
+    const t = datosDeRespuesta(String(texto ?? ''), hoy).trayectoria;
+    if (t != null) return t;
+    const n = normalizar(texto);
+    if (SI_TRAYECTORIA.test(n)) return true;
+    if (NO_TRAYECTORIA.test(n)) return false;
+    if (opciones?.length && opciones.some((o) => normalizar(sinEmojis(o.titulo)) === normalizar(sinEmojis(texto)))
+        && opciones.some((o) => datosDeRespuesta(o.titulo, hoy).trayectoria === true)) return false;
+    return null;
+}
+
+/**
+ * Lo que el embudo ya sabe de la persona para elegir la oferta (bot-ofertas `elegirOfertas`):
+ *   - año: el de la fecha de nacimiento que leyó el embudo; si la pregunta de fecha usa otra
+ *     clave, se lee de su respuesta (`leerFechaNacimiento`: «2011-03-14» o «2011»);
+ *   - género: la opción de sexo (Mujer/Hombre); si la pregunta usa otra clave, su respuesta;
+ *   - trayectoria: las respuestas a preguntas cuya clave o texto hablan de trayectoria, clubes
+ *     o torneos (una que diga que sí manda; ninguna clara = null). Pura.
+ */
+export function datosDePersonaDeEmbudo(d: DatosEmbudo, preguntas: PreguntaProspecto[], ahora: Date): DatosDePersona {
+    const r = d.respuestas ?? {};
+    const hoy = ahoraBogota(ahora).fecha;
+    let anio = d.anio ?? null;
+    for (const p of preguntas) {
+        if (anio != null) break;
+        if (p.tipo === 'fecha' && r[p.clave]) anio = leerFechaNacimiento(r[p.clave], ahora)?.anio ?? null;
+    }
+    let g: 'f' | 'm' | null = d.genero ?? null;
+    for (const p of preguntas) {
+        if (g) break;
+        if (r[p.clave] && /\b(sexo|genero)\b/.test(normalizar(`${p.clave} ${p.texto}`))) g = generoDeTexto(r[p.clave]);
+    }
+    const { trayectoria } = trayectoriaDeEmbudo(r, preguntas, hoy);
+    return { anio, genero: g === 'f' ? 'femenino' : g === 'm' ? 'masculino' : null, trayectoria };
+}
+
+/** La trayectoria de las respuestas del embudo y, si dice que sí, el texto de esas respuestas. Pura. */
+function trayectoriaDeEmbudo(
+    r: Record<string, string>, preguntas: PreguntaProspecto[], hoy: string,
+): { trayectoria: boolean | null; detalle: string | null } {
+    const votos: { t: boolean | null; texto: string }[] = [];
+    for (const p of preguntas) {
+        if (CLAVES_RESERVADAS.has(p.clave)) continue;
+        const habla = DE_TRAYECTORIA.test(normalizar(`${p.clave} ${p.texto}`));
+        if (habla && r[p.clave]) votos.push({ t: trayectoriaDeTexto(r[p.clave], hoy, p.opciones), texto: r[p.clave] });
+        const det = p.detalle;
+        if (det && r[det.clave] && (habla || DE_TRAYECTORIA.test(normalizar(`${det.clave} ${det.texto}`)))) {
+            votos.push({ t: trayectoriaDeTexto(r[det.clave], hoy), texto: r[det.clave] });
+        }
+    }
+    const si = votos.filter((v) => v.t === true);
+    if (si.length) return { trayectoria: true, detalle: si.map((v) => v.texto.trim()).filter(Boolean).join(' · ') || null };
+    return { trayectoria: votos.some((v) => v.t === false) ? false : null, detalle: null };
+}
+
+/**
+ * Lo que el embudo le entrega a la conversación de ofertas (`ctx.iniciarOfertas`): género (sexo),
+ * año (fecha de nacimiento), trayectoria solo si una respuesta la dice clara (con `detalle` = lo
+ * que contó, si es que sí), el nombre del deportista y la sede que eligió si es la `sede` de alguna
+ * oferta (como la escribió la oferta). Lo que no se sabe no va (la conversación lo pregunta). Pura.
+ */
+export function prefillDeOfertas(
+    d: DatosEmbudo, preguntas: PreguntaProspecto[], of: Pick<EstadoOfertas, 'ofertas'>, ahora: Date,
+): Partial<DatosOferta> {
+    const persona = datosDePersonaDeEmbudo(d, preguntas, ahora);
+    const tray = trayectoriaDeEmbudo(d.respuestas ?? {}, preguntas, ahoraBogota(ahora).fecha);
+    const nombre = (d.nombre ?? d.respuestas?.nombre ?? '').trim();
+    const sedeElegida = normalizar(sinEmojis(d.sedeTitulo));
+    const sede = sedeElegida
+        ? of.ofertas.map((o) => o.sede).find((s): s is string => !!s && normalizar(sinEmojis(s)) === sedeElegida) ?? null
+        : null;
+    return {
+        ...(persona.genero ? { genero: persona.genero } : {}),
+        ...(persona.anio != null ? { anio: persona.anio } : {}),
+        ...(tray.trayectoria != null ? { trayectoria: tray.trayectoria } : {}),
+        ...(tray.trayectoria === true && tray.detalle ? { detalle: tray.detalle } : {}),
+        ...(nombre ? { nombre } : {}),
+        ...(sede ? { sede } : {}),
+    };
 }
 
 /** «Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).» Pura. */
@@ -1276,26 +1401,23 @@ export function textoSinClaseDePrueba(of: Pick<EstadoOfertas, 'claseDePrueba' | 
 }
 
 /**
- * Sin clase de prueba hoy. Con ofertas vigentes (filtradas por el género que dio): el
- * lead con su tipo, las ofertas tal cual las cargó la escuela y «¿a cuál fecha?»
- * (paso `elegir_oferta`). Sin ofertas: el lead y la escuela le escribe. Sin cobros.
- * `conGrupo`: al terminar las preguntas, la línea del grupo que le corresponde.
+ * Sin clase de prueba hoy. Con ofertas vigentes: el lead con su tipo, las ofertas y
+ * «¿a cuál fecha?» (paso `elegir_oferta`). Sin ofertas: el lead y la escuela le escribe.
+ * Sin cobros. `conGrupo`: al terminar las preguntas, la línea del grupo que le corresponde.
+ *
+ * Qué ofertas van:
+ *   - Con `preguntasOfertas` y `ctx.iniciarOfertas`: se guarda el lead y sigue la conversación
+ *     compartida con lo que ya contó (`prefillDeOfertas`). Si no la toma (false), lo de abajo.
+ *   - Sin criterios en ninguna oferta (las demás escuelas): todas las de su género, tal
+ *     cual las cargó la escuela (como antes, letra por letra).
+ *   - Con criterios (Monster): solo la(s) que le aplica(n) por sus datos (`elegirOfertas`),
+ *     con el texto de la escuela y su nota común. Si el mensaje pasaría el tope de
+ *     WhatsApp, la nota va aparte con la pregunta.
  */
 async function ofrecerSinClaseDePrueba(
     ctx: CtxEmbudo, d: DatosEmbudo, grupo: GrupoEmbudo | null, of: EstadoOfertas,
     o: { encabezado?: string; conGrupo?: boolean } = {},
 ): Promise<boolean> {
-    const genero = d.genero === 'f' ? 'femenino' : d.genero === 'm' ? 'masculino' : null;
-    const ofertas = textoOfertasParaPersona(of, { genero });
-    const quiere = ofertas ? interesDeOfertas(of) : null;
-    const tieneDatos = !!(d.nombre || Object.keys(d.respuestas ?? {}).length);
-    const leadId = tieneDatos
-        ? (await seguro(() => ctx.guardarLead({ ...leadDeDatos(d, grupo), ...(quiere ? { quiere } : {}) }))) ?? d.leadId ?? null
-        : d.leadId ?? null;
-    const datos: DatosEmbudo = {
-        ...d, leadId, teamId: grupo?.teamId ?? d.teamId ?? null, grupo: grupo?.nombre ?? d.grupo ?? null,
-        profe: grupo?.profe ?? d.profe ?? null, intentos: 0, lista: undefined, desde: undefined, listaEn: undefined, recordado: null,
-    };
     const nombre = primerNombre(d.nombre);
     let lineaGrupo = '';
     if (o.conGrupo && grupo) {
@@ -1304,6 +1426,22 @@ async function ofrecerSinClaseDePrueba(
         lineaGrupo = `¡Listo! ✨ ${porAnio} le corresponde *${grupo.nombre}*${sede}.`;
     }
     const cabeza = [o.encabezado ?? '', lineaGrupo, textoSinClaseDePrueba(of)].filter(Boolean).join('\n');
+
+    const preguntas = (await seguro(() => ajustesDe(ctx)))?.preguntasProspecto ?? [];
+    // La conversación compartida de ofertas: con lo que ya contó, pregunta lo que falte y elige.
+    if (of.preguntasOfertas && ctx.iniciarOfertas) {
+        await conLeadDeOfertas(ctx, d, grupo, of.ofertas.length ? interesDeOfertas(of) : null);
+        const prefill = prefillDeOfertas(d, preguntas, of, hoyDe(ctx));
+        if (await seguro(() => ctx.iniciarOfertas!(prefill))) return true;
+    }
+    const persona = ofertasConCriterios(of) ? datosDePersonaDeEmbudo(d, preguntas, hoyDe(ctx)) : null;
+    const elegidas = persona ? elegirOfertas(of, persona).ofertas : null;
+    const genero = d.genero === 'f' ? 'femenino' : d.genero === 'm' ? 'masculino' : null;
+    const ofertas = elegidas
+        ? textoDeOfertas(elegidas, of, { conNota: true })
+        : textoOfertasParaPersona(of, { genero });
+    const quiere = ofertas ? interesDeOfertas(elegidas ? { ofertas: elegidas } : of) : null;
+    const datos = await conLeadDeOfertas(ctx, d, grupo, quiere);
     if (!ofertas) {
         const cierre = of.mensajeSinOfertas
             ? `${of.mensajeSinOfertas}\n\nYa le pasé tus datos a la escuela y te escriben por aquí 🙌`
@@ -1313,8 +1451,33 @@ async function ofrecerSinClaseDePrueba(
     const pregunta = nombre
         ? `¿A cuál fecha quieres inscribir a *${nombre}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
         : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
-    await ctx.enviar([cabeza, ofertas, pregunta].join('\n\n'), PASO_EMBUDO.OFERTAS, { paso: 'elegir_oferta', datos });
+    const estado: EstadoEmbudo = {
+        paso: 'elegir_oferta',
+        datos: elegidas ? { ...datos, ofertasMostradas: elegidas.map((x) => ({ titulo: x.titulo, tipo: x.tipo })) } : datos,
+    };
+    const completo = [cabeza, ofertas, pregunta].filter(Boolean).join('\n\n');
+    if (!elegidas || !of.notaOfertas || completo.length <= MAX_TEXTO_OFERTAS) {
+        await ctx.enviar(completo, PASO_EMBUDO.OFERTAS, estado);
+        return true;
+    }
+    // Pasaría el tope de WhatsApp: las ofertas primero y la nota común con la pregunta en otro mensaje.
+    await ctx.enviar([cabeza, textoDeOfertas(elegidas, of)].filter(Boolean).join('\n\n'), PASO_EMBUDO.OFERTAS, estado);
+    await ctx.enviar([of.notaOfertas, pregunta].join('\n\n'), PASO_EMBUDO.OFERTAS, estado);
     return true;
+}
+
+/** Guarda el lead (si ya contó algo) con lo que quiere y deja los datos listos para el paso de las ofertas. */
+async function conLeadDeOfertas(
+    ctx: CtxEmbudo, d: DatosEmbudo, grupo: GrupoEmbudo | null, quiere: TipoOferta | 'oferta' | null,
+): Promise<DatosEmbudo> {
+    const tieneDatos = !!(d.nombre || Object.keys(d.respuestas ?? {}).length);
+    const leadId = tieneDatos
+        ? (await seguro(() => ctx.guardarLead({ ...leadDeDatos(d, grupo), ...(quiere ? { quiere } : {}) }))) ?? d.leadId ?? null
+        : d.leadId ?? null;
+    return {
+        ...d, leadId, teamId: grupo?.teamId ?? d.teamId ?? null, grupo: grupo?.nombre ?? d.grupo ?? null,
+        profe: grupo?.profe ?? d.profe ?? null, intentos: 0, lista: undefined, desde: undefined, listaEn: undefined, recordado: null,
+    };
 }
 
 /**
@@ -1335,8 +1498,10 @@ async function pasoElegirOferta(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: str
         return true;
     }
     const eleccion = recortar(texto.replace(/\s+/g, ' ').trim(), 200);
-    const of = await ofertasDe(ctx);
-    const quiere = of?.ofertas.length ? interesDeOfertas(of) : 'oferta';
+    // Con las ofertas elegidas por sus datos, lo que quiere es lo que se le mostró.
+    const mostradas = d.ofertasMostradas?.length ? d.ofertasMostradas : null;
+    const of = mostradas ? null : await ofertasDe(ctx);
+    const quiere = mostradas ? interesDeOfertas({ ofertas: mostradas }) : of?.ofertas.length ? interesDeOfertas(of) : 'oferta';
     const datos: DatosEmbudo = { ...d, respuestas: { ...(d.respuestas ?? {}), oferta_elegida: eleccion } };
     await seguro(() => ctx.guardarLead({ ...leadDeDatos(datos, grupoDeDatos(datos)), quiere }));
     const nombre = primerNombre(d.nombre);
@@ -1346,6 +1511,7 @@ async function pasoElegirOferta(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: str
     await seguro(() => ctx.avisarEscuela('inscripcion_oferta', [
         d.nombre ? `Interesado: ${d.nombre}${d.anio ? ` (${d.anio})` : ''}.` : '',
         `Quiere inscribirse (${quiere}): «${eleccion}».`,
+        mostradas ? `Le ofrecí: ${unirConY(mostradas.map((m) => `«${m.titulo}»`))}.` : '',
         d.sedeTitulo ? `Sede: ${sinEmojis(d.sedeTitulo)}.` : '',
     ].filter(Boolean).join(' ')));
     return true;
