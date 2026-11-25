@@ -11,7 +11,7 @@
 import crypto from 'crypto';
 import type { Logger } from 'pino';
 import { supabase } from '../config/supabase';
-import { extractReceiptWithFallback, listConfiguredProviders } from './ocr.service';
+import { extractReceiptWithFallback, listConfiguredProviders, type OcrProvider, type OcrResult } from './ocr.service';
 import { evaluateVerdict, evaluarEvidenciaAutoAprobacion, normalizeReference } from './receipt-verdict';
 import type { VerdictReason } from './receipt-verdict';
 import { buildVerdictContext } from './receipt-context.service';
@@ -39,7 +39,20 @@ type PaymentRow = {
     parent_id: string | null; user_id?: string | null; child_id: string | null; team_id: string | null;
     concept: string | null; ocr_reference: string | null;
     receipt_verdict: string | null; receipt_verdict_reasons: unknown;
+    receipt_image_sha256_source?: string | null;
 };
+
+/**
+ * Lectura que el servidor YA hizo del archivo guardado (el sellado,
+ * comprobante-sellado.service). Se reusa como lectura A solo si es del MISMO
+ * archivo (misma huella real): así la primera lectura no se paga dos veces.
+ */
+export interface LecturaPrevia {
+    provider: OcrProvider;
+    result: OcrResult;
+    /** sha256 de los bytes que se leyeron. */
+    sha: string;
+}
 
 /**
  * Lo que el comprobante DEBE decir: el saldo del cobro con el pronto pago
@@ -185,11 +198,15 @@ export async function montoElegidoPorElCliente(paymentId: string): Promise<boole
     }
 }
 
-export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): Promise<EvaluateResult> {
+export async function evaluatePaymentReceipt(
+    paymentId: string,
+    log?: Logger,
+    opts: { lecturaA?: LecturaPrevia } = {},
+): Promise<EvaluateResult> {
     try {
         const { data: pay } = await supabase
             .from('payments')
-            .select('id, school_id, status, amount, amount_paid, early_payment_discount_applied, receipt_url, receipt_image_sha256, parent_id, user_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons')
+            .select('id, school_id, status, amount, amount_paid, early_payment_discount_applied, receipt_url, receipt_image_sha256, parent_id, user_id, child_id, team_id, concept, ocr_reference, receipt_verdict, receipt_verdict_reasons, receipt_image_sha256_source')
             .eq('id', paymentId)
             .single();
         if (!pay || (pay as PaymentRow).status !== 'awaiting_approval') return { action: 'none' };
@@ -239,7 +256,11 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
                 const providers = listConfiguredProviders();
                 // Antes: providers[0] pelado. Si ese provider estaba caido (Groq
                 // dando 404), la excepcion mataba la evaluacion entera.
-                const attemptA = await extractReceiptWithFallback(providers, base64, mime);
+                // La lectura del sellado (§3.3 paso 9) vale como A si es de ESTOS bytes.
+                const previa = opts.lecturaA && opts.lecturaA.sha === realHash ? opts.lecturaA : null;
+                const attemptA = previa
+                    ? { provider: previa.provider, result: previa.result }
+                    : await extractReceiptWithFallback(providers, base64, mime);
                 if (attemptA) {
                     const { provider: providerA, result: ocrA } = attemptA;
                     const ctx = await buildVerdictContext(p.school_id, {
@@ -345,6 +366,14 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
 }
 
 async function glosaFallback(p: PaymentRow, log?: Logger): Promise<EvaluateResult> {
+    // (spec seguridad-veredicto-comprobante §3.5) Solo se decide con un veredicto
+    // que escribió el SERVIDOR (sellado, bot, receipt-approval). Uno escrito por
+    // el navegador (la PWA vieja, antes del guard de la base) no rechaza ni glosa:
+    // queda para revisión manual, y el sellado o el barrido lo reemplazan.
+    if (p.receipt_image_sha256_source !== 'server_verified') {
+        (log ?? console).info?.({ paymentId: p.id }, '[auto-approve] veredicto sin sellar por el servidor → manual');
+        return { action: 'none' };
+    }
     // Camino sin re-extracción (auto-approve apagado, PDF, o imagen no descargable):
     // se decide con el veredicto ya persistido. Ese veredicto lo computó el BFF en
     // /extract-receipt — el cliente solo lo relaya — y para RECHAZAR el sesgo juega
@@ -357,8 +386,9 @@ async function glosaFallback(p: PaymentRow, log?: Logger): Promise<EvaluateResul
         const rejected = await autoRejectRed(p, persisted, log);
         if (rejected) return rejected;
     }
-    // Posible manipulación: revisión manual, sin glosa al acudiente.
-    if (esManipulacion(persisted)) return { action: 'none' };
+    // Posible manipulación o lectura fallida del servidor: revisión manual, sin
+    // glosa al acudiente (no se le pide aclarar un fallo nuestro).
+    if (esManipulacion(persisted) || persisted.some((r) => r?.code === 'LECTURA_FALLIDA')) return { action: 'none' };
     const gid = await maybeAutoCreateGlosa(p.id, log);
     return { action: gid ? 'glosa' : 'none', glosaId: gid };
 }

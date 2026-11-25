@@ -19,7 +19,10 @@
  *     agrupado, cada 2 h por escuela.
  *   · Nada entre las 22:00 y las 06:59 (hora Colombia): lo acumulado sale a las 7.
  *
- * NO aprueba nada. La aprobación sigue siendo de una persona.
+ * Los avisos NO aprueban nada. El barrido de sellado (2026-11-25, abajo) lee
+ * con el servidor los comprobantes que quedaron sin veredicto y sigue el mismo
+ * camino que el sellado de la app (`evaluatePaymentReceipt`): con la
+ * auto-aprobación de la escuela encendida, ese camino sí puede aprobar.
  *
  * Idempotencia: los 3 BFF (dev/stg/prod) comparten la base y corren este job a
  * la vez. El estado de cada escuela vive en `school_receipt_review_alerts` con
@@ -45,6 +48,8 @@ export interface ComprobantePorValidar {
     amount_paid: number;
     concept: string | null;
     receipt_verdict: string | null;
+    /** Ruta del comprobante (el barrido no toca los que comparten archivo). */
+    receipt_url?: string | null;
     /** Cuándo entró el comprobante (ISO). */
     enviado_en: string;
 }
@@ -171,12 +176,11 @@ export function planDeAvisos(estado: EstadoAlertas, lista: ComprobantePorValidar
 // ─── I/O ────────────────────────────────────────────────────────────────────
 
 let avisoSinMigracion = false;
-function sinMigracion(log: Logger | undefined, detalle: string): { avisos: number } {
+function sinMigracion(log: Logger | undefined, detalle: string): void {
     if (!avisoSinMigracion) {
         avisoSinMigracion = true;
         (log ?? console).warn?.({ detalle }, '[receipt-alerts] falta la migración 20261008165728: el job no avisa');
     }
-    return { avisos: 0 };
 }
 
 const esFaltaDeEsquema = (code?: string) =>
@@ -195,34 +199,160 @@ async function destinatarios(schoolId: string): Promise<string[]> {
     return [...ids];
 }
 
-export async function runReceiptReviewAlerts(log?: Logger, ahora = Date.now()): Promise<{ avisos: number }> {
-    if (!enHorarioDeAvisos(ahora)) return { avisos: 0 };
+// ─── Barrido de sellado (spec seguridad-veredicto-comprobante §3.6) ──────────
+//
+// Red de seguridad del sellado (POST /api/v1/payments/:id/sellar-comprobante):
+// el servidor lee el comprobante GUARDADO de los cobros por validar que quedaron
+// SIN veredicto. Cubre la PWA vieja (solo pide /auto-evaluate si su veredicto
+// local es verde o amarillo), los fallos de red y las familias que subieron y
+// no confirmaron (`linkReceiptOnUpload`).
+//
+//   · Selección: `receipt_verdict IS NULL` y entró hace más de 3 min (el
+//     sellado del frontend ya pasó), sobre la MISMA lectura de la cola.
+//   · Como mucho 5 por corrida, el más antiguo primero.
+//   · Fuera los que comparten archivo con otro cobro de la cola (un comprobante
+//     para varios cobros, `wa_cubrir_cobros_con_comprobante`): el sellado es del
+//     principal. El servicio lo vuelve a comprobar contra la base.
+//   · Uno que ya se intentó no se reintenta en 6 h (si no se pudo sellar, no
+//     ocupa el cupo en cada vuelta).
+//   · Solo NODE_ENV=production (los 3 BFF comparten la base y el de dev tiene
+//     crons), igual que `pagosPorValidarActivo`. Corre dentro de la ventana de
+//     avisos (07:00–21:59): lo de la noche se sella a las 07:00, sin consultas
+//     nuevas de madrugada. El frontend nuevo sella al enviar.
+
+export const SELLADO_ESPERA_MS = 3 * 60 * 1000;
+export const SELLADO_MAX_POR_CORRIDA = 5;
+export const SELLADO_REINTENTO_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * ¿Este servidor barre? Solo producción. `DISABLE_SELLADO_BARRIDO=true` lo
+ * apaga; `SELLADO_BARRIDO_FUERA_DE_PROD=true` lo prende fuera de producción
+ * (gemelo). Pura.
+ */
+export function barridoDeSelladoActivo(env: NodeJS.ProcessEnv = process.env): boolean {
+    if (env.DISABLE_SELLADO_BARRIDO === 'true') return false;
+    if (env.NODE_ENV === 'production') return true;
+    return env.SELLADO_BARRIDO_FUERA_DE_PROD === 'true';
+}
+
+const claveIntento = (c: Pick<ComprobantePorValidar, 'id' | 'receipt_url'>) => `${c.id}|${c.receipt_url ?? ''}`;
+
+/** Cuáles sellar en esta vuelta (ids, el más antiguo primero). Pura. */
+export function elegirParaSellar(
+    lista: ComprobantePorValidar[],
+    ahora: number,
+    intentados: ReadonlyMap<string, number> = new Map(),
+    max = SELLADO_MAX_POR_CORRIDA,
+): string[] {
+    const porArchivo = new Map<string, number>();
+    for (const c of lista) if (c.receipt_url) porArchivo.set(c.receipt_url, (porArchivo.get(c.receipt_url) ?? 0) + 1);
+    return lista
+        .filter((c) => c.receipt_verdict == null)
+        .filter((c) => ahora - Date.parse(c.enviado_en) >= SELLADO_ESPERA_MS) // fecha inválida → NaN → fuera
+        .filter((c) => !c.receipt_url || (porArchivo.get(c.receipt_url) ?? 0) <= 1)
+        .filter((c) => {
+            const t = intentados.get(claveIntento(c));
+            return t == null || ahora - t >= SELLADO_REINTENTO_MS;
+        })
+        .sort((a, b) => Date.parse(a.enviado_en) - Date.parse(b.enviado_en))
+        .slice(0, max)
+        .map((c) => c.id);
+}
+
+/** Sella un cobro como sistema. Inyectable para las pruebas. */
+export type SellarPorBarrido = (paymentId: string, log?: Logger) => Promise<{ ok: boolean }>;
+
+/** Carga el servicio al primer uso: el grafo del bot no entra a este job salvo cuando barre. */
+const sellarPorDefecto: SellarPorBarrido = async (paymentId, log) => {
+    const { sellarComprobante } = await import('../services/comprobante-sellado.service');
+    return sellarComprobante(paymentId, { sistema: true }, log);
+};
+
+const intentadosPorBarrido = new Map<string, number>();
+let barridoEnCurso = false;
+
+/** Solo para pruebas. */
+export function _reiniciarBarrido(): void {
+    intentadosPorBarrido.clear();
+    barridoEnCurso = false;
+}
+
+/** Sella en serie los elegidos. Devuelve cuántos sellados salieron bien. */
+export async function barrerComprobantesSinSellar(
+    lista: ComprobantePorValidar[],
+    ahora: number,
+    sellar: SellarPorBarrido,
+    log?: Logger,
+): Promise<number> {
+    // Una corrida lenta (OCR) no se pisa con la siguiente del cron.
+    if (barridoEnCurso) return 0;
+    barridoEnCurso = true;
+    try {
+        for (const [clave, t] of intentadosPorBarrido) if (ahora - t >= SELLADO_REINTENTO_MS) intentadosPorBarrido.delete(clave);
+        const ids = elegirParaSellar(lista, ahora, intentadosPorBarrido);
+        let sellados = 0;
+        for (const id of ids) {
+            const c = lista.find((x) => x.id === id)!;
+            intentadosPorBarrido.set(claveIntento(c), ahora);
+            try {
+                const r = await sellar(id, log);
+                if (r.ok) sellados++;
+            } catch (err) {
+                (log ?? console).warn?.({ err, paymentId: id }, '[receipt-alerts] el barrido no pudo sellar');
+            }
+        }
+        if (ids.length > 0) (log ?? console).info?.({ elegidos: ids.length, sellados }, '[receipt-alerts] barrido de sellado');
+        return sellados;
+    } finally {
+        barridoEnCurso = false;
+    }
+}
+
+export async function runReceiptReviewAlerts(
+    log?: Logger,
+    ahora = Date.now(),
+    sellar: SellarPorBarrido = sellarPorDefecto,
+): Promise<{ avisos: number; sellados: number }> {
+    if (!enHorarioDeAvisos(ahora)) return { avisos: 0, sellados: 0 };
 
     const { data: filas, error } = await supabase
         .from('payments')
-        .select('id, school_id, amount, amount_paid, concept, receipt_verdict, receipt_submitted_at, receipt_verdict_at, created_at')
+        .select('id, school_id, amount, amount_paid, concept, receipt_url, receipt_verdict, receipt_submitted_at, receipt_verdict_at, created_at')
         .eq('status', 'awaiting_approval')
         .not('receipt_url', 'is', null)
         .not('school_id', 'is', null)
         .limit(LIMITE);
     if (error) {
-        if (esFaltaDeEsquema((error as any).code)) return sinMigracion(log, error.message);
-        (log ?? console).error?.({ err: error.message }, '[receipt-alerts] no se pudo listar');
-        return { avisos: 0 };
+        if (esFaltaDeEsquema((error as any).code)) sinMigracion(log, error.message);
+        else (log ?? console).error?.({ err: error.message }, '[receipt-alerts] no se pudo listar');
+        return { avisos: 0, sellados: 0 };
     }
-    if (!filas || filas.length === 0) return { avisos: 0 };
+    if (!filas || filas.length === 0) return { avisos: 0, sellados: 0 };
 
+    const lista: ComprobantePorValidar[] = (filas as any[]).map((f) => ({
+        id: f.id,
+        school_id: f.school_id,
+        amount: Number(f.amount) || 0,
+        amount_paid: Number(f.amount_paid) || 0,
+        concept: f.concept ?? null,
+        receipt_verdict: f.receipt_verdict ?? null,
+        receipt_url: f.receipt_url ?? null,
+        enviado_en: f.receipt_submitted_at ?? f.receipt_verdict_at ?? f.created_at,
+    }));
+
+    // Primero los avisos (no esperan al OCR); después el barrido, con la MISMA
+    // lectura de la cola: ninguna consulta nueva salvo el sellado de cada fila.
+    const avisos = await avisarEscuelas(lista, ahora, log);
+    const sellados = barridoDeSelladoActivo()
+        ? await barrerComprobantesSinSellar(lista, ahora, sellar, log)
+        : 0;
+    return { avisos, sellados };
+}
+
+/** Avisos «nuevo» / «recordatorio» por escuela. Devuelve cuántos salieron. */
+async function avisarEscuelas(comprobantes: ComprobantePorValidar[], ahora: number, log?: Logger): Promise<number> {
     const porEscuela = new Map<string, ComprobantePorValidar[]>();
-    for (const f of filas as any[]) {
-        const c: ComprobantePorValidar = {
-            id: f.id,
-            school_id: f.school_id,
-            amount: Number(f.amount) || 0,
-            amount_paid: Number(f.amount_paid) || 0,
-            concept: f.concept ?? null,
-            receipt_verdict: f.receipt_verdict ?? null,
-            enviado_en: f.receipt_submitted_at ?? f.receipt_verdict_at ?? f.created_at,
-        };
+    for (const c of comprobantes) {
         const l = porEscuela.get(c.school_id);
         if (l) l.push(c); else porEscuela.set(c.school_id, [c]);
     }
@@ -236,9 +366,9 @@ export async function runReceiptReviewAlerts(log?: Logger, ahora = Date.now()): 
         .select('school_id, new_cursor, last_new_alert_at, last_reminder_at, version')
         .in('school_id', escuelas);
     if (errEstado) {
-        if (esFaltaDeEsquema((errEstado as any).code)) return sinMigracion(log, errEstado.message);
-        (log ?? console).error?.({ err: errEstado.message }, '[receipt-alerts] no se pudo leer el estado');
-        return { avisos: 0 };
+        if (esFaltaDeEsquema((errEstado as any).code)) sinMigracion(log, errEstado.message);
+        else (log ?? console).error?.({ err: errEstado.message }, '[receipt-alerts] no se pudo leer el estado');
+        return 0;
     }
     const estados = new Map<string, EstadoAlertas>(((existentes as any[]) ?? []).map((e) => [e.school_id, e]));
     const faltan = escuelas.filter((s) => !estados.has(s));
@@ -298,5 +428,5 @@ export async function runReceiptReviewAlerts(log?: Logger, ahora = Date.now()): 
             masAntiguo: lista.reduce<string | null>((m, c) => (!m || c.enviado_en < m ? c.enviado_en : m), null),
         }, ahora);
     }
-    return { avisos };
+    return avisos;
 }

@@ -39,7 +39,10 @@ const h = vi.hoisted(() => {
     function builder(table: string) {
         const b: any = {};
         for (const m of ['select', 'eq', 'in', 'not', 'order', 'limit']) b[m] = () => b;
-        b.update = (row: any) => { state.updates.push({ table, row }); return b; };
+        // Un update de payments devuelve la fila, como la base real: el Paso 0 (sello de
+        // la lectura del servidor antes de auto_approve_payment) exige que se haya escrito.
+        let esUpdate = false;
+        b.update = (row: any) => { state.updates.push({ table, row }); esUpdate = true; return b; };
         const resolver = () => {
             if (table === 'payments') return { data: state.pago, error: null };
             if (table === 'school_settings') return { data: state.settings, error: null };
@@ -47,7 +50,9 @@ const h = vi.hoisted(() => {
         };
         b.single = async () => resolver();
         b.maybeSingle = async () => resolver();
-        b.then = (ok: any, ko: any) => Promise.resolve({ data: null, error: null }).then(ok, ko);
+        b.then = (ok: any, ko: any) => Promise.resolve(
+            esUpdate && table === 'payments' ? { data: [{ id: state.pago?.id ?? 'pago' }], error: null } : { data: null, error: null },
+        ).then(ok, ko);
         return b;
     }
     const supabase = {

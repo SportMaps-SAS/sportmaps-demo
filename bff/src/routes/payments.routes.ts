@@ -29,6 +29,7 @@ import { buildVerdictContext } from '../services/receipt-context.service';
 import { debitoEnCurso, MENSAJE_DEBITO_EN_CURSO } from '../services/autopay.service';
 import { saldoPorCobrar, ESTADOS_PAGABLES_EN_LINEA } from '../utils/saldo-cobro';
 import { validarLlaveCheckoutEscuela, MENSAJE_CHECKOUT_NO_DISPONIBLE } from '../services/wompi-llave-checkout.guard';
+import { sellarComprobante, respuestaDelSellado, limiteSellado } from '../services/comprobante-sellado.service';
 
 const router = Router();
 
@@ -639,6 +640,44 @@ router.post(
                 detail: err.message,
             });
         }
+    },
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /:id/sellar-comprobante — el SERVIDOR lee el comprobante guardado
+// ─────────────────────────────────────────────────────────────────────────────
+// Spec docs/specs/seguridad-veredicto-comprobante-plan.md §3.3. El frontend lo
+// llama SIEMPRE después de guardar el comprobante (con o sin veredicto en la
+// vista previa). Lee el archivo GUARDADO, calcula la huella real y el veredicto
+// con el monto y la categoría del cobro, y escribe con service role. Nada del
+// body cuenta: ni monto esperado, ni categoría, ni huella.
+//
+// /extract-receipt queda como vista previa (bloquea en la pantalla, no escribe).
+//
+// Auth: JWT liviano (las familias no son school_members). La autorización fina
+// (familia del cobro o administración de la escuela) vive en el servicio.
+// Cupo propio (limiteSellado): 10/min por IP real, compartido con /glosas/auto-evaluate.
+
+const PaymentIdSchema = z.string().uuid();
+
+router.post(
+    '/:id/sellar-comprobante',
+    limiteSellado,
+    async (req: AuthenticatedRequest, res: Response) => {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'Token de autorizacion requerido.' });
+        }
+        const { data: { user }, error: authError } = await supabaseAnonClient.auth.getUser(authHeader.split(' ')[1]);
+        if (authError || !user) {
+            return res.status(401).json({ error: 'Token invalido o expirado.' });
+        }
+        const id = PaymentIdSchema.safeParse(req.params.id);
+        if (!id.success) return res.status(400).json({ error: 'paymentId invalido' });
+
+        const r = await sellarComprobante(id.data, { uid: user.id }, req.log);
+        const { status, body } = respuestaDelSellado(r);
+        return res.status(status).json(body);
     },
 );
 
