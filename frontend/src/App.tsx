@@ -121,6 +121,7 @@ const ChildReportDetailPage = lazy(() => import("./pages/ChildReportDetailPage")
 const ChildPostTrainingReportPage = lazy(() => import("./pages/ChildPostTrainingReportPage"));
 const AcademicProgressPage = lazy(() => import("./pages/AcademicProgressPage"));
 const AttendancePage = lazy(() => import("./pages/AttendancePage"));
+import { MarkPaymentsViewed } from "@/components/onboarding/MarkPaymentsViewed";
 const MyPaymentsPage = lazy(() => ACUDIENTE_V2 ? import("./pages/MyPaymentsPage") : import("./pages/MyPaymentsPageClassic"));
 const AccountStatementPage = lazy(() => import("./pages/AccountStatementPage"));
 const PostTrainingSelfEvalPage = lazy(() => import("./pages/PostTrainingSelfEvalPage"));
@@ -572,6 +573,7 @@ const App = () => (
                       } />
                       <Route path="my-payments" element={
                         <ProtectedRoute allowedRoles={['parent', 'athlete']}>
+                          <MarkPaymentsViewed />
                           <MyPaymentsPage />
                         </ProtectedRoute>
                       } />

@@ -73,6 +73,8 @@ const registerSchema = z.object({
   // pasaba la validación: la escuela elegía su deporte y el formulario se
   // negaba a enviarse, sin que el error apuntara a nada visible.
   sportId: z.union([z.string(), z.number()]).optional(),
+  // Consentimiento para avisos por WhatsApp (opcional; solo dueños de negocio).
+  whatsappConsent: z.boolean().optional(),
   acceptTerms: z.boolean().refine(val => val === true, {
     message: 'Debes aceptar los términos y condiciones para continuar',
   }),
@@ -219,6 +221,7 @@ export default function RegisterPage() {
       // "Required" en inglés y nada más.
       acceptTerms: false,
       isAdult: false,
+      whatsappConsent: false,
     }
   });
 
@@ -348,6 +351,11 @@ export default function RegisterPage() {
         school_name: data.schoolName,
         referral_code: referralCode || undefined,
       };
+
+      // Consentimiento explícito (casilla sin marcar por defecto). Se guarda con fecha en la base.
+      if (data.whatsappConsent === true && ['school', 'facility_manager', 'organizer'].includes(data.role)) {
+        metadata.whatsapp_consent = true;
+      }
 
       if (data.role === 'facility_manager') {
         // Dueño de espacios: la cuenta nace con rol facility_manager y una
@@ -709,15 +717,15 @@ export default function RegisterPage() {
                 )}
                 <div className="role-card-grid">
                   {[
-                    { id: 'athlete', icon: '⚽', label: 'Atleta 18+' },
-                    { id: 'parent', icon: '👨‍👩‍👧', label: 'Acudiente' },
-                    { id: 'coach', icon: '📋', label: 'Coach' },
-                    { id: 'school', icon: '🏫', label: 'Escuela' },
-                    { id: 'facility_manager', icon: '🏟️', label: 'Club / Canchas' },
-                    { id: 'organizer', icon: '🏆', label: 'Organizador' },
-                    { id: 'wellness_professional', icon: '💚', label: 'Profesional' },
-                    { id: 'store_owner', icon: '🏪', label: 'Tienda' },
-                    { id: 'personal_trainer', icon: '🏋️', label: 'Entrenador' },
+                    { id: 'athlete', icon: '⚽', label: 'Atleta 18+', hint: 'Me inscribo yo, soy mayor de edad' },
+                    { id: 'parent', icon: '👨‍👩‍👧', label: 'Acudiente', hint: 'Inscribo a un menor a mi cargo' },
+                    { id: 'coach', icon: '📋', label: 'Coach', hint: 'Entreno en una escuela' },
+                    { id: 'school', icon: '🏫', label: 'Escuela', hint: 'Tengo alumnos, grupos y mensualidades' },
+                    { id: 'facility_manager', icon: '🏟️', label: 'Club / Canchas', hint: 'Alquilo canchas o espacios por horas' },
+                    { id: 'organizer', icon: '🏆', label: 'Organizador', hint: 'Organizo torneos' },
+                    { id: 'wellness_professional', icon: '💚', label: 'Profesional', hint: 'Fisioterapia, nutrición o psicología' },
+                    { id: 'store_owner', icon: '🏪', label: 'Tienda', hint: 'Vendo artículos deportivos' },
+                    { id: 'personal_trainer', icon: '🏋️', label: 'Entrenador', hint: 'Entreno a mis propios clientes' },
                   ].map((role) => (
                     <div 
                       key={role.id}
@@ -732,6 +740,7 @@ export default function RegisterPage() {
                     >
                       <span className="text-xl mb-1">{role.icon}</span>
                       <span className="text-[9px] font-bold uppercase tracking-tight text-[#d4d8d0]">{role.label}</span>
+                      <span className="mt-0.5 text-center text-[9px] leading-tight text-[#8a9186]">{role.hint}</span>
                       {roleValue === role.id && <div className="absolute top-1 right-1 w-1.5 h-1.5 bg-[#2ea82d] rounded-full"></div>}
                     </div>
                   ))}
@@ -855,7 +864,7 @@ export default function RegisterPage() {
                     {errors.schoolName && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.schoolName.message}</p>}
                   </div>
                   <p className="text-[11px] text-[#8a9186] px-1">
-                    {roleValue === 'organizer' ? 'Crea y publica tus torneos con tabla y marcador en vivo, sin necesidad de ser una escuela. Plan Gratis, sin tarjeta.' : 'Publica tus canchas y recibe reservas, sin necesidad de ser una escuela.'}
+                    {roleValue === 'organizer' ? 'Crea y publica tus torneos con tabla y marcador en vivo, sin necesidad de ser una escuela. Plan Gratis, sin tarjeta.' : 'Publica tus canchas y recibe reservas, sin necesidad de ser una escuela. ¿No alquilas canchas por horas sino que tienes alumnos? Elige «Escuela».'}
                   </p>
                 </div>
               )}
@@ -925,11 +934,28 @@ export default function RegisterPage() {
                       )}
                     />
                     {errors.sportId && <p className="text-[10px] text-red-500 font-medium px-1 mt-1">{errors.sportId.message}</p>}
-                    <p className="text-[9px] text-[#8a9186] px-1 italic">Este deporte autogenerará categorías sugeridas para tu academia.</p>
+                    <p className="text-[9px] text-[#8a9186] px-1 italic">Lo usamos para dejar listo tu primer grupo. Podrás agregar más deportes después.</p>
                   </div>
                 </div>
               )}
             </div>
+
+            {['school', 'facility_manager', 'organizer'].includes(roleValue || '') && !inviteId && (
+              <div className="flex items-start gap-4 pt-4">
+                <div
+                  role="checkbox"
+                  aria-checked={!!watch('whatsappConsent')}
+                  className={cn("w-5 h-5 rounded-md border flex items-center justify-center cursor-pointer transition-all flex-shrink-0 mt-0.5",
+                    watch('whatsappConsent') ? "bg-[#248223] border-[#248223]" : "bg-[#0f2614] border-white/10")}
+                  onClick={() => setValue('whatsappConsent', !watch('whatsappConsent'))}
+                >
+                  {watch('whatsappConsent') && <Check className="w-3.5 h-3.5 text-white" />}
+                </div>
+                <p className="text-xs text-[#8a9186] leading-relaxed select-none">
+                  Quiero recibir por WhatsApp avisos para configurar mi cuenta (opcional). Puedo pedir que paren cuando quiera.
+                </p>
+              </div>
+            )}
 
             <div className="flex items-start gap-4 pt-4">
               <div 

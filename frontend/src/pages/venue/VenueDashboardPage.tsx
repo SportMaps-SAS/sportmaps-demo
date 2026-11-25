@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useVenueSummary } from './useVenueSummary';
+import { VenueChecklist } from '@/components/onboarding/VenueChecklist';
 import { contarPorConfirmar, ESTADOS_POR_CONFIRMAR, ingresosDelMes, ocupacionSemanal } from './venueMetrics';
 
 const cop = (n: number) =>
@@ -41,7 +42,7 @@ function Stat({ icon: Icon, title, value, hint, to }: StatProps) {
  */
 export default function VenueDashboardPage() {
   const { profile } = useAuth();
-  const { schoolName } = useSchoolContext();
+  const { schoolName, schoolId } = useSchoolContext();
   const { facilities, reservations, loading, error, hoyIso, semanaIso, mesIso } = useVenueSummary();
 
   if (loading) {
@@ -70,6 +71,8 @@ export default function VenueDashboardPage() {
         <h1 className="text-2xl font-bold">{primerNombre ? `Hola, ${primerNombre}` : 'Inicio'}</h1>
         <p className="text-muted-foreground">{schoolName || 'Tu espacio'}</p>
       </div>
+
+      <VenueChecklist schoolId={schoolId} hasReservation={reservations.length > 0} />
 
       {error && (
         <Card className="border-destructive/40">

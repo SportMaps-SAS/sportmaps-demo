@@ -1,5 +1,14 @@
 import { USER_ROLES } from '../../constants/roles';
-import { Building, Users, Award, Bell, Activity, Shield, TrendingUp, Trophy, UserCircle, Calendar, Plus, Heart, ShoppingBag, CreditCard, Tag, Layers } from 'lucide-react';
+import { buildSchoolChecklist, buildParentChecklist, hasViewedPayments, type ChecklistItem } from './onboardingChecklists';
+import { Building, Bell, Activity, Shield, Trophy, UserCircle, Circle, Heart, CreditCard, Tag, GraduationCap, Receipt, UserPlus, HeartHandshake, Link2, Eye } from 'lucide-react';
+
+// Ícono por paso: la lista (ids, textos, hrefs y si está hecho) vive en onboardingChecklists.ts.
+const ICONOS: Record<string, any> = {
+    create_plan: Tag, add_student: GraduationCap, see_charge: Receipt, payment_method: CreditCard,
+    invite_families: HeartHandshake, invite_staff: UserPlus,
+    connect_school: Link2, review_athlete: Heart, see_payments: Eye,
+};
+const conIcono = (items: ChecklistItem[]) => items.map((i) => ({ ...i, icon: ICONOS[i.id] ?? Circle }));
 
 export const getStepsForRole = (role: string, status: any) => {
     switch (role) {
@@ -13,47 +22,15 @@ export const getStepsForRole = (role: string, status: any) => {
                 ];
             }
 
-            // Wizard guiado: sede → (modelo) → equipo/plan → coach → atleta → pagos
-            // El modelo (teams|plans|both) se elige en onboarding y vive en
-            // schools.business_model. Si esta vacio el paso lo pregunta.
-            const businessModel = status.business_model as 'teams' | 'plans' | 'both' | undefined;
-            const wizardSteps: Array<{ id: string; title: string; description: string; completed: boolean; href: string; icon: any }> = [
-                { id: 'confirm_branch', title: 'Tu Sede',  description: 'Confirma la dirección de tu sede principal.', completed: status.has_branches, href: '/dashboard', icon: Building },
-            ];
-
-            if (!businessModel) {
-                wizardSteps.push({ id: 'choose_model', title: 'Modelo', description: '¿Tu academia trabaja por equipos o por planes/membresías?', completed: false, href: '/dashboard', icon: Award });
-            } else {
-                if (businessModel === 'teams' || businessModel === 'both') {
-                    wizardSteps.push({ id: 'create_team', title: 'Primer Equipo', description: 'Crea tu primer grupo o equipo deportivo.', completed: status.has_teams, href: '/dashboard', icon: Trophy });
-                }
-                if (businessModel === 'plans' || businessModel === 'both') {
-                    wizardSteps.push({ id: 'create_plan', title: 'Primer Plan', description: 'Crea tu primera mensualidad o paquete.', completed: !!status.has_plans, href: '/dashboard', icon: TrendingUp });
-                }
-            }
-
-            wizardSteps.push(
-                { id: 'invite_staff',    title: 'Entrenador',    description: 'Invita a tu primer entrenador.',                  completed: status.has_staff,                    href: '/dashboard', icon: Users },
-                { id: 'add_student',     title: 'Primer Atleta', description: 'Registra a tu primer deportista.',                completed: !!status.has_students,               href: '/dashboard', icon: Bell },
-                { id: 'setup_payments',  title: 'Cobros',        description: 'Configura cómo recibir pagos.',                   completed: status.payment_setup_completed === true, href: '/dashboard', icon: CreditCard },
-            );
-            return wizardSteps;
+            // Checklist del panel: plan → deportista → cobro → medio de pago →
+            // familias → entrenador. Cada paso se marca por lo que existe en la base
+            // y su href lleva a la pantalla donde se resuelve (nunca a /dashboard).
+            // `has_families` llega de get_onboarding_checklist_extras, mezclado en `status`.
+            return conIcono(buildSchoolChecklist(status, { has_families: status.has_families }));
         }
 
-        case USER_ROLES.PARENT: {
-            const parentSteps = [];
-
-            // Only show accept_invite if there's a pending invitation or it was already accepted
-            if (status.has_pending_invitation || status.has_accepted_invite) {
-                parentSteps.push({ id: 'accept_invite', title: 'Aceptar Invitación', description: 'Vinculate a la escuela de tu hijo.', completed: status.has_accepted_invite, href: '/notifications', icon: Bell });
-            }
-
-            parentSteps.push(
-                { id: 'add_child', title: 'Perfil del Deportista', description: 'Crea la ficha de tu hijo.', completed: status.has_children, href: '/children', icon: Users },
-                { id: 'medical_info', title: 'Ficha Médica', description: 'Sube EPS y datos de salud.', completed: status.has_medical_records, href: '/children', icon: Heart }
-            );
-            return parentSteps;
-        }
+        case USER_ROLES.PARENT:
+            return conIcono(buildParentChecklist(status, { viewedPayments: hasViewedPayments() }));
 
         case USER_ROLES.COACH:
             return [

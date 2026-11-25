@@ -9,11 +9,11 @@ import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
-import { KeyRound, Clock, XCircle, ChevronRight } from 'lucide-react';
+import { KeyRound, Clock, XCircle, ChevronRight, MessageCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { schoolJoinApi } from '@/lib/api/schoolJoin';
-import { formatJoinCode, joinErrorMessage, readPendingJoinCode } from '@/lib/schoolJoinCode';
+import { enviadaHaceTexto, formatJoinCode, joinErrorMessage, readPendingJoinCode, waLinkEscuela } from '@/lib/schoolJoinCode';
 
 export function JoinSchoolCodeBanner({ className = '' }: { className?: string }) {
   const { user } = useAuth();
@@ -63,11 +63,18 @@ export function JoinSchoolCodeBanner({ className = '' }: { className?: string })
         <div key={r.id} className="rounded-2xl border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 p-4 flex gap-3">
           <Clock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
           <div className="min-w-0 flex-1">
-            <p className="font-semibold text-sm">Solicitud enviada a {r.school_name}</p>
+            <p className="font-semibold text-sm">En revisión por {r.school_name}</p>
             <p className="text-sm text-muted-foreground">
               {r.for_whom === 'child' ? `${r.athlete_name}: ` : ''}
-              la escuela te asignará la categoría. Te avisamos cuando lo haga.
+              {enviadaHaceTexto(r.created_at)}. La escuela te asignará la categoría y te avisamos cuando lo haga.
             </p>
+            {waLinkEscuela(r.school_whatsapp, r.school_name, r.athlete_name) && (
+              <Button asChild size="sm" variant="outline" className="mt-2">
+                <a href={waLinkEscuela(r.school_whatsapp, r.school_name, r.athlete_name)!} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle className="h-4 w-4 mr-2" /> Escribirle a la escuela
+                </a>
+              </Button>
+            )}
             <button
               type="button"
               className="mt-1 text-xs text-muted-foreground underline underline-offset-2"

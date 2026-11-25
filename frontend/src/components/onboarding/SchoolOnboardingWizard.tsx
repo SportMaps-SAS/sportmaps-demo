@@ -38,9 +38,15 @@ import { emailClient } from '@/lib/email-client';
 import { esNombreDePagoUnico, PAGO_UNICO_NO_ES_PLAN_MSG } from '@/lib/school/pagosUnicos';
 import { FootballModalitySelect } from '@/components/teams/FootballModalitySelect';
 import { modalityToSave } from '@/lib/sports/footballModality';
+import { resolveSignupSport } from '@/lib/auth/signupMetadata';
+import { isSchoolWizardStepDone, isWizardStepRequired, schoolHasSport } from '@/lib/onboarding/schoolOnboardingRules';
+import { bffClient } from '@/lib/api/bffClient';
+import { todayColombia } from '@/lib/dateUtils';
+import { planWizardStudentCreation, type WizardEnrollTarget } from '@/lib/onboarding/wizardStudentPayload';
+import { track } from '@/lib/onboarding/trackOnboardingEvent';
 
 type BusinessModel = 'teams' | 'plans' | 'both';
-type StepId = 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
+type StepId = 'sport' | 'branch' | 'model' | 'team' | 'plan' | 'coach' | 'student' | 'payments';
 
 /**
  * Convierte errores tecnicos de Supabase/PostgREST en mensajes que un
@@ -81,6 +87,8 @@ const onlyLetters = (v: string) => v.replace(/[^A-Za-zÁÉÍÓÚáéíóúÑñ \
 interface OnboardingStatus {
   has_school: boolean;
   has_branches: boolean;
+  /** La sede principal tiene dirección. Llega con la migración 20261123084254. */
+  branch_confirmed?: boolean | null;
   has_teams: boolean;
   has_plans?: boolean;
   has_staff: boolean;
@@ -100,24 +108,30 @@ interface WizardStep {
 
 // Pasos disponibles. El wizard ensambla cuales se muestran segun business_model.
 const STEP_DEFS: Record<StepId, WizardStep> = {
-  branch:   { id: 'branch',   title: 'Tu Sede',           subtitle: 'Confirma la direccion de tu sede principal', icon: Building,      required: true  },
-  model:    { id: 'model',    title: 'Modelo',            subtitle: '¿Como organizas tu academia?',               icon: Layers,        required: true  },
-  team:     { id: 'team',     title: 'Primer Equipo',     subtitle: 'Crea tu primer grupo o equipo deportivo',    icon: Trophy,        required: true  },
-  plan:     { id: 'plan',     title: 'Primer Plan',       subtitle: 'Crea tu primera mensualidad o paquete',      icon: Tag,           required: true  },
+  // No obligatoria: el paso estuvo oculto para todas las academias (se daba por
+  // hecho con la sede automática). Ahora se muestra, pero se puede saltar para no
+  // sumar una barrera nueva antes de ver el producto.
+  // Único paso obligatorio: solo aparece si la academia llegó sin deporte.
+  sport:    { id: 'sport',    title: 'Deporte',           subtitle: '¿Qué deporte practica tu academia?',          icon: Trophy,        required: true  },
+  branch:   { id: 'branch',   title: 'Tu Sede',           subtitle: 'Confirma la direccion de tu sede principal', icon: Building,      required: false },
+  model:    { id: 'model',    title: 'Modelo',            subtitle: '¿Como organizas tu academia?',               icon: Layers,        required: false },
+  team:     { id: 'team',     title: 'Primer Equipo',     subtitle: 'Crea tu primer grupo o equipo deportivo',    icon: Trophy,        required: false },
+  plan:     { id: 'plan',     title: 'Primer Plan',       subtitle: 'Crea tu primera mensualidad o paquete',      icon: Tag,           required: false },
   coach:    { id: 'coach',    title: 'Entrenador',        subtitle: 'Invita a tu primer entrenador',              icon: UserPlus,      required: false },
   student:  { id: 'student',  title: 'Primer Atleta',     subtitle: 'Registra a tu primer deportista',            icon: GraduationCap, required: false },
   payments: { id: 'payments', title: 'Cobros',            subtitle: 'Configura como recibir pagos',               icon: CreditCard,    required: false },
 };
 
-const buildSteps = (model: BusinessModel | null): WizardStep[] => {
+const buildSteps = (model: BusinessModel | null, sportMissing = false): WizardStep[] => {
   // El paso "Modelo" aparece SIEMPRE (no se autoesconde cuando hay default
   // 'teams' del backfill). El admin puede volver a este paso desde las pills
   // para cambiar su organizacion.
-  const steps: WizardStep[] = [STEP_DEFS.branch, STEP_DEFS.model];
+  const steps: WizardStep[] = [...(sportMissing ? [STEP_DEFS.sport] : []), STEP_DEFS.branch, STEP_DEFS.model];
   if (model === 'teams' || model === 'both') steps.push(STEP_DEFS.team);
   if (model === 'plans' || model === 'both') steps.push(STEP_DEFS.plan);
   steps.push(STEP_DEFS.coach, STEP_DEFS.student, STEP_DEFS.payments);
-  return steps;
+  // Qué bloquea se decide en un solo lugar (schoolOnboardingRules): el asistente es corto.
+  return steps.map((st) => ({ ...st, required: isWizardStepRequired(st.id) }));
 };
 
 interface SchoolOnboardingWizardProps {
@@ -146,24 +160,19 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
     else if (status.has_teams)                setBusinessModel('teams');
   }, [businessModel, status.has_teams, status.has_plans]);
 
-  const STEPS = buildSteps(businessModel);
+  // undefined = aún cargando; null = cargó y la academia no tiene deporte.
+  const [schoolSport, setSchoolSport] = useState<string | null | undefined>(undefined);
+  const [sportChoice, setSportChoice] = useState('');
+  const STEPS = buildSteps(businessModel, schoolSport === null);
 
   // `model` se considera "done" solo si la escuela ya creó al menos un team o
   // plan, no solo porque schools.business_model tenga valor (puede venir del
   // default 'teams' del backfill). Asi forzamos al admin a ver el step en su
   // primer onboarding y confirmar explicitamente como organiza su academia.
-  const isStepDoneById = useCallback((id: StepId): boolean => {
-    switch (id) {
-      case 'branch':   return !!status.has_branches;
-      case 'model':    return !!status.has_teams || !!status.has_plans;
-      case 'team':     return !!status.has_teams;
-      case 'plan':     return !!status.has_plans;
-      case 'coach':    return !!status.has_staff;
-      case 'student':  return !!status.has_students;
-      case 'payments': return !!status.payment_setup_completed;
-      default:         return false;
-    }
-  }, [status]);
+  const isStepDoneById = useCallback(
+    (id: StepId): boolean => (id === 'sport' ? !!schoolSport : isSchoolWizardStepDone(id, status)),
+    [status, schoolSport],
+  );
 
   // Determine initial step based on what's already done
   const getInitialStep = useCallback(() => {
@@ -202,6 +211,12 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   const [studentIsAdult, setStudentIsAdult] = useState(false);
   const [parentEmail, setParentEmail] = useState('');
   const [parentPhone, setParentPhone] = useState('');
+  const [parentName, setParentName] = useState('');
+  // '' = automático (el primer plan, o el primer equipo); 'none' = sin plan por ahora;
+  // 'plan:<id>' / 'team:<id>' = lo que eligió el usuario.
+  const [studentTarget, setStudentTarget] = useState('');
+  const [enrollPlans, setEnrollPlans] = useState<Array<{ id: string; name: string; price: number; offering_id: string }>>([]);
+  const [enrollTeams, setEnrollTeams] = useState<Array<{ id: string; name: string; price_monthly: number | null }>>([]);
 
   // Payments form — bloque unificado school/trainer/vendor:
   // Nequi + Bre-B + Banco + Cuenta + Tipo + WhatsApp.
@@ -220,6 +235,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   // Load existing onboarding data
   useEffect(() => {
     if (schoolId) {
+      loadSport();
       loadBranchData();
       loadTeamData();
       loadPlanData();
@@ -227,6 +243,55 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [schoolId]);
+
+  // Evento «paso visto»: uno por paso y sesión (el helper deduplica), no por render.
+  const currentStepId = STEPS[currentStep]?.id;
+  useEffect(() => {
+    if (currentStepId) track({ type: 'onboarding_step_viewed', flow: 'school', step: currentStepId });
+  }, [currentStepId]);
+
+  // El paso del deportista ofrece los planes y equipos que la academia ya creó.
+  useEffect(() => {
+    if (currentStepId !== 'student' || !schoolId) return;
+    (async () => {
+      const [{ data: plans }, { data: teams }] = await Promise.all([
+        supabase.from('offering_plans').select('id, name, price, offering_id').eq('school_id', schoolId).eq('is_active', true).order('created_at', { ascending: true }),
+        supabase.from('teams').select('id, name, price_monthly').eq('school_id', schoolId).order('created_at', { ascending: true }),
+      ]);
+      setEnrollPlans(((plans as unknown) as typeof enrollPlans) ?? []);
+      setEnrollTeams(((teams as unknown) as typeof enrollTeams) ?? []);
+    })();
+  }, [currentStepId, schoolId]);
+
+  // ¿Tiene deporte la academia? Si no, el asistente lo pide (es lo único obligatorio).
+  const loadSport = async () => {
+    if (!schoolId) return;
+    const { data } = await supabase.from('schools').select('sports').eq('id', schoolId).maybeSingle();
+    const sports = (data as { sports?: string[] | null } | null)?.sports;
+    const metadataSport = user?.user_metadata?.sport_name;
+    setSchoolSport(schoolHasSport({ schoolSports: sports, metadataSport }) ? 'ok' : null);
+  };
+
+  const handleSaveSport = async () => {
+    if (!schoolId || !sportChoice) {
+      toast({ title: 'Elige el deporte de tu academia', variant: 'destructive' });
+      return;
+    }
+    setSaving(true);
+    try {
+      const { error } = await supabase.from('schools').update({ sports: [sportChoice] }).eq('id', schoolId);
+      if (error) throw error;
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'sport' });
+      setTeamSport((prev) => prev || sportChoice);
+      // El paso desaparece de la lista al quedar guardado: no se avanza a mano.
+      setSchoolSport('ok');
+      onRefresh();
+    } catch (err: any) {
+      toast({ title: 'Error', description: friendlyError(err), variant: 'destructive' });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const loadBranchData = async () => {
     if (!schoolId) return;
@@ -260,7 +325,22 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       setTeamSport(data.sport || '');
       setTeamModality(data.sport_modality || '');
       setTeamPrice(String(data.price_monthly || '150000'));
+      return;
     }
+
+    // Sin equipo todavía: se precarga el deporte que la academia ya eligió en el
+    // registro, en vez de volver a preguntarlo (hallazgo A).
+    const { data: school } = await supabase
+      .from('schools')
+      .select('sports')
+      .eq('id', schoolId)
+      .maybeSingle();
+    const sport = resolveSignupSport({
+      schoolSports: (school as { sports?: string[] | null } | null)?.sports,
+      metadataSport: user?.user_metadata?.sport_name,
+      catalog: SPORTS_LIST,
+    });
+    if (sport) setTeamSport((prev) => prev || sport);
   };
 
   const loadPlanData = async () => {
@@ -350,6 +430,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       if (error) throw error;
 
       toast({ title: 'Sede actualizada' });
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'branch' });
       onRefresh();
       goNext();
     } catch (err: any) {
@@ -372,6 +453,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
 
       setBusinessModel(model);
       toast({ title: 'Modelo guardado' });
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'model' });
       onRefresh();
       // Avanzamos al siguiente paso (team o plan) automaticamente para que
       // el usuario no se quede preguntandose como seguir. El step 'model'
@@ -467,6 +549,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           .eq('id', existingPlanId);
         if (planErr) throw planErr;
         toast({ title: 'Plan actualizado' });
+        track({ type: 'onboarding_step_completed', flow: 'school', step: 'plan' });
       } else {
         // Insert new offering_plan
         const { data: newPlanData, error: planErr } = await supabase
@@ -487,6 +570,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           setExistingPlanId(newPlanData.id);
         }
         toast({ title: 'Plan creado' });
+        track({ type: 'onboarding_step_completed', flow: 'school', step: 'plan' });
       }
 
       onRefresh();
@@ -529,6 +613,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
 
         if (error) throw error;
         toast({ title: 'Equipo actualizado' });
+        track({ type: 'onboarding_step_completed', flow: 'school', step: 'team' });
       } else {
         // Insert new team
         const { data: newTeam, error } = await supabase
@@ -551,6 +636,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           setExistingTeamId(newTeam.id);
         }
         toast({ title: 'Equipo creado' });
+        track({ type: 'onboarding_step_completed', flow: 'school', step: 'team' });
       }
 
       onRefresh();
@@ -600,6 +686,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       }
 
       toast({ title: 'Entrenador agregado e invitacion enviada' });
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'coach' });
       onRefresh();
       goNext();
     } catch (err: any) {
@@ -609,12 +696,59 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
     }
   };
 
+  // Destino de inscripción efectivo: lo que eligió el usuario o, si no tocó nada, el
+  // primer plan y, si no hay plan, el primer equipo (hallazgo F).
+  const resolveStudentTarget = (): WizardEnrollTarget | null => {
+    if (studentTarget === 'none') return null;
+    if (studentTarget.startsWith('plan:')) {
+      const p = enrollPlans.find((x) => x.id === studentTarget.slice(5));
+      return p ? { kind: 'plan', planId: p.id, offeringId: p.offering_id } : null;
+    }
+    if (studentTarget.startsWith('team:')) {
+      return { kind: 'team', teamId: studentTarget.slice(5) };
+    }
+    if (enrollPlans[0]) return { kind: 'plan', planId: enrollPlans[0].id, offeringId: enrollPlans[0].offering_id };
+    if (enrollTeams[0]) return { kind: 'team', teamId: enrollTeams[0].id };
+    return null;
+  };
+
   const handleCreateStudent = async () => {
     if (!schoolId) return;
-    if (!studentName.trim()) {
-      toast({ title: 'Ingresa el nombre del atleta', variant: 'destructive' });
+
+    // Con plan o equipo, el alta va por el mismo endpoint que «Agregar atleta»:
+    // crea deportista, inscripción y cobro. Sin ninguno, queda el alta simple.
+    const plan = planWizardStudentCreation({
+      fullName: studentName,
+      isAdult: studentIsAdult,
+      parentName,
+      parentEmail,
+      parentPhone,
+      target: resolveStudentTarget(),
+      startDate: todayColombia(),
+    });
+    if (plan.mode === 'invalid') {
+      toast({ title: plan.message, variant: 'destructive' });
       return;
     }
+    if (plan.mode === 'create-one') {
+      setSaving(true);
+      try {
+        await bffClient.post('/api/v1/students/create-one', plan.payload, { 'x-school-id': schoolId });
+        toast({
+          title: 'Atleta inscrito',
+          description: 'Su cobro ya quedó creado. Lo ves en Pagos.',
+        });
+        track({ type: 'onboarding_step_completed', flow: 'school', step: 'student', extra: { con_plan: true } });
+        onRefresh();
+        goNext();
+      } catch (err: any) {
+        toast({ title: 'No pudimos inscribir al atleta', description: friendlyError(err), variant: 'destructive' });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     setSaving(true);
     try {
       // Get first team for auto-assign
@@ -662,7 +796,9 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           : (parentEmail.trim()
               ? 'Atleta registrado e invitación enviada al padre'
               : 'Atleta registrado'),
+        description: 'Quedó sin plan: asígnaselo desde Deportistas para que se genere su cobro.',
       });
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'student', extra: { con_plan: false } });
       onRefresh();
       goNext();
     } catch (err: any) {
@@ -713,6 +849,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
       if (error) throw error;
 
       toast({ title: 'Datos de cobro guardados' });
+      track({ type: 'onboarding_step_completed', flow: 'school', step: 'payments' });
       onRefresh();
       handleFinish();
     } catch (err: any) {
@@ -722,8 +859,9 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
     }
   };
 
-  const handleFinish = async () => {
+  const handleFinish = async (how: 'complete' | 'later' = 'complete') => {
     if (!schoolId) return;
+    track({ type: 'onboarding_finished', flow: 'school', extra: { how } });
     // Mark onboarding as completed
     await supabase
       .from('schools')
@@ -747,6 +885,7 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
 
   const handleSkip = () => {
     if (!STEPS[currentStep].required) {
+      track({ type: 'onboarding_step_skipped', flow: 'school', step: STEPS[currentStep].id });
       goNext();
     }
   };
@@ -756,6 +895,29 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
   const renderStepContent = () => {
     const stepId = STEPS[currentStep]?.id;
     switch (stepId) {
+      case 'sport':
+        return (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Es lo único que necesitamos para abrir tu panel. Lo demás lo haces después, a tu ritmo.
+            </p>
+            <div className="space-y-2">
+              <Label>Deporte *</Label>
+              <Select value={sportChoice} onValueChange={setSportChoice}>
+                <SelectTrigger><SelectValue placeholder="Elige un deporte" /></SelectTrigger>
+                <SelectContent>
+                  {SPORTS_LIST.map((sport) => (
+                    <SelectItem key={sport} value={sport}>{sport}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button onClick={handleSaveSport} disabled={saving || !sportChoice} className="w-full">
+              {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Guardar y continuar
+            </Button>
+          </div>
+        );
       case 'branch':
         return (
           <div className="space-y-4">
@@ -953,11 +1115,17 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           </div>
         );
 
-      case 'student':
+      case 'student': {
+        const objetivo = resolveStudentTarget();
+        const valorSelect = studentTarget !== '' ? studentTarget
+          : objetivo?.kind === 'plan' ? `plan:${objetivo.planId}`
+          : objetivo?.kind === 'team' ? `team:${objetivo.teamId}`
+          : 'none';
+        const conPlan = objetivo !== null;
         return (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Registra a tu primer deportista. Si es menor de edad necesitamos los datos del padre/madre para enviarles la invitación.
+              Registra a tu primer deportista. Si lo inscribes en un plan, su cobro se crea solo y lo ves en Pagos.
             </p>
             <div className="space-y-2">
               <Label>Nombre del atleta *</Label>
@@ -968,6 +1136,29 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
               />
               <p className="text-[11px] text-muted-foreground">Solo letras. Sin números.</p>
             </div>
+
+            {(enrollPlans.length > 0 || enrollTeams.length > 0) && (
+              <div className="space-y-2">
+                <Label>Plan o equipo</Label>
+                <Select value={valorSelect} onValueChange={setStudentTarget}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {enrollPlans.map((p) => (
+                      <SelectItem key={p.id} value={`plan:${p.id}`}>{p.name} · ${Number(p.price).toLocaleString('es-CO')}</SelectItem>
+                    ))}
+                    {enrollTeams.map((t) => (
+                      <SelectItem key={t.id} value={`team:${t.id}`}>Equipo {t.name}</SelectItem>
+                    ))}
+                    <SelectItem value="none">Sin plan por ahora</SelectItem>
+                  </SelectContent>
+                </Select>
+                {!conPlan && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Sin plan no se genera cobro. Podrás asignárselo después desde Deportistas.
+                  </p>
+                )}
+              </div>
+            )}
 
             <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
               <input
@@ -980,29 +1171,42 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
             </label>
 
             {!studentIsAdult && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Email del padre (opcional)</Label>
-                  <Input
-                    type="email"
-                    placeholder="padre@email.com"
-                    value={parentEmail}
-                    onChange={(e) => setParentEmail(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Teléfono del padre (opcional)</Label>
-                  <PhoneInput value={parentPhone} onChange={setParentPhone} placeholder="Número de celular" />
+              <div className="space-y-4">
+                {conPlan && (
+                  <div className="space-y-2">
+                    <Label>Nombre del padre o acudiente *</Label>
+                    <Input
+                      placeholder="Nombre y apellido"
+                      value={parentName}
+                      onChange={(e) => setParentName(onlyLetters(e.target.value))}
+                    />
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{conPlan ? 'Email del padre *' : 'Email del padre (opcional)'}</Label>
+                    <Input
+                      type="email"
+                      placeholder="padre@email.com"
+                      value={parentEmail}
+                      onChange={(e) => setParentEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{conPlan ? 'WhatsApp del padre *' : 'Teléfono del padre (opcional)'}</Label>
+                    <PhoneInput value={parentPhone} onChange={setParentPhone} placeholder="Número de celular" />
+                  </div>
                 </div>
               </div>
             )}
 
             <Button onClick={handleCreateStudent} disabled={saving} className="w-full">
               {saving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <GraduationCap className="h-4 w-4 mr-2" />}
-              Registrar Atleta
+              {conPlan ? 'Inscribir atleta' : 'Registrar Atleta'}
             </Button>
           </div>
         );
+      }
 
       case 'payments':
         return (
@@ -1124,8 +1328,8 @@ export function SchoolOnboardingWizard({ status, onComplete, onRefresh, variant 
           </Button>
         )}
         {allRequiredDone && (
-          <Button variant="outline" size="sm" onClick={handleFinish}>
-            Terminar después <ArrowRight className="h-4 w-4 ml-1" />
+          <Button variant="outline" size="sm" onClick={() => handleFinish('later')}>
+            Ir a mi panel <ArrowRight className="h-4 w-4 ml-1" />
           </Button>
         )}
         {!isLastStep && (

@@ -31,6 +31,7 @@ import { runWhatsAppPaymentOutcome } from './whatsapp-payment-outcome.job';
 import { runReceiptReviewAlerts } from './receipt-review-alerts.job';
 import { runPagosPorValidar, pagosPorValidarActivo, type Tramo as TramoPagosPorValidar } from './pagos-por-validar.job';
 import { runResumenCuentas, resumenCuentasActivo } from './resumen-cuentas.job';
+import { runSolicitudesUnionAvisos, solicitudesUnionAvisosActivo } from './solicitudes-union-avisos.job';
 import { runAcuerdosRecordatorios, correrMantenimientoAcuerdos } from './acuerdos-de-pago-recordatorios.job';
 import { runBienvenidaEscuelas } from './bienvenida-escuelas.job';
 import { runWhatsAppMantenimiento } from './whatsapp-mantenimiento.job';
@@ -702,6 +703,27 @@ export function initMaintenanceJobs() {
     console.log(pagosPorValidarActivo()
         ? '[CRON] Resumen de pagos por validar registrado (07:30 y 17:00 COT).'
         : '[CRON] Resumen de pagos por validar APAGADO en este servidor (solo NODE_ENV=production; o DISABLE_PAGOS_POR_VALIDAR=true).');
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Solicitudes de unión por código sin atender → WhatsApp de plataforma a la
+    // administración de la escuela, y recordatorio a las 24 h — cada 10 min.
+    // UN mensaje por escuela (no por solicitud). Solo marca lo que salió de verdad:
+    // sin suscriptores o en silencio nocturno se reintenta. Solo producción;
+    // kill-switch DISABLE_SOLICITUDES_UNION_AVISOS=true.
+    // ────────────────────────────────────────────────────────────────────────
+    cron.schedule('*/10 * * * *', async () => {
+        if (!solicitudesUnionAvisosActivo()) return;
+        try {
+            const r = await runSolicitudesUnionAvisos();
+            if (r.avisadas > 0) console.log(`[CRON] Solicitudes de unión: ${r.avisadas} escuela(s) avisada(s), ${r.omitidas} omitida(s).`);
+        } catch (err: any) {
+            Sentry.captureException(err);
+            console.error('[CRON] Error avisando solicitudes de unión:', err?.message || err);
+        }
+    });
+    console.log(solicitudesUnionAvisosActivo()
+        ? '[CRON] Avisos de solicitudes de unión registrados (cada 10 min).'
+        : '[CRON] Avisos de solicitudes de unión APAGADOS en este servidor (solo NODE_ENV=production; o DISABLE_SOLICITUDES_UNION_AVISOS=true).');
 
     // ────────────────────────────────────────────────────────────────────────
     // Resumen de cuentas cada 4 horas (07:00, 11:00, 15:00 y 19:00 COT) para las escuelas de
