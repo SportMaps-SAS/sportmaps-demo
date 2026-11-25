@@ -80,7 +80,7 @@ export default function ParentMorePage() {
     { label: 'Inscripciones y planes', to: '/enrollments' },
     { label: 'Mis eventos y torneos', to: '/my-event-registrations' },
     { label: 'Carnets', to: '/my-cards' },
-    { label: 'Constancias', to: '/my-certificates' },
+    { label: 'Constancias', nota: 'Paz y salvo, inscripción', to: '/my-certificates' },
     ...(showStore ? [{ label: 'Tienda del club', to: '/mi-tienda' }] : []),
     ...(showMyPurchases ? [{ label: 'Mis compras', to: '/mis-compras' }] : []),
     { label: 'Salud de mis hijos', to: '/salud' },

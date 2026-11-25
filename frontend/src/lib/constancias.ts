@@ -87,6 +87,14 @@ export const PLANTILLAS_SUGERIDAS: Array<{
       '{{escuela.nombre}} certifica que {{atleta.nombre}}, {{atleta.identificacion}}, de {{atleta.edad}} años, es deportista {{atleta.activo}} de nuestra institución en la categoría {{equipo}}.\n\nSe expide para los fines que el interesado considere pertinentes, el {{fecha_emision}}.',
     footer_text: 'Documento generado electrónicamente. Verifique su autenticidad escaneando el código QR.',
   },
+  {
+    name: 'Paz y salvo',
+    kind: 'payment',
+    title: 'PAZ Y SALVO',
+    body_template:
+      '{{escuela.nombre}} certifica que {{atleta.nombre}}, {{atleta.identificacion}}, {{atleta.inscrito}} en {{equipo}}, se encuentra a paz y salvo por todo concepto con la institución a la fecha.\n\nSe expide a solicitud del interesado el {{fecha_emision}}.',
+    footer_text: 'Documento generado electrónicamente. Verifique su autenticidad escaneando el código QR.',
+  },
 ];
 
 export type EstadoConstancia = 'pending_payment' | 'pending_review' | 'issued' | 'revoked';

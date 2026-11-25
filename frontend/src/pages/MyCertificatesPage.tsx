@@ -118,7 +118,13 @@ export default function MyCertificatesPage() {
     });
     setReqLoading(false);
     if (error) {
-      return toast({ title: 'No se pudo pedir la constancia', description: 'Inténtalo de nuevo en un momento.', variant: 'destructive' });
+      // El paz y salvo exige estar al día (trigger 20261125162425): ese motivo sí se le muestra a la familia.
+      const pys = /paz y salvo/i.test(error.message || '');
+      return toast({
+        title: pys ? 'Todavía no se puede dar el paz y salvo' : 'No se pudo pedir la constancia',
+        description: pys ? `${error.message} Puedes pagar en la pestaña Pagos.` : 'Inténtalo de nuevo en un momento.',
+        variant: 'destructive',
+      });
     }
     toast({
       title: (data as any)?.already_pending ? 'Ya la habías pedido' : 'Listo, la pediste',
