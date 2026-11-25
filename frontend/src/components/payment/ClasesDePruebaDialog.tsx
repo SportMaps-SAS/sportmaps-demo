@@ -194,13 +194,13 @@ export function ClasesDePruebaDialog({ open, onOpenChange, schoolId, onPagado }:
                 const metodo = METODOS_PAGO_CLASE_PRUEBA.find((m) => m.value === p.pago?.metodo)?.label ?? 'Otro';
                 return (
                   <li key={p.id} className="py-3 space-y-3">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">
+                    <div className="flex flex-col gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-sm truncate">{p.full_name}</p>
                         <p className="text-xs text-muted-foreground truncate">
                           {p.guardian_name ? `${p.guardian_name} · ` : ''}{p.phone}
                         </p>
-                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        <div className="flex flex-wrap gap-1.5 mt-1.5 [&>*]:whitespace-nowrap">
                           <Badge variant="secondary" className="text-[10px] gap-1"><Icono className="h-3 w-3" />{canal.label}</Badge>
                           {fechaClase
                             ? (
@@ -219,7 +219,7 @@ export function ClasesDePruebaDialog({ open, onOpenChange, schoolId, onPagado }:
                           {p.status === 'converted' && <Badge variant="outline" className="text-[10px]">Ya es deportista</Badge>}
                         </div>
                       </div>
-                      <div className="shrink-0 flex flex-wrap items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         {p.pago ? (
                           <>
                             <Badge variant="outline" className="gap-1 text-xs text-emerald-700 border-emerald-300 dark:text-emerald-400">
