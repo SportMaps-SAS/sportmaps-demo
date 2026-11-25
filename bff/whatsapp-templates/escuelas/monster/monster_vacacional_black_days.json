@@ -1,0 +1,24 @@
+{
+  "name": "monster_vacacional_black_days",
+  "language": "es_CO",
+  "category": "MARKETING",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "¡Hola {{1}}! 🏐 Black Days en el Vacacional de Voleibol de Monster´s Volley Club: hasta el domingo 29 de noviembre, 10 % de descuento por hermanos pagando el total. Es en el Parque Pinar de Suba 2, martes, miércoles y jueves de 8 a 11 a. m., hasta el 11 de diciembre, e incluye camiseta. Cupo limitado a 40 deportistas. ¿Te enviamos precios e inscripción?",
+      "example": { "body_text": [["Carolina"]] }
+    },
+    {
+      "type": "FOOTER",
+      "text": "Puedes dejar de recibir promociones cuando quieras"
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Sí, cuéntame" },
+        { "type": "QUICK_REPLY", "text": "Más adelante" },
+        { "type": "QUICK_REPLY", "text": "No recibir más" }
+      ]
+    }
+  ]
+}

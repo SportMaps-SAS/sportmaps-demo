@@ -266,3 +266,13 @@ docs/manuales/_src/manual-entrenador-v2/build.mjs
 docs/manuales/_src/manual-deportista-v2/
 docs/manuales/_src/manual-acudiente-v2/_viejo/
 docs/manuales/_src/manual-acudiente-v2/reprueba-*/
+docs/manuales/_src/carnets-constancias/
+docs/manuales/_src/control-acceso-reservas-agendamiento/
+docs/manuales/academias/carnets-y-constancias.*
+docs/manuales/interno/carnets-y-constancias.*
+
+# Salida generada de los evals de Mapi (cada corrida la reescribe)
+bff/src/services/mapi-agente/evals/ultimo-reporte.json
+
+# Consultas temporales de solo lectura de una auditoría: se borran al cerrarla
+bff/scripts/_tmp_*.ts

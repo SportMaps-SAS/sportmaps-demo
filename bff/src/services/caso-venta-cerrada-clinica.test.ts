@@ -166,10 +166,13 @@ beforeEach(() => {
     h.state.filas = [];
     h.state.lead = null;
     h.state.pagos = [];
-    // Se cierra YA por la variable (la fecha real de la prueba es anterior al 21-nov).
+    // El caso es el 20-nov (venta cerrada, clínica el 21 y 22). Se fija el reloj: con
+    // Date.now() real, desde el 23-nov la clínica ya terminó y los tests se caían solos.
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-20T15:00:00Z') });
+    // Se cierra YA por la variable (la fecha de la prueba es anterior al 21-nov).
     vi.stubEnv('WA_VENTAS_CERRADAS_ITEMS', ID_CLINICA);
 });
-afterEach(() => { vi.unstubAllEnvs(); });
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe('ventaCerradaDeItem (pura)', () => {
     const base = { id: 'x', kind: 'clase_extra', starts_at: '2026-11-21T05:00:00Z' };

@@ -74,7 +74,7 @@ export const CONFIG_COMERCIAL: ConfigComercial = {
     // funciones. NO decir nada más (precio desde enero, tope de escuelas, tarjeta) hasta que se confirme: Q1–Q11 de
     // docs/specs/campana-black-friday-sportmaps.md. `hasta` = fin de diciembre (la promo es de esos dos meses).
     promo: {
-        texto: 'Black Friday: noviembre y diciembre gratis, con la migración de tus datos incluida y todas las funciones. Hay hasta 20 cupos',
+        texto: 'Black Friday: noviembre y diciembre gratis, con la migración de tus datos incluida y todas las funciones (gratis hasta el 31 de diciembre; desde enero se paga el plan normal). Hay hasta 20 cupos y se puede pedir hasta el lunes 30 de noviembre',
         desde: null,
         hasta: '2026-12-31T23:59:59-05:00',
     },
