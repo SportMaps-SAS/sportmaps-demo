@@ -45,6 +45,7 @@ import {
     sendInteractiveButtons, sendTextMessage, type BotonInteractivo, type SendTextResult, type WhatsAppIntegration,
 } from './whatsapp.service';
 import { aWaId, enviarCobroPorPlantilla, ventanaAbierta, type ConceptoCobro, type DatosCobro } from './whatsapp-plantillas.service';
+import { estadoDeOfertas, claseDePruebaPermitidaEn, type EstadoOfertas } from './bot-ofertas.service';
 
 const TZ = 'America/Bogota';
 
@@ -619,6 +620,8 @@ export interface DepsEnvio {
      */
     reservar: (leadId: string, clave: string, valor: Record<string, unknown> & { id: string }) => Promise<boolean>;
     log: { info?: (...a: any[]) => void; warn?: (...a: any[]) => void };
+    /** Estado de ofertas de la escuela (bloqueos de la clase de prueba). Nunca lanza. */
+    estadoOfertas: (schoolId: string) => Promise<EstadoOfertas>;
 }
 
 const DEPS_ENVIO: DepsEnvio = {
@@ -678,7 +681,34 @@ const DEPS_ENVIO: DepsEnvio = {
         return !error && Array.isArray(data) && data.length > 0;
     },
     log: console,
+    estadoOfertas: (schoolId) => estadoDeOfertas(schoolId),
 };
+
+/**
+ * ¿La escuela bloqueó la clase de prueba en `fecha` (p. ej. vacaciones de Monster
+ * 2026-12-01..2027-01-31)? Lee las ofertas UNA vez por escuela con el mapa de la
+ * corrida (no N+1: los jobs comparten la base). Si está bloqueada, deja el motivo
+ * `clase_prueba_bloqueada` en el log: al interesado no se le escribe nada. Si la
+ * lectura falla (o viene `motivo: 'error'`) también devuelve true (`ofertas_sin_leer`).
+ */
+async function claseBloqueadaEn(
+    d: DepsEnvio, cache: Map<string, EstadoOfertas | null>, schoolId: string, fecha: string, contexto: Record<string, unknown>,
+): Promise<boolean> {
+    if (!cache.has(schoolId)) {
+        let e: EstadoOfertas | null = null;
+        try { e = await d.estadoOfertas(schoolId); } catch { e = null; }
+        cache.set(schoolId, e && e.claseDePrueba?.motivo !== 'error' ? e : null);
+    }
+    const estado = cache.get(schoolId);
+    // Falla CERRADO (como el bot en vivo): sin el estado no se sabe si la fecha está bloqueada.
+    if (!estado) {
+        d.log.warn?.('[clase-prueba] aviso omitido', { ...contexto, schoolId, fecha, motivo: 'ofertas_sin_leer' });
+        return true;
+    }
+    if (claseDePruebaPermitidaEn(estado, fecha)) return false;
+    d.log.info?.('[clase-prueba] aviso omitido', { ...contexto, schoolId, fecha, motivo: 'clase_prueba_bloqueada' });
+    return true;
+}
 
 type Canal = 'texto' | 'plantilla' | 'ninguno';
 
@@ -800,7 +830,7 @@ export interface DepsCupos extends DepsEnvio {
     avisarLiberado: (fila: { lead_id: string; school_id: string; slot_id?: string | null }, lead: any, horas: number | null) => Promise<void>;
     /** Agenda (etapa + avisos) y devuelve la confirmación para el interesado, o null. */
     alConfirmar: (fila: { lead_id: string; school_id: string; phone?: string | null }) =>
-        Promise<{ texto: string; telefono: string | null; slotId: string; teamId: string | null } | null>;
+        Promise<{ texto: string; telefono: string | null; slotId: string; teamId: string | null; fecha?: string | null } | null>;
 }
 
 const DEPS_CUPOS: Omit<DepsCupos, keyof DepsEnvio> = {
@@ -851,7 +881,7 @@ const DEPS_CUPOS: Omit<DepsCupos, keyof DepsEnvio> = {
         if (!franja) return null;
         return {
             texto: textoConfirmacion(franja, { deportista: lead.nombre, nombreClase: aj.nombreClase, queLlevar }),
-            telefono: fila.phone ?? lead.telefono, slotId: franja.id, teamId: franja.teamId,
+            telefono: fila.phone ?? lead.telefono, slotId: franja.id, teamId: franja.teamId, fecha: franja.fecha,
         };
     },
 };
@@ -871,6 +901,7 @@ export async function runCuposSeparados(opciones: { deps?: Partial<DepsCupos> } 
     if (process.env.DISABLE_CUPOS_SEPARADOS === 'true') return { ...r, desactivado: true };
     const d: DepsCupos = { ...DEPS_ENVIO, ...DEPS_CUPOS, ...opciones.deps };
     const ahora = d.ahora();
+    const ofertas = new Map<string, EstadoOfertas | null>();
     try {
         // 1. Por vencer.
         const desde = new Date(ahora.getTime() + AVISO_HASTA_MIN * 60_000).toISOString();
@@ -887,6 +918,10 @@ export async function runCuposSeparados(opciones: { deps?: Partial<DepsCupos> } 
             for (const l of pendientes) {
                 const s = slots.get(l.cupo_separado_slot_id);
                 if (!s) { r.omitidos++; continue; }
+                // Clase en fecha bloqueada por la escuela: no se le apura a pagar.
+                if (await claseBloqueadaEn(d, ofertas, l.school_id, String(s.slot_date).slice(0, 10), { lead: l.id, aviso: 'cupo_por_vencer' })) {
+                    r.omitidos++; continue;
+                }
                 if (!ajustesPorEscuela.has(l.school_id)) ajustesPorEscuela.set(l.school_id, await d.ajustes(l.school_id));
                 const aj = ajustesPorEscuela.get(l.school_id)!;
                 const id = `${l.cupo_separado_slot_id}:${l.cupo_separado_hasta}`;
@@ -927,7 +962,8 @@ export async function runCuposSeparados(opciones: { deps?: Partial<DepsCupos> } 
                         // El pago llegó por otro lado (registrado a mano o revisado): queda agendada
                         // y se le dice, solo si la ventana sigue abierta (no hay plantilla para esto).
                         const c = await d.alConfirmar(v);
-                        if (c) {
+                        // Queda agendada igual (ya pagó), pero en fecha bloqueada no se le confirma la clase.
+                        if (c && !(c.fecha && await claseBloqueadaEn(d, ofertas, v.school_id, c.fecha, { lead: v.lead_id, aviso: 'agendada' }))) {
                             await enviarAviso(d, {
                                 schoolId: v.school_id, telefono: c.telefono, texto: c.texto, step: 'clase_prueba_agendada',
                                 estado: { flujo: FLUJO_EMBUDO_AGENDA, paso_embudo: 'agendada', datos_embudo: { leadId: v.lead_id, slotId: c.slotId, teamId: c.teamId } },
@@ -996,6 +1032,8 @@ export interface ResumenReprogramadas {
     sinCanal: number;
     yaAvisados: number;
     errores: number;
+    /** Franjas en fecha bloqueada por la escuela (`clase_prueba_bloqueada`): no se avisa. */
+    bloqueadas?: number;
     sinTabla?: boolean;
 }
 
@@ -1099,6 +1137,8 @@ export async function avisarClasesCanceladas(p: {
         const porSlot = new Map(afectadas.map((a) => [a.slot.id, a]));
         const leads = await d.leadsDeFranjas([...porSlot.keys()]);
         const aj = await d.ajustes(p.schoolId);
+        // Una lectura de ofertas por escuela (esta función corre por escuela).
+        const ofertas = new Map<string, EstadoOfertas | null>();
         for (const l of leads) {
             const slotId: string | null = porSlot.has(l.trial_slot_id) ? l.trial_slot_id
                 : porSlot.has(l.cupo_separado_slot_id) ? l.cupo_separado_slot_id : null;
@@ -1106,6 +1146,11 @@ export async function avisarClasesCanceladas(p: {
             r.agendados++;
             const { slot, excepcion } = porSlot.get(slotId)!;
             if (l.source_detail?.reprogramada?.id === slotId) { r.yaAvisados++; continue; }
+            // La escuela bloqueó la clase de prueba ese día: no se le ofrece «elegir otro horario».
+            if (await claseBloqueadaEn(d, ofertas, p.schoolId, String(slot.slot_date).slice(0, 10), { lead: l.id, aviso: 'reprogramada' })) {
+                r.bloqueadas = (r.bloqueadas ?? 0) + 1;
+                continue;
+            }
             if (!(await d.reservar(l.id, 'reprogramada', { id: slotId, at: d.ahora().toISOString(), tipo: excepcion.tipo }))) {
                 r.yaAvisados++;
                 continue;

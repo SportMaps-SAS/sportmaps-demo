@@ -10,7 +10,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
-import { supabase } from '../config/supabase';
 import { requireAuth, AuthenticatedRequest } from '../middlewares/authMiddleware';
 import {
     createGlosa, respondGlosa, conciliateGlosa, resolveGlosa, reopenGlosa,
@@ -18,8 +17,7 @@ import {
     sendGlosaCreatedEmail, sendGlosaRespondedEmail, sendGlosaResolvedEmail,
     GlosaRpcError,
 } from '../services/glosa.service';
-import { evaluatePaymentReceipt } from '../services/receipt-approval.service';
-import { destinatarioDelCobro } from '../utils/destinatarioDelCobro';
+import { sellarComprobante, respuestaDelSellado, limiteSellado } from '../services/comprobante-sellado.service';
 
 const router = Router();
 
@@ -143,22 +141,23 @@ router.get('/', requireAuth, async (req: AuthenticatedRequest, res: Response) =>
     }
 });
 
-// auto-evaluate (Fase 5): el frontend lo llama tras insertar un comprobante con veredicto.
-// El servidor decide (auto-aprobar / glosa / nada) de forma server-authoritative. JWT liviano
-// porque lo dispara el acudiente (no es school_member); verifica que sea dueño del pago.
-router.post('/auto-evaluate', async (req: AuthenticatedRequest, res: Response) => {
+// auto-evaluate (Fase 5). Desde 2026-11-25 DELEGA en el sellado
+// (POST /api/v1/payments/:id/sellar-comprobante, spec seguridad-veredicto-comprobante
+// §3.3): la PWA instalada vieja sigue llamando aquí después de escribir su propio
+// veredicto, y el servidor lo pisa con la lectura del archivo guardado antes de
+// decidir (auto-aprobar / glosa / rechazo). La autorización es la del sellado:
+// familia del cobro (también el hijo con `parent_id` NULL, que antes daba 403) o
+// administración de la escuela. Mismo cupo que el sellado.
+router.post('/auto-evaluate', limiteSellado, async (req: AuthenticatedRequest, res: Response) => {
     const user = await getJwtUser(req, res);
     if (!user) return;
     const paymentId = typeof req.body?.paymentId === 'string' ? req.body.paymentId : null;
-    if (!paymentId) return res.status(400).json({ error: 'paymentId requerido' });
-    // Ownership: solo el acudiente del pago puede disparar su evaluación (evita abuso/DoS de re-OCR).
-    // Dueño = acudiente o, si el cobro no tiene, el adulto titular (user_id).
-    const { data: owner } = await supabase.from('payments').select('parent_id, user_id').eq('id', paymentId).single();
-    if (!owner || destinatarioDelCobro(owner) !== user.id) {
-        return res.status(403).json({ error: 'No autorizado sobre este pago.' });
+    if (!paymentId || !z.string().uuid().safeParse(paymentId).success) {
+        return res.status(400).json({ error: 'paymentId requerido' });
     }
-    const result = await evaluatePaymentReceipt(paymentId, req.log);
-    return res.json(result); // { action: 'approved'|'glosa'|'none', glosaId? }
+    const r = await sellarComprobante(paymentId, { uid: user.id }, req.log);
+    const { status, body } = respuestaDelSellado(r);
+    return res.status(status).json(body); // { verdict, action: 'approved'|'glosa'|'rejected'|'none', glosaId, duplicado }
 });
 
 // ── Acudiente (JWT liviano) ──────────────────────────────────────────────────

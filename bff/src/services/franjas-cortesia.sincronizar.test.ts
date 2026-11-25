@@ -13,6 +13,12 @@ type Op = [string, any[]];
 const h = vi.hoisted(() => ({
     resolver: (_tabla: string, _ops: [string, any[]][]): { data: any; error: any } => ({ data: null, error: null }),
     llamadas: [] as { tabla: string; ops: [string, any[]][] }[],
+    /** Bloqueos de la clase de prueba de la escuela (bot_oferta_bloqueos). */
+    bloqueos: [] as any[],
+}));
+vi.mock('./bot-ofertas.service', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./bot-ofertas.service')>()),
+    estadoDeOfertas: vi.fn(async () => ({ bloqueos: h.bloqueos })),
 }));
 vi.mock('../config/supabase', () => {
     const builder = (tabla: string): any => {
@@ -89,7 +95,7 @@ const slot = (o: any) => ({
     reserved_count: 0, is_open: true, generated_from_schedule: true, max_capacity: CUPOS_SIN_LIMITE, cerrada_por: null, ...o,
 });
 
-beforeEach(() => limpiarCacheSemana());
+beforeEach(() => { limpiarCacheSemana(); h.bloqueos = []; });
 
 describe('sin la migración M1: lo de siempre', () => {
     it('reintenta sin las columnas nuevas, crea sin límite, cierra sin cerrada_por y no reabre', async () => {
@@ -224,5 +230,34 @@ describe('con la migración M1', () => {
         expect(escrituras('school_trial_slots', 'update')).toHaveLength(0);
         expect(escrituras('school_trial_slots', 'insert')).toHaveLength(0);
         expect(r).toMatchObject({ aplicado: false, reabiertas: 1, cuposAjustados: 1 });
+    });
+});
+
+describe('fechas con la clase de prueba bloqueada', () => {
+    it('no crea franjas en fechas bloqueadas y NO cierra ni toca las que ya existen ahí', async () => {
+        h.bloqueos = [{ tipo: 'clase_prueba', desde: '2026-10-08', hasta: '2026-10-10', motivo: 'Vacaciones' }];
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        base({ m1: true, existentes: [slot({ id: 'jueves', slot_date: '2026-10-08' })] });
+        const r = await sincronizarFranjasDeEscuela('s1', { aplicar: true, hoy: HOY, semanas: 1 });
+        expect(r.errores).toEqual([]);
+        expect(escrituras('school_trial_slots', 'insert')).toHaveLength(0);
+        // La del jueves (ya existía, en fecha bloqueada) sigue como estaba.
+        expect(escrituras('school_trial_slots', 'update')).toHaveLength(0);
+        expect(r).toMatchObject({ creadas: 0, cerradas: 0, yaExistian: 1, bloqueadasOmitidas: 2 });
+        expect(warn.mock.calls.some((c) => JSON.stringify(c).includes('clase_prueba_bloqueada'))).toBe(true);
+        warn.mockRestore();
+    });
+
+    it('regresión: un bloqueo fuera de la ventana o de otro tipo no cambia nada', async () => {
+        h.bloqueos = [
+            { tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null },
+            { tipo: 'clinica', desde: '2026-10-01', hasta: '2026-10-31', motivo: null },
+        ];
+        base({ m1: true, existentes: [slot({ id: 'jueves', slot_date: '2026-10-08' })] });
+        const r = await sincronizarFranjasDeEscuela('s1', { aplicar: true, hoy: HOY, semanas: 1 });
+        const filas = escrituras('school_trial_slots', 'insert')[0].ops.find(([m]) => m === 'insert')![1][0];
+        expect(filas.map((f: any) => `${f.team_id} ${f.slot_date}`)).toEqual(['t-mini 2026-10-10', 't-seniors 2026-10-10']);
+        expect(r.creadas).toBe(2);
+        expect(r.bloqueadasOmitidas).toBeUndefined();
     });
 });

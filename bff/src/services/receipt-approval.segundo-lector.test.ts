@@ -217,3 +217,81 @@ describe('aprobación automática con Gemini (A) y Claude (B)', () => {
         expect(h.claude).not.toHaveBeenCalled();
     });
 });
+
+// ─── Spec seguridad-veredicto-comprobante §3.5 ───────────────────────────────
+describe('lectura previa del sellado y fallback sin re-lectura', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const shaDe = (b: Uint8Array) => require('crypto').createHash('sha256').update(Buffer.from(b)).digest('hex');
+    const LECTURA = {
+        amount: 165000, currency: 'COP', date: '2026-11-08', time: '10:15', bank: 'Nequi', reference: 'M48217730',
+        destination: '319 450 5150', destinationName: 'Monsters Volley Club', originName: 'Carolina Pérez',
+        isReceipt: true, isTransactionList: false, missingFields: [], rawText: COMPROBANTE.raw_text, provider: 'gemini',
+    };
+
+    it('la lectura del sellado de ESTOS bytes vale como A: no se vuelve a leer con Gemini', async () => {
+        const base = escenario();
+        h.db = supabaseFalso(base);
+        const fetchGemini = leeGemini(COMPROBANTE);
+        leeClaude(COMPROBANTE);
+
+        const r = await evaluatePaymentReceipt('pay1', logFalso() as any, {
+            lecturaA: { provider: 'gemini', result: LECTURA as any, sha: shaDe(IMAGEN) },
+        });
+
+        expect(r.action).toBe('approved');
+        expect(fetchGemini).not.toHaveBeenCalled();
+        expect(h.claude).toHaveBeenCalledTimes(1);
+    });
+
+    it('una lectura previa de OTROS bytes no se usa: se lee de nuevo', async () => {
+        const base = escenario();
+        h.db = supabaseFalso(base);
+        const fetchGemini = leeGemini(COMPROBANTE);
+        leeClaude(COMPROBANTE);
+
+        await evaluatePaymentReceipt('pay1', logFalso() as any, {
+            lecturaA: { provider: 'gemini', result: LECTURA as any, sha: 'f'.repeat(64) },
+        });
+
+        expect(fetchGemini).toHaveBeenCalledTimes(1);
+    });
+
+    function sinAutoAprobacion(fila: Record<string, unknown>): BaseFalsa {
+        const base = escenario();
+        base.tablas.school_settings = [{ school_id: 's1', auto_approve_enabled: false, auto_approve_max_amount: 0 }];
+        Object.assign(base.tablas.payments[0], fila);
+        base.rpc.reject_payment_receipt = () => ({ data: { ok: true } });
+        return base;
+    }
+    const rechazo = (base: BaseFalsa) => base.llamadasRpc.some((c) => c.nombre === 'reject_payment_receipt');
+
+    it('rojo escrito por el navegador (sin server_verified) → no rechaza, queda manual', async () => {
+        const base = sinAutoAprobacion({
+            receipt_verdict: 'rojo', receipt_image_sha256_source: 'client_original',
+            receipt_verdict_reasons: [{ code: 'DESTINO_NO_COINCIDE', level: 'rojo' }],
+        });
+        h.db = supabaseFalso(base);
+        expect(await evaluatePaymentReceipt('pay1', logFalso() as any)).toEqual({ action: 'none' });
+        expect(rechazo(base)).toBe(false);
+    });
+
+    it('rojo sellado por el servidor → rechazo automático, como siempre', async () => {
+        const base = sinAutoAprobacion({
+            receipt_verdict: 'rojo', receipt_image_sha256_source: 'server_verified',
+            receipt_verdict_reasons: [{ code: 'DESTINO_NO_COINCIDE', level: 'rojo' }],
+        });
+        h.db = supabaseFalso(base);
+        expect((await evaluatePaymentReceipt('pay1', logFalso() as any)).action).toBe('rejected');
+        expect(rechazo(base)).toBe(true);
+    });
+
+    it('lectura fallida del servidor → sin glosa ni rechazo', async () => {
+        const base = sinAutoAprobacion({
+            receipt_verdict: 'amarillo', receipt_image_sha256_source: 'server_verified',
+            receipt_verdict_reasons: [{ code: 'LECTURA_FALLIDA', level: 'amarillo' }],
+        });
+        h.db = supabaseFalso(base);
+        expect(await evaluatePaymentReceipt('pay1', logFalso() as any)).toEqual({ action: 'none' });
+        expect(rechazo(base)).toBe(false);
+    });
+});

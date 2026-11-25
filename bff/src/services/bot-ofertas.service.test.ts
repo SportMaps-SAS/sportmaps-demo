@@ -201,11 +201,11 @@ describe('Monster — 26-nov 10:00: clase de prueba disponible con bloqueo en ca
         });
     });
 
-    it('las reglas dicen «solo se pueden agendar hasta el lunes 30 de noviembre» y no prohíben la clase hoy', () => {
+    it('las reglas dicen «del 1-dic al 31-ene NO hay» y no prohíben la clase hoy', () => {
         const reglas = reglasDeOfertasParaIa(e);
         expect(reglas).toHaveLength(2);
-        expect(reglas[0]).toBe('- Las clases de prueba solo se pueden agendar hasta el lunes 30 de noviembre; '
-            + 'del martes 1 de diciembre al domingo 31 de enero de 2027 no hay. Nunca propongas una fecha dentro de ese rango.');
+        expect(reglas[0]).toBe('- Del martes 1 de diciembre al domingo 31 de enero de 2027 NO hay clases de prueba '
+            + '(la última es el lunes 30 de noviembre). Nunca propongas ni aceptes una fecha dentro de ese rango.');
         expect(reglas[1]).toMatch(/^- Si preguntan por convocatorias/);
         expect(reglas[1]).toContain('A quien pregunte por una convocatoria NO le ofrezcas clase de prueba.');
         expect(reglas.join('\n')).not.toContain('HOY NO HAY CLASES DE PRUEBA');
@@ -559,7 +559,7 @@ describe('lineasDeSesiones y textos', () => {
         expect(ia).toContain(`[convocatoria] ${T_NORTE} · Sede Norte · Público: Grupos de formación\n`
             + '  • sábado 5 y domingo 6 de diciembre, 7:00 a 9:00 a. m. · Locos por Pádel\n'
             + '  • sábado 12 de diciembre, 8:00 a 10:00 a. m. · ECCI\n'
-            + '  Sin costo indicado por la escuela\n'
+            + '  Valor: la escuela no lo indicó; si preguntan, di que la escuela lo confirma (nunca digas que es gratis)\n'
             + `  Cómo inscribirse: ${CTA}`);
         // C es mixto: no lleva «Género:».
         expect(ia).toContain(`[convocatoria] ${T_SUBA} · Sede Suba · Público: Nacidas y nacidos de 2009 a 2022, por año de nacimiento\n`);
@@ -581,6 +581,7 @@ describe('lineasDeSesiones y textos', () => {
         expect(ia).toContain('[clinica] Clínica de vóley · Sede Norte · Público: Grupos de formación · Género: femenino');
         expect(ia).toContain('  Valor: $50.000');
         expect(ia).not.toContain('Sin costo');
+        expect(ia).not.toContain('la escuela no lo indicó');
     });
 
     it('textoOfertasParaPersona filtra por tipo', () => {
@@ -618,7 +619,7 @@ describe('estadoCerrado', () => {
         expect(e).toEqual({
             schoolId: ESCUELA, hoy: '2026-11-26', ofertas: [], bloqueos: [],
             claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null },
-            mensajeSinOfertas: null,
+            mensajeSinOfertas: null, preguntasOfertas: null, notaOfertas: null, promoOfertas: null,
         });
     });
 });

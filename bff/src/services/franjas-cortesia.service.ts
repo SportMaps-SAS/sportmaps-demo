@@ -80,6 +80,11 @@
  *     reabren si la sesión vuelve (el profe deshace la cancelación). Las que
  *     cerró la escuela, o las cerradas antes de la migración (NULL), nunca.
  *   · `soloEquipo`: sincroniza un equipo (lo pide «Mi semana» al guardar).
+ *
+ * BLOQUEOS DE LA CLASE DE PRUEBA (`bot_oferta_bloqueos`, tipo 'clase_prueba'; p. ej.
+ * vacaciones de Monster 2026-12-01..2027-01-31): en esas fechas NO se crean
+ * franjas. Solo se salta la CREACIÓN: las que ya existen no se cierran ni se
+ * borran (siguen contando como planeadas, así que tampoco caen en «obsoletas»).
  */
 
 import { supabase } from '../config/supabase';
@@ -87,6 +92,7 @@ import { esFestivoColombia } from '../utils/festivos-colombia';
 import {
     excepcionesDeEscuela, excepcionesDelEquipo, normalizarHora, sesionesDelDia, sesionesValidas, type ExcepcionSemana,
 } from './semana-equipo.service';
+import { estadoDeOfertas, claseDePruebaPermitidaEn } from './bot-ofertas.service';
 
 export { normalizarHora };
 
@@ -314,7 +320,11 @@ export function compararConExistentes(
     plan: FranjaPlaneada[],
     existentes: FranjaExistente[],
     ventana: { desde: string; hasta: string },
-    opciones: { cupos?: number | null } = {},
+    opciones: {
+        cupos?: number | null;
+        /** Fechas en que la escuela bloqueó la clase de prueba: no se CREA ahí (lo existente no se toca). */
+        fechaBloqueada?: (fecha: string) => boolean;
+    } = {},
 ): {
     crear: FranjaPlaneada[]; yaExistian: number; cerrar: FranjaExistente[]; conservadasConReserva: FranjaExistente[];
     conReservaSinHorario: FranjaExistente[];
@@ -326,7 +336,8 @@ export function compararConExistentes(
     const enVentana = (e: FranjaExistente) => e.slot_date.slice(0, 10) >= ventana.desde && e.slot_date.slice(0, 10) < ventana.hasta;
     const planeada = (e: FranjaExistente) => !!e.team_id && planeadas.has(claveFranja(e.team_id, e.slot_date, e.start_time));
 
-    const crear = plan.filter((p) => !hay.has(claveFranja(p.team_id, p.slot_date, p.start_time)));
+    const crear = plan.filter((p) => !hay.has(claveFranja(p.team_id, p.slot_date, p.start_time))
+        && !opciones.fechaBloqueada?.(p.slot_date.slice(0, 10)));
     const obsoletas = existentes.filter((e) =>
         e.generated_from_schedule === true && e.is_open && e.team_id && enVentana(e) && !planeada(e));
     const reabrir = existentes.filter((e) =>
@@ -345,7 +356,7 @@ export function compararConExistentes(
 
     return {
         crear,
-        yaExistian: plan.length - crear.length,
+        yaExistian: plan.filter((p) => hay.has(claveFranja(p.team_id, p.slot_date, p.start_time))).length,
         cerrar: obsoletas.filter((e) => (e.reserved_count ?? 0) === 0),
         conservadasConReserva,
         conReservaSinHorario: [...conservadasConReserva, ...yaCerradasConReserva]
@@ -401,6 +412,8 @@ export interface ReporteFranjas {
     errores: string[];
     /** Lo que se crearía/creó, para el reporte por grupo. */
     nuevas: FranjaPlaneada[];
+    /** Franjas que no se crearon porque la escuela bloqueó la clase de prueba ese día. */
+    bloqueadasOmitidas?: number;
 }
 
 /** Franja con reservas cuyo horario ya no existe (cerrada a gente nueva). */
@@ -493,12 +506,14 @@ export async function sincronizarFranjasDeEscuela(
         if (soloEquipo) q = q.eq('id', soloEquipo);
         return q.limit(500);
     };
-    const [escuela, equiposConColumna, ajustes, excepciones] = await Promise.all([
+    const [escuela, equiposConColumna, ajustes, excepciones, ofertas] = await Promise.all([
         supabase.from('schools').select('name, owner_id').eq('id', schoolId).maybeSingle(),
         leerEquipos('id, name, active, admite_nuevos, schedule, recibe_clase_prueba'),
         ajustesDelGenerador(schoolId),
         // Sin caché: corre justo después de que el profe cambió su semana.
         excepcionesDeEscuela(schoolId, hoy, hasta, { sinCache: true }),
+        // Una lectura por escuela (con caché de 60 s); nunca lanza. Sin bloqueos = como antes.
+        estadoDeOfertas(schoolId),
     ]);
     let equipos: any = equiposConColumna;
     if (equipos.error && /recibe_clase_prueba/.test(String(equipos.error.message ?? ''))) {
@@ -545,8 +560,15 @@ export async function sincronizarFranjasDeEscuela(
     }
 
     const filas = (existentes.data ?? []) as any[];
+    const fechaBloqueada = (fecha: string) => !claseDePruebaPermitidaEn(ofertas, fecha);
     const cmp = compararConExistentes(reporte.plan.franjas, filas as FranjaExistente[], reporte.ventana,
-        { cupos: ajustes.cupos });
+        { cupos: ajustes.cupos, fechaBloqueada });
+    const sinCrearPorBloqueo = cmp.yaExistian + cmp.crear.length < reporte.plan.franjas.length
+        ? reporte.plan.franjas.length - cmp.yaExistian - cmp.crear.length : 0;
+    if (sinCrearPorBloqueo) {
+        reporte.bloqueadasOmitidas = sinCrearPorBloqueo;
+        console.warn('[franjas-cortesia] franjas sin crear', { schoolId, cantidad: sinCrearPorBloqueo, motivo: 'clase_prueba_bloqueada' });
+    }
     reporte.yaExistian = cmp.yaExistian;
     reporte.nuevas = cmp.crear;
     reporte.conservadasConReserva = cmp.conservadasConReserva.map((e: any) => ({

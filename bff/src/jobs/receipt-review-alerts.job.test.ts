@@ -3,7 +3,7 @@
  * de >2 h como mucho cada 2 h, silencio de noche y reclamo por versión entre
  * los 3 BFF.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 type Resp = { data: any; error: any };
 const llamadas: { tabla: string; op: string; args: any[] }[] = [];
@@ -30,6 +30,8 @@ vi.mock('../config/supabase', () => ({ supabase: { from: (t: string) => builder(
 import {
     planDeAvisos, enHorarioDeAvisos, formatoEspera, horaColombia, runReceiptReviewAlerts,
     RECORDATORIO_MS, type EstadoAlertas, type ComprobantePorValidar,
+    barridoDeSelladoActivo, elegirParaSellar, barrerComprobantesSinSellar, _reiniciarBarrido,
+    SELLADO_ESPERA_MS, SELLADO_REINTENTO_MS,
 } from './receipt-review-alerts.job';
 
 // 2026-10-08 15:00 Colombia = 20:00 UTC
@@ -44,7 +46,7 @@ const comp = (id: string, minutos: number, o: Partial<ComprobantePorValidar> = {
     enviado_en: hace(minutos), ...o,
 });
 
-beforeEach(() => { llamadas.length = 0; respuestas = {}; });
+beforeEach(() => { llamadas.length = 0; respuestas = {}; _reiniciarBarrido(); });
 
 describe('horario y formato', () => {
     it('hora Colombia y ventana 07:00–21:59', () => {
@@ -176,5 +178,88 @@ describe('runReceiptReviewAlerts', () => {
         const ups = llamadas.find((l) => l.op === 'upsert');
         expect(ups?.args[0]).toEqual([{ school_id: 'S1', new_cursor: new Date(AHORA).toISOString() }]);
         expect(ups?.args[1]).toMatchObject({ ignoreDuplicates: true });
+    });
+});
+
+// ─── Barrido de sellado (spec seguridad-veredicto-comprobante §3.6) ──────────
+describe('barrido de sellado', () => {
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it('solo en producción, con interruptor para apagarlo o probarlo fuera', () => {
+        expect(barridoDeSelladoActivo({ NODE_ENV: 'production' } as any)).toBe(true);
+        expect(barridoDeSelladoActivo({ NODE_ENV: 'development' } as any)).toBe(false);
+        expect(barridoDeSelladoActivo({ NODE_ENV: 'production', DISABLE_SELLADO_BARRIDO: 'true' } as any)).toBe(false);
+        expect(barridoDeSelladoActivo({ NODE_ENV: 'development', SELLADO_BARRIDO_FUERA_DE_PROD: 'true' } as any)).toBe(true);
+    });
+
+    const sinVeredicto = (id: string, minutos: number, o: Partial<ComprobantePorValidar> = {}) =>
+        comp(id, minutos, { receipt_verdict: null, receipt_url: `u/${id}.png`, ...o });
+
+    it('elige solo sin veredicto y con más de 3 min, el más antiguo primero, máximo 5', () => {
+        const lista = [
+            sinVeredicto('reciente', 2),
+            comp('con-veredicto', 60, { receipt_url: 'u/v.png' }),
+            ...[10, 50, 30, 20, 40, 60].map((m) => sinVeredicto(`m${m}`, m)),
+        ];
+        expect(elegirParaSellar(lista, AHORA)).toEqual(['m60', 'm50', 'm40', 'm30', 'm20']);
+        expect(SELLADO_ESPERA_MS).toBe(180_000);
+    });
+
+    it('no toca los cobros que comparten archivo (un comprobante para varios cobros)', () => {
+        const lista = [
+            comp('principal', 30, { receipt_url: 'u/compartido.png' }),
+            sinVeredicto('cubierto', 30, { receipt_url: 'u/compartido.png' }),
+            sinVeredicto('solo', 30),
+        ];
+        expect(elegirParaSellar(lista, AHORA)).toEqual(['solo']);
+    });
+
+    it('lo ya intentado espera 6 h (no ocupa el cupo en cada vuelta)', () => {
+        const lista = [sinVeredicto('p1', 30), sinVeredicto('p2', 30)];
+        const intentados = new Map([['p1|u/p1.png', AHORA - 60_000]]);
+        expect(elegirParaSellar(lista, AHORA, intentados)).toEqual(['p2']);
+        const viejo = new Map([['p1|u/p1.png', AHORA - SELLADO_REINTENTO_MS]]);
+        expect(elegirParaSellar(lista, AHORA, viejo)).toEqual(['p1', 'p2']);
+    });
+
+    it('sella en serie, cuenta los que salieron y no repite en la vuelta siguiente', async () => {
+        const sellar = vi.fn(async (id: string) => ({ ok: id !== 'p2' }));
+        const lista = [sinVeredicto('p1', 30), sinVeredicto('p2', 20)];
+        expect(await barrerComprobantesSinSellar(lista, AHORA, sellar)).toBe(1);
+        expect(sellar.mock.calls.map((c) => c[0])).toEqual(['p1', 'p2']);
+        expect(await barrerComprobantesSinSellar(lista, AHORA + 300_000, sellar)).toBe(0);
+        expect(sellar).toHaveBeenCalledTimes(2);
+    });
+
+    it('un fallo del sellado no corta el barrido', async () => {
+        const sellar = vi.fn(async (id: string) => { if (id === 'p1') throw new Error('ocr'); return { ok: true }; });
+        expect(await barrerComprobantesSinSellar([sinVeredicto('p1', 30), sinVeredicto('p2', 20)], AHORA, sellar)).toBe(1);
+    });
+
+    it('runReceiptReviewAlerts en producción: avisa y después barre con la MISMA lectura', async () => {
+        vi.stubEnv('NODE_ENV', 'production');
+        respuestas['payments:select'] = [{ data: [{
+            id: 'p9', school_id: 'S1', amount: 180000, amount_paid: null, concept: 'Mensualidad 11/2026',
+            receipt_url: 'u/p9.png', receipt_verdict: null, receipt_submitted_at: hace(10), receipt_verdict_at: null, created_at: hace(9000),
+        }], error: null }];
+        respuestas['school_receipt_review_alerts:select'] = [{ data: [estado()], error: null }];
+        respuestas['school_receipt_review_alerts:update'] = [{ data: [], error: null }];
+        const sellar = vi.fn(async () => ({ ok: true }));
+        const r = await runReceiptReviewAlerts(undefined, AHORA, sellar);
+        expect(r).toEqual({ avisos: 0, sellados: 1 });
+        expect(sellar).toHaveBeenCalledWith('p9', undefined);
+        expect(llamadas.filter((l) => l.tabla === 'payments' && l.op === 'select')).toHaveLength(1);
+    });
+
+    it('fuera de producción no barre', async () => {
+        respuestas['payments:select'] = [{ data: [{
+            id: 'p9', school_id: 'S1', amount: 180000, amount_paid: null, concept: 'X',
+            receipt_url: 'u/p9.png', receipt_verdict: null, receipt_submitted_at: hace(10), receipt_verdict_at: null, created_at: hace(9000),
+        }], error: null }];
+        respuestas['school_receipt_review_alerts:select'] = [{ data: [estado()], error: null }];
+        const sellar = vi.fn(async () => ({ ok: true }));
+        const r = await runReceiptReviewAlerts(undefined, AHORA, sellar);
+        expect(r.sellados).toBe(0);
+        expect(sellar).not.toHaveBeenCalled();
     });
 });

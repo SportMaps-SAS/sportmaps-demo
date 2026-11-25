@@ -491,6 +491,8 @@ describe('seguimiento de la noche', () => {
         reclamar: vi.fn(async () => true),
         soltar: vi.fn(async () => {}),
         enviar: vi.fn(async () => true),
+        // Sin bloqueos: la escuela se comporta como siempre.
+        estadoOfertas: vi.fn(async () => ({ bloqueos: [] }) as any),
         ...over,
     });
     // 20:15 COT del 2030-01-14 = 01:15 UTC del 15.
@@ -542,6 +544,41 @@ describe('seguimiento de la noche', () => {
         const r = await runSeguimientoNocheCortesia({ ahora: NOCHE, deps: d });
         expect(r.fallidos).toBe(1);
         expect(d.soltar).toHaveBeenCalled();
+    });
+
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2030-01-01', hasta: '2030-01-31', motivo: 'Vacaciones' };
+
+    it('fecha bloqueada por la escuela: no se pregunta «¿cómo le fue?» ni se reclama el lead', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const d = deps({
+            reservasDelDia: vi.fn(async () => [R, { ...R, leadId: 'lead-2', telefono: '3004445566' }]),
+            estadoOfertas: vi.fn(async () => ({ bloqueos: [BLOQUEO] }) as any),
+        });
+        const r = await runSeguimientoNocheCortesia({ ahora: NOCHE, deps: d });
+        expect(r).toMatchObject({ enviados: 0, omitidos: 2 });
+        expect(d.reclamar).not.toHaveBeenCalled();
+        expect(d.enviar).not.toHaveBeenCalled();
+        expect(d.estadoOfertas).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls.some((c) => JSON.stringify(c).includes('clase_prueba_bloqueada'))).toBe(true);
+        warn.mockRestore();
+    });
+
+    it('falla cerrado: lectura de ofertas con error o que lanza → nada y sin reclamar', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        for (const estadoOfertas of [vi.fn(async () => ({ bloqueos: [], claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null } }) as any), vi.fn(async () => { throw new Error('boom'); })]) {
+            const d = deps({ estadoOfertas });
+            const r = await runSeguimientoNocheCortesia({ ahora: NOCHE, deps: d });
+            expect(r).toMatchObject({ enviados: 0, omitidos: 1 });
+            expect(d.reclamar).not.toHaveBeenCalled();
+        }
+        expect(warn.mock.calls.some((c) => JSON.stringify(c).includes('ofertas_sin_leer'))).toBe(true);
+        warn.mockRestore();
+    });
+
+    it('regresión: un bloqueo que no cubre la fecha no cambia nada', async () => {
+        const d = deps({ estadoOfertas: vi.fn(async () => ({ bloqueos: [{ ...BLOQUEO, desde: '2030-01-20' }] }) as any) });
+        const r = await runSeguimientoNocheCortesia({ ahora: NOCHE, deps: d });
+        expect(r.enviados).toBe(1);
     });
 });
 

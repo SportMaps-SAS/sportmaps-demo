@@ -32,12 +32,25 @@
  * `textoOfertasParaPersona` y pregunta a cuál fecha quiere ir; con la respuesta,
  * la escuela recibe el aviso y la conversación queda pendiente de ella. Con la
  * clase disponible, los botones de siempre.
+ *
+ * Convocatoria guiada (Monster 2026-11-25, flujo oficial de la escuela): si la
+ * escuela configuró `preguntasOfertas`, el bot pregunta UNA cosa a la vez con
+ * botones o lista (género, año, trayectoria, sede: `siguientePreguntaOferta`),
+ * muestra SOLO la oferta que le aplica y ofrece [Quiero inscribirme] [Cómo es la
+ * evaluación] [Hablar con alguien]; la inscripción pide el nombre y la fecha (lista)
+ * y queda pendiente de la escuela (`iniciarConvocatoria`, paso 'oferta').
+ * Sin preguntas configuradas, todo sigue como antes.
  */
 
 import type { BotonInteractivo } from './whatsapp.service';
 import { supabase } from '../config/supabase';
 import { leerEdad, nombreValido, normalizar } from './whatsapp-clase-cortesia.service';
-import { estadoDeOfertas, textoOfertasParaPersona, type EstadoOfertas, type TipoOferta } from './bot-ofertas.service';
+import {
+    estadoDeOfertas, textoOfertasParaPersona, textoDeOfertas, filtrarPorGenero,
+    introDeOfertas, siguientePreguntaOferta, aplicarRespuestaOferta, opcionesDeFechas, fechaLegible, rangoLegible,
+    ID_OFERTA, DATOS_OFERTA_VACIOS,
+    type EstadoOfertas, type TipoOferta, type OfertaBot, type DatosOferta, type PasoOferta, type OpcionOferta,
+} from './bot-ofertas.service';
 import { etiquetaDeOfertas } from './whatsapp-bienvenida';
 
 export const FLUJO_PUERTA = 'puerta_desconocido';
@@ -67,6 +80,11 @@ export const BOTON_PUERTA = {
 
 export function esBotonPuerta(id: string | null | undefined): boolean {
     return !!id && id.startsWith('sm_pd_');
+}
+
+/** Botones y filas de la convocatoria guiada (bot-ofertas: todos empiezan con `of_`). */
+export function esBotonOferta(id: string | null | undefined): boolean {
+    return !!id && id.startsWith('of_');
 }
 
 /** Títulos ≤ 20 caracteres (límite de Meta). */
@@ -106,7 +124,11 @@ export function botonesQueQuiere(ofertas?: OfertasDePuerta | null): { botones: B
 
 export type PasoPuerta = 'menu' | 'club_nombre' | 'info_nombre' | 'info_edad' | 'info_acudiente' | 'info_quiere'
     /** Ya vio las ofertas: falta a cuál fecha quiere ir. */
-    | 'info_oferta';
+    | 'info_oferta'
+    /** Convocatoria guiada: una pregunta a la vez con botones (`datos.ultimoPaso` dice cuál). */
+    | 'oferta';
+/** En qué va la convocatoria guiada: una pregunta de bot-ofertas, o los pasos de la inscripción. */
+export type PasoConvocatoria = PasoOferta | 'accion' | 'elegir_oferta' | 'nombre' | 'fecha';
 export type QueQuiere = 'cortesia' | 'inscribirme' | 'precios' | 'ofertas';
 
 export interface DatosPuerta {
@@ -121,6 +143,15 @@ export interface DatosPuerta {
     grupoSugerido?: string | null;
     quiere?: QueQuiere;
     intentos?: number;
+    /** Convocatoria guiada: lo que va respondiendo (bot-ofertas). */
+    oferta?: DatosOferta;
+    /** La última pregunta que se le hizo en la convocatoria guiada. */
+    ultimoPaso?: PasoConvocatoria;
+    /** Cómo eligió su año («2013 a 2014»), para el aviso a la escuela. */
+    anioTexto?: string | null;
+    /** Las ofertas que se le mostraron (ids) y la que eligió para inscribirse. */
+    mostradas?: string[];
+    ofertaId?: string | null;
 }
 
 export interface EstadoPuerta { paso: PasoPuerta; datos: DatosPuerta }
@@ -144,7 +175,9 @@ export interface CtxPuerta {
     contactWaId: string;
     /** Envía un mensaje. `estado` null = terminal (cierra el flujo). */
     enviar: (texto: string, step: string, estado: EstadoPuerta | null,
-        botones?: BotonInteractivo[], enTexto?: string, contexto?: Record<string, unknown>) => Promise<void>;
+        botones?: BotonInteractivo[], enTexto?: string, contexto?: Record<string, unknown>,
+        /** `textoLista`: el botón que abre la lista (más de 3 opciones). */
+        opciones?: { textoLista?: string }) => Promise<void>;
     /** Deja la conversación en el buzón y avisa a la escuela (push + correo con freno). */
     avisarEscuela: (motivo: 'club' | 'otro' | 'prospecto_sin_enlace', detalle: string | null) => Promise<void>;
     /** Nombre del perfil de WhatsApp (botón «Soy {nombre}»). */
@@ -163,6 +196,11 @@ export interface CtxPuerta {
      */
     ofertas?: () => Promise<OfertasDePuerta>;
     leerEstado?: (conversationId: string) => Promise<EstadoPuerta | null>;
+    /**
+     * Estado de la convocatoria guiada aunque el bot haya contestado otra cosa después
+     * (una pregunta a mitad del flujo): con él, un botón `of_…` tocado más tarde sigue valiendo.
+     */
+    leerEstadoDeOferta?: (conversationId: string) => Promise<EstadoPuerta | null>;
     ahora?: () => Date;
 }
 
@@ -304,7 +342,19 @@ export async function iniciarPuerta(ctx: CtxPuerta, saludo: string): Promise<voi
  */
 export async function atenderTurnoPuerta(ctx: CtxPuerta, textoCrudo: string, botonId: string | null): Promise<boolean> {
     const texto = (textoCrudo || '').trim();
-    const estado = await (ctx.leerEstado ?? leerEstadoDePuertaDeSupabase)(ctx.conversationId);
+    let estado = await (ctx.leerEstado ?? leerEstadoDePuertaDeSupabase)(ctx.conversationId);
+    // Un botón de la convocatoria guiada tocado después de que el bot contestó otra cosa: el estado de la convocatoria.
+    if (esBotonOferta(botonId) && estado?.paso !== 'oferta') {
+        estado = await (ctx.leerEstadoDeOferta ?? leerEstadoDeOfertaDeSupabase)(ctx.conversationId) ?? estado;
+    }
+    if (estado?.paso === 'oferta') {
+        // Con la convocatoria abierta, sus botones van a ella; los de otro flujo se sueltan.
+        if (botonId && !esBotonOferta(botonId) && !esBotonPuerta(botonId)) return false;
+        if (!esBotonOferta(botonId) && leerOpcionDePuerta(texto, botonId)) return elegirOpcion(ctx, leerOpcionDePuerta(texto, botonId)!);
+        if (!botonId && /\b(asesor|una persona|hablar con (alguien|una persona|la escuela)|humano)\b/.test(normalizar(texto))) return false;
+        if (!botonId && EMAIL.test(texto)) return false;
+        return pasoConvocatoria(ctx, estado, texto, botonId);
+    }
     const opcion = leerOpcionDePuerta(texto, botonId);
 
     // Botón de otro mensaje (la pregunta de arriba sigue en pantalla): vale igual.
@@ -563,6 +613,8 @@ async function cerrarMiniRegistro(ctx: CtxPuerta, datos: DatosPuerta, ofertas?: 
  * Las ofertas de hoy (`textoOfertasParaPersona`: títulos, fechas, lugares y «cómo
  * inscribirse» salen de la base) y la pregunta de a cuál fecha quiere ir. El lead
  * queda con `quiere` = el tipo de la oferta. false si no hay ofertas (sigue lo de siempre).
+ * Si la escuela tiene preguntas antes de las ofertas (`preguntasOfertas`), la
+ * convocatoria guiada (una pregunta a la vez; lo que el registro ya sabe no se pregunta).
  */
 async function mostrarOfertas(ctx: CtxPuerta, datos: DatosPuerta, ofertas: OfertasDePuerta | null, previos: string[]): Promise<boolean> {
     const texto = ofertas ? textoOfertasParaPersona(ofertas) : null;
@@ -578,6 +630,12 @@ async function mostrarOfertas(ctx: CtxPuerta, datos: DatosPuerta, ofertas: Ofert
         ? `Listo${datos.acudiente ? `, ${primerNombre(datos.acudiente)}` : ''}: registré a *${datos.deportista}*`
             + (edad != null ? ` (${edad} años)` : '') + '. 🙌'
         : '';
+    if (ofertas.preguntasOfertas) {
+        const encabezado = [registrado, ...previos].filter(Boolean).join('\n\n');
+        const anio = anioDelRegistro(datos, ofertas.hoy);
+        return iniciarConvocatoria(ctx, { ...(anio != null ? { anio } : {}), ...(datos.deportista ? { nombre: datos.deportista } : {}) },
+            { encabezado, ofertas, datos });
+    }
     const pregunta = datos.deportista
         ? `¿A cuál fecha quieres inscribir a *${primerNombre(datos.deportista)}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
         : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
@@ -612,6 +670,426 @@ async function pasoInfoOferta(ctx: CtxPuerta, estado: EstadoPuerta, texto: strin
         d.acudiente ? `Acudiente: ${d.acudiente}.` : '',
     ].filter(Boolean).join(' '));
     return true;
+}
+
+// ── Convocatoria guiada: una pregunta a la vez (Monster 2026-11-25) ─────────
+//
+// QUÉ preguntar y con qué opciones lo decide bot-ofertas (`siguientePreguntaOferta`,
+// `aplicarRespuestaOferta`); aquí solo la conversación: botones (2–3 opciones) o
+// lista (más de 3, botón «Elegir»), el estado en el payload y la inscripción.
+
+/** step de las preguntas de la convocatoria guiada cuando quien llama no da otro. */
+export const PASO_PUERTA_OFERTA = 'puerta_oferta';
+/** step de los mensajes con las ofertas elegidas y la promo (sin estado: el estado va en los botones de después). */
+export const PASO_PUERTA_OFERTA_LISTA = 'puerta_oferta_lista';
+
+/** Tope por mensaje: WhatsApp admite 4096 caracteres; el margen es para la coletilla de baja. */
+export const LARGO_MAX_MENSAJE_OFERTAS = 3900;
+/** Cuerpo máximo de un mensaje con botones (límite de Meta). */
+const LARGO_MAX_CUERPO_BOTONES = 1024;
+const TEXTO_LISTA = 'Elegir';
+const PREGUNTA_ACCION = '¿Qué quieres hacer? 👇';
+const A_LA_ESCUELA = 'Listo, la escuela te escribe por aquí 🙌';
+
+/** Opciones de bot-ofertas como botones (≤ 3) o filas de lista (más). */
+function botonesDe(opciones: OpcionOferta[], seccion?: string): BotonInteractivo[] {
+    return opciones.map((o) => ({
+        id: o.id, title: o.titulo, ...(o.descripcion ? { descripcion: o.descripcion } : {}), ...(seccion ? { seccion } : {}),
+    }));
+}
+
+/** Respaldo en texto de las opciones (modo asistido o si Meta rechaza los botones). */
+function enTextoDe(botones: BotonInteractivo[]): string | undefined {
+    if (!botones.length) return undefined;
+    return `Responde ${botones.map((b) => `*${b.title}*`).join(', ').replace(/, ([^,]*)$/, ' o $1')}.`;
+}
+
+/** Envía una pregunta del flujo con su estado (botones o lista según cuántas opciones). */
+async function preguntarConvocatoria(
+    ctx: CtxPuerta, texto: string, datos: DatosPuerta, paso: PasoConvocatoria, botones: BotonInteractivo[],
+    op: { step?: string; contexto?: Record<string, unknown>; intentos?: number } = {},
+): Promise<void> {
+    await ctx.enviar(texto, op.step ?? PASO_PUERTA_OFERTA,
+        { paso: 'oferta', datos: { ...datos, quiere: 'ofertas', ultimoPaso: paso, intentos: op.intentos ?? 0 } },
+        botones.length ? botones : undefined, enTextoDe(botones), op.contexto,
+        botones.length > 3 || botones.some((b) => b.seccion) ? { textoLista: TEXTO_LISTA } : undefined);
+}
+
+/**
+ * Arranca la convocatoria guiada: la presentación de la escuela (`introDeOfertas`) y
+ * la primera pregunta (lo que ya se sabe en `prefill` no se pregunta). false si la
+ * escuela no tiene preguntas configuradas o no hay ofertas vigentes: quien llama
+ * sigue con lo de siempre.
+ *   - `encabezado`: va antes (saludo, «no tenemos clases de prueba…»).
+ *   - `ofertas`: el estado ya leído en el turno (sin él, se lee).
+ *   - `step` / `contexto`: los del primer mensaje (el bot pasa el de su freno).
+ *   - `datos`: lo que la puerta ya sabe (mini-registro).
+ */
+export async function iniciarConvocatoria(
+    ctx: CtxPuerta, prefill: Partial<DatosOferta> = {},
+    opciones: {
+        encabezado?: string; ofertas?: OfertasDePuerta | null; step?: string; contexto?: Record<string, unknown>; datos?: DatosPuerta;
+    } = {},
+): Promise<boolean> {
+    const ofertas = opciones.ofertas !== undefined ? opciones.ofertas : await ofertasDePuerta(ctx);
+    if (!ofertas?.ofertas.length || !ofertas.preguntasOfertas) return false;
+    const datos: DatosPuerta = {
+        ...(opciones.datos ?? {}),
+        oferta: { ...DATOS_OFERTA_VACIOS, ...prefill },
+        mostradas: undefined, ofertaId: null,
+    };
+    const previos = [opciones.encabezado, introDeOfertas(ofertas)];
+    return siguientePaso(ctx, ofertas, datos, previos, { step: opciones.step, contexto: opciones.contexto });
+}
+
+/** La pregunta que sigue, o las ofertas si ya se sabe lo necesario. */
+async function siguientePaso(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, datos: DatosPuerta, previos: (string | null | undefined)[],
+    op: { step?: string; contexto?: Record<string, unknown>; intentos?: number } = {},
+): Promise<boolean> {
+    const p = siguientePreguntaOferta(ofertas, datos.oferta ?? DATOS_OFERTA_VACIOS);
+    if (p.paso === 'lista') return mostrarElegidas(ctx, ofertas, datos, p.ofertas, previos, op);
+    const texto = [...previos, p.texto].map((x) => (x ?? '').trim()).filter(Boolean).join('\n\n');
+    await preguntarConvocatoria(ctx, texto, datos, p.paso, botonesDe(p.opciones), op);
+    return true;
+}
+
+/** Las ofertas en mensajes: todas en uno si caben; si no, una por mensaje. Pura. */
+export function mensajesDeOfertas(
+    ofertas: OfertaBot[], estado: Pick<EstadoOfertas, 'hoy' | 'notaOfertas'>, encabezado = '',
+    largoMax = LARGO_MAX_MENSAJE_OFERTAS,
+): string[] {
+    const junta = (...xs: (string | null | undefined)[]) => xs.map((x) => (x ?? '').trim()).filter(Boolean).join('\n\n');
+    if (!ofertas.length) return [];
+    const todo = junta(encabezado, textoDeOfertas(ofertas, estado));
+    if (todo.length <= largoMax) return [todo];
+    return ofertas.map((o, i) => junta(i === 0 ? encabezado : '', textoDeOfertas([o], estado)).slice(0, largoMax));
+}
+
+/** Botones del final: inscribirse, la evaluación (si la escuela tiene la nota) y una persona. */
+function botonesDeAccion(ofertas: OfertasDePuerta, conEvaluacion = true): BotonInteractivo[] {
+    return [
+        { id: ID_OFERTA.INSCRIBIRME, title: 'Quiero inscribirme' },
+        ...(conEvaluacion && ofertas.notaOfertas ? [{ id: ID_OFERTA.EVALUACION, title: 'Cómo es la evaluación' }] : []),
+        { id: ID_OFERTA.PERSONA, title: 'Hablar con alguien' },
+    ];
+}
+
+/**
+ * La(s) oferta(s) que le aplican con el texto de la escuela (sin la nota), la promo
+ * vigente si hay, y aparte «¿Qué quieres hacer? 👇» con los botones del final (el
+ * texto largo va solo: un mensaje con botones admite 1024 caracteres).
+ */
+async function mostrarElegidas(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, datos: DatosPuerta, elegidas: OfertaBot[], previos: (string | null | undefined)[],
+    op: { step?: string; contexto?: Record<string, unknown> } = {},
+): Promise<boolean> {
+    let lista = elegidas.length ? elegidas : filtrarPorGenero(ofertas.ofertas, datos.oferta?.genero ?? null);
+    if (!lista.length) lista = [];
+    const encabezado = previos.map((x) => (x ?? '').trim()).filter(Boolean).join('\n\n');
+    if (!lista.length) {
+        // Nada de su perfil: no se le manda lo que no le sirve; la escuela le escribe.
+        await ctx.enviar([encabezado, A_LA_ESCUELA].filter(Boolean).join('\n\n'), 'puerta_info_listo', null, undefined, undefined,
+            { pendiente_escuela: 'convocatoria: sin oferta para su perfil', ...(op.contexto ?? {}) });
+        await ctx.avisarEscuela('otro', `${resumenDeConvocatoria(datos)} Ninguna oferta vigente le aplica.`);
+        return true;
+    }
+    // Con el género elegido, una nota de sesión que solo reparte por género («Una cancha femenino y otra masculino») sobra.
+    if (datos.oferta?.genero) lista = lista.map((o) => ({ ...o, sesiones: o.sesiones.map((x) => (notaDeGenero(x.notas) ? { ...x, notas: null } : x)) }));
+    const mensajes = mensajesDeOfertas(lista, ofertas, encabezado);
+    for (let i = 0; i < mensajes.length; i++) {
+        await ctx.enviar(mensajes[i], i === 0 && op.step ? op.step : PASO_PUERTA_OFERTA_LISTA, null, undefined, undefined,
+            i === 0 ? op.contexto : undefined);
+    }
+    const promo = (ofertas.promoOfertas ?? '').trim();
+    if (promo) await ctx.enviar(promo, PASO_PUERTA_OFERTA_LISTA, null);
+    await preguntarConvocatoria(ctx, PREGUNTA_ACCION, { ...datos, mostradas: lista.map((o) => o.id) }, 'accion',
+        botonesDeAccion(ofertas));
+    return true;
+}
+
+/** ¿La nota de la sesión solo reparte por género (nombra femenino y masculino)? Pura. */
+function notaDeGenero(nota: string | null | undefined): boolean {
+    const n = normalizar(nota);
+    return !!n && /femenin/.test(n) && /masculin/.test(n);
+}
+
+/** «¿Y cuánto cuesta?», «dónde queda»: una pregunta, no la respuesta. */
+const PREGUNTA_SUELTA = /^(cuant[oa]s?|cuando|donde|como|cual(es)?|que|quien|hay|tienen|puedo|se puede|me pueden?|necesito|quisiera|y)\b/;
+
+/** ¿Lo escrito es otra cosa (una pregunta, un «gracias», una frase larga) y no la respuesta? */
+function noEsRespuesta(texto: string): boolean {
+    const n = normalizar(texto);
+    return !n || texto.includes('?') || SOLO_CORTESIA.test(n);
+}
+
+/**
+ * Turno de la convocatoria guiada. false (lo contesta el bot de siempre) con una
+ * pregunta, un «gracias» o un texto que no tiene que ver; el estado queda en el
+ * último mensaje del flujo, así que un botón tocado después sigue valiendo.
+ */
+async function pasoConvocatoria(ctx: CtxPuerta, estado: EstadoPuerta, texto: string, botonId: string | null): Promise<boolean> {
+    const d = estado.datos;
+    const paso = d.ultimoPaso ?? 'genero';
+    const ofertas = await ofertasDePuerta(ctx);
+    if (!ofertas?.ofertas.length) {
+        if (!botonId && noEsRespuesta(texto)) return false;
+        // Las ofertas vencieron a mitad del flujo: la escuela le escribe.
+        await ctx.enviar(`¡Gracias! 🙌 ${A_LA_ESCUELA}`, 'puerta_info_listo', null, undefined, undefined,
+            { pendiente_escuela: 'convocatoria: ya no hay ofertas vigentes' });
+        await ctx.avisarEscuela('otro', `${resumenDeConvocatoria(d)} Ya no hay ofertas vigentes.`);
+        return true;
+    }
+    switch (paso) {
+        case 'accion': return pasoAccion(ctx, ofertas, d, texto, botonId);
+        case 'elegir_oferta': return pasoElegirOferta(ctx, ofertas, d, texto, botonId);
+        case 'nombre': return pasoNombreConvocatoria(ctx, ofertas, d, texto, botonId);
+        case 'fecha': return pasoFecha(ctx, ofertas, d, texto, botonId);
+        default: return pasoPregunta(ctx, ofertas, d, texto, botonId);
+    }
+}
+
+/** Respuesta a una pregunta de bot-ofertas (género, año, trayectoria, detalle, sede). */
+async function pasoPregunta(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null,
+): Promise<boolean> {
+    const datosOferta = d.oferta ?? DATOS_OFERTA_VACIOS;
+    const pregunta = siguientePreguntaOferta(ofertas, datosOferta);
+    if (!botonId && noEsRespuesta(texto)) return false;
+    if (pregunta.paso === 'lista') return mostrarElegidas(ctx, ofertas, d, pregunta.ofertas, []);
+    const nuevo = aplicarRespuestaOferta(pregunta, datosOferta, { botonId, texto }, ofertas.hoy);
+    if (!nuevo) {
+        // Un texto que no tiene que ver (frase larga o una pregunta suelta): lo contesta el bot de siempre.
+        if (!botonId && (PREGUNTA_SUELTA.test(normalizar(texto)) || texto.split(/\s+/).length > 8)) return false;
+        return noEntendio(ctx, ofertas, d, pregunta.paso, botonesDe(pregunta.opciones), pregunta.texto);
+    }
+    const anioTexto = pregunta.paso === 'anio'
+        ? (pregunta.opciones.find((o) => o.id === botonId)?.titulo ?? (nuevo.anio != null ? String(nuevo.anio) : null))
+        : d.anioTexto;
+    return siguientePaso(ctx, ofertas, { ...d, oferta: nuevo, anioTexto }, []);
+}
+
+/** No se entendió: se repite UNA vez; a la segunda, la conversación pasa a la escuela. */
+async function noEntendio(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, paso: PasoConvocatoria, botones: BotonInteractivo[], pregunta: string,
+): Promise<boolean> {
+    const intentos = (d.intentos ?? 0) + 1;
+    if (intentos >= MAX_INTENTOS) {
+        await ctx.enviar(A_LA_ESCUELA, 'puerta_info_listo', null, undefined, undefined,
+            { pendiente_escuela: 'convocatoria: no se entendió su respuesta' });
+        await ctx.avisarEscuela('otro', `${resumenDeConvocatoria(d)} No se entendió su respuesta: sigue la escuela.`);
+        return true;
+    }
+    const ayuda = botones.length ? 'Elige una opción 👇' : 'No alcancé a entenderte.';
+    await preguntarConvocatoria(ctx, `${ayuda}\n\n${pregunta}`, d, paso, botones, { intentos });
+    void ofertas;
+    return true;
+}
+
+/** Las ofertas que se le mostraron (con las sesiones filtradas por lo que respondió). */
+function ofertasMostradas(ofertas: OfertasDePuerta, d: DatosPuerta): OfertaBot[] {
+    const filtradas = siguientePreguntaOferta(ofertas, d.oferta ?? DATOS_OFERTA_VACIOS).ofertas;
+    const ids = d.mostradas ?? filtradas.map((o) => o.id);
+    return ids.map((id) => filtradas.find((o) => o.id === id) ?? ofertas.ofertas.find((o) => o.id === id))
+        .filter((o): o is OfertaBot => Boolean(o));
+}
+
+const QUIERE_INSCRIBIRSE = /\b(inscrib\w*|inscripcion|matricul\w*|quiero ir|me apunto|reservar?)\b/;
+const QUIERE_EVALUACION = /\b(evaluacion|evaluan|como (es|son|funciona))\b/;
+
+/** [Quiero inscribirme] [Cómo es la evaluación] [Hablar con alguien], tocados o escritos. */
+async function pasoAccion(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null): Promise<boolean> {
+    const n = normalizar(texto);
+    const accion = botonId === ID_OFERTA.INSCRIBIRME || (!botonId && QUIERE_INSCRIBIRSE.test(n)) ? 'inscribirme'
+        : botonId === ID_OFERTA.EVALUACION || (!botonId && QUIERE_EVALUACION.test(n) && !!ofertas.notaOfertas) ? 'evaluacion'
+            : botonId === ID_OFERTA.PERSONA ? 'persona' : null;
+    if (!accion) {
+        if (!botonId) return false;   // otra cosa escrita: el bot de siempre (el estado sigue para un botón después)
+        return pasoPregunta(ctx, ofertas, d, texto, botonId);   // un botón de una pregunta anterior
+    }
+    if (accion === 'evaluacion') {
+        const nota = (ofertas.notaOfertas ?? '').trim();
+        const botones = botonesDeAccion(ofertas, false);
+        const junto = `${nota}\n\n${PREGUNTA_ACCION}`;
+        if (junto.length <= LARGO_MAX_CUERPO_BOTONES) {
+            await preguntarConvocatoria(ctx, junto, d, 'accion', botones);
+        } else {
+            await ctx.enviar(nota, PASO_PUERTA_OFERTA_LISTA, null);
+            await preguntarConvocatoria(ctx, PREGUNTA_ACCION, d, 'accion', botones);
+        }
+        return true;
+    }
+    if (accion === 'persona') {
+        await ctx.enviar(A_LA_ESCUELA, 'puerta_info_listo', null, undefined, undefined,
+            { pendiente_escuela: `convocatoria: pidió hablar con alguien (${tituloDeMostradas(ofertas, d)})`.slice(0, 300) });
+        await ctx.avisarEscuela('otro', `${resumenDeConvocatoria(d, ofertas)} Pidió hablar con alguien.`);
+        return true;
+    }
+    const mostradas = ofertasMostradas(ofertas, d);
+    if (mostradas.length > 1) {
+        const sedes = mostradas.map((o) => (o.sede ?? '').trim());
+        const unicas = sedes.every((s, i) => s && sedes.indexOf(s) === i);
+        const botones: BotonInteractivo[] = mostradas.map((o) => ({
+            id: `of_o_${o.id}`, title: (unicas ? o.sede! : o.titulo),
+            ...(unicas || mostradas.length > 3 ? { descripcion: o.titulo.slice(0, 72) } : {}),
+        }));
+        await preguntarConvocatoria(ctx, '¿A cuál convocatoria quieres inscribirte?', d, 'elegir_oferta', botones);
+        return true;
+    }
+    return pedirNombreOFecha(ctx, ofertas, { ...d, ofertaId: mostradas[0]?.id ?? null });
+}
+
+function tituloDeMostradas(ofertas: OfertasDePuerta, d: DatosPuerta): string {
+    const o = d.ofertaId ? ofertas.ofertas.find((x) => x.id === d.ofertaId) : null;
+    return o ? o.titulo : ofertasMostradas(ofertas, d).map((x) => x.titulo).join(' · ');
+}
+
+/** ¿A cuál convocatoria? (si se le mostró más de una). */
+async function pasoElegirOferta(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null): Promise<boolean> {
+    const mostradas = ofertasMostradas(ofertas, d);
+    let elegida = botonId?.startsWith('of_o_') ? mostradas.find((o) => `of_o_${o.id}` === botonId) : undefined;
+    if (!elegida && !botonId) {
+        if (noEsRespuesta(texto)) return false;
+        const n = normalizar(texto);
+        elegida = mostradas.find((o) => [o.sede, o.titulo].some((x) => x && (n.includes(normalizar(x)) || normalizar(x).includes(n))));
+    }
+    if (!elegida) {
+        if (botonId && !botonId.startsWith('of_o_')) return pasoAccion(ctx, ofertas, d, texto, botonId);
+        if (!botonId && texto.split(/\s+/).length > 8) return false;
+        const botones = mostradas.map((o) => ({ id: `of_o_${o.id}`, title: o.sede ?? o.titulo }));
+        return noEntendio(ctx, ofertas, d, 'elegir_oferta', botones, '¿A cuál convocatoria quieres inscribirte?');
+    }
+    return pedirNombreOFecha(ctx, ofertas, { ...d, ofertaId: elegida.id, intentos: 0 });
+}
+
+/** El nombre del deportista (si no se sabe) y luego la fecha. */
+async function pedirNombreOFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta): Promise<boolean> {
+    if (!(d.oferta?.nombre ?? d.deportista)) {
+        await preguntarConvocatoria(ctx, '¡Súper! 🙌 ¿Cuál es el *nombre completo* del deportista?', d, 'nombre', []);
+        return true;
+    }
+    return pedirFecha(ctx, ofertas, d);
+}
+
+async function pasoNombreConvocatoria(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null,
+): Promise<boolean> {
+    if (botonId) return pasoAccion(ctx, ofertas, d, texto, botonId);
+    if (noEsRespuesta(texto)) return false;
+    const leido = leerNombreDeDeportista(texto, (ctx.ahora ?? (() => new Date()))());
+    if (!leido) {
+        if (PREGUNTA_SUELTA.test(normalizar(texto))) return false;
+        const intentos = (d.intentos ?? 0) + 1;
+        // Sin nombre la inscripción sigue igual: la escuela lo pide al confirmar.
+        if (intentos >= MAX_INTENTOS) return pedirFecha(ctx, ofertas, { ...d, intentos: 0 });
+        await preguntarConvocatoria(ctx, 'Escríbeme el *nombre y apellido* del deportista (por ejemplo: Sofía Gómez).', d, 'nombre', [], { intentos });
+        return true;
+    }
+    return pedirFecha(ctx, ofertas, { ...d, oferta: { ...(d.oferta ?? DATOS_OFERTA_VACIOS), nombre: leido.nombre }, intentos: 0 });
+}
+
+function ofertaElegida(ofertas: OfertasDePuerta, d: DatosPuerta): OfertaBot | null {
+    const mostradas = ofertasMostradas(ofertas, d);
+    return mostradas.find((o) => o.id === d.ofertaId) ?? mostradas[0] ?? null;
+}
+
+/** «¿A cuál fecha vas a ir?» como lista (`opcionesDeFechas`). Sin fechas, se confirma sin fecha. */
+async function pedirFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, intentos = 0): Promise<boolean> {
+    const oferta = ofertaElegida(ofertas, d);
+    if (!oferta) return confirmarInscripcion(ctx, ofertas, d, null, null);
+    const filas = botonesDe(opcionesDeFechas(oferta, ofertas.hoy), 'Fechas');
+    if (!filas.length) return confirmarInscripcion(ctx, ofertas, d, oferta, null);
+    const quien = d.oferta?.nombre ?? d.deportista;
+    await preguntarConvocatoria(ctx,
+        `¿A cuál fecha vas a ir${quien ? ` con *${primerNombre(quien)}*` : ''}? 👇`, { ...d, ofertaId: oferta.id }, 'fecha', filas, { intentos });
+    return true;
+}
+
+async function pasoFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null): Promise<boolean> {
+    const oferta = ofertaElegida(ofertas, d);
+    if (!oferta) return confirmarInscripcion(ctx, ofertas, d, null, null);
+    let sesion = botonId?.startsWith('of_f_') ? oferta.sesiones.find((s) => `of_f_${s.id}` === botonId) : undefined;
+    if (!sesion && botonId?.startsWith('of_f_')) {
+        // Una fecha de otra oferta (o ya pasada): se busca entre todas las vigentes.
+        sesion = ofertas.ofertas.flatMap((o) => o.sesiones).find((s) => `of_f_${s.id}` === botonId);
+    }
+    if (!sesion && !botonId) {
+        if (noEsRespuesta(texto)) return false;
+        const n = normalizar(texto);
+        const fila = opcionesDeFechas(oferta, ofertas.hoy).find((f) => normalizar(f.titulo) === n);
+        sesion = fila ? oferta.sesiones.find((s) => `of_f_${s.id}` === fila.id) : undefined;
+        if (!sesion) {
+            if (PREGUNTA_SUELTA.test(n) || texto.split(/\s+/).length > 12) return false;
+            const intentos = (d.intentos ?? 0) + 1;
+            // A la segunda, lo que escribió («el sábado temprano») va tal cual: la escuela confirma.
+            if (intentos >= MAX_INTENTOS) return confirmarInscripcion(ctx, ofertas, d, oferta, null, texto.slice(0, 200));
+            await ctx.enviar('Elige la fecha en la lista 👇', PASO_PUERTA_OFERTA, null);
+            return pedirFecha(ctx, ofertas, d, intentos);
+        }
+    }
+    if (!sesion) return pasoAccion(ctx, ofertas, d, texto, botonId);
+    return confirmarInscripcion(ctx, ofertas, d, oferta, sesion);
+}
+
+/** «sábado 12 de diciembre, 7:00 a 9:00 a. m. · Locos por Pádel». */
+function fechaDeSesion(s: OfertaBot['sesiones'][number], hoy: string): string {
+    return `${fechaLegible(s.fecha, hoy)}, ${rangoLegible(s.horaInicio, s.horaFin)}${s.lugar ? ` · ${s.lugar}` : ''}`;
+}
+
+/**
+ * Cierre: la inscripción queda pendiente de la escuela (ella confirma el cupo y,
+ * si la oferta tiene valor, cómo pagar). La escuela recibe TODO lo que contó.
+ */
+async function confirmarInscripcion(
+    ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, oferta: OfertaBot | null,
+    sesion: OfertaBot['sesiones'][number] | null, fechaEscrita: string | null = null,
+): Promise<boolean> {
+    const nombre = d.oferta?.nombre ?? d.deportista ?? null;
+    const cuando = sesion ? fechaDeSesion(sesion, ofertas.hoy) : fechaEscrita ? `«${fechaEscrita}»` : null;
+    const valor = oferta?.requierePago && oferta.valor != null ? `$${oferta.valor.toLocaleString('es-CO')}` : null;
+    const texto = [
+        `¡Listo! ✅ Le pasé a la escuela tu inscripción${nombre ? ` de *${nombre}*` : ''}`
+            + `${oferta ? ` a *${oferta.titulo}*` : ''}${cuando ? `: ${cuando}` : ''}.`,
+        valor ? `Valor: *${valor}*. La escuela te indica cómo pagar.` : '',
+        'La escuela te confirma el cupo por aquí 🙌',
+    ].filter(Boolean).join('\n\n');
+    await ctx.enviar(texto, 'puerta_info_listo', null, undefined, undefined, {
+        pendiente_escuela: `inscripción: ${[oferta?.titulo, cuando].filter(Boolean).join(' · ')}`.slice(0, 300),
+    });
+    if (nombre) {
+        await seguro(() => ctx.guardarLead({
+            deportista: nombre, fechaNacimiento: d.fechaNacimiento ?? null, edad: d.edad ?? null,
+            acudiente: d.acudiente ?? null, grupoSugerido: oferta?.titulo ?? null, quiere: oferta?.tipo ?? 'oferta',
+        }));
+    }
+    await ctx.avisarEscuela('otro', [
+        `Inscripción (${(etiquetaDeOfertas(ofertas.ofertas)?.boton ?? 'Oferta').toLocaleLowerCase('es-CO')}):`
+            + ` ${oferta?.titulo ?? 'sin oferta elegida'}${cuando ? ` — ${cuando}` : ''}.`,
+        nombre ? `Deportista: ${nombre}.` : 'Sin nombre del deportista.',
+        resumenDeConvocatoria(d),
+        valor ? `Valor: ${valor} (indicarle cómo pagar).` : '',
+    ].filter(Boolean).join(' '));
+    return true;
+}
+
+/** Lo que contó en la convocatoria guiada, para el aviso a la escuela. Pura. */
+function resumenDeConvocatoria(d: DatosPuerta, ofertas?: OfertasDePuerta): string {
+    const o = d.oferta ?? DATOS_OFERTA_VACIOS;
+    return [
+        o.genero ? `Género: ${o.genero}.` : '',
+        d.anioTexto || o.anio != null ? `Año de nacimiento: ${d.anioTexto ?? o.anio}.` : '',
+        o.trayectoria === true ? `Trayectoria: sí${o.detalle ? ` (${o.detalle})` : ''}.` : o.trayectoria === false ? 'Trayectoria: no.' : '',
+        o.sede ? `Sede: ${o.sede}.` : '',
+        ofertas ? `Ofertas que vio: ${tituloDeMostradas(ofertas, d)}.` : '',
+        d.acudiente ? `Acudiente: ${d.acudiente}.` : '',
+    ].filter(Boolean).join(' ') || 'Convocatorias.';
+}
+
+/** Año de nacimiento que ya dio en el mini-registro (su fecha, o la edad contra el año de `hoy`). Pura. */
+function anioDelRegistro(d: DatosPuerta, hoy: string): number | null {
+    const deFecha = d.fechaNacimiento ? Number(String(d.fechaNacimiento).slice(0, 4)) : NaN;
+    if (Number.isFinite(deFecha) && deFecha > 1900) return deFecha;
+    return d.edad != null ? Number(hoy.slice(0, 4)) - d.edad : null;
 }
 
 /** No entendió el nombre/edad dos veces: lo que haya queda en el buzón y la escuela lo ve. */
@@ -659,6 +1137,49 @@ export async function leerEstadoDePuertaDeSupabase(conversationId: string): Prom
             : (new Date(b.created_at) > new Date(m.created_at) ? b.tool_context : m.payload);
         if (!ultimo || ultimo.flujo !== FLUJO_PUERTA || !ultimo.paso_puerta) return null;
         return { paso: ultimo.paso_puerta, datos: ultimo.datos_puerta ?? {} };
+    } catch {
+        return null;
+    }
+}
+
+/** Cuántos salientes hacia atrás se busca el estado de la convocatoria guiada. */
+const SALIENTES_PARA_OFERTA = 8;
+
+/**
+ * El estado de la convocatoria guiada aunque el bot haya contestado otra cosa
+ * después (una pregunta a mitad del flujo): el saliente más reciente del bot con
+ * paso 'oferta' en la vigencia. Si una persona de la escuela escribió después, ya
+ * no (la conversación es suya). Nunca lanza.
+ */
+export async function leerEstadoDeOfertaDeSupabase(conversationId: string): Promise<EstadoPuerta | null> {
+    try {
+        const desde = new Date(Date.now() - VIGENCIA_FLUJO_PUERTA_MS).toISOString();
+        const [msgs, borradores] = await Promise.all([
+            supabase.from('whatsapp_messages')
+                .select('payload, created_at, ai_generated')
+                .eq('conversation_id', conversationId)
+                .eq('direction', 'outbound')
+                .gte('created_at', desde)
+                .order('created_at', { ascending: false })
+                .limit(SALIENTES_PARA_OFERTA),
+            supabase.from('whatsapp_message_drafts')
+                .select('tool_context, created_at')
+                .eq('conversation_id', conversationId)
+                .eq('status', 'pending')
+                .gte('created_at', desde)
+                .order('created_at', { ascending: false })
+                .limit(SALIENTES_PARA_OFERTA),
+        ]);
+        const comoLista = (d: any) => (Array.isArray(d) ? d : d ? [d] : []) as any[];
+        const filas = [
+            ...comoLista((msgs as any)?.data).map((m) => ({ p: m.payload, humano: m.ai_generated === false, en: m.created_at })),
+            ...comoLista((borradores as any)?.data).map((b) => ({ p: b.tool_context, humano: false, en: b.created_at })),
+        ].sort((a, b) => new Date(b.en).getTime() - new Date(a.en).getTime());
+        for (const f of filas) {
+            if (f.humano) return null;
+            if (f.p?.flujo === FLUJO_PUERTA && f.p?.paso_puerta === 'oferta') return { paso: 'oferta', datos: f.p.datos_puerta ?? {} };
+        }
+        return null;
     } catch {
         return null;
     }
