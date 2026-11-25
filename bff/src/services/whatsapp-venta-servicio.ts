@@ -329,7 +329,9 @@ export function textoBotonDelClubEnVenta(item: ItemConFicha, o: { pagado: boolea
  * club»): antes de agendar nada se le dice que va aparte del servicio y cuánto cuesta
  * (Nicolás terminó pagando $15.000 creyendo que eran parte de la clínica). Pura.
  */
-export function textoClubAparteDeLaVenta(item: ItemConFicha, t: Pick<TextosClase, 'nombre' | 'precio' | 'gratis'>): string {
+export function textoClubAparteDeLaVenta(item: ItemConFicha, t: Pick<TextosClase, 'nombre' | 'precio' | 'gratis'> & { disponible?: boolean }): string {
+    // (2026-11-25) `disponible: false` = hoy no hay clase de prueba (`estadoDeOfertas`): no se nombra.
+    if (t.disponible === false) return `Claro 🙌 Lo del club va aparte ${deLaDelServicio(item)}: la escuela te cuenta por aquí cómo entrar.`;
     const valor = t.gratis || !t.precio ? 'que es gratis' : `que cuesta *${t.precio}*`;
     return `Claro 🙌 Lo del club va aparte ${deLaDelServicio(item)}: para empezar se agenda una *${t.nombre}*, ${valor}.`;
 }
@@ -813,7 +815,7 @@ export function diceSerAfiliado(texto: string | null | undefined): boolean {
     const t = normalizarFrase(texto);
     return DICE_SER_AFILIADO.test(t) && !NO_AFILIADO.test(t) && !/\bno (es|son|esta|estan|entrena|entrenan|juega|juegan)\b/.test(t);
 }
-export const TEXTO_DICE_SER_AFILIADO = 'Perfecto 🙌 Entonces aplica el valor de afiliados. La escuela confirma que ya entrenas en el club cuando valide tu comprobante. '
+export const TEXTO_DICE_SER_AFILIADO = 'Perfecto 🙌 Lo anoto. La escuela confirma que ya entrenas en el club cuando valide tu comprobante y, si es así, aplica el valor de afiliados. '
     + '¿Te paso los datos de pago?';
 
 /** «¿los entrenos serían normales?»: pregunta por los entrenamientos de siempre del club, que el servicio no trae. */
@@ -1558,7 +1560,12 @@ export async function atenderVentaDeServicio(
         const dichoHace = (clave: string, minutos: number) => ctx.recientes.some((f) => f.direction === 'outbound'
             && f.payload?.fija_de_venta === clave && momento(f) >= ahora - minutos * 60_000);
         // «Para dos hermanos», «son dos niñas, 3 semanas cada una»: el cobro por persona lo arma la escuela.
-        if (pideVariosCupos(texto) && !dichoHace('varios_cupos', 30)) {
+        // Salvo que el bot acabe de preguntar «¿dos cupos o uno solo?»: esa respuesta la lee la rama de `detalle` (elegirEntreNombres).
+        const ultimoSalienteDeVenta = [...ctx.recientes]
+            .filter((f) => f.direction === 'outbound' && momento(f) >= ahora - 24 * 3600_000).sort((a, b) => momento(b) - momento(a))[0];
+        const respondeAPreguntaDeNombres = Array.isArray(ultimoSalienteDeVenta?.payload?.asistentes_dichos)
+            && ultimoSalienteDeVenta!.payload.asistentes_dichos.length >= 2;
+        if (!respondeAPreguntaDeNombres && pideVariosCupos(texto) && !dichoHace('varios_cupos', 30)) {
             await ctx.enviar(TEXTO_VARIOS_CUPOS, {
                 ...marca, step: PASO_VENTA.A_LA_ESCUELA, fija_de_venta: 'varios_cupos', repetible: true,
                 pendiente_escuela: `varios cupos: ${texto}`.slice(0, 300), ...payloadDeOpcion(eleccion),
@@ -1575,7 +1582,8 @@ export async function atenderVentaDeServicio(
             return 'venta_respuesta';
         }
         // «Soy afiliado», «mi hija entrena en el club»: lo que el propio bot preguntó («cuéntame cuál es tu caso»).
-        if (!eleccion && diceSerAfiliado(texto) && tienePrecioDeAfiliado(item)) {
+        // Solo si es una afirmación: «soy afiliado, ¿cuánto cuesta?» es una pregunta de precio y la contesta la cotización.
+        if (!eleccion && !/[?¿]/.test(texto) && diceSerAfiliado(texto) && tienePrecioDeAfiliado(item)) {
             if (dichoHace('dice_ser_afiliado', 5)) return 'venta_silencio';
             await ctx.enviar(TEXTO_DICE_SER_AFILIADO, { ...marca, step: PASO_VENTA.RESPUESTA, fija_de_venta: 'dice_ser_afiliado', repetible: true },
                 botonesDeVenta(item, ['separar', 'humano']));

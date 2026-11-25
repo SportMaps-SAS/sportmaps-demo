@@ -137,6 +137,14 @@ export async function tarjetasDelTicket(userId: string, ticketId: string): Promi
     return ((data as FilaBorrador[]) ?? []).reverse().map(aTarjeta);
 }
 
+/** Las propuestas que siguen vivas en el chat (pendientes y sin vencer), las 5 más nuevas. */
+export async function pendientesDelTicket(userId: string, ticketId: string): Promise<TarjetaAccion[]> {
+    const ahora = Date.now();
+    return (await tarjetasDelTicket(userId, ticketId))
+        .filter((t) => t.estado === 'draft' && Date.parse(t.expiraEn) > ahora)
+        .slice(-5);
+}
+
 export async function asociarMensaje(ids: string[], messageId: string): Promise<void> {
     if (!ids.length) return;
     await supabase.from('mapi_action_drafts').update({ message_id: messageId }).in('id', ids);

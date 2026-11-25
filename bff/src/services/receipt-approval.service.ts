@@ -289,6 +289,29 @@ export async function evaluatePaymentReceipt(paymentId: string, log?: Logger): P
                                 return { action: 'none' };
                             }
                             if (evidencia.ok) {
+                                // Paso 0 de docs/specs/seguridad-veredicto-comprobante-plan.md §3.5:
+                                // lo que leyó el SERVIDOR reemplaza lo que escribió el navegador
+                                // ANTES de aprobar. El trigger del saldo a favor
+                                // (fn_payments_saldo_a_favor_al_aprobar) acredita
+                                // ocr_amount − saldo: con el valor del cliente, una familia
+                                // podía inflar su saldo a favor en la aprobación automática.
+                                // Solo si sigue en revisión; si no se pudo sellar, no se aprueba.
+                                const { data: sellado, error: errSello } = await supabase.from('payments')
+                                    .update({
+                                        ocr_amount: ocrA.amount ?? null,
+                                        ocr_reference: ocrA.reference ?? null,
+                                        ocr_date: ocrA.date ?? null,
+                                        ocr_destination: ocrA.destination ?? null,
+                                        receipt_verdict: verdictA.verdict,
+                                        receipt_verdict_reasons: verdictA.reasons,
+                                        receipt_verdict_at: new Date().toISOString(),
+                                    })
+                                    .eq('id', paymentId).eq('status', 'awaiting_approval')
+                                    .select('id');
+                                if (errSello || !(sellado as any[] | null)?.length) {
+                                    (log ?? console).warn?.({ paymentId, err: errSello?.message }, '[auto-approve] no se pudo sellar la lectura del servidor → manual');
+                                    return { action: 'none' };
+                                }
                                 const { data: approved } = await supabase.rpc('auto_approve_payment', { p_payment_id: paymentId });
                                 if (approved === true) {
                                     await sendApprovalEmail(p, esperado, log);

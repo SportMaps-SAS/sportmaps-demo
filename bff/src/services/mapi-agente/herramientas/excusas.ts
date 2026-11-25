@@ -124,8 +124,13 @@ export const excusarAusencia: HerramientaAccion<ArgsExcusar> = {
         if (!nuevos.length) return { ok: false, motivo: `Todos esos días ya tienen aviso de ausencia de ${d.nombre}.` };
 
         const deFamilia = ya.filter((x) => x.source !== 'staff').map((x) => fechaCorta(x.dia));
+        // La tarjeta cuenta los días que ESTA excusa agrega: antes decía «3 días» y el
+        // resultado «2 días» cuando la familia ya había avisado uno (evals 11-25).
+        const cuantos = nuevos.length === dias.length
+            ? `${dias.length} ${dias.length === 1 ? 'día' : 'días'}`
+            : `se excusan ${nuevos.length} de ${dias.length} días`;
         const lineas = [
-            `${rangoLegible(args.desde, args.hasta)[0].toUpperCase()}${rangoLegible(args.desde, args.hasta).slice(1)} · ${dias.length} ${dias.length === 1 ? 'día' : 'días'}`,
+            `${rangoLegible(args.desde, args.hasta)[0].toUpperCase()}${rangoLegible(args.desde, args.hasta).slice(1)} · ${cuantos}`,
             `Motivo: ${MOTIVO_LEGIBLE[args.motivo]}${args.nota ? ` · «${args.nota}»` : ''}`,
             ...(deFamilia.length ? [`${deFamilia.join(', ')}: ya lo había avisado la familia. Ese aviso se respeta.`] : []),
             'El entrenador lo verá «excusado» en la lista.',
@@ -273,6 +278,8 @@ export const quitarExcusa: HerramientaAccion<ArgsQuitar> = {
     mensajeResultado(r, args) {
         const x = r.resultado as any;
         if (r.estado === 'failed') return `No se quitó ninguna excusa. ${x.motivo || ''}`.trim();
-        return `Se quitaron ${x.quitados} ${x.quitados === 1 ? 'aviso' : 'avisos'} de ausencia de ${x.nombre} ${rangoLegible(args.desde, args.hasta)}.`;
+        return x.quitados === 1
+            ? `Se quitó 1 aviso de ausencia de ${x.nombre} ${rangoLegible(args.desde, args.hasta)}.`
+            : `Se quitaron ${x.quitados} avisos de ausencia de ${x.nombre} ${rangoLegible(args.desde, args.hasta)}.`;
     },
 };

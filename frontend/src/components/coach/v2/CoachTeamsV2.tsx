@@ -38,6 +38,7 @@ import { EvaluarTab } from './equipos/EvaluarTab';
 import { AgregarHorarioBoton } from './equipos/AgregarHorarioSheet';
 import { BotonCrearEquipo } from './equipos/AltasDelProfe';
 import { useEntitlements } from '@/hooks/useEntitlements';
+import { useEntidadParaMapi } from '@/lib/mapiPantalla';
 
 const TABS: { id: TabEquipo; label: string }[] = [
   { id: 'deportistas', label: 'Deportistas' },
@@ -192,6 +193,7 @@ function Detalle({
   schoolId: string; ahora: Date; rutas: RutasCoachV2; nombreProfe?: string | null;
   puedeFelicitar: boolean; felicitados: Set<string>; onFelicitar: (o: ObjetivoFelicitar) => void;
 }) {
+  useEntidadParaMapi({ tipo: 'equipo', id: equipo.id });
   return (
     <>
       <div className="sticky top-0 z-10 -mx-gutter flex flex-col gap-2 bg-background/95 px-gutter pb-2 pt-1 backdrop-blur md:mx-0 md:px-0">

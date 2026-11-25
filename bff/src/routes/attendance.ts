@@ -1618,499 +1618,515 @@ router.get('/history', requireAuth, requireRole('owner', 'super_admin', 'admin',
     try {
       const { schoolId } = req;
       if (!schoolId) return res.status(400).json({ error: 'Falta el contexto de escuela.' });
-
-      // Un mes (`month=YYYY-MM`, lo de siempre) o un rango de meses
-      // (`fromMonth`/`toMonth`, o `month=all` = desde la primera lista de la
-      // escuela). Carmel pidió ver "todos los meses" juntos, no mes por mes.
-      const YM = /^\d{4}-(0[1-9]|1[0-2])$/;
-      const thisMonth = todayString().slice(0, 7);
-      const monthParam = (req.query.month as string) ?? '';
-      let fromMonth: string;
-      let toMonth: string;
-      if (monthParam === 'all') {
-        const { data: first } = await supabase
-          .from('attendance_records')
-          .select('attendance_date')
-          .eq('school_id', schoolId)
-          .order('attendance_date', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-        fromMonth = ((first as any)?.attendance_date ?? todayString()).slice(0, 7);
-        toMonth = thisMonth;
-      } else if (YM.test(String(req.query.fromMonth ?? '')) && YM.test(String(req.query.toMonth ?? ''))) {
-        fromMonth = String(req.query.fromMonth);
-        toMonth = String(req.query.toMonth);
-        if (fromMonth > toMonth) [fromMonth, toMonth] = [toMonth, fromMonth];
-      } else {
-        fromMonth = toMonth = YM.test(monthParam) ? monthParam : thisMonth;
-      }
-      // Tope de 24 meses: más que eso es un volcado, no un informe.
-      const [fy, fm] = fromMonth.split('-').map(Number);
-      const [ty, tm] = toMonth.split('-').map(Number);
-      if ((ty - fy) * 12 + (tm - fm) >= 24) {
-        return res.status(400).json({ error: 'El rango máximo es de 24 meses.' });
-      }
-      const isRange = fromMonth !== toMonth;
-      const month = fromMonth;
-
-      const lastDay = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
-      const from = `${fromMonth}-01`;
-      const to = `${toMonth}-${String(lastDay).padStart(2, '0')}`;
-
-      const teamFilter = (req.query.teamId as string) || null;
-      const offeringFilter = (req.query.offeringId as string) || null;
-      // `coachId` es un school_staff.id. Para filtrar hacen falta las dos caras:
-      // quién quedó asignado a la sesión (`attendance_sessions.coach_id`, que es
-      // FK a school_staff) y quién efectivamente pasó lista (`marked_by`, que es
-      // el auth uid). No alcanza con una: 11 de las 33 sesiones de Dynasty
-      // tienen coach_id nulo porque las marcó la dueña desde el panel, y al revés
-      // un coach puede figurar asignado y que haya marcado un reemplazo.
-      const coachFilter = (req.query.coachId as string) || null;
-      let coachAuthId: string | null = null;
-      if (coachFilter) {
-        const { data: staff } = await supabase
-          .from('school_staff')
-          .select('coach_auth_id')
-          .eq('id', coachFilter)
-          .eq('school_id', schoolId)
-          .maybeSingle();
-        coachAuthId = (staff as any)?.coach_auth_id ?? null;
-      }
-
-      let records = await fetchAllAttendanceRecords(schoolId, from, to);
-
-      // ── Contexto de cada registro ────────────────────────────────────────
-      // team_id viene directo en el registro; las asistencias de planes e
-      // instalaciones solo se pueden ubicar a través de su sesión.
-      const sessionIds = [...new Set(records.map(r => r.session_id).filter(Boolean))] as string[];
-      const sessionCtx: Record<string, { team_id: string | null; offering_id: string | null; facility_id: string | null; coach_id: string | null }> = {};
-
-      if (sessionIds.length) {
-        const CHUNK = 300;
-        for (let i = 0; i < sessionIds.length; i += CHUNK) {
-          const { data, error } = await supabase
-            .from('attendance_sessions')
-            .select('id, team_id, offering_id, facility_id, coach_id')
-            .in('id', sessionIds.slice(i, i + CHUNK));
-          if (error) throw error;
-          for (const s of data || []) {
-            sessionCtx[(s as any).id] = {
-              team_id: (s as any).team_id ?? null,
-              offering_id: (s as any).offering_id ?? null,
-              facility_id: (s as any).facility_id ?? null,
-              coach_id: (s as any).coach_id ?? null,
-            };
-          }
-        }
-      }
-
-      const ctxOf = (r: HistoryRecord) => {
-        const s = r.session_id ? sessionCtx[r.session_id] : undefined;
-        return {
-          teamId: r.team_id ?? s?.team_id ?? null,
-          offeringId: s?.offering_id ?? null,
-          facilityId: s?.facility_id ?? null,
-          coachId: s?.coach_id ?? null,
-        };
-      };
-
-      if (teamFilter) records = records.filter(r => ctxOf(r).teamId === teamFilter);
-      if (offeringFilter) records = records.filter(r => ctxOf(r).offeringId === offeringFilter);
-      if (coachFilter) {
-        records = records.filter(r =>
-          ctxOf(r).coachId === coachFilter
-          || (!!coachAuthId && r.marked_by === coachAuthId));
-      }
-
-      // ── Identidad precargada ya vinculada a una cuenta ───────────────────
-      // La asistencia se escribe sobre la columna con la que se pasó lista, así
-      // que un atleta que la escuela precargó sigue apareciendo por
-      // `unregistered_athlete_id` aunque después haya creado su cuenta. Mirar
-      // solo la columna rotulaba "Sin cuenta" a gente que sí la tiene (caso real:
-      // DAIMARIS VASQUEZ PEREZ = Dai Vázquez), y si además tiene asistencias bajo
-      // su perfil el mes se le parte en dos filas. `linked_profile_id` manda.
-      const rawUnregIds = [...new Set(records.map(r => r.unregistered_athlete_id).filter(Boolean))] as string[];
-      const unregMeta: Record<string, { full_name: string; linked_profile_id: string | null }> = {};
-
-      if (rawUnregIds.length) {
-        const CHUNK = 300;
-        for (let i = 0; i < rawUnregIds.length; i += CHUNK) {
-          const { data, error } = await supabase
-            .from('unregistered_athletes')
-            .select('id, full_name, linked_profile_id')
-            .in('id', rawUnregIds.slice(i, i + CHUNK));
-          if (error) throw error;
-          for (const u of data || []) {
-            unregMeta[(u as any).id] = {
-              full_name: (u as any).full_name,
-              linked_profile_id: (u as any).linked_profile_id ?? null,
-            };
-          }
-        }
-      }
-
-      /** Identidad con la que se agrupa: la cuenta vinculada gana sobre la precargada. */
-      const athleteIdOf = (r: HistoryRecord): string | null =>
-        r.child_id
-        ?? r.user_id
-        ?? (r.unregistered_athlete_id
-          ? unregMeta[r.unregistered_athlete_id]?.linked_profile_id ?? r.unregistered_athlete_id
-          : null);
-
-      // ── Nombres (atletas y contextos) ────────────────────────────────────
-      const childIds = [...new Set(records.map(r => r.child_id).filter(Boolean))] as string[];
-      const linkedProfileIds = rawUnregIds
-        .map(id => unregMeta[id]?.linked_profile_id)
-        .filter(Boolean) as string[];
-      const userIds = [...new Set([
-        ...records.map(r => r.user_id).filter(Boolean) as string[],
-        ...linkedProfileIds,
-      ])];
-      const unregIds = rawUnregIds;
-
-      const teamIds = [...new Set(records.map(r => ctxOf(r).teamId).filter(Boolean))] as string[];
-      const offeringIds = [...new Set(records.map(r => ctxOf(r).offeringId).filter(Boolean))] as string[];
-      const facilityIds = [...new Set(records.map(r => ctxOf(r).facilityId).filter(Boolean))] as string[];
-
-      const [childNames, userNames, unregNames, teamNames, offeringNames, facilityNames] = await Promise.all([
-        childIds.length ? fetchNames('children', childIds) : Promise.resolve({} as Record<string, string>),
-        userIds.length ? fetchNames('profiles', userIds) : Promise.resolve({} as Record<string, string>),
-        unregIds.length ? fetchNames('unregistered_athletes', unregIds) : Promise.resolve({} as Record<string, string>),
-        teamIds.length
-          ? supabase.from('teams').select('id, name').in('id', teamIds)
-              .then(({ data }) => Object.fromEntries((data || []).map((t: any) => [t.id, t.name])))
-          : Promise.resolve({} as Record<string, string>),
-        offeringIds.length
-          ? supabase.from('offerings').select('id, name').in('id', offeringIds)
-              .then(({ data }) => Object.fromEntries((data || []).map((o: any) => [o.id, o.name])))
-          : Promise.resolve({} as Record<string, string>),
-        facilityIds.length
-          ? supabase.from('facilities').select('id, name').in('id', facilityIds)
-              .then(({ data }) => Object.fromEntries((data || []).map((f: any) => [f.id, f.name])))
-          : Promise.resolve({} as Record<string, string>),
-      ]);
-
-      // ── Agregación ───────────────────────────────────────────────────────
-      type AthleteRow = {
-        id: string; athlete_type: 'child' | 'adult' | 'unregistered'; full_name: string;
-        /** Otros nombres de la misma persona (p.ej. como la precargó la escuela). */
-        aliases: string[];
-        contexts: string[]; present: number; absent: number; late: number; excused: number;
-        total: number; rate: number; by_day: Record<string, string>;
-        /** Conteo por mes (YYYY-MM): la tabla "Por atleta" en modo rango. */
-        by_month: Record<string, { present: number; absent: number; late: number; excused: number; total: number }>;
-      };
-
-      const athletes = new Map<string, AthleteRow & { _ctx: Set<string>; _aliases: Set<string> }>();
-      // Agregado por contexto (equipo / oferta / instalación), para el bloque
-      // "Asistencia del mes" del reporte gerencial: "% por equipo" no se puede
-      // reconstruir desde `athletes[].contexts` sin contar dos veces a quien
-      // está en dos equipos (Carmel: categoría + arqueros).
-      const byContext = new Map<string, {
-        name: string; present: number; absent: number; late: number; excused: number;
-        total: number; rate: number; _athletes: Set<string>;
-      }>();
-      const days = new Map<string, {
-        date: string; present: number; absent: number; late: number; excused: number;
-        total: number; athletes: number; rate: number; _athletes: Set<string>;
-      }>();
-      const months = new Map<string, {
-        month: string; present: number; absent: number; late: number; excused: number;
-        total: number; athletes: number; days: number; rate: number;
-        _athletes: Set<string>; _days: Set<string>;
-      }>();
-
-      for (const r of records) {
-        const id = athleteIdOf(r);
-        if (!id) continue;
-
-        const linked = r.unregistered_athlete_id
-          ? unregMeta[r.unregistered_athlete_id]?.linked_profile_id ?? null
-          : null;
-
-        // "Sin cuenta" solo si de verdad no hay cuenta detrás.
-        const athleteType = r.child_id ? 'child'
-          : r.user_id || linked ? 'adult'
-            : 'unregistered';
-
-        // Con cuenta vinculada manda el nombre del perfil, que es la identidad
-        // que sobrevive; el nombre precargado se guarda como alias para que la
-        // escuela siga encontrándola buscando como ella la escribió.
-        const unregName = r.unregistered_athlete_id
-          ? unregNames[r.unregistered_athlete_id] ?? unregMeta[r.unregistered_athlete_id]?.full_name
-          : undefined;
-        const fullName = (r.child_id ? childNames[r.child_id]
-          : r.user_id ? userNames[r.user_id]
-          : linked ? userNames[linked] ?? unregName
-            : unregName) ?? 'Sin nombre';
-        const alias = linked && unregName && unregName !== fullName ? unregName : null;
-
-        const ctx = ctxOf(r);
-        const ctxLabel = (ctx.teamId && teamNames[ctx.teamId])
-          || (ctx.offeringId && offeringNames[ctx.offeringId])
-          || (ctx.facilityId && facilityNames[ctx.facilityId])
-          || null;
-
-        let row = athletes.get(id);
-        if (!row) {
-          row = {
-            id, athlete_type: athleteType, full_name: fullName, aliases: [], contexts: [],
-            present: 0, absent: 0, late: 0, excused: 0, total: 0, rate: 0,
-            by_day: {}, by_month: {}, _ctx: new Set<string>(), _aliases: new Set<string>(),
-          };
-          athletes.set(id, row);
-        }
-        if (ctxLabel) row._ctx.add(ctxLabel);
-        if (alias) row._aliases.add(alias);
-
-        let day = days.get(r.attendance_date);
-        if (!day) {
-          day = {
-            date: r.attendance_date, present: 0, absent: 0, late: 0, excused: 0,
-            total: 0, athletes: 0, rate: 0, _athletes: new Set<string>(),
-          };
-          days.set(r.attendance_date, day);
-        }
-        day._athletes.add(id);
-
-        const status = normalizeStatus(r.status);
-        row[status] += 1;
-        day[status] += 1;
-        row.total += 1;
-        day.total += 1;
-
-        const ym = r.attendance_date.slice(0, 7);
-        let mrow = months.get(ym);
-        if (!mrow) {
-          mrow = {
-            month: ym, present: 0, absent: 0, late: 0, excused: 0, total: 0,
-            athletes: 0, days: 0, rate: 0, _athletes: new Set<string>(), _days: new Set<string>(),
-          };
-          months.set(ym, mrow);
-        }
-        mrow[status] += 1;
-        mrow.total += 1;
-        mrow._athletes.add(id);
-        mrow._days.add(r.attendance_date);
-        const am = (row.by_month[ym] ??= { present: 0, absent: 0, late: 0, excused: 0, total: 0 });
-        am[status] += 1;
-        am.total += 1;
-
-        if (ctxLabel) {
-          let ctxRow = byContext.get(ctxLabel);
-          if (!ctxRow) {
-            ctxRow = {
-              name: ctxLabel, present: 0, absent: 0, late: 0, excused: 0,
-              total: 0, rate: 0, _athletes: new Set<string>(),
-            };
-            byContext.set(ctxLabel, ctxRow);
-          }
-          ctxRow[status] += 1;
-          ctxRow.total += 1;
-          ctxRow._athletes.add(id);
-        }
-
-        // En la matriz manda el mejor estado del día: quien faltó a un equipo
-        // pero entrenó en la instalación asistió ese día.
-        const prev = row.by_day[r.attendance_date];
-        if (!prev || STATUS_RANK[status] > (STATUS_RANK[prev] ?? 0)) {
-          row.by_day[r.attendance_date] = status;
-        }
-      }
-
-      const athleteRows: AthleteRow[] = [...athletes.values()]
-        .map(({ _ctx, _aliases, ...row }) => ({
-          ...row,
-          contexts: [..._ctx].sort(),
-          aliases: [..._aliases].sort(),
-          rate: row.total > 0 ? Math.round(((row.present + row.late) / row.total) * 100) : 0,
-        }))
-        .sort((a, b) => a.full_name.localeCompare(b.full_name, 'es'));
-
-      const dayRows = [...days.values()]
-        .map(({ _athletes, ...day }) => ({
-          ...day,
-          athletes: _athletes.size,
-          rate: day.total > 0 ? Math.round(((day.present + day.late) / day.total) * 100) : 0,
-        }))
-        .sort((a, b) => a.date.localeCompare(b.date));
-
-      const monthRows = [...months.values()]
-        .map(({ _athletes, _days, ...m }) => ({
-          ...m,
-          athletes: _athletes.size,
-          days: _days.size,
-          rate: m.total > 0 ? Math.round(((m.present + m.late) / m.total) * 100) : 0,
-        }))
-        .sort((a, b) => a.month.localeCompare(b.month));
-
-      const contextRows = [...byContext.values()]
-        .map(({ _athletes, ...ctx }) => ({
-          ...ctx,
-          athletes: _athletes.size,
-          rate: ctx.total > 0 ? Math.round(((ctx.present + ctx.late) / ctx.total) * 100) : 0,
-        }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'es'));
-
-      // ── Plan vs consumo ──────────────────────────────────────────────────
-      //
-      // La asistencia se registra SIEMPRE, tenga saldo o no: es deliberado
-      // (dejar constancia de que el atleta vino y cobrarle la clase son cosas
-      // distintas). El efecto secundario es que nadie ve el desfase, y la
-      // escuela termina regalando clases sin enterarse.
-      //
-      // Se cuenta contra las asistencias DEL MES, no contra `sessions_used`:
-      // ese contador es acumulado y nunca se resetea, así que comparado con un
-      // tope mensual miente a partir del segundo mes.
-      const idsPorTipo = {
-        child: athleteRows.filter(a => a.athlete_type === 'child').map(a => a.id),
-        adult: athleteRows.filter(a => a.athlete_type === 'adult').map(a => a.id),
-        unreg: athleteRows.filter(a => a.athlete_type === 'unregistered').map(a => a.id),
-      };
-
-      const planPorAtleta: Record<string, any> = {};
-      // El tope del plan es MENSUAL: contra un rango de varios meses casi todos
-      // saldrían "excedidos". En modo rango no se calcula ni se ofrece facturar.
-      for (const [tipo, ids] of isRange ? [] : Object.entries(idsPorTipo)) {
-        if (!ids.length) continue;
-        const col = tipo === 'child' ? 'child_id' : tipo === 'adult' ? 'user_id' : 'unregistered_athlete_id';
-        const { data } = await supabase
-          .from('enrollments')
-          .select(`id, child_id, user_id, unregistered_athlete_id, team_id, expires_at, sessions_used,
-            offering_plan_id,
-            offering_plans!enrollments_offering_plan_id_fkey(name, max_sessions, price, currency)`)
-          .eq('school_id', schoolId)
-          .eq('status', 'active')
-          .in(col, ids);
-        for (const e of (data || []) as any[]) {
-          const key = e.child_id ?? e.user_id ?? e.unregistered_athlete_id;
-          // Si tiene varias, gana la de tope más alto: es la que mejor explica
-          // cuántas clases le corresponden en el mes.
-          const tope = e.offering_plans?.max_sessions ?? null;
-          const prev = planPorAtleta[key];
-          if (!prev || (tope ?? 0) > (prev.tope ?? 0)) {
-            const precio = Number(e.offering_plans?.price ?? 0);
-            planPorAtleta[key] = {
-              enrollment_id: e.id,
-              plan_id: e.offering_plan_id ?? null,
-              team_id: e.team_id ?? null,
-              nombre: e.offering_plans?.name ?? null,
-              tope,
-              // Lo que vale una clase suelta de ESE plan. Es la única cifra
-              // defendible frente a la familia: sale del plan que contrató, no
-              // de una tarifa inventada.
-              precio_clase: tope && tope > 0 ? Math.round(precio / tope) : null,
-              moneda: e.offering_plans?.currency ?? 'COP',
-              vence: e.expires_at ?? null,
-              descontadas: e.sessions_used ?? 0,
-            };
-          }
-        }
-      }
-
-      for (const row of (isRange ? [] : athleteRows) as any[]) {
-        const p = planPorAtleta[row.id];
-        const asistidas = row.present + row.late;
-        if (!p) {
-          // MISMA forma que la rama con plan. Antes esta emitia `excedente: 0`
-          // como NUMERO mientras la otra emitia objetos, y la pantalla —que
-          // incluye a los `sin_plan` en el desglose— hacia `cubo.fechas.length`
-          // sobre un 0. Tumbaba el histórico entero con un ErrorBoundary.
-          const vacio = { clases: 0, valor: null, fechas: [] as string[] };
-          row.plan = {
-            estado: 'sin_plan', nombre: null, tope: null, vence: null, descontadas: 0,
-            asistidas, cubiertas: 0, precio_clase: null, moneda: 'COP',
-            excedente: { ...vacio }, vencidas: { ...vacio },
-            fuera_de_plan: 0, valor: null,
-          };
-          continue;
-        }
-        // ── Clasificación clase por clase, en cubos EXCLUYENTES ────────────
-        //
-        // Una clase cae en uno y solo uno: o está cubierta, o se pasó del tope,
-        // o el plan ya había vencido. Si el plan vencía el 5 y entrenó el 11, esa
-        // clase NO es "excedente" — el tope ni siquiera aplica ya. Contarla en
-        // los dos cubos la facturaría dos veces, que es justo lo que no puede
-        // pasar cuando esto emite cobros.
-        //
-        // Se ordena por fecha porque el tope se consume en orden: las primeras 8
-        // están cubiertas y de la 9 en adelante son excedente.
-        const diasAsistidos = Object.entries(row.by_day as Record<string, string>)
-          .filter(([, st]) => st === 'present' || st === 'late')
-          .map(([fecha]) => fecha)
-          .sort();
-
-        const diasVigentes = p.vence ? diasAsistidos.filter(f => f <= p.vence) : diasAsistidos;
-        const vencidas   = diasAsistidos.length - diasVigentes.length;
-        const excedente  = p.tope !== null ? Math.max(diasVigentes.length - p.tope, 0) : 0;
-        const cubiertas  = diasVigentes.length - excedente;
-
-        // Ahora SÍ se suman: son disjuntos por construcción.
-        const fueraDePlan = excedente + vencidas;
-        const precio = p.precio_clase;
-
-        row.plan = {
-          nombre: p.nombre, tope: p.tope, vence: p.vence, descontadas: p.descontadas,
-          asistidas, cubiertas,
-          precio_clase: precio, moneda: p.moneda,
-          // Los dos conceptos van separados hasta el final: se muestran, se
-          // valorizan y se facturan por su cuenta.
-          excedente:   { clases: excedente, valor: precio ? excedente * precio : null,
-                         fechas: diasVigentes.slice(p.tope ?? 0) },
-          vencidas:    { clases: vencidas,  valor: precio ? vencidas  * precio : null,
-                         fechas: p.vence ? diasAsistidos.filter(f => f > p.vence) : [] },
-          fuera_de_plan: fueraDePlan,
-          valor: precio ? fueraDePlan * precio : null,
-          enrollment_id: p.enrollment_id, plan_id: p.plan_id, team_id: p.team_id,
-          estado: fueraDePlan > 0 ? (vencidas > 0 ? 'vencido' : 'excedido') : 'ok',
-        };
-      }
-
-      const desfases = isRange ? null : {
-        excedidos:      (athleteRows as any[]).filter(a => a.plan?.estado === 'excedido').length,
-        con_vencido:    (athleteRows as any[]).filter(a => a.plan?.estado === 'vencido').length,
-        sin_plan:       (athleteRows as any[]).filter(a => a.plan?.estado === 'sin_plan').length,
-        clases_de_mas:   (athleteRows as any[]).reduce((s, a) => s + (a.plan?.excedente?.clases ?? 0), 0),
-        clases_vencidas: (athleteRows as any[]).reduce((s, a) => s + (a.plan?.vencidas?.clases ?? 0), 0),
-        valor_excedente: (athleteRows as any[]).reduce((s, a) => s + (a.plan?.excedente?.valor ?? 0), 0),
-        valor_vencidas:  (athleteRows as any[]).reduce((s, a) => s + (a.plan?.vencidas?.valor ?? 0), 0),
-        valor_total:     (athleteRows as any[]).reduce((s, a) => s + (a.plan?.valor ?? 0), 0),
-      };
-
-      const totals = athleteRows.reduce(
-        (acc, a) => ({
-          records: acc.records + a.total,
-          present: acc.present + a.present,
-          absent: acc.absent + a.absent,
-          late: acc.late + a.late,
-          excused: acc.excused + a.excused,
-        }),
-        { records: 0, present: 0, absent: 0, late: 0, excused: 0 },
-      );
-
-      return res.json({
-        month, from, to,
-        range: { from: fromMonth, to: toMonth, is_range: isRange },
-        months: monthRows,
-        days: dayRows,
-        athletes: athleteRows,
-        contexts: contextRows,
-        desfases,
-        totals: {
-          ...totals,
-          rate: totals.records > 0
-            ? Math.round(((totals.present + totals.late) / totals.records) * 100)
-            : 0,
-          athletes: athleteRows.length,
-          days: dayRows.length,
-        },
-      });
+      const r = await historialDeAsistencia(schoolId, req.query as Record<string, unknown>);
+      if (!r.ok) return res.status(r.status).json({ error: r.error });
+      return res.json(r.datos);
     } catch (err: any) {
       req.log?.error({ err: err.message || err }, 'Error obteniendo histórico de asistencia');
       return res.status(500).json({ error: 'Error interno obteniendo el histórico de asistencia.' });
     }
   }
 );
+
+/**
+ * El histórico de asistencia de la escuela (la respuesta de GET /history), sin
+ * Express: lo usan esa ruta y el reporte de asistencia de Mapi
+ * (services/mapi-agente/herramientas/informes.ts). Recibe los mismos parámetros
+ * de la query: `month` (AAAA-MM o 'all'), `fromMonth`/`toMonth`, `teamId`,
+ * `offeringId` y `coachId`. Solo lectura. Quien llama valida el rol: la ruta
+ * deja fuera al coach y Mapi solo se lo da filtrado por uno de sus equipos.
+ */
+export async function historialDeAsistencia(schoolId: string, query: Record<string, unknown>) {
+  // Un mes (`month=YYYY-MM`, lo de siempre) o un rango de meses
+  // (`fromMonth`/`toMonth`, o `month=all` = desde la primera lista de la
+  // escuela). Carmel pidió ver "todos los meses" juntos, no mes por mes.
+  const YM = /^\d{4}-(0[1-9]|1[0-2])$/;
+  const thisMonth = todayString().slice(0, 7);
+  const monthParam = (query.month as string) ?? '';
+  let fromMonth: string;
+  let toMonth: string;
+  if (monthParam === 'all') {
+    const { data: first } = await supabase
+      .from('attendance_records')
+      .select('attendance_date')
+      .eq('school_id', schoolId)
+      .order('attendance_date', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    fromMonth = ((first as any)?.attendance_date ?? todayString()).slice(0, 7);
+    toMonth = thisMonth;
+  } else if (YM.test(String(query.fromMonth ?? '')) && YM.test(String(query.toMonth ?? ''))) {
+    fromMonth = String(query.fromMonth);
+    toMonth = String(query.toMonth);
+    if (fromMonth > toMonth) [fromMonth, toMonth] = [toMonth, fromMonth];
+  } else {
+    fromMonth = toMonth = YM.test(monthParam) ? monthParam : thisMonth;
+  }
+  // Tope de 24 meses: más que eso es un volcado, no un informe.
+  const [fy, fm] = fromMonth.split('-').map(Number);
+  const [ty, tm] = toMonth.split('-').map(Number);
+  if ((ty - fy) * 12 + (tm - fm) >= 24) {
+    return { ok: false as const, status: 400 as const, error: 'El rango máximo es de 24 meses.' };
+  }
+  const isRange = fromMonth !== toMonth;
+  const month = fromMonth;
+
+  const lastDay = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+  const from = `${fromMonth}-01`;
+  const to = `${toMonth}-${String(lastDay).padStart(2, '0')}`;
+
+  const teamFilter = (query.teamId as string) || null;
+  const offeringFilter = (query.offeringId as string) || null;
+  // `coachId` es un school_staff.id. Para filtrar hacen falta las dos caras:
+  // quién quedó asignado a la sesión (`attendance_sessions.coach_id`, que es
+  // FK a school_staff) y quién efectivamente pasó lista (`marked_by`, que es
+  // el auth uid). No alcanza con una: 11 de las 33 sesiones de Dynasty
+  // tienen coach_id nulo porque las marcó la dueña desde el panel, y al revés
+  // un coach puede figurar asignado y que haya marcado un reemplazo.
+  const coachFilter = (query.coachId as string) || null;
+  let coachAuthId: string | null = null;
+  if (coachFilter) {
+    const { data: staff } = await supabase
+      .from('school_staff')
+      .select('coach_auth_id')
+      .eq('id', coachFilter)
+      .eq('school_id', schoolId)
+      .maybeSingle();
+    coachAuthId = (staff as any)?.coach_auth_id ?? null;
+  }
+
+  let records = await fetchAllAttendanceRecords(schoolId, from, to);
+
+  // ── Contexto de cada registro ────────────────────────────────────────
+  // team_id viene directo en el registro; las asistencias de planes e
+  // instalaciones solo se pueden ubicar a través de su sesión.
+  const sessionIds = [...new Set(records.map(r => r.session_id).filter(Boolean))] as string[];
+  const sessionCtx: Record<string, { team_id: string | null; offering_id: string | null; facility_id: string | null; coach_id: string | null }> = {};
+
+  if (sessionIds.length) {
+    const CHUNK = 300;
+    for (let i = 0; i < sessionIds.length; i += CHUNK) {
+      const { data, error } = await supabase
+        .from('attendance_sessions')
+        .select('id, team_id, offering_id, facility_id, coach_id')
+        .in('id', sessionIds.slice(i, i + CHUNK));
+      if (error) throw error;
+      for (const s of data || []) {
+        sessionCtx[(s as any).id] = {
+          team_id: (s as any).team_id ?? null,
+          offering_id: (s as any).offering_id ?? null,
+          facility_id: (s as any).facility_id ?? null,
+          coach_id: (s as any).coach_id ?? null,
+        };
+      }
+    }
+  }
+
+  const ctxOf = (r: HistoryRecord) => {
+    const s = r.session_id ? sessionCtx[r.session_id] : undefined;
+    return {
+      teamId: r.team_id ?? s?.team_id ?? null,
+      offeringId: s?.offering_id ?? null,
+      facilityId: s?.facility_id ?? null,
+      coachId: s?.coach_id ?? null,
+    };
+  };
+
+  if (teamFilter) records = records.filter(r => ctxOf(r).teamId === teamFilter);
+  if (offeringFilter) records = records.filter(r => ctxOf(r).offeringId === offeringFilter);
+  if (coachFilter) {
+    records = records.filter(r =>
+      ctxOf(r).coachId === coachFilter
+      || (!!coachAuthId && r.marked_by === coachAuthId));
+  }
+
+  // ── Identidad precargada ya vinculada a una cuenta ───────────────────
+  // La asistencia se escribe sobre la columna con la que se pasó lista, así
+  // que un atleta que la escuela precargó sigue apareciendo por
+  // `unregistered_athlete_id` aunque después haya creado su cuenta. Mirar
+  // solo la columna rotulaba "Sin cuenta" a gente que sí la tiene (caso real:
+  // DAIMARIS VASQUEZ PEREZ = Dai Vázquez), y si además tiene asistencias bajo
+  // su perfil el mes se le parte en dos filas. `linked_profile_id` manda.
+  const rawUnregIds = [...new Set(records.map(r => r.unregistered_athlete_id).filter(Boolean))] as string[];
+  const unregMeta: Record<string, { full_name: string; linked_profile_id: string | null }> = {};
+
+  if (rawUnregIds.length) {
+    const CHUNK = 300;
+    for (let i = 0; i < rawUnregIds.length; i += CHUNK) {
+      const { data, error } = await supabase
+        .from('unregistered_athletes')
+        .select('id, full_name, linked_profile_id')
+        .in('id', rawUnregIds.slice(i, i + CHUNK));
+      if (error) throw error;
+      for (const u of data || []) {
+        unregMeta[(u as any).id] = {
+          full_name: (u as any).full_name,
+          linked_profile_id: (u as any).linked_profile_id ?? null,
+        };
+      }
+    }
+  }
+
+  /** Identidad con la que se agrupa: la cuenta vinculada gana sobre la precargada. */
+  const athleteIdOf = (r: HistoryRecord): string | null =>
+    r.child_id
+    ?? r.user_id
+    ?? (r.unregistered_athlete_id
+      ? unregMeta[r.unregistered_athlete_id]?.linked_profile_id ?? r.unregistered_athlete_id
+      : null);
+
+  // ── Nombres (atletas y contextos) ────────────────────────────────────
+  const childIds = [...new Set(records.map(r => r.child_id).filter(Boolean))] as string[];
+  const linkedProfileIds = rawUnregIds
+    .map(id => unregMeta[id]?.linked_profile_id)
+    .filter(Boolean) as string[];
+  const userIds = [...new Set([
+    ...records.map(r => r.user_id).filter(Boolean) as string[],
+    ...linkedProfileIds,
+  ])];
+  const unregIds = rawUnregIds;
+
+  const teamIds = [...new Set(records.map(r => ctxOf(r).teamId).filter(Boolean))] as string[];
+  const offeringIds = [...new Set(records.map(r => ctxOf(r).offeringId).filter(Boolean))] as string[];
+  const facilityIds = [...new Set(records.map(r => ctxOf(r).facilityId).filter(Boolean))] as string[];
+
+  const [childNames, userNames, unregNames, teamNames, offeringNames, facilityNames] = await Promise.all([
+    childIds.length ? fetchNames('children', childIds) : Promise.resolve({} as Record<string, string>),
+    userIds.length ? fetchNames('profiles', userIds) : Promise.resolve({} as Record<string, string>),
+    unregIds.length ? fetchNames('unregistered_athletes', unregIds) : Promise.resolve({} as Record<string, string>),
+    teamIds.length
+      ? supabase.from('teams').select('id, name').in('id', teamIds)
+          .then(({ data }) => Object.fromEntries((data || []).map((t: any) => [t.id, t.name])))
+      : Promise.resolve({} as Record<string, string>),
+    offeringIds.length
+      ? supabase.from('offerings').select('id, name').in('id', offeringIds)
+          .then(({ data }) => Object.fromEntries((data || []).map((o: any) => [o.id, o.name])))
+      : Promise.resolve({} as Record<string, string>),
+    facilityIds.length
+      ? supabase.from('facilities').select('id, name').in('id', facilityIds)
+          .then(({ data }) => Object.fromEntries((data || []).map((f: any) => [f.id, f.name])))
+      : Promise.resolve({} as Record<string, string>),
+  ]);
+
+  // ── Agregación ───────────────────────────────────────────────────────
+  type AthleteRow = {
+    id: string; athlete_type: 'child' | 'adult' | 'unregistered'; full_name: string;
+    /** Otros nombres de la misma persona (p.ej. como la precargó la escuela). */
+    aliases: string[];
+    contexts: string[]; present: number; absent: number; late: number; excused: number;
+    total: number; rate: number; by_day: Record<string, string>;
+    /** Conteo por mes (YYYY-MM): la tabla "Por atleta" en modo rango. */
+    by_month: Record<string, { present: number; absent: number; late: number; excused: number; total: number }>;
+  };
+
+  const athletes = new Map<string, AthleteRow & { _ctx: Set<string>; _aliases: Set<string> }>();
+  // Agregado por contexto (equipo / oferta / instalación), para el bloque
+  // "Asistencia del mes" del reporte gerencial: "% por equipo" no se puede
+  // reconstruir desde `athletes[].contexts` sin contar dos veces a quien
+  // está en dos equipos (Carmel: categoría + arqueros).
+  const byContext = new Map<string, {
+    name: string; present: number; absent: number; late: number; excused: number;
+    total: number; rate: number; _athletes: Set<string>;
+  }>();
+  const days = new Map<string, {
+    date: string; present: number; absent: number; late: number; excused: number;
+    total: number; athletes: number; rate: number; _athletes: Set<string>;
+  }>();
+  const months = new Map<string, {
+    month: string; present: number; absent: number; late: number; excused: number;
+    total: number; athletes: number; days: number; rate: number;
+    _athletes: Set<string>; _days: Set<string>;
+  }>();
+
+  for (const r of records) {
+    const id = athleteIdOf(r);
+    if (!id) continue;
+
+    const linked = r.unregistered_athlete_id
+      ? unregMeta[r.unregistered_athlete_id]?.linked_profile_id ?? null
+      : null;
+
+    // "Sin cuenta" solo si de verdad no hay cuenta detrás.
+    const athleteType = r.child_id ? 'child'
+      : r.user_id || linked ? 'adult'
+        : 'unregistered';
+
+    // Con cuenta vinculada manda el nombre del perfil, que es la identidad
+    // que sobrevive; el nombre precargado se guarda como alias para que la
+    // escuela siga encontrándola buscando como ella la escribió.
+    const unregName = r.unregistered_athlete_id
+      ? unregNames[r.unregistered_athlete_id] ?? unregMeta[r.unregistered_athlete_id]?.full_name
+      : undefined;
+    const fullName = (r.child_id ? childNames[r.child_id]
+      : r.user_id ? userNames[r.user_id]
+      : linked ? userNames[linked] ?? unregName
+        : unregName) ?? 'Sin nombre';
+    const alias = linked && unregName && unregName !== fullName ? unregName : null;
+
+    const ctx = ctxOf(r);
+    const ctxLabel = (ctx.teamId && teamNames[ctx.teamId])
+      || (ctx.offeringId && offeringNames[ctx.offeringId])
+      || (ctx.facilityId && facilityNames[ctx.facilityId])
+      || null;
+
+    let row = athletes.get(id);
+    if (!row) {
+      row = {
+        id, athlete_type: athleteType, full_name: fullName, aliases: [], contexts: [],
+        present: 0, absent: 0, late: 0, excused: 0, total: 0, rate: 0,
+        by_day: {}, by_month: {}, _ctx: new Set<string>(), _aliases: new Set<string>(),
+      };
+      athletes.set(id, row);
+    }
+    if (ctxLabel) row._ctx.add(ctxLabel);
+    if (alias) row._aliases.add(alias);
+
+    let day = days.get(r.attendance_date);
+    if (!day) {
+      day = {
+        date: r.attendance_date, present: 0, absent: 0, late: 0, excused: 0,
+        total: 0, athletes: 0, rate: 0, _athletes: new Set<string>(),
+      };
+      days.set(r.attendance_date, day);
+    }
+    day._athletes.add(id);
+
+    const status = normalizeStatus(r.status);
+    row[status] += 1;
+    day[status] += 1;
+    row.total += 1;
+    day.total += 1;
+
+    const ym = r.attendance_date.slice(0, 7);
+    let mrow = months.get(ym);
+    if (!mrow) {
+      mrow = {
+        month: ym, present: 0, absent: 0, late: 0, excused: 0, total: 0,
+        athletes: 0, days: 0, rate: 0, _athletes: new Set<string>(), _days: new Set<string>(),
+      };
+      months.set(ym, mrow);
+    }
+    mrow[status] += 1;
+    mrow.total += 1;
+    mrow._athletes.add(id);
+    mrow._days.add(r.attendance_date);
+    const am = (row.by_month[ym] ??= { present: 0, absent: 0, late: 0, excused: 0, total: 0 });
+    am[status] += 1;
+    am.total += 1;
+
+    if (ctxLabel) {
+      let ctxRow = byContext.get(ctxLabel);
+      if (!ctxRow) {
+        ctxRow = {
+          name: ctxLabel, present: 0, absent: 0, late: 0, excused: 0,
+          total: 0, rate: 0, _athletes: new Set<string>(),
+        };
+        byContext.set(ctxLabel, ctxRow);
+      }
+      ctxRow[status] += 1;
+      ctxRow.total += 1;
+      ctxRow._athletes.add(id);
+    }
+
+    // En la matriz manda el mejor estado del día: quien faltó a un equipo
+    // pero entrenó en la instalación asistió ese día.
+    const prev = row.by_day[r.attendance_date];
+    if (!prev || STATUS_RANK[status] > (STATUS_RANK[prev] ?? 0)) {
+      row.by_day[r.attendance_date] = status;
+    }
+  }
+
+  const athleteRows: AthleteRow[] = [...athletes.values()]
+    .map(({ _ctx, _aliases, ...row }) => ({
+      ...row,
+      contexts: [..._ctx].sort(),
+      aliases: [..._aliases].sort(),
+      rate: row.total > 0 ? Math.round(((row.present + row.late) / row.total) * 100) : 0,
+    }))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name, 'es'));
+
+  const dayRows = [...days.values()]
+    .map(({ _athletes, ...day }) => ({
+      ...day,
+      athletes: _athletes.size,
+      rate: day.total > 0 ? Math.round(((day.present + day.late) / day.total) * 100) : 0,
+    }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const monthRows = [...months.values()]
+    .map(({ _athletes, _days, ...m }) => ({
+      ...m,
+      athletes: _athletes.size,
+      days: _days.size,
+      rate: m.total > 0 ? Math.round(((m.present + m.late) / m.total) * 100) : 0,
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month));
+
+  const contextRows = [...byContext.values()]
+    .map(({ _athletes, ...ctx }) => ({
+      ...ctx,
+      athletes: _athletes.size,
+      rate: ctx.total > 0 ? Math.round(((ctx.present + ctx.late) / ctx.total) * 100) : 0,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+
+  // ── Plan vs consumo ──────────────────────────────────────────────────
+  //
+  // La asistencia se registra SIEMPRE, tenga saldo o no: es deliberado
+  // (dejar constancia de que el atleta vino y cobrarle la clase son cosas
+  // distintas). El efecto secundario es que nadie ve el desfase, y la
+  // escuela termina regalando clases sin enterarse.
+  //
+  // Se cuenta contra las asistencias DEL MES, no contra `sessions_used`:
+  // ese contador es acumulado y nunca se resetea, así que comparado con un
+  // tope mensual miente a partir del segundo mes.
+  const idsPorTipo = {
+    child: athleteRows.filter(a => a.athlete_type === 'child').map(a => a.id),
+    adult: athleteRows.filter(a => a.athlete_type === 'adult').map(a => a.id),
+    unreg: athleteRows.filter(a => a.athlete_type === 'unregistered').map(a => a.id),
+  };
+
+  const planPorAtleta: Record<string, any> = {};
+  // El tope del plan es MENSUAL: contra un rango de varios meses casi todos
+  // saldrían "excedidos". En modo rango no se calcula ni se ofrece facturar.
+  for (const [tipo, ids] of isRange ? [] : Object.entries(idsPorTipo)) {
+    if (!ids.length) continue;
+    const col = tipo === 'child' ? 'child_id' : tipo === 'adult' ? 'user_id' : 'unregistered_athlete_id';
+    const { data } = await supabase
+      .from('enrollments')
+      .select(`id, child_id, user_id, unregistered_athlete_id, team_id, expires_at, sessions_used,
+        offering_plan_id,
+        offering_plans!enrollments_offering_plan_id_fkey(name, max_sessions, price, currency)`)
+      .eq('school_id', schoolId)
+      .eq('status', 'active')
+      .in(col, ids);
+    for (const e of (data || []) as any[]) {
+      const key = e.child_id ?? e.user_id ?? e.unregistered_athlete_id;
+      // Si tiene varias, gana la de tope más alto: es la que mejor explica
+      // cuántas clases le corresponden en el mes.
+      const tope = e.offering_plans?.max_sessions ?? null;
+      const prev = planPorAtleta[key];
+      if (!prev || (tope ?? 0) > (prev.tope ?? 0)) {
+        const precio = Number(e.offering_plans?.price ?? 0);
+        planPorAtleta[key] = {
+          enrollment_id: e.id,
+          plan_id: e.offering_plan_id ?? null,
+          team_id: e.team_id ?? null,
+          nombre: e.offering_plans?.name ?? null,
+          tope,
+          // Lo que vale una clase suelta de ESE plan. Es la única cifra
+          // defendible frente a la familia: sale del plan que contrató, no
+          // de una tarifa inventada.
+          precio_clase: tope && tope > 0 ? Math.round(precio / tope) : null,
+          moneda: e.offering_plans?.currency ?? 'COP',
+          vence: e.expires_at ?? null,
+          descontadas: e.sessions_used ?? 0,
+        };
+      }
+    }
+  }
+
+  for (const row of (isRange ? [] : athleteRows) as any[]) {
+    const p = planPorAtleta[row.id];
+    const asistidas = row.present + row.late;
+    if (!p) {
+      // MISMA forma que la rama con plan. Antes esta emitia `excedente: 0`
+      // como NUMERO mientras la otra emitia objetos, y la pantalla —que
+      // incluye a los `sin_plan` en el desglose— hacia `cubo.fechas.length`
+      // sobre un 0. Tumbaba el histórico entero con un ErrorBoundary.
+      const vacio = { clases: 0, valor: null, fechas: [] as string[] };
+      row.plan = {
+        estado: 'sin_plan', nombre: null, tope: null, vence: null, descontadas: 0,
+        asistidas, cubiertas: 0, precio_clase: null, moneda: 'COP',
+        excedente: { ...vacio }, vencidas: { ...vacio },
+        fuera_de_plan: 0, valor: null,
+      };
+      continue;
+    }
+    // ── Clasificación clase por clase, en cubos EXCLUYENTES ────────────
+    //
+    // Una clase cae en uno y solo uno: o está cubierta, o se pasó del tope,
+    // o el plan ya había vencido. Si el plan vencía el 5 y entrenó el 11, esa
+    // clase NO es "excedente" — el tope ni siquiera aplica ya. Contarla en
+    // los dos cubos la facturaría dos veces, que es justo lo que no puede
+    // pasar cuando esto emite cobros.
+    //
+    // Se ordena por fecha porque el tope se consume en orden: las primeras 8
+    // están cubiertas y de la 9 en adelante son excedente.
+    const diasAsistidos = Object.entries(row.by_day as Record<string, string>)
+      .filter(([, st]) => st === 'present' || st === 'late')
+      .map(([fecha]) => fecha)
+      .sort();
+
+    const diasVigentes = p.vence ? diasAsistidos.filter(f => f <= p.vence) : diasAsistidos;
+    const vencidas   = diasAsistidos.length - diasVigentes.length;
+    const excedente  = p.tope !== null ? Math.max(diasVigentes.length - p.tope, 0) : 0;
+    const cubiertas  = diasVigentes.length - excedente;
+
+    // Ahora SÍ se suman: son disjuntos por construcción.
+    const fueraDePlan = excedente + vencidas;
+    const precio = p.precio_clase;
+
+    row.plan = {
+      nombre: p.nombre, tope: p.tope, vence: p.vence, descontadas: p.descontadas,
+      asistidas, cubiertas,
+      precio_clase: precio, moneda: p.moneda,
+      // Los dos conceptos van separados hasta el final: se muestran, se
+      // valorizan y se facturan por su cuenta.
+      excedente:   { clases: excedente, valor: precio ? excedente * precio : null,
+                     fechas: diasVigentes.slice(p.tope ?? 0) },
+      vencidas:    { clases: vencidas,  valor: precio ? vencidas  * precio : null,
+                     fechas: p.vence ? diasAsistidos.filter(f => f > p.vence) : [] },
+      fuera_de_plan: fueraDePlan,
+      valor: precio ? fueraDePlan * precio : null,
+      enrollment_id: p.enrollment_id, plan_id: p.plan_id, team_id: p.team_id,
+      estado: fueraDePlan > 0 ? (vencidas > 0 ? 'vencido' : 'excedido') : 'ok',
+    };
+  }
+
+  const desfases = isRange ? null : {
+    excedidos:      (athleteRows as any[]).filter(a => a.plan?.estado === 'excedido').length,
+    con_vencido:    (athleteRows as any[]).filter(a => a.plan?.estado === 'vencido').length,
+    sin_plan:       (athleteRows as any[]).filter(a => a.plan?.estado === 'sin_plan').length,
+    clases_de_mas:   (athleteRows as any[]).reduce((s, a) => s + (a.plan?.excedente?.clases ?? 0), 0),
+    clases_vencidas: (athleteRows as any[]).reduce((s, a) => s + (a.plan?.vencidas?.clases ?? 0), 0),
+    valor_excedente: (athleteRows as any[]).reduce((s, a) => s + (a.plan?.excedente?.valor ?? 0), 0),
+    valor_vencidas:  (athleteRows as any[]).reduce((s, a) => s + (a.plan?.vencidas?.valor ?? 0), 0),
+    valor_total:     (athleteRows as any[]).reduce((s, a) => s + (a.plan?.valor ?? 0), 0),
+  };
+
+  const totals = athleteRows.reduce(
+    (acc, a) => ({
+      records: acc.records + a.total,
+      present: acc.present + a.present,
+      absent: acc.absent + a.absent,
+      late: acc.late + a.late,
+      excused: acc.excused + a.excused,
+    }),
+    { records: 0, present: 0, absent: 0, late: 0, excused: 0 },
+  );
+
+  return {
+    ok: true as const,
+    datos: {
+      month, from, to,
+      range: { from: fromMonth, to: toMonth, is_range: isRange },
+      months: monthRows,
+      days: dayRows,
+      athletes: athleteRows,
+      contexts: contextRows,
+      desfases,
+      totals: {
+        ...totals,
+        rate: totals.records > 0
+          ? Math.round(((totals.present + totals.late) / totals.records) * 100)
+          : 0,
+        athletes: athleteRows.length,
+        days: dayRows.length,
+      },
+    },
+  };
+}
 
 // GET /school-roster?search=nombre — busca cualquier atleta con enrollment activo
 // en la escuela, sin importar el plan/offering. Usado por el walk-in de instalaciones,

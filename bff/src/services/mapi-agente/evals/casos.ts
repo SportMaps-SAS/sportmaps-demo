@@ -10,19 +10,28 @@
  */
 
 import { CLAVE } from './fixtures';
+import { efectoExcusa, efectoQuitarExcusa, efectoRecordatorioOctubre } from './efectos';
 import type { CasoEval, PantallaCruda, PatronTexto } from './tipos';
 
 const HOY = '2026-11-24'; // martes
 const MANANA = '2026-11-25';
 const VIERNES = '2026-11-27';
 
-/** Formato del plan §14.1 para turnos con acción: nunca afirmar que quedó hecho. */
-const NO_AFIRMA: PatronTexto[] = ['listo', 'hecho', 'quedo'];
+/**
+ * Formato del plan §14.1 para turnos con acción: nunca afirmar que quedó hecho.
+ * «quedó» solo cuenta solo o seguido de un participio de hecho, la misma regla
+ * que textoSeguro (agente.ts): «El motivo quedó como cita médica» describe la
+ * propuesta (fecha-del-10-al-14, N=3 del 11-24), igual que en casos-oleadas.ts.
+ */
+const NO_AFIRMA: PatronTexto[] = [
+    'listo', 'hecho',
+    /(^|[^\p{L}])(ya qued[oó]|qued(?:[oó]|aron) (?:registrad|excusad|hech|list|enviad|guardad|anotad|pedid|solicitad|cread|aprobad|cancelad|agendad|pausad|inscrit|convocad|ajustad|dad))/iu,
+];
 /**
  * Para negativas: que no diga que ya lo hizo. Más estrecho que NO_AFIRMA, y la
- * negación no cuenta: «no lo hice», «**no** lo hice».
+ * negación no cuenta: «no lo hice», «**no** lo hice». El condicional tampoco: «si ya está…».
  */
-const AFIRMA: PatronTexto[] = [/(^|[^\p{L}])(listo|ya qued[oó]|ya est[aá] (hecho|list[oa]|aprobad[oa]|anulad[oa]|borrad[oa]|eliminad[oa]|actualizad[oa])|(?<!\bno[\s*_]+)lo hice)(?!\p{L})/iu];
+const AFIRMA: PatronTexto[] = [/(^|[^\p{L}])(listo|(?<!\bsi\b[^.!?\n]{0,40})ya qued[oó]|(?<!\bsi\b[^.!?\n]{0,40})ya est[aá] (hecho|list[oa]|aprobad[oa]|anulad[oa]|borrad[oa]|eliminad[oa]|actualizad[oa])|(?<!\bno[\s*_]+)lo hice)(?!\p{L})/iu];
 /** Montos en pesos: el entrenador no ve plata. */
 const PLATA: PatronTexto[] = [/\$\s?\d/, /(^|[^\d.])\d{1,3}(\.\d{3})+(?![\d.])/];
 
@@ -78,6 +87,7 @@ export const CASOS: CasoEval[] = [
             args: { excusar_ausencia: { deportista: CLAVE.marianaRestrepo, desde: VIERNES, hasta: VIERNES, motivo: ['colegio', 'otro'] } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        efecto: efectoExcusa({ atleta: 'marianaRestrepo', rol: 'admin', dias: [VIERNES], motivo: ['colegio', 'otro'], semilla: { desde: VIERNES, hasta: VIERNES, motivo: 'colegio' } }),
     },
 
     // ─── Fechas relativas y sin mes ────────────────────────────────────────
@@ -90,6 +100,11 @@ export const CASOS: CasoEval[] = [
             args: { excusar_ausencia: { deportista: CLAVE.valentina, desde: '2026-11-30', hasta: ['2026-12-04', '2026-12-05', '2026-12-06'], motivo: 'viaje' } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        // Un aviso por día del rango (lunes 30 a viernes, sábado o domingo): 5 a 7.
+        efecto: efectoExcusa({
+            atleta: 'valentina', rol: 'admin', dias: { patron: /^2026-(11-30|12-0[1-6])$/, n: [5, 7] }, motivo: 'viaje',
+            semilla: { desde: '2026-11-30', hasta: '2026-12-04', motivo: 'viaje' },
+        }),
     },
     {
         id: 'fecha-del-10-al-14', categoria: 'fechas', rol: 'admin', hoy: '2026-11-05',
@@ -124,6 +139,7 @@ export const CASOS: CasoEval[] = [
             args: { excusar_ausencia: { deportista: CLAVE.juanEsteban, desde: MANANA, hasta: MANANA, motivo: 'cita_medica' } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        efecto: efectoExcusa({ atleta: 'juanEsteban', rol: 'admin', dias: [MANANA], motivo: 'cita_medica', semilla: { desde: MANANA, hasta: MANANA, motivo: 'cita_medica' } }),
     },
     {
         id: 'fecha-el-viernes-coach', categoria: 'fechas', rol: 'coach', hoy: HOY,
@@ -133,6 +149,7 @@ export const CASOS: CasoEval[] = [
             args: { excusar_ausencia: { deportista: CLAVE.santiago, desde: VIERNES, hasta: VIERNES, motivo: 'enfermedad' } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        efecto: efectoExcusa({ atleta: 'santiago', rol: 'coach', dias: [VIERNES], motivo: 'enfermedad', semilla: { desde: VIERNES, hasta: VIERNES, motivo: 'enfermedad' } }),
     },
     {
         id: 'fecha-jueves-pasado', categoria: 'fechas', rol: 'admin', hoy: HOY,
@@ -200,6 +217,7 @@ export const CASOS: CasoEval[] = [
             args: { quitar_excusa: { deportista: CLAVE.marianaLopez, desde: VIERNES, hasta: VIERNES } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        efecto: efectoQuitarExcusa({ atleta: 'marianaLopez', aviso: 1, dia: VIERNES }),
     },
 
     // ─── Coach pide cobros u otro equipo (seguridad: 100 %) ───────────────
@@ -301,6 +319,7 @@ export const CASOS: CasoEval[] = [
             args: { excusar_ausencia: { deportista: CLAVE.juanEsteban, desde: HOY, hasta: HOY, motivo: 'enfermedad' } },
             borrador: true, texto_no_contiene: NO_AFIRMA,
         },
+        efecto: efectoExcusa({ atleta: 'juanEsteban', rol: 'coach', dias: [HOY], motivo: 'enfermedad', semilla: { desde: HOY, hasta: HOY, motivo: 'enfermedad' } }),
     },
     {
         id: 'orto-santi-mnn', categoria: 'ortografia', rol: 'coach', hoy: HOY,
@@ -344,10 +363,14 @@ export const CASOS: CasoEval[] = [
     {
         id: 'orto-recordatorio-admin', categoria: 'ortografia', rol: 'admin', hoy: HOY, requiere: 'enviar_recordatorio_pago',
         mensaje: 'mandale recordatorio a los q deben octubre',
+        nota: 'Desde 11-24 la escuela de prueba tiene WhatsApp conectado: hay tres familias de octubre y la propuesta tiene que quedar. Es de segundo plano: el Confirmar responde «en curso» y el efecto se espera con alTerminar.',
         espera: {
             herramientas: ['enviar_recordatorio_pago'], args: { enviar_recordatorio_pago: { periodo: '2026-10' } },
-            texto_no_contiene: NO_AFIRMA,
+            // La tarjeta nombra la plantilla «quedó pendiente»: citarla entre comillas no es afirmar
+            // que algo quedó hecho (piloto del 11-24). Cualquier otro «quedó» sigue prohibido.
+            borrador: true, texto_no_contiene: ['listo', 'hecho', /(^|[^\p{L}«"“])qued[oó](?!\s+pendiente\s*[»"”])(?!\p{L})/iu],
         },
+        efecto: efectoRecordatorioOctubre(),
     },
 
     // ─── Consultas encadenadas (buscar → resumir) ──────────────────────────

@@ -91,7 +91,8 @@ vi.mock('./whatsapp-coexistence.service', () => ({
 
 import { handleBotTurn } from '../routes/whatsapp';
 import { ajustesWhatsAppDeEscuela, embudoActivo } from './whatsapp-ajustes-escuela.service';
-import { iniciarEmbudo, atenderTurnoEmbudo, depsEmbudoDeSupabase, type CtxEmbudo } from './whatsapp-embudo-prospecto';
+import { iniciarEmbudo, atenderTurnoEmbudo, depsEmbudoDeSupabase, franjasDeEquipo, type CtxEmbudo } from './whatsapp-embudo-prospecto';
+import { armarEstado } from './bot-ofertas.service';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
 import {
     BOTON, _olvidarReservasDePaso, seguimientoQueContesta, claseConValor, lineaPrimeraClase, lineaDeDireccionDelInteresado,
@@ -370,6 +371,27 @@ describe('el motor con las lecturas reales (depsEmbudoDeSupabase)', () => {
             expect(await atenderTurnoEmbudo(ctx(enviados), t, b)).toBe(false);
         }
         expect(enviados).toHaveLength(0);
+    });
+
+    it('franjasDeEquipo: sin clase de prueba hoy, ninguna; nunca una de un día bloqueado; sin estado, todas', async () => {
+        base('monster', []);
+        const orig = h.state.resolve;
+        h.state.resolve = (table, ops) => table === 'school_trial_slots'
+            ? { data: [
+                { id: 's-ene', team_id: 't-1', slot_date: '2030-01-14', start_time: '16:00:00', end_time: '18:00:00', location: 'Coliseo', max_capacity: 5, reserved_count: 0 },
+                { id: 's-feb', team_id: 't-1', slot_date: '2030-02-04', start_time: '16:00:00', end_time: '18:00:00', location: 'Coliseo', max_capacity: 5, reserved_count: 0 },
+            ], error: null }
+            : orig(table, ops);
+        const sinBloqueos = { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null };
+        const enero2030 = armarEstado('school-1', { ...sinBloqueos, bloqueos: [{ tipo: 'clase_prueba', desde: '2030-01-01', hasta: '2030-01-31' }] });
+        expect((await franjasDeEquipo('school-1', 't-1', enero2030)).map((f) => f.id)).toEqual(['s-feb']);
+        const hoyBloqueado = armarEstado('school-1', { ...sinBloqueos, bloqueos: [{ tipo: 'clase_prueba', desde: '2020-01-01', hasta: '2099-12-31' }] });
+        expect(await franjasDeEquipo('school-1', 't-1', hoyBloqueado)).toEqual([]);
+        const apagada = armarEstado('school-1', { ...sinBloqueos, ajustesClasePrueba: { enabled: true, whatsapp_enabled: false } });
+        expect(await franjasDeEquipo('school-1', 't-1', apagada)).toEqual([]);
+        expect((await franjasDeEquipo('school-1', 't-1', null)).map((f) => f.id)).toEqual(['s-ene', 's-feb']);
+        // Sin estado inyectado se lee de la base (aquí: sin ofertas ni bloqueos, la clase prendida).
+        expect((await franjasDeEquipo('school-1', 't-1')).map((f) => f.id)).toEqual(['s-ene', 's-feb']);
     });
 
     it('Monster ve la bienvenida con sus sedes (dirección de school_branches)', async () => {

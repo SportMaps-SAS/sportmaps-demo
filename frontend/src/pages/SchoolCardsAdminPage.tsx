@@ -1044,7 +1044,9 @@ export default function SchoolCardsAdminPage() {
 
       {/* Preview dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-md">
+        {/* max-w-lg y pie que se parte en líneas: con los tres botones en una fila el
+            pie medía más que el diálogo, ensanchaba la grilla y recortaba el carnet. */}
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Vista previa del carnet</DialogTitle>
             <DialogDescription>QR público escaneable. Estado en tiempo real.</DialogDescription>
@@ -1072,8 +1074,8 @@ export default function SchoolCardsAdminPage() {
               </Button>
             )}
           </div>
-          <DialogFooter className="gap-2 sm:justify-between">
-            <div className="flex gap-2">
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-between sm:space-x-0">
+            <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
                 onClick={() => previewToken && window.open(`/c/${previewToken}`, '_blank')}
@@ -1095,7 +1097,7 @@ export default function SchoolCardsAdminPage() {
             </div>
             <Button onClick={downloadPreview} disabled={downloading || !previewData} className="gap-1">
               {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              Descargar PNG (frente y reverso)
+              Descargar PNG
             </Button>
           </DialogFooter>
         </DialogContent>

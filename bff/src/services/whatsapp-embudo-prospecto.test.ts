@@ -18,6 +18,8 @@ import {
     type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo, type LugarDeClase,
 } from './whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
+import { armarEstado, type EstadoOfertas, type FilasCrudas } from './bot-ofertas.service';
+import { recordatorioDePasoEmbudo, textoSinClaseDePrueba, textoDeMatriculaSinClase } from './whatsapp-embudo-prospecto';
 import {
     ajustesDesdeFila, ajustesClasePruebaDesdeFila, type AjustesWhatsAppEscuela, type AjustesClasePrueba,
 } from './whatsapp-ajustes-escuela.service';
@@ -79,6 +81,8 @@ function crear(op: {
     yaSoyDelClub?: boolean; estado?: EstadoEmbudo | null; lead?: any;
     /** Dónde es la clase (`lugarDeLaClase`); sin la clave, el contexto no lo trae. */
     lugar?: LugarDeClase | null;
+    /** Qué se puede ofrecer hoy (bot-ofertas); sin la clave, el contexto no lo trae (como antes). */
+    ofertas?: EstadoOfertas;
 } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null };
     const ctx: CtxEmbudo = {
@@ -113,6 +117,7 @@ function crear(op: {
         avisarEscuela: vi.fn(async () => {}),
         ...(op.yaSoyDelClub ? { yaSoyDelClub: vi.fn(async () => {}) } : {}),
         ...(op.lugar !== undefined ? { lugarDeLaClase: vi.fn(async () => op.lugar ?? null) } : {}),
+        ...(op.ofertas ? { ofertas: vi.fn(async () => op.ofertas!) } : {}),
         leadDelContacto: vi.fn(async () => op.lead ?? null),
         leerEstado: async () => s.estado,
         ahora: () => AHORA,
@@ -925,5 +930,142 @@ describe('el JSON de Monster tal cual lo deja el SQL de datos (B1, después de l
         expect(tituloDeGrupo('U15 Fem Proyección')).toBe('U15 Fem Proyección');
         expect(grupoDeRango({ teamId: 't', nombre: 'U9 Y U11 MIXTO', coachNombres: ['', 'Sebastián Hurtado'] }))
             .toEqual({ teamId: 't', nombre: 'U9 Y U11 Mixto', profe: 'Sebastián Hurtado' });
+    });
+});
+
+// ─── Sin clase de prueba hoy: las ofertas vigentes (bot-ofertas, Monster 2026-11-25) ──
+//
+// En diciembre y enero Monster no tiene clases de prueba: al terminar las preguntas no
+// se dice «se agenda una clase de prueba» ni salen horarios; van las convocatorias.
+// Datos de ejemplo.
+
+describe('embudo sin clase de prueba (bot-ofertas)', () => {
+    const FILAS: FilasCrudas = {
+        ofertas: [
+            { id: 'o-mayores', tipo: 'convocatoria', titulo: 'Convocatorias Superliga', sede: 'Sede Norte', publico: null, genero: null,
+                estado: 'activa', vigente_desde: '2026-11-25', vigente_hasta: '2026-12-11', prioridad: 20, requiere_inscripcion: true,
+                requiere_pago: false, valor: null, cta: 'Escríbenos el nombre, la fecha de nacimiento y la convocatoria (día y hora).' },
+        ],
+        sesiones: [
+            { id: 'f', oferta_id: 'o-mayores', fecha: '2026-12-09', hora_inicio: '19:00:00', hora_fin: '21:00:00', lugar: 'ECCI', genero: 'femenino', publico: null, notas: null },
+            { id: 'm', oferta_id: 'o-mayores', fecha: '2026-12-09', hora_inicio: '20:00:00', hora_fin: '22:00:00', lugar: 'ECCI', genero: 'masculino', publico: null, notas: null },
+        ],
+        bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null }],
+        ajustesClasePrueba: null, mensajeSinOfertas: null,
+    };
+    const DIC_3 = Date.parse('2026-12-03T15:00:00Z');
+    const NOV_28 = Date.parse('2026-11-28T15:00:00Z');
+    const SIN_CLASE = armarEstado('monster', FILAS, DIC_3);
+
+    it('al terminar las preguntas: el grupo, «no estamos agendando», las convocatorias de SU género y «¿a cuál fecha?»', async () => {
+        const c = crear({ ofertas: SIN_CLASE });
+        await hastaHorarios(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_ofertas');
+        expect(m.estado).toMatchObject({ paso: 'elegir_oferta', datos: { leadId: 'lead-1', teamId: 't-infantil-fem' } });
+        expect(m.texto).toContain('le corresponde *Infantil Femenino* en la Sede Norte.');
+        expect(m.texto).toContain('Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).');
+        expect(m.texto).toContain('*Convocatorias Superliga*');
+        expect(m.texto).toContain('7:00 a 9:00 p. m. · ECCI · femenino');
+        expect(m.texto).not.toContain('masculino');
+        expect(m.texto).toContain('¿A cuál fecha quieres inscribir a *Mariana*?');
+        expect(m.texto).not.toMatch(/se agenda una|próximos horarios|\$15\.000/);
+        expect(m.botones).toBeUndefined();
+        expect(c.ctx.franjas).not.toHaveBeenCalled();
+        expect(c.ctx.tomarCupo).not.toHaveBeenCalled();
+        expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Mariana Gómez Rojas', quiere: 'convocatoria' }));
+
+        // La fecha que elige: lead con la elección, aviso a la escuela, pendiente de ella y flujo cerrado.
+        expect(await c.turno('La del miércoles 9 a las 7')).toBe(true);
+        const cierre = c.ultimo();
+        expect(cierre.step).toBe('embudo_inscripcion_oferta');
+        expect(cierre.estado).toBeNull();
+        expect(cierre.texto).toContain('«La del miércoles 9 a las 7»');
+        expect(cierre.texto).toContain('La escuela te confirma el cupo por aquí.');
+        expect(cierre.contexto).toEqual({ pendiente_escuela: 'inscripción: La del miércoles 9 a las 7' });
+        expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({
+            quiere: 'convocatoria', respuestas: expect.objectContaining({ oferta_elegida: 'La del miércoles 9 a las 7' }),
+        }));
+        expect(c.ctx.avisarEscuela).toHaveBeenLastCalledWith('inscripcion_oferta',
+            'Interesado: Mariana Gómez Rojas (2011). Quiere inscribirse (convocatoria): «La del miércoles 9 a las 7». Sede: Sede Norte.');
+        expect(c.ctx.tomarCupo).not.toHaveBeenCalled();
+    });
+
+    it('en la pregunta de la fecha: otra pregunta la contesta el bot (y se recuerda); un «gracias», una vez', async () => {
+        const c = crear({ ofertas: SIN_CLASE });
+        await hastaHorarios(c);
+        expect(await c.turno('¿Y cuánto cuesta?')).toBe(false);
+        expect(await c.turno('Gracias')).toBe(true);
+        expect(c.ultimo().texto).toContain('escríbeme a cuál fecha quieres ir');
+        const n = c.s.enviados.length;
+        expect(await c.turno('ok')).toBe(true);
+        expect(c.s.enviados).toHaveLength(n);
+        expect(recordatorioDePasoEmbudo(AJ_MONSTER, { paso: 'elegir_oferta', datos: {} })?.texto)
+            .toBe('Cuando quieras seguimos con tu registro 🙌 Escríbeme a cuál fecha quieres ir y se lo paso a la escuela.');
+    });
+
+    it('sin clase y sin ofertas: el lead y la escuela le escribe (sin horarios ni clase)', async () => {
+        const c = crear({ ofertas: armarEstado('monster', { ...FILAS, ofertas: [], sesiones: [] }, DIC_3) });
+        await hastaHorarios(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_a_persona');
+        expect(m.estado).toBeNull();
+        expect(m.texto).toContain('Por ahora no estamos agendando clases de prueba');
+        expect(m.texto).toContain('Ya le pasé tus datos a la escuela y te escriben por aquí cuando haya fechas');
+        expect(c.ctx.franjas).not.toHaveBeenCalled();
+        expect(c.ctx.avisarEscuela).toHaveBeenCalledWith('sin_horarios', expect.stringContaining('Sin clase de prueba hoy ni ofertas vigentes.'));
+    });
+
+    it('un horario de una lista vieja un día sin clase no toma el cupo; «Cambiar horario» tampoco muestra horarios', async () => {
+        const estado = { paso: 'elegir_franja' as const, datos: { leadId: 'lead-1', teamId: 't', grupo: 'Infantil', nombre: 'Mariana', lista: ['s-sab31'] } };
+        const c = crear({ ofertas: SIN_CLASE, estado });
+        expect(await c.turno('', `${BOTON_EMBUDO.FRANJA}s-sab31`)).toBe(true);
+        expect(c.ctx.tomarCupo).not.toHaveBeenCalled();
+        expect(c.ultimo().step).toBe('embudo_ofertas');
+        const d = crear({ ofertas: SIN_CLASE, estado: { paso: 'agendada', datos: { leadId: 'lead-1', teamId: 't', slotId: 's-sab31' } } });
+        await d.turno('', BOTON_EMBUDO.CAMBIAR);
+        expect(d.ultimo().step).toBe('embudo_ofertas');
+        expect(d.ultimo().texto).not.toContain('Elige el nuevo horario');
+    });
+
+    it('la matrícula un día sin clase no promete «después de la clase de prueba»', async () => {
+        const estado = { paso: 'elegir_franja' as const, datos: { leadId: 'lead-1', teamId: 't', grupo: 'Infantil', nombre: 'Mariana', genero: 'f' as const, lista: ['s-sab31'] } };
+        const c = crear({ ofertas: SIN_CLASE, estado });
+        await c.turno('¿Y para matricularla qué hago?');
+        expect(c.ultimo().texto).toContain('Le pasé a la escuela que quieres matricularla: te escriben por aquí con los pasos 🙌');
+        expect(c.ultimo().texto).not.toContain('después de la clase');
+        expect(textoDeMatriculaSinClase('Mariana Gómez', null)).toBe('Le pasé a la escuela que quieres hacer la matrícula de Mariana: te escriben por aquí con los pasos 🙌');
+    });
+
+    it('antes del bloqueo (28-nov): la clase de siempre, pero una franja de un día bloqueado no se agenda', async () => {
+        const nov = armarEstado('monster', FILAS, NOV_28);
+        const c = crear({ ofertas: nov });
+        await hastaHorarios(c);
+        expect(c.ultimo().texto).toContain('Para empezar en el club se agenda una clase de prueba, que cuesta $15.000');
+        const DIC_05: FranjaEmbudo = { id: 's-dic05', fecha: '2026-12-05', horaInicio: '08:00', horaFin: '10:00', lugar: 'La Enseñanza', cupos: 6 };
+        const d = crear({
+            ofertas: nov, franjas: [...FRANJAS, DIC_05],
+            estado: { paso: 'elegir_franja', datos: { leadId: 'lead-1', teamId: 't', grupo: 'Infantil', lista: ['s-dic05'] } },
+        });
+        await d.turno('', `${BOTON_EMBUDO.FRANJA}s-dic05`);
+        expect(d.ctx.tomarCupo).not.toHaveBeenCalled();
+        expect(d.ultimo().texto).toContain('Ese horario ya no está disponible');
+        expect(textoSinClaseDePrueba(armarEstado('x', { ...FILAS, bloqueos: [] , ajustesClasePrueba: { whatsapp_enabled: false } }, NOV_28)))
+            .toBe('Por ahora no estamos agendando clases de prueba.');
+    });
+
+    it('regresión: clase disponible, sin ofertas ni bloqueos → el embudo de siempre, letra por letra', async () => {
+        const nada = armarEstado('dynasty', { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null }, NOV_28);
+        const con = crear({ ofertas: nada });
+        const sin = crear();
+        await hastaHorarios(con);
+        await hastaHorarios(sin);
+        expect(con.s.enviados).toEqual(sin.s.enviados);
+        expect(con.ultimo().step).toBe('embudo_horarios');
+        await con.turno('1');
+        await sin.turno('1');
+        expect(con.s.enviados).toEqual(sin.s.enviados);
+        expect(con.ctx.tomarCupo).toHaveBeenCalledTimes(1);
+        expect(leadCompletoDeEmbudo(leadDeDatos({ nombre: 'X' }, null)).quiere).toBe('clase_prueba');
     });
 });

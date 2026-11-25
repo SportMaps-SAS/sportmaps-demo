@@ -47,7 +47,7 @@ import {
 } from './wa-cobro-desde-comprobante.service';
 // Ciclo a propósito (venta-servicio usa el precio de acá): solo se usan dentro de funciones.
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
-import { PASO_VENTA, botonesDeVenta, pideDatosDePago, textoDePagoDeServicio, type BotonDeVenta } from './whatsapp-venta-servicio';
+import { PASO_VENTA, botonesDeVenta, deLaDelServicio, pideDatosDePago, textoDePagoDeServicio, type BotonDeVenta } from './whatsapp-venta-servicio';
 import { esConsultaDePatrocinio } from './whatsapp-patrocinio';
 import { marcarCuposLlenos } from './wa-cupos-de-servicio.service';
 
@@ -221,20 +221,20 @@ export function ventaCerradaDeItem(
     return false;
 }
 
-/** El mensaje fijo a quien pregunta por un servicio cuya venta cerró y NO tiene cobro de él. Pura. */
+/**
+ * El mensaje fijo a quien pregunta por un servicio cuya venta cerró y NO tiene cobro de él. Pura.
+ * (2026-11-25) Sin textos de una escuela en el código: antes la clínica de Monster tenía su frase fija con sus
+ * fechas («la clínica es mañana y el domingo (21 y 22 de noviembre)»), que seguía saliendo pasadas esas fechas.
+ * Solo el nombre del ítem: ni fechas, ni precio, ni descripción (no se vende ni se describe lo que ya cerró).
+ */
 export function textoVentaCerrada(item: (Pick<ItemDeServicio, 'name'> & { cupos_llenos?: boolean }) | null | undefined): string {
-    const nombre = String(item?.name ?? '');
+    const nombre = String(item?.name ?? '').trim();
     if (item?.cupos_llenos === true) {
         return `Los cupos de *${nombre || 'este servicio'}* ya se completaron 🙌 `
             + 'Si quieres quedar en lista de espera, escríbeme el nombre completo de quien asistiría y la escuela te avisa por aquí si se libera un cupo. '
             + 'Si ya pagaste, envíanos el comprobante con el nombre completo del deportista y la escuela te lo confirma.';
     }
-    if (/cl[ií]nica de armadores/i.test(nombre)) {
-        return 'Las inscripciones de la *Clínica de armadores y atacantes* ya cerraron: la clínica es mañana y el domingo (21 y 22 de noviembre). '
-            + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
-            + 'Para cualquier otra pregunta, ya le pasé tu mensaje a la escuela y te responde por aquí 🙌';
-    }
-    return `Las inscripciones de *${nombre || 'este servicio'}* ya cerraron. `
+    return `Las inscripciones ${nombre ? deLaDelServicio({ name: nombre }, { negrita: true }) : 'de este servicio'} ya cerraron. `
         + 'Si ya abonaste y falta tu saldo, envíanos por aquí el comprobante con el nombre completo del deportista y la escuela te lo confirma. '
         + 'Para cualquier otra pregunta, ya le pasé tu mensaje a la escuela y te responde por aquí 🙌';
 }
@@ -258,6 +258,25 @@ export async function serviciosDeAnuncio(
         const vigentes = await marcarCuposLlenos(schoolId,
             (data as unknown as ItemConFicha[]).filter((it) => servicioVigente(it, ahora)), ahora);
         return vigentes.filter((it) => !(opciones.ventaAbierta && ventaCerradaDeItem(it, ahora)));
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * (2026-11-25) Los servicios del catálogo que YA NO están vigentes (inactivos o terminados; sin los de un evento,
+ * que no son servicios de venta). Solo id, nombre, tipo y fechas: sirven para reconocer de qué era una campaña o
+ * un anuncio viejo y NO venderlo ni describirlo (Monster: la clínica, `active=false` desde el 22-nov, seguía
+ * saliendo en la respuesta al «Sí» de sus campañas). Nunca lanza ([] ante un error).
+ */
+export async function serviciosNoVigentes(schoolId: string, ahora = Date.now()): Promise<ItemConFicha[]> {
+    try {
+        const { data, error } = await supabase.from('school_tournament_items')
+            .select('id, name, kind, active, event_id, starts_at, ends_at')
+            .eq('school_id', schoolId).is('event_id', null)
+            .order('created_at', { ascending: false }).limit(100);
+        if (error || !Array.isArray(data)) return [];
+        return (data as unknown as ItemConFicha[]).filter((it) => !servicioVigente(it, ahora));
     } catch {
         return [];
     }

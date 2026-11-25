@@ -16,7 +16,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { bffClient } from '@/lib/api/bffClient';
 import { ChipEstado } from '@/components/common/ChipEstado';
 import { estadoConstancia, fraseConstancias } from '@/components/certificates/myCertificatesModel';
-import { cn, formatCurrency } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 type Mine = {
   id: string;
@@ -33,8 +33,9 @@ type Mine = {
   athlete_name: string;
 };
 
-type Tpl = { id: string; name: string; kind: string; requires_payment: boolean; price: number };
-type ChildOpt = { id: string; full_name: string; school_id: string };
+type Tpl = { id: string; name: string; kind: string };
+/** A quién se le pide: un hijo (acudiente) o uno mismo en una escuela (deportista adulto). */
+type ChildOpt = { id: string; full_name: string; school_id: string; kind: 'child' | 'profile' };
 
 export default function MyCertificatesPage() {
   const { user } = useAuth();
@@ -70,20 +71,33 @@ export default function MyCertificatesPage() {
 
   async function loadChildren() {
     if (!user) return;
-    const { data, error } = await supabase
-      .from('children')
-      .select('id, full_name, school_id')
-      .eq('parent_id', user.id);
-    if (error) return;
-    setChildren((data as ChildOpt[]) || []);
+    const [hijos, propias] = await Promise.all([
+      supabase.from('children').select('id, full_name, school_id').eq('parent_id', user.id),
+      // Deportista adulto: puede pedir sus propias constancias en cada escuela donde está activo.
+      supabase.from('school_members').select('school_id').eq('profile_id', user.id).eq('role', 'athlete').eq('status', 'active'),
+    ]);
+    const opts: ChildOpt[] = ((hijos.data as any[]) ?? [])
+      .filter((c) => c.school_id)
+      .map((c) => ({ id: c.id, full_name: c.full_name, school_id: c.school_id, kind: 'child' as const }));
+    const escuelas = [...new Set((((propias.data as any[]) ?? []).map((m) => m.school_id)).filter(Boolean))] as string[];
+    if (escuelas.length > 0) {
+      const { data: sch } = await supabase.from('schools').select('id, name').in('id', escuelas);
+      const nombre = new Map(((sch as any[]) ?? []).map((s) => [s.id, s.name]));
+      for (const sid of escuelas) {
+        opts.push({ id: user.id, full_name: escuelas.length > 1 ? `Yo · ${nombre.get(sid) ?? 'mi escuela'}` : 'Yo', school_id: sid, kind: 'profile' });
+      }
+    }
+    setChildren(opts);
   }
 
+  const optKey = (c: ChildOpt) => `${c.kind}:${c.id}:${c.school_id}`;
+
   async function loadTemplatesForChild(childId: string) {
-    const child = children.find((c) => c.id === childId);
+    const child = children.find((c) => optKey(c) === childId);
     if (!child) return setTemplates([]);
     const { data, error } = await supabase
       .from('school_certificate_templates' as any)
-      .select('id, name, kind, requires_payment, price')
+      .select('id, name, kind')
       .eq('school_id', child.school_id)
       .eq('active', true)
       .order('name');
@@ -92,25 +106,23 @@ export default function MyCertificatesPage() {
   }
 
   async function submitRequest() {
-    const child = children.find((c) => c.id === selectedChild);
+    const child = children.find((c) => optKey(c) === selectedChild);
     const tpl = templates.find((t) => t.id === selectedTpl);
     if (!child || !tpl) return;
     setReqLoading(true);
-    const { error } = await supabase.rpc('request_athlete_certificate' as any, {
+    const { data, error } = await supabase.rpc('request_athlete_certificate' as any, {
       p_school_id:   child.school_id,
       p_template_id: tpl.id,
-      p_child_id:    child.id,
-      p_profile_id:  null,
+      p_child_id:    child.kind === 'child' ? child.id : null,
+      p_profile_id:  child.kind === 'profile' ? child.id : null,
     });
     setReqLoading(false);
     if (error) {
       return toast({ title: 'No se pudo pedir la constancia', description: 'Inténtalo de nuevo en un momento.', variant: 'destructive' });
     }
     toast({
-      title: 'Listo, la pediste',
-      description: tpl.requires_payment
-        ? `Cuesta ${formatCurrency(Number(tpl.price))}. Te avisamos cuando esté lista.`
-        : 'La escuela la revisa y te avisa cuando esté lista.',
+      title: (data as any)?.already_pending ? 'Ya la habías pedido' : 'Listo, la pediste',
+      description: 'La escuela la revisa y te avisa cuando esté lista.',
     });
     setReqOpen(false);
     setSelectedChild(''); setSelectedTpl(''); setTemplates([]);
@@ -204,15 +216,17 @@ export default function MyCertificatesPage() {
                       Descargar
                     </button>
                   )}
+                  {(it.status === 'issued' || it.status === 'revoked') && (
                   <a
-                    href={`/cert/${it.folio}`}
+                    href={`/cert/${it.qr_verify_token}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex min-h-touch items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground"
                   >
                     <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                    Ver
+                    Verificar
                   </a>
+                  )}
                 </div>
               </div>
             );
@@ -239,10 +253,10 @@ export default function MyCertificatesPage() {
                 value={selectedChild}
                 onValueChange={(v) => { setSelectedChild(v); void loadTemplatesForChild(v); setSelectedTpl(''); }}
               >
-                <SelectTrigger className="min-h-touch text-input"><SelectValue placeholder="Elige a tu hijo" /></SelectTrigger>
+                <SelectTrigger className="min-h-touch text-input"><SelectValue placeholder="Elige para quién" /></SelectTrigger>
                 <SelectContent>
                   {children.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>
+                    <SelectItem key={optKey(c)} value={optKey(c)}>{c.full_name}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -251,12 +265,12 @@ export default function MyCertificatesPage() {
               <Label>¿Qué constancia?</Label>
               <Select value={selectedTpl} onValueChange={setSelectedTpl} disabled={!selectedChild || templates.length === 0}>
                 <SelectTrigger className="min-h-touch text-input">
-                  <SelectValue placeholder={!selectedChild ? 'Primero elige a tu hijo' : (templates.length === 0 ? 'La escuela aún no ofrece constancias' : 'Elige una')} />
+                  <SelectValue placeholder={!selectedChild ? 'Primero elige para quién' : (templates.length === 0 ? 'La escuela aún no ofrece constancias' : 'Elige una')} />
                 </SelectTrigger>
                 <SelectContent>
                   {templates.map((t) => (
                     <SelectItem key={t.id} value={t.id}>
-                      {t.name}{t.requires_payment ? ` · ${formatCurrency(Number(t.price))}` : ' · Gratis'}
+                      {t.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

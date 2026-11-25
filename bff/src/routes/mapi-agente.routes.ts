@@ -40,6 +40,8 @@ router.post('/acciones/:id/confirmar', async (req: AuthenticatedRequest, res: Re
             schoolId: req.schoolId,
             headerSchoolId: req.headers['x-school-id'] as string | undefined,
             rolSesion: req.role,
+            // Token fresco de ESTE clic: las RPC que autorizan con auth.uid() corren como la persona.
+            authorization: req.headers.authorization ?? null,
         });
         const r = await confirmarBorrador({
             userId: req.user.id,

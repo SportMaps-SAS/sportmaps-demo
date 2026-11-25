@@ -29,7 +29,7 @@ vi.mock('../services/avisos-correo.service', async (orig) => {
 import {
     runPagosPorValidar, armarResumen, exclusionVerde, lineaVerdes, textosDelAviso, debeAvisar, escuelaElegible,
     pagosPorValidarActivo, tramoPorHora, saldo, claveAviso, ETIQUETA_TIPO, ORDEN_TIPOS, tipoDeCobro, URL_PANEL,
-    type PagoPorValidar,
+    LOTE_VERDES_PAUSADO, type PagoPorValidar,
 } from './pagos-por-validar.job';
 
 const MONSTER = 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c';
@@ -92,6 +92,8 @@ function escenario(): BaseFalsa {
 
 let base: BaseFalsa;
 beforeEach(() => {
+    // Las reglas del lote se prueban con el lote ACTIVO; la pausa por defecto, abajo.
+    process.env.LOTE_VERDES_ACTIVO = 'true';
     base = escenario();
     h.db = supabaseFalso(base);
     h.envios = [];
@@ -211,6 +213,11 @@ describe('recordatorio de las 17:00', () => {
 });
 
 describe('reglas puras', () => {
+    it('sin LOTE_VERDES_ACTIVO el lote queda pausado (Paso 0, seguridad del veredicto)', () => {
+        delete process.env.LOTE_VERDES_ACTIVO;
+        expect(exclusionVerde({ receipt_verdict: 'verde' } as any, { compartidos: new Set(), periodosPagados: new Set() } as any)).toBe(LOTE_VERDES_PAUSADO);
+        process.env.LOTE_VERDES_ACTIVO = 'true';
+    });
     const p = (o: Partial<PagoPorValidar>): PagoPorValidar => ({
         id: 'x', school_id: 's', amount: 145000, amount_paid: 0, early_payment_discount_applied: 0, concept: 'Mensualidad',
         payment_category: null, receipt_verdict: 'verde', receipt_url: 'r/x', ocr_amount: 145000, requires_review: false,

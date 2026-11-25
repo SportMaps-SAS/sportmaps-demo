@@ -48,7 +48,8 @@ describe('constancias', () => {
   it('estado en palabras', () => {
     expect(estadoConstancia('issued').label).toBe('Lista');
     expect(estadoConstancia('pending_review').label).toBe('En revisión');
-    expect(estadoConstancia('pending_payment').label).toBe('Falta el pago');
+    // Sin cobro desde 2026-11-24: lo heredado «pendiente de pago» se ve en revisión.
+    expect(estadoConstancia('pending_payment').label).toBe('En revisión');
     expect(estadoConstancia('otro').label).not.toMatch(/_/);
   });
   it('frase de arriba', () => {

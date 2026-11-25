@@ -1257,61 +1257,98 @@ router.post('/school-tournaments/:id/register-athlete', requireAuth, requireRole
         const parsed = RegisterAthleteSchema.safeParse(req.body);
         if (!parsed.success) return res.status(400).json({ error: 'Datos inválidos', details: parsed.error.issues });
 
-        // Soportes obligatorios (D12, spec campanas-descuento… §6b): con school_settings.require_athlete_documents
-        // prendido (solo Monster) no se convoca a un torneo a quien le falten soportes. Apagado: no hace nada.
-        const sujetoSoportes: Sujeto = parsed.data.child_id
-            ? { tipo: 'child', id: parsed.data.child_id }
-            : { tipo: 'profile', id: parsed.data.athlete_user_id as string };
-        const soportes = await chequearSoportesSujeto(String(req.headers.authorization ?? ''), schoolId, sujetoSoportes);
-        if ('bloquear' in soportes && soportes.bloquear) {
-            return res.status(409).json({
-                error: `SOPORTES_INCOMPLETOS: ${mensajeFaltantes(soportes.faltan)}`,
-                codigo: 'SOPORTES_INCOMPLETOS',
-                faltan: soportes.faltan,
-            });
-        }
-        if ('error' in soportes && soportes.status === 403) return res.status(403).json({ error: 'forbidden' });
-
-        // Con el cliente del usuario: la RPC valida auth.uid() contra la administración de la escuela.
-        const client = userClient(req);
-        // El parámetro del adulto solo viaja cuando hace falta: el camino del hijo no cambia.
-        const { data, error } = await client.rpc('school_register_athlete_for_tournament', {
-            p_event_id: eventId,
-            p_category_id: parsed.data.category_id,
-            ...(parsed.data.child_id
-                ? { p_child_id: parsed.data.child_id }
-                : { p_athlete_user_id: parsed.data.athlete_user_id }),
+        const r = await inscribirAtletaDesdeLaEscuela({
+            client: userClient(req),
+            authorization: String(req.headers.authorization ?? ''),
+            schoolId,
+            eventId,
+            categoryId: parsed.data.category_id,
+            childId: parsed.data.child_id,
+            athleteUserId: parsed.data.athlete_user_id,
+            log: req.log,
         });
-        if (error) {
-            req.log?.warn({ err: error }, 'school_register_athlete_for_tournament rechazó la inscripción');
-            return res.status(error.code === '42501' ? 403 : 400).json({ error: error.message });
-        }
-
-        const r = (data ?? {}) as {
-            registration_id?: string; already_registered?: boolean; parent_id?: string | null;
-            payment_id?: string | null; amount?: number | null; is_paid?: boolean;
-        };
-
-        // Aviso a la familia solo si la inscripción es NUEVA (no repetir si ya estaba).
-        if (!r.already_registered && r.parent_id) {
-            const { data: ev } = await supabase.from('events').select('title').eq('id', eventId).maybeSingle();
-            const titulo = ev?.title ?? 'el torneo';
-            notifyProfiles([r.parent_id], {
-                title: '🏆 Inscribieron a tu deportista en un torneo',
-                message: r.is_paid === false
-                    ? `La escuela inscribió a tu deportista en "${titulo}".`
-                    : `La escuela inscribió a tu deportista en "${titulo}". Tienes un cobro pendiente en Mis pagos.`,
-                link: `/tournaments/${eventId}/register`,
-                data: { eventId, registrationId: r.registration_id },
-            }).catch((err) => req.log?.warn({ err }, 'Error notificando inscripción hecha por la escuela'));
-        }
-
-        return res.status(r.already_registered ? 200 : 201).json(r);
+        return res.status(r.status).json(r.body);
     } catch (err: any) {
         req.log?.error({ err }, 'Error inesperado inscribiendo atleta desde la escuela');
         return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
+
+/**
+ * La escuela inscribe a UN deportista en su torneo interno: lo de
+ * POST /school-tournaments/:id/register-athlete después de validar que el torneo
+ * es de la escuela y el cuerpo, sin Express. Lo usan esa ruta y
+ * `inscribir_a_torneo` de Mapi (services/mapi-agente/herramientas/informes.ts).
+ *
+ * `client` y `authorization` son los de LA PERSONA: la RPC valida auth.uid()
+ * contra la administración de la escuela y los soportes se leen como ella.
+ * Va un hijo (`childId`) o un atleta adulto (`athleteUserId`), uno solo.
+ */
+export async function inscribirAtletaDesdeLaEscuela(p: {
+    client: { rpc: (fn: string, args: Record<string, unknown>) => PromiseLike<{ data: any; error: any }> };
+    authorization: string;
+    schoolId: string;
+    eventId: string;
+    categoryId: string;
+    childId?: string;
+    athleteUserId?: string;
+    log?: { warn: (obj: unknown, msg?: string) => void };
+}): Promise<{ status: number; body: any }> {
+    const { eventId } = p;
+
+    // Soportes obligatorios (D12, spec campanas-descuento… §6b): con school_settings.require_athlete_documents
+    // prendido (solo Monster) no se convoca a un torneo a quien le falten soportes. Apagado: no hace nada.
+    const sujetoSoportes: Sujeto = p.childId
+        ? { tipo: 'child', id: p.childId }
+        : { tipo: 'profile', id: p.athleteUserId as string };
+    const soportes = await chequearSoportesSujeto(p.authorization, p.schoolId, sujetoSoportes);
+    if ('bloquear' in soportes && soportes.bloquear) {
+        return {
+            status: 409,
+            body: {
+                error: `SOPORTES_INCOMPLETOS: ${mensajeFaltantes(soportes.faltan)}`,
+                codigo: 'SOPORTES_INCOMPLETOS',
+                faltan: soportes.faltan,
+            },
+        };
+    }
+    if ('error' in soportes && soportes.status === 403) return { status: 403, body: { error: 'forbidden' } };
+
+    // Con el cliente del usuario: la RPC valida auth.uid() contra la administración de la escuela.
+    // El parámetro del adulto solo viaja cuando hace falta: el camino del hijo no cambia.
+    const { data, error } = await p.client.rpc('school_register_athlete_for_tournament', {
+        p_event_id: eventId,
+        p_category_id: p.categoryId,
+        ...(p.childId
+            ? { p_child_id: p.childId }
+            : { p_athlete_user_id: p.athleteUserId }),
+    });
+    if (error) {
+        p.log?.warn({ err: error }, 'school_register_athlete_for_tournament rechazó la inscripción');
+        return { status: error.code === '42501' ? 403 : 400, body: { error: error.message } };
+    }
+
+    const r = (data ?? {}) as {
+        registration_id?: string; already_registered?: boolean; parent_id?: string | null;
+        payment_id?: string | null; amount?: number | null; is_paid?: boolean;
+    };
+
+    // Aviso a la familia solo si la inscripción es NUEVA (no repetir si ya estaba).
+    if (!r.already_registered && r.parent_id) {
+        const { data: ev } = await supabase.from('events').select('title').eq('id', eventId).maybeSingle();
+        const titulo = ev?.title ?? 'el torneo';
+        notifyProfiles([r.parent_id], {
+            title: '🏆 Inscribieron a tu deportista en un torneo',
+            message: r.is_paid === false
+                ? `La escuela inscribió a tu deportista en "${titulo}".`
+                : `La escuela inscribió a tu deportista en "${titulo}". Tienes un cobro pendiente en Mis pagos.`,
+            link: `/tournaments/${eventId}/register`,
+            data: { eventId, registrationId: r.registration_id },
+        }).catch((err) => p.log?.warn({ err }, 'Error notificando inscripción hecha por la escuela'));
+    }
+
+    return { status: r.already_registered ? 200 : 201, body: r };
+}
 
 // POST /api/v1/events/school-tournaments/:id/categories/:catId/assign-teams — la escuela reparte inscritos en equipos
 const AssignTeamsSchema = z.object({

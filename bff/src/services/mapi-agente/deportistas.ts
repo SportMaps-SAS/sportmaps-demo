@@ -138,6 +138,63 @@ export async function buscarEnEscuela(a: Alcance, texto: string): Promise<Deport
         .filter((d) => visiblePara(a, d));
 }
 
+// ─── Búsqueda aproximada (errores de audio y de tecleo) ─────────────────────
+
+/**
+ * Clave fonética del español de Colombia: b/v, s/z/c(e,i), ll/y, h muda, k/qu/c,
+ * letras dobles. «balentina» = «valentina», «ortis» = «ortiz», «lopes» = «lopez». Pura.
+ */
+export function fonetica(palabra: string): string {
+    return normalizar(palabra).replace(/[^a-z]/g, '')
+        .replace(/ch/g, '§').replace(/h/g, '').replace(/§/g, 'ch')
+        .replace(/qu/g, 'k').replace(/c([ei])/g, 's$1').replace(/c/g, 'k')
+        .replace(/z/g, 's').replace(/v/g, 'b').replace(/ll/g, 'y').replace(/w/g, 'u')
+        .replace(/(.)\1+/g, '$1');
+}
+
+/** ¿Distancia de edición ≤ 1? (una letra de más, de menos o cambiada). Pura. */
+export function unaLetraDeDiferencia(a: string, b: string): boolean {
+    if (a === b) return true;
+    if (Math.abs(a.length - b.length) > 1) return false;
+    let i = 0;
+    let j = 0;
+    let difs = 0;
+    while (i < a.length && j < b.length) {
+        if (a[i] === b[j]) { i++; j++; continue; }
+        if (++difs > 1) return false;
+        if (a.length > b.length) i++;
+        else if (b.length > a.length) j++;
+        else { i++; j++; }
+    }
+    return difs + (a.length - i) + (b.length - j) <= 1;
+}
+
+/**
+ * Cada palabra buscada (de 2+ letras) coincide con alguna del nombre por clave
+ * fonética (o como prefijo); las de 4+ letras admiten una letra de diferencia. Pura.
+ */
+export function coincideAproximado(nombre: string, texto: string): boolean {
+    const delNombre = normalizar(nombre).split(/[^a-z]+/).filter(Boolean).map(fonetica);
+    const buscadas = normalizar(texto).split(/[^a-z]+/).filter((p) => p.length >= 2).map(fonetica);
+    if (!buscadas.length) return false;
+    return buscadas.every((b) => delNombre.some((n) => n === b || n.startsWith(b) || (b.length >= 4 && unaLetraDeDiferencia(b, n))));
+}
+
+/**
+ * Último recurso cuando la búsqueda literal y la de apodos no encuentran a nadie:
+ * lee los nombres de la escuela (una sola consulta, columnas mínimas) y compara
+ * por fonética. Lo que devuelve es APROXIMADO: Mapi confirma el nombre antes de
+ * preparar una acción.
+ */
+export async function buscarAproximado(a: Alcance, texto: string): Promise<Deportista[]> {
+    const { data, error } = await supabase.from('school_athletes').select(COLUMNAS)
+        .eq('school_id', a.schoolId).limit(3000);
+    if (error) throw new Error(error.message);
+    return agrupar((data as any[]) ?? [])
+        .filter((d) => coincideAproximado(d.nombre, texto))
+        .filter((d) => visiblePara(a, d));
+}
+
 /**
  * El deportista que nombró el modelo, validado contra la escuela de la sesión
  * y, si es coach, contra sus equipos. Lanza RechazoHerramienta si no aplica.

@@ -782,3 +782,82 @@ Sale del roadmap consolidado del 2026-11-20 (§3, «Pagos confirmados»). Resuel
   traer texto pensado para engañar a Mapi.
 - Registrar un pago en efectivo desde el chat (§19.6 #2) sigue fuera hasta la oleada 3.
 - Siguen fuera siempre: anular o editar pagos.
+
+## 22. Mapi completo: lo construido el 2026-11-24 y lo que falta
+
+> Pedido del usuario, 2026-11-24: «construyamos todos los posibles flujos, debemos tener
+> a Mapi completo». Las oleadas 2–5 se construyeron en paralelo, un módulo por archivo,
+> **sin migraciones**: solo herramientas sobre servicios del BFF o RPC que ya existen.
+> Lo que necesita una RPC nueva quedó como plan, porque `CLAUDE.md` exige aprobar el plan
+> antes de escribir la migración.
+
+### 22.1 Catálogo: 38 herramientas
+
+Los esquemas suman ~10.500 tokens para el admin y ~4.200 para el coach (medidos con
+`count_tokens`). Van todos cargados y con caché. Se pasa a `defer_loading` + tool search
+(§19.3) si los evals muestran que el modelo confunde herramientas parecidas.
+
+| Módulo (archivo) | Consultas | Acciones | Apagadas hasta revisar |
+|---|---|---|---|
+| Oleada 1 (`consultas`, `excusas`, `recordatorio`) | buscar, resumen, cartera, ayuda | excusar, quitar excusa, recordatorio de pago | recordatorio (`MAPI_RECORDATORIO_MANUAL`) |
+| Pagos (`pagos.ts`) | por validar, por qué no se aprobó, seguimiento WhatsApp, auditar pendientes, estado de la aprobación automática, ventas de servicio | pedir aclaración (glosa) | glosa (`MAPI_PAGOS_ACCIONES`) |
+| Entrenador (`entrenador.ts`) | equipos y horarios, asistencia de una sesión, semana del equipo | pasar lista, evaluar el entreno, felicitar | evaluar y felicitar requieren la sesión de la persona |
+| Escuela (`escuela.ts`) | — | pausar, reactivar, dar de baja, cambiar plan, cobro único | cambiar plan (`MAPI_CAMBIAR_PLAN`), cobro único (`MAPI_COBROS_UNICOS`); pausa y baja requieren la sesión |
+| Informes (`informes.ts`) | reporte (asistencia, inscripciones, cartera), informes del atleta, torneos, clases de prueba | enviar informe, convocar a torneo, inscribir a torneo, agendar clase de prueba | inscribir a torneo (`MAPI_INSCRIBIR_TORNEO`) |
+| Operación (`operacion.ts`) | ventas de la tienda, inventario, reservas | ajustar stock, cancelar reserva | las dos (`MAPI_OPERACION_ACCIONES`) |
+
+**Sesión de la persona:** varias RPC de las pantallas autorizan con `auth.uid()`, como la
+pausa, la baja, evaluar, los kudos y las clases de prueba. Para esas, el `Alcance` lleva el
+header `authorization` de la request: el del turno del chat y el del clic en Confirmar.
+- Va como propiedad no enumerable, así que no sale en logs ni en `JSON.stringify`.
+- Nunca va al modelo ni al borrador.
+- Sin él, esas herramientas no se ofrecen.
+
+**Bug evitado:** tres esquemas traían un `enum` con `type: ['string','null']`, que la API
+rechaza con un 400. `registro.ts:normalizarEsquema` los manda como `anyOf`, y
+`registro.test.ts` lo vigila.
+
+### 22.2 Lo que falta: necesita migración (plan para aprobar)
+
+| Qué | Por qué no se construyó | Plan |
+|---|---|---|
+| **Aprobar un comprobante** (`aprobar_pago`, `aprobar_verdes`, §21) | La aprobación manual vive en el navegador (`approvePayment.ts`: 3 escrituras sueltas). `auto_approve_payment` no sirve: queda como automática, sin abono, y con otro texto para la familia | RPC `aprobar_comprobante(p_actor, p_payment_id, p_abono)`, `SECURITY DEFINER` con `FOR UPDATE` y gate de admin de la escuela del pago, `GRANT` solo a `service_role`. Una gemela con `auth.uid()` para que la pantalla la use. Mapi recalcula el nivel en `preparar`, con tope de $400.000 |
+| **Registrar efectivo** | El modal hace `UPDATE`/`INSERT` desde React; `register_manual_payments` exige `auth.uid()` y no admite abono | RPC núcleo `register_manual_payments_por(p_actor, …, p_monto)` con abono; la actual lo llama. Decisión §19.6 #2 pendiente |
+| **Crear equipo / cambiar horario** | Inserts y updates directos a `teams` desde React | RPC `crear_equipo` y `cambiar_horario_equipo`, con gate admin o coach del equipo |
+| **Cancelar una sesión y avisar** | Insert directo en `team_schedule_exceptions` y **hoy no avisa a nadie** | RPC `cancelar_sesion_equipo` que inserte la excepción y las `notifications` |
+| **Enviar un aviso** | Los Anuncios se insertan directo y **no notifican**: las familias solo los ven si abren la página | RPC `enviar_aviso` que inserte el anuncio y las `notifications`, con tope |
+| **Preparar el entreno del día** | La planificación inserta en `training_sessions` desde React | RPC `guardar_plan_de_entreno(p_team_id, p_session_date, …)` |
+| **Inscribir una delegación en un torneo externo** | La ruta borra y recrea la nómina sin transacción | RPC `enroll_delegation` que sume sin borrar, con `FOR UPDATE` |
+| **Reservar una cancha** | El contrato de reservas por IA obliga al canal `ai`, que solo acepta pago en línea con apartado de 10–15 min | Opción 1, sin migración: enmendar §2/§10 del contrato y usar el canal `admin` con efectivo en 0. Opción 2: un canal nuevo `'mapi'` en `reservar_cancha`. Además, `ejecutar` debería recibir el id del borrador para la llave de idempotencia |
+| **Crear un producto** | El wizard exige foto y la creación no es transaccional (`products` + `inventory_adjust` aparte, 207 si falla) | RPC `crear_producto_borrador(...)`, más una decisión de producto: ¿se permite un borrador sin foto? |
+
+### 22.3 Lo que falta: sin migración, pero toca rutas grandes
+
+- **Inscribir un deportista** y **pasar un prospecto a deportista:** extraer el alta de
+  `students-create-one.route.ts` (~730 líneas en el handler) a un servicio, sin cambiar su
+  comportamiento. La cubren 3 archivos de pruebas existentes.
+- **Mover de equipo:** extraer el paso de equipo de `PUT /students/:id` y escribir antes
+  pruebas de caracterización, porque hoy no tiene ninguna.
+- **Resumen contable:** un servicio en el BFF sobre `finance_income_summary` /
+  `store_income_summary`, con gate `has_entitlement('accounting')`. Con service_role esas
+  RPC no revisan permisos, así que el BFF valida el alcance.
+- **Cierre de caja:** no existe en la app (spec `editar-pago-y-cierre-de-caja.md` sin construir).
+
+### 22.4 Hallazgos fuera de Mapi (2026-11-24, sin corregir)
+
+1. **Seguridad:** `POST /school/performance/entries` inserta mediciones con service role sin
+   validar que el deportista sea de la escuela, ni de los equipos del coach; además busca
+   `teams` sin filtrar por escuela. `PUT` y `DELETE /entries/:id` dejan a cualquier coach
+   editar o borrar cualquier medición de la escuela.
+2. Cambiar de plan con «Inscribir en el plan» (`POST /enrollments`) pone `monthly_fee` en
+   el precio del plan nuevo: **un becado pierde su cuota sin aviso**. Mapi lo advierte en la
+   tarjeta.
+3. En la ruta del coach «solo categoría» (Besser), `PUT /students/:id` con solo `{team_id}`
+   escribe `monthly_fee: null` en la fila que también tiene el plan.
+4. Reportes Gerenciales cuenta como «retiros» las inscripciones creadas en el mes que hoy
+   están inactivas, no las bajas del mes.
+5. El gate de glosas (`_glosa_actor_is_admin`) acepta owner/admin pero no `school_admin`.
+6. Un `school_admin` limitado a una sede ve toda la escuela en Mapi, porque el `Alcance`
+   no trae sede.
+7. `pagos_por_validar` cuenta lo mismo que el correo diario (`awaiting_approval` con
+   comprobante); la pantalla también muestra `partial` y `pending` con comprobante.

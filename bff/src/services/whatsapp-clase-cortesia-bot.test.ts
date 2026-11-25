@@ -5,7 +5,7 @@
  * Mismo andamiaje que whatsapp-atencion-bot.test.ts: Supabase con builder
  * encadenable, `debeAtender` y el envío mockeados. Ni base ni Meta.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const h = vi.hoisted(() => {
     type Ops = [string, any[]][];
@@ -85,8 +85,11 @@ vi.mock('./whatsapp-coexistence.service', () => ({
 }));
 
 import { handleBotTurn } from '../routes/whatsapp';
-import { runBotTurn, _olvidarReservasDePaso, _limpiarCacheVocativos } from './whatsapp-bot.service';
+import {
+    runBotTurn, _olvidarReservasDePaso, _limpiarCacheVocativos, promptConOfertas, presentacionLarga, SYSTEM_PROMPT,
+} from './whatsapp-bot.service';
 import { BOTON_CC } from './whatsapp-clase-cortesia.service';
+import { invalidarCacheOfertas, armarEstado } from './bot-ofertas.service';
 
 const INTEGRATION = { id: 'int-1', school_id: 'school-1' } as any;
 const CONV = 'conv-1';
@@ -330,5 +333,186 @@ describe('auditoría Dynasty 2026-10-07: correo en la ráfaga y saludo con el no
         conEquipo();
         await runBotTurn(INTEGRATION, 'conv-c', '573209998877', 'mile voy tenemos entreno?', 'wamid.c1');
         expect(borradores().map((b) => b.row.tool_context?.step)).toEqual(['ask_email']);
+    });
+});
+
+describe('clase de prueba cerrada por la escuela y convocatorias (bot-ofertas, Monster 2026-11-25)', () => {
+    // Un bloqueo que cubre «hoy» siempre y sesiones lejos en el futuro: la prueba no caduca con el calendario.
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2000-01-01', hasta: '2099-12-31', motivo: null };
+    const OFERTA = {
+        id: 'o-1', tipo: 'convocatoria', titulo: 'Convocatorias Sede Norte', sede: 'Sede Norte', estado: 'activa',
+        prioridad: 1, requiere_inscripcion: true, cta: 'Escríbenos el nombre del deportista y a cuál fecha quiere ir.',
+    };
+    const SESIONES = [
+        { id: 's-1', oferta_id: 'o-1', fecha: '2030-01-12', hora_inicio: '07:00:00', hora_fin: '09:00:00', lugar: 'ECCI', genero: 'femenino' },
+        { id: 's-2', oferta_id: 'o-1', fecha: '2030-01-12', hora_inicio: '09:00:00', hora_fin: '11:00:00', lugar: 'ECCI', genero: 'masculino' },
+    ];
+    /** Las tablas de bot-ofertas encima del `base` del caso. */
+    function conOfertas(op: { bloqueos?: any[]; ofertas?: any[]; sesiones?: any[] }) {
+        const previo = h.state.resolve;
+        h.state.resolve = (table, ops) => {
+            if (table === 'bot_oferta_bloqueos') return { data: op.bloqueos ?? [], error: null };
+            if (table === 'bot_ofertas') return { data: op.ofertas ?? [], error: null };
+            if (table === 'bot_oferta_sesiones') return { data: op.sesiones ?? [], error: null };
+            return previo(table, ops);
+        };
+    }
+    /** Familia con cuenta (el teléfono la identifica). */
+    function conFamilia() {
+        const previo = h.state.resolve;
+        h.state.resolve = (table, ops) => {
+            if (table === 'whatsapp_conversations') {
+                return { data: { id: CONV, parent_id: 'parent-1', identified: true, status: 'open', contact_name: 'A.' }, error: null };
+            }
+            if (table === 'profiles') return { data: { full_name: 'Acudiente Pérez' }, error: null };
+            return previo(table, ops);
+        };
+        const rpcPrevio = h.state.rpc;
+        h.state.rpc = (fn, args) => (fn === 'wa_identify_by_phone'
+            ? { data: { estado: 'identificado', parent_id: 'parent-1' }, error: null } : rpcPrevio(fn, args));
+    }
+    beforeEach(() => invalidarCacheOfertas());
+    afterEach(() => invalidarCacheOfertas());
+
+    it('desconocido: «Clase de cortesía tienen» con el bloqueo → ni franjas ni «gratis»: «no tenemos (vuelven…)» + convocatorias', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS });
+        conOfertas({ bloqueos: [BLOQUEO], ofertas: [OFERTA], sesiones: SESIONES });
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje({ textBody: 'Clase de cortesía tienen' }));
+
+        expect(h.chatWithTools).not.toHaveBeenCalled();
+        expect(borradores()).toHaveLength(1);
+        const b = borradores()[0].row;
+        expect(b.proposed_text).toContain('Por ahora no tenemos clases de cortesía (vuelven el');
+        expect(b.proposed_text).toContain('*Convocatorias Sede Norte*');
+        expect(b.proposed_text).toContain('Escríbenos el nombre del deportista');
+        expect(b.proposed_text).not.toMatch(/Sub-15|gratis|dejar(me)? tus datos|tu clase de cortesía/);
+        expect(b.tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'ofertas_vigentes' });
+        expect(b.tool_context.flujo).toBeUndefined();
+        expect(b.tool_context.botones ?? []).toEqual([]);
+    });
+
+    it('desconocido: «¿cuándo son las convocatorias femeninas?» con la clase ABIERTA → las femeninas, sin ofrecer la clase', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS });
+        conOfertas({ ofertas: [OFERTA], sesiones: SESIONES });
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje({ textBody: 'Hola, ¿cuándo son las convocatorias femeninas?' }));
+
+        expect(borradores()).toHaveLength(1);
+        const b = borradores()[0].row;
+        expect(b.proposed_text).toContain('*Convocatorias Sede Norte*');
+        expect(b.proposed_text).toContain('7:00 a 9:00 a. m.');
+        expect(b.proposed_text).not.toContain('9:00 a 11:00 a. m.');
+        expect(b.proposed_text).not.toMatch(/Sub-15|clase de cortesía\* gratis|Estas son las próximas franjas/);
+        expect(b.tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'ofertas_vigentes' });
+        expect(b.tool_context.flujo).toBeUndefined();
+    });
+
+    /** Escuela con embudo del interesado (Monster): `wa_preguntas_prospecto` no vacío. */
+    function conEmbudo() {
+        const previo = h.state.resolve;
+        h.state.resolve = (table, ops) => (table === 'school_settings'
+            ? { data: { wa_modo_cortesia: 'clase', wa_preguntas_prospecto: [
+                { clave: 'nombre', texto: '¿Cuál es el nombre completo del deportista?', tipo: 'texto' },
+            ] }, error: null }
+            : previo(table, ops));
+    }
+
+    it('escuela con EMBUDO, clase abierta (control): un saludo sin convocatoria arranca el embudo', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS });
+        conOfertas({ ofertas: [OFERTA], sesiones: SESIONES });
+        conEmbudo();
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje({ textBody: 'Hola, quiero información para inscribir a mi hija' }));
+
+        expect(borradores()).toHaveLength(1);
+        expect(borradores()[0].row.tool_context.intencion).not.toBe('ofertas_vigentes');
+        expect(borradores()[0].row.tool_context.flujo).toBe('embudo');
+    });
+
+    it('escuela con EMBUDO, clase abierta (26–30 nov): «¿cuándo son las convocatorias?» → las ofertas, NO el embudo de la clase', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS });
+        conOfertas({ ofertas: [OFERTA], sesiones: SESIONES });
+        conEmbudo();
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje({ textBody: 'Hola, ¿cuándo son las convocatorias?' }));
+
+        expect(borradores()).toHaveLength(1);
+        const b = borradores()[0].row;
+        expect(b.proposed_text).toContain('*Convocatorias Sede Norte*');
+        expect(b.tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'ofertas_vigentes' });
+        expect(b.tool_context.flujo).not.toBe('embudo');
+        expect(b.proposed_text).not.toMatch(/nombre completo del deportista|Estas son las próximas franjas|clase de cortesía\* gratis/);
+    });
+
+    it('familia con cuenta: pide la clase de prueba con el bloqueo → no agenda: «no tenemos» y las ofertas', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS, identificado: true });
+        conOfertas({ bloqueos: [BLOQUEO], ofertas: [OFERTA], sesiones: SESIONES });
+        conFamilia();
+        // Si llegara al modelo, el modelo pediría la herramienta de la clase: tampoco agenda.
+        h.chatWithTools.mockResolvedValue({ text: '', toolCalls: [{ name: 'get_trial_class_info', args: {} }], provider: 'test' });
+        await runBotTurn(INTEGRATION, CONV, '573209998877', 'Quiero una clase de prueba para mi sobrino', 'wamid.f1');
+
+        const textos = borradores().map((b) => String(b.row.proposed_text)).join('\n---\n');
+        expect(textos).toContain('Por ahora no tenemos clases de cortesía');
+        expect(textos).toContain('*Convocatorias Sede Norte*');
+        expect(textos).not.toMatch(/Sub-15|gratis|¿Cuál te reservo\?/);
+        expect(borradores().every((b) => !b.row.tool_context?.flujo)).toBe(true);
+        expect(h.state.rpcCalls.find((c) => c.fn === 'submit_school_lead')).toBeUndefined();
+    });
+
+    it('un botón VIEJO de franja tocado durante el bloqueo no reserva', async () => {
+        _olvidarReservasDePaso();
+        base({ franjas: FRANJAS });
+        conOfertas({ bloqueos: [BLOQUEO], ofertas: [OFERTA], sesiones: SESIONES });
+        await handleBotTurn(req, INTEGRATION, CONV,
+            mensaje({ type: 'interactive', textBody: 'Sub-15', botonId: `${BOTON_CC.FRANJA}slot-1` }));
+        expect(h.state.rpcCalls.find((c) => c.fn === 'submit_school_lead')).toBeUndefined();
+        const b = borradores()[0].row;
+        expect(b.proposed_text).toContain('Por ahora no tenemos clases de cortesía');
+        expect(b.tool_context.step).toBe('cortesia_no_disponible');
+        expect(b.tool_context.flujo).toBeUndefined();
+    });
+
+    it('regresión: sin bloqueos ni ofertas, el prompt de la familia es SYSTEM_PROMPT letra por letra', () => {
+        const abierta = armarEstado('s', { ofertas: [], sesiones: [], bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null });
+        expect(promptConOfertas(SYSTEM_PROMPT, abierta)).toBe(SYSTEM_PROMPT);
+    });
+
+    it('prompt con la clase cerrada: no anuncia ni agenda la clase; van las reglas y <ofertas_vigentes>', () => {
+        const ahora = new Date('2026-12-02T15:00:00Z').getTime();
+        const cerrada = armarEstado('s', {
+            ofertas: [{ ...OFERTA, vigente_desde: null, vigente_hasta: null }],
+            sesiones: [{ ...SESIONES[0], fecha: '2026-12-09' }],
+            bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null }],
+            ajustesClasePrueba: null, mensajeSinOfertas: null,
+        }, ahora);
+        const p = promptConOfertas(SYSTEM_PROMPT, cerrada);
+        expect(p).not.toContain('agendar la CLASE DE CORTESIA');
+        expect(p).not.toContain('y agenda paso a paso');
+        expect(p).toContain('HOY LA ESCUELA NO TIENE CLASES DE PRUEBA');
+        expect(p).toContain('HOY NO HAY CLASES DE PRUEBA. Vuelven el lunes 1 de febrero de 2027.');
+        expect(p).toContain('<ofertas_vigentes');
+        expect(p).toContain('Convocatorias Sede Norte');
+        expect(p).toContain('COMO PAGAR:');   // lo demás del prompt sigue igual
+    });
+
+    it('prompt con la clase abierta y convocatorias: el prompt de siempre + la regla «a quien pregunte por una convocatoria NO le ofrezcas clase de prueba»', () => {
+        const ahora = new Date('2026-11-26T15:00:00Z').getTime();
+        const abierta = armarEstado('s', {
+            ofertas: [{ ...OFERTA, vigente_desde: null, vigente_hasta: null }],
+            sesiones: [{ ...SESIONES[0], fecha: '2026-12-09' }],
+            bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null,
+        }, ahora);
+        const p = promptConOfertas(SYSTEM_PROMPT, abierta);
+        expect(p.startsWith(SYSTEM_PROMPT)).toBe(true);
+        expect(p).toContain('A quien pregunte por una convocatoria NO le ofrezcas clase de prueba');
+    });
+
+    it('la presentación sin clase de prueba no la nombra', () => {
+        expect(presentacionLarga('Monster', null)).toContain('Te ayudo con horarios, valores, pagos e inscripciones.');
+        expect(presentacionLarga('Monster', null)).not.toMatch(/clase/);
+        expect(presentacionLarga('Monster', 'clase de prueba')).toContain('pagos y tu clase de prueba.');
     });
 });

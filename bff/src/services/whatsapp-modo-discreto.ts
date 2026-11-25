@@ -106,6 +106,9 @@ export async function escuelaActiva(conversationId: string, ahora = Date.now()):
 const PASOS_QUE_ESPERAN = new Set([
     'escalated', 'identificacion_ambigua', 'puerta_club_recibido', 'puerta_otro_tema',
     'cortesia_sin_grupo_para_edad',
+    // Sin clase de prueba hoy (bloqueo por fecha o apagada): se le contestó con las
+    // ofertas o el texto neutro y la escuela le escribe (bot-ofertas, 2026-11-25).
+    'cortesia_no_disponible',
 ]);
 /** Tipos de entrante que no piden nada. */
 const TIPOS_SIN_PEDIDO = new Set(['sticker', 'reaction', 'unsupported']);
