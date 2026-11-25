@@ -348,10 +348,10 @@ export async function sendInteractiveButtons(
     toWaId: string,
     body: string,
     botones: BotonInteractivo[],
-    opts: { imagenUrl?: string | null } = {},
+    opts: { imagenUrl?: string | null; textoLista?: string } = {},
 ): Promise<SendTextResult> {
-    // La lista no admite foto en el encabezado: sale sin ella.
-    if (debeIrComoLista(botones)) return sendList(integration, toWaId, body, botones);
+    // La lista no admite foto en el encabezado: sale sin ella. `textoLista`: el botón que la abre («Elegir»).
+    if (debeIrComoLista(botones)) return sendList(integration, toWaId, body, botones, opts.textoLista);
     const payload = payloadDeBotones(toWaId, body, botones, opts);
     if (!payload) return { ok: false, error: 'no_cabe_como_botones' };
     return postearMensaje(integration, payload);

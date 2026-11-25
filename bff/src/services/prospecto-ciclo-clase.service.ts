@@ -30,6 +30,7 @@ import {
     avanzarEtapaLead, etapaDeLead, variantesTelefonoLead, type EtapaLead,
 } from './whatsapp-prospecto-lead.service';
 import { ahoraBogota, minutosDeHora, nombresDelLead } from './recordatorio-cortesia.service';
+import { estadoDeOfertas, claseDePruebaPermitidaEn, type EstadoOfertas } from './bot-ofertas.service';
 
 // ─── 1. Llegada ──────────────────────────────────────────────────────────────
 
@@ -223,6 +224,8 @@ export interface DepsSeguimiento {
     soltar: (r: ReservaParaSeguimiento) => Promise<void>;
     /** true = salió (o quedó de borrador en modo asistido). */
     enviar: (integ: WhatsAppIntegration, conversationId: string, waId: string, texto: string, payload: Record<string, unknown>) => Promise<boolean>;
+    /** Estado de ofertas de la escuela (bloqueos de la clase de prueba). Nunca lanza. */
+    estadoOfertas: (schoolId: string) => Promise<EstadoOfertas>;
 }
 
 export const PASO_SEGUIMIENTO_CLASE = 'cortesia_seguimiento_noche';
@@ -309,6 +312,7 @@ const DEPS_SEGUIMIENTO: DepsSeguimiento = {
         await deliver(integ, conversationId, waId, texto, payload);
         return true;
     },
+    estadoOfertas: (schoolId) => estadoDeOfertas(schoolId),
 };
 
 /**
@@ -332,10 +336,34 @@ export async function runSeguimientoNocheCortesia(
     resumen.candidatas = reservas.length;
 
     const integraciones = new Map<string, WhatsAppIntegration | null>();
+    // Una lectura de ofertas por escuela y corrida (no N+1: el cron comparte la base).
+    // null = no se pudo leer: falla CERRADO (como el bot en vivo).
+    const ofertas = new Map<string, EstadoOfertas | null>();
     for (const r of reservas) {
         try {
             const waId = aWaId(r.telefono);
             if (!waId) { resumen.omitidos++; continue; }
+            // La escuela bloqueó la clase de prueba ese día: no hubo clase, no se
+            // pregunta «¿cómo le fue?». Sin reclamar: no se toca el lead.
+            if (!ofertas.has(r.schoolId)) {
+                let e: EstadoOfertas | null = null;
+                try { e = await d.estadoOfertas(r.schoolId); } catch { e = null; }
+                ofertas.set(r.schoolId, e && e.claseDePrueba?.motivo !== 'error' ? e : null);
+            }
+            const estado = ofertas.get(r.schoolId);
+            if (!estado) {
+                // Sin reclamar: un tick posterior lo intenta con la lectura sana.
+                resumen.omitidos++;
+                console.warn('[prospecto-ciclo] seguimiento omitido', { leadId: r.leadId, schoolId: r.schoolId, motivo: 'ofertas_sin_leer' });
+                continue;
+            }
+            if (!claseDePruebaPermitidaEn(estado, r.slot.slot_date)) {
+                resumen.omitidos++;
+                console.warn('[prospecto-ciclo] seguimiento omitido', {
+                    leadId: r.leadId, schoolId: r.schoolId, fecha: r.slot.slot_date, motivo: 'clase_prueba_bloqueada',
+                });
+                continue;
+            }
             if (!integraciones.has(r.schoolId)) integraciones.set(r.schoolId, await d.integracion(r.schoolId));
             const integ = integraciones.get(r.schoolId);
             if (!integ) { resumen.omitidos++; continue; }

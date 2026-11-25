@@ -516,3 +516,182 @@ describe('clase de prueba cerrada por la escuela y convocatorias (bot-ofertas, M
         expect(presentacionLarga('Monster', 'clase de prueba')).toContain('pagos y tu clase de prueba.');
     });
 });
+
+describe('convocatoria guiada con botones para el desconocido (Monster 2026-11-25)', () => {
+    // Bloqueo que siempre cubre «hoy» y sesiones lejos en el futuro: la prueba no caduca con el calendario.
+    const BLOQUEO = { tipo: 'clase_prueba', desde: '2000-01-01', hasta: '2099-12-31', motivo: null };
+    const PREGUNTAS = '¡Queremos conocerte y conocer tu experiencia en el voleibol!\n\n- *Año de nacimiento:*\n- *Género:*';
+    const NOTA = 'Durante las convocatorias haremos una evaluación objetiva de tus habilidades.';
+    const OFERTAS = [
+        { id: 'may', tipo: 'convocatoria', titulo: 'Convocatorias equipos mayores', sede: 'Sede Norte', estado: 'activa', prioridad: 20,
+            descripcion: 'Por tu trayectoria, te invitamos a las *convocatorias de los equipos mayores de competencia*.',
+            cta: '¡Queremos contar contigo!', anio_nacimiento_hasta: 2008, requiere_trayectoria: true, requiere_pago: true, valor: 50000 },
+        { id: 'suba', tipo: 'convocatoria', titulo: 'Convocatorias Sede Suba', sede: 'Sede Suba', estado: 'activa', prioridad: 10, genero: 'mixto',
+            descripcion: 'Por tu año de nacimiento, te invitamos a los *grupos de proyección de nuestra sede Suba*.',
+            cta: '¡Tu próximo paso puede comenzar aquí!', anio_nacimiento_desde: 2009, anio_nacimiento_hasta: 2022 },
+        { id: 'norte', tipo: 'convocatoria', titulo: 'Convocatorias Sede Norte', sede: 'Sede Norte', estado: 'activa', prioridad: 30,
+            descripcion: 'Por tu edad y perfil, te invitamos a los *grupos de formación de nuestra sede norte*.', cta: '¡Anímate a participar!' },
+    ];
+    const SESIONES = [
+        { id: 'm1', oferta_id: 'may', fecha: '2030-01-09', hora_inicio: '19:00:00', hora_fin: '21:00:00', lugar: 'Universidad ECCI', genero: 'femenino' },
+        { id: 'm2', oferta_id: 'may', fecha: '2030-01-09', hora_inicio: '20:00:00', hora_fin: '22:00:00', lugar: 'Universidad ECCI', genero: 'masculino' },
+        { id: 's1', oferta_id: 'suba', fecha: '2030-01-11', hora_inicio: '16:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba', genero: 'mixto', publico: 'Nacidos en 2013 y 2014' },
+        { id: 's2', oferta_id: 'suba', fecha: '2030-01-11', hora_inicio: '18:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba', genero: 'mixto', publico: 'Nacidos en 2011 y 2012' },
+        { id: 'n1', oferta_id: 'norte', fecha: '2030-01-12', hora_inicio: '07:00:00', hora_fin: '09:00:00', lugar: 'Locos por Pádel', genero: 'femenino' },
+        { id: 'n2', oferta_id: 'norte', fecha: '2030-01-12', hora_inicio: '09:00:00', hora_fin: '11:00:00', lugar: 'Locos por Pádel', genero: 'masculino' },
+    ];
+
+    /** Lo que el bot fue dejando (tool_context de cada borrador): el último es el estado del flujo. */
+    let historial: any[] = [];
+    let n = 0;
+    function montar(op: { preguntas?: boolean; bloqueo?: boolean; embudo?: boolean } = {}) {
+        const ultimo = historial.at(-1) ?? null;
+        base({ franjas: FRANJAS, ultimoSaliente: ultimo, pasos: historial.map((c) => c?.step) });
+        const previo = h.state.resolve;
+        h.state.resolve = (table, ops) => {
+            if (table === 'bot_oferta_bloqueos') return { data: op.bloqueo ? [BLOQUEO] : [], error: null };
+            if (table === 'bot_ofertas') return { data: OFERTAS, error: null };
+            if (table === 'bot_oferta_sesiones') return { data: SESIONES, error: null };
+            if (table === 'bot_ofertas_ajustes') {
+                return { data: op.preguntas === false ? null : { mensaje_sin_ofertas: null, preguntas_ofertas: PREGUNTAS, nota_ofertas: NOTA }, error: null };
+            }
+            if (op.embudo && table === 'school_settings') {
+                return { data: { wa_modo_cortesia: 'clase', wa_preguntas_prospecto: [
+                    { clave: 'nombre', texto: '¿Cuál es el nombre completo del deportista?', tipo: 'texto' }] }, error: null };
+            }
+            // Los últimos salientes (estado de la convocatoria aunque el bot haya contestado otra cosa después).
+            if (table === 'whatsapp_messages' && ops.some(([m, a]) => m === 'select' && String(a[0]) === 'payload, created_at, ai_generated')) {
+                const t0 = Date.now();
+                return { data: [...historial].reverse().map((p, i) => ({ payload: p, created_at: new Date(t0 - i * 1000).toISOString(), ai_generated: true })), error: null };
+            }
+            return previo(table, ops);
+        };
+    }
+    /** Un turno: lo que escribió o tocó; devuelve los borradores nuevos. */
+    async function turno(texto: string, botonId: string | null = null, op: Parameters<typeof montar>[0] = {}) {
+        invalidarCacheOfertas();
+        montar(op);
+        const antes = borradores().length;
+        await handleBotTurn(req, INTEGRATION, CONV, mensaje({
+            type: botonId ? 'interactive' : 'text', textBody: texto, botonId, waMessageId: `wamid.g${n++}`,
+        }));
+        const nuevos = borradores().slice(antes).map((b) => b.row);
+        historial.push(...nuevos.map((b) => b.tool_context));
+        return nuevos;
+    }
+    const botonesDe = (b: any) => (b.tool_context.botones ?? []).map((x: any) => x.id);
+    const titulosDe = (b: any) => (b.tool_context.botones ?? []).map((x: any) => x.title);
+    const idPorTitulo = (b: any, t: string) => b.tool_context.botones.find((x: any) => x.title === t)?.id;
+
+    beforeEach(() => { historial = []; _olvidarReservasDePaso(); invalidarCacheOfertas(); });
+    afterEach(() => invalidarCacheOfertas());
+
+    it('niña 2014: botones → lista de años → sede → SOLO Suba 2013–2014 → «Quiero inscribirme» → nombre → lista de fechas → confirmación', async () => {
+        let r = await turno('Hola, ¿cuándo son las convocatorias?');
+        expect(h.chatWithTools).not.toHaveBeenCalled();
+        expect(r).toHaveLength(1);
+        expect(r[0].proposed_text).toContain('¡Queremos conocerte y conocer tu experiencia en el voleibol!');
+        expect(r[0].proposed_text).toContain('¿La convocatoria es para *femenino* o *masculino*?');
+        expect(r[0].proposed_text).not.toMatch(/Año de nacimiento:|Convocatorias Sede|Sub-15/);
+        expect(r[0].tool_context).toMatchObject({
+            step: 'desconocido_tema_escolar', intencion: 'ofertas_preguntas', flujo: 'puerta_desconocido', paso_puerta: 'oferta',
+            datos_puerta: { ultimoPaso: 'genero' },
+        });
+        expect(botonesDe(r[0])).toEqual(['of_g_femenino', 'of_g_masculino']);
+
+        r = await turno('Femenino', 'of_g_femenino');
+        expect(r.at(-1).proposed_text).toContain('¿En qué año nació');
+        expect(titulosDe(r.at(-1))).toEqual(['2015 o después', '2013 a 2014', '2011 a 2012', '2008 o antes']);
+        expect(r.at(-1).tool_context.datos_puerta).toMatchObject({ ultimoPaso: 'anio' });
+
+        r = await turno('2013 a 2014', 'of_a_2013_2014');
+        expect([...titulosDe(r.at(-1))].sort()).toEqual(['Sede Norte', 'Sede Suba']);
+
+        r = await turno('Sede Suba', idPorTitulo(r.at(-1), 'Sede Suba'));
+        const todo = r.map((b) => b.proposed_text).join('\n---\n');
+        expect(todo).toContain('grupos de proyección de nuestra sede Suba');
+        expect(todo).toContain('Nacidos en 2013 y 2014');
+        expect(todo).not.toContain('Nacidos en 2011 y 2012');
+        expect(todo).not.toMatch(/sede norte|equipos mayores/);
+        expect(r.at(-1).proposed_text).toContain('¿Qué quieres hacer? 👇');
+        expect(titulosDe(r.at(-1))).toEqual(['Quiero inscribirme', 'Cómo es la evaluación', 'Hablar con alguien']);
+
+        r = await turno('Quiero inscribirme', 'of_inscribirme');
+        expect(r.at(-1).proposed_text).toContain('*nombre completo* del deportista');
+        r = await turno('Sofía Gómez Uribe');
+        expect(r.at(-1).proposed_text).toContain('¿A cuál fecha vas a ir con *Sofía*?');
+        expect(botonesDe(r.at(-1))).toEqual(['of_f_s1']);
+
+        r = await turno('Vie 11 ene · 4:00 p. m.', 'of_f_s1');
+        const fin = r.at(-1);
+        expect(fin.proposed_text).toContain('¡Listo! ✅');
+        expect(fin.proposed_text).toContain('*Sofía Gómez Uribe* a *Convocatorias Sede Suba*');
+        expect(fin.tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'puerta_info',
+            pendiente_escuela: expect.stringContaining('inscripción: Convocatorias Sede Suba') });
+        expect(fin.tool_context.flujo).toBeUndefined();
+    });
+
+    it('hombre 1998 con trayectoria: «convocatorias masculinas» ya trae el género → mayores SOLO masculino → inscripción con el valor', async () => {
+        let r = await turno('Hola, ¿cuándo son las convocatorias masculinas?');
+        expect(r[0].tool_context.datos_puerta).toMatchObject({ ultimoPaso: 'anio', oferta: { genero: 'masculino' } });
+        r = await turno('2008 o antes', 'of_a_x_2008');
+        expect(titulosDe(r.at(-1))).toEqual(['Sí', 'No']);
+        r = await turno('Sí', 'of_t_si');
+        expect(r.at(-1).proposed_text).toContain('en qué clubes o torneos');
+        r = await turno('Club X y torneo departamental, opuesto');
+        const todo = r.map((b) => b.proposed_text).join('\n---\n');
+        expect(todo).toContain('equipos mayores de competencia');
+        expect(todo).toContain('8:00 a 10:00 p. m.');
+        expect(todo).not.toContain('7:00 a 9:00 p. m.');
+        expect(todo).not.toMatch(/sede Suba|sede norte/);
+        await turno('Quiero inscribirme', 'of_inscribirme');
+        r = await turno('Juan Pérez');
+        expect(botonesDe(r.at(-1))).toEqual(['of_f_m2']);
+        r = await turno('', 'of_f_m2');
+        expect(r.at(-1).proposed_text).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
+    });
+
+    it('respuestas escritas en vez de tocar: «femenino», «2014», «suba»', async () => {
+        await turno('Hola, ¿cuándo son las convocatorias?');
+        let r = await turno('femenino');
+        expect(r.at(-1).tool_context.datos_puerta).toMatchObject({ ultimoPaso: 'anio' });
+        r = await turno('2014');
+        expect(r.at(-1).tool_context.datos_puerta).toMatchObject({ ultimoPaso: 'sede' });
+        r = await turno('suba');
+        expect(r.map((b) => b.proposed_text).join('\n')).toContain('Nacidos en 2013 y 2014');
+    });
+
+    it('una pregunta con «?» a mitad del flujo no la toma la convocatoria; después el botón sigue valiendo', async () => {
+        await turno('Hola, ¿cuándo son las convocatorias?');
+        const r1 = await turno('¿Y dónde queda la sede?');
+        expect(r1.every((b) => b.tool_context?.paso_puerta !== 'oferta')).toBe(true);
+        // Aunque el bot haya contestado otra cosa después, el botón tocado sigue la convocatoria.
+        historial.push({ step: 'prospecto_seguimiento' });
+        const r2 = await turno('Femenino', 'of_g_femenino');
+        expect(r2.at(-1).tool_context.datos_puerta).toMatchObject({ ultimoPaso: 'anio', oferta: { genero: 'femenino' } });
+    });
+
+    it('escuela con EMBUDO: «¿cuándo son las convocatorias?» arranca la convocatoria guiada, no el embudo de la clase', async () => {
+        const r = await turno('Hola, ¿cuándo son las convocatorias?', null, { embudo: true });
+        expect(r).toHaveLength(1);
+        expect(r[0].tool_context).toMatchObject({ flujo: 'puerta_desconocido', paso_puerta: 'oferta' });
+        expect(r[0].proposed_text).not.toContain('nombre completo del deportista');
+    });
+
+    it('sin clase de prueba hoy, «Clase de cortesía tienen» → «Por ahora no tenemos… (vuelven el …)» y la primera pregunta', async () => {
+        const r = await turno('Clase de cortesía tienen', null, { bloqueo: true });
+        expect(r).toHaveLength(1);
+        expect(r[0].proposed_text).toContain('Por ahora no tenemos clases de cortesía (vuelven el');
+        expect(r[0].proposed_text).toContain('¿La convocatoria es para *femenino* o *masculino*?');
+        expect(r[0].proposed_text).not.toMatch(/Sub-15|gratis/);
+        expect(r[0].tool_context).toMatchObject({ paso_puerta: 'oferta', step: 'desconocido_tema_escolar' });
+    });
+
+    it('regresión: escuela SIN preguntas → las ofertas de una vez, como antes (sin flujo)', async () => {
+        const r = await turno('Hola, ¿cuándo son las convocatorias femeninas?', null, { preguntas: false });
+        expect(r).toHaveLength(1);
+        expect(r[0].proposed_text).toContain('grupos de formación de nuestra sede norte');
+        expect(r[0].tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'ofertas_vigentes' });
+        expect(r[0].tool_context.flujo).toBeUndefined();
+    });
+});

@@ -112,6 +112,7 @@ import { textoSinRespuesta, textoDelAvisoAlEquipo } from './whatsapp-escalacione
 import {
     leerOpcionDePuerta, leerQueQuiere, leerNombreDeDeportista, leerVariosDeportistas, mensajeDePuerta, iniciarPuerta, atenderTurnoPuerta,
     BOTON_PUERTA, PASO_PUERTA_MENU, FLUJO_PUERTA, botonesQueQuiere, type CtxPuerta, type EstadoPuerta, type LeadCompleto,
+    iniciarConvocatoria, mensajesDeOfertas, esBotonOferta, PASO_PUERTA_OFERTA, PASO_PUERTA_OFERTA_LISTA,
 } from './whatsapp-puerta-desconocido';
 import { armarEstado, type EstadoOfertas, type FilasCrudas } from './bot-ofertas.service';
 
@@ -180,7 +181,7 @@ describe('puerta única: lectura de respuestas', () => {
 // ─── 2. El motor de la puerta, con un contexto falso ─────────────────────────
 
 describe('puerta única: motor', () => {
-    interface Salida { texto: string; step: string; estado: EstadoPuerta | null; botones: string[]; titulos: string[]; contexto?: any }
+    interface Salida { texto: string; step: string; estado: EstadoPuerta | null; botones: string[]; titulos: string[]; contexto?: any; lista?: string }
     function falso(op: {
         perfil?: string | null; edadPrevia?: number | null; enlace?: string | null; precios?: string | null;
         /** Qué se puede ofrecer hoy (bot-ofertas). Sin la clave, el contexto no lo trae (se lee de la base falsa). */
@@ -193,9 +194,9 @@ describe('puerta única: motor', () => {
         let estado: EstadoPuerta | null = null;
         const ctx: CtxPuerta = {
             conversationId: 'c1', schoolId: 's1', contactWaId: '573000000001',
-            enviar: async (texto, step, st, botones, _enTexto, contexto) => {
+            enviar: async (texto, step, st, botones, _enTexto, contexto, opciones) => {
                 salidas.push({ texto, step, estado: st, botones: (botones ?? []).map((b) => b.id),
-                    titulos: (botones ?? []).map((b) => b.title), contexto });
+                    titulos: (botones ?? []).map((b) => b.title), contexto, lista: opciones?.textoLista });
                 estado = st;
             },
             avisarEscuela: async (motivo, detalle) => { avisos.push({ motivo, detalle }); },
@@ -509,6 +510,214 @@ describe('puerta única: motor', () => {
         expect(await f.turno('', BOTON_PUERTA.OFERTAS)).toBe(true);
         expect(f.ultimo().texto).toContain('*Convocatorias Sede Suba*');
         expect(f.ultimo().texto).toContain('¿A cuál fecha quieres ir?');
+    });
+
+    // ── Convocatoria guiada, una pregunta a la vez (flujo oficial de Monster, 2026-11-25) ──
+    // Tres convocatorias con sus criterios: mayores (hasta 2008, con trayectoria, con valor), Suba (2009–2022, por año
+    // en cada sesión) y Norte (todas las categorías). Textos de ejemplo, no los de la escuela.
+    const PREGUNTAS = '¡Queremos conocerte y conocer tu experiencia en el voleibol!\n\n- *Año de nacimiento:*\n- *Género:*';
+    const NOTA = 'Durante las convocatorias haremos una evaluación objetiva de tus habilidades.';
+    const FILAS_GUIADA: FilasCrudas = {
+        ofertas: [
+            { id: 'may', tipo: 'convocatoria', titulo: 'Convocatorias equipos mayores', sede: 'Sede Norte', estado: 'activa', prioridad: 20,
+                descripcion: 'Por tu trayectoria, te invitamos a las *convocatorias de los equipos mayores de competencia*.',
+                cta: '¡Queremos contar contigo en la Superliga!', anio_nacimiento_hasta: 2008, requiere_trayectoria: true,
+                requiere_pago: true, valor: 50000 },
+            { id: 'suba', tipo: 'convocatoria', titulo: 'Convocatorias Sede Suba', sede: 'Sede Suba', estado: 'activa', prioridad: 10, genero: 'mixto',
+                descripcion: 'Por tu año de nacimiento, te invitamos a los *grupos de proyección de nuestra sede Suba*.',
+                cta: '¡Tu próximo paso puede comenzar aquí!', anio_nacimiento_desde: 2009, anio_nacimiento_hasta: 2022 },
+            { id: 'norte', tipo: 'convocatoria', titulo: 'Convocatorias Sede Norte', sede: 'Sede Norte', estado: 'activa', prioridad: 30,
+                descripcion: 'Por tu edad y perfil, te invitamos a los *grupos de formación de nuestra sede norte*.',
+                cta: '¡Anímate a participar!' },
+        ],
+        sesiones: [
+            { id: 'm1', oferta_id: 'may', fecha: '2026-12-09', hora_inicio: '19:00:00', hora_fin: '21:00:00', lugar: 'Universidad ECCI', genero: 'femenino' },
+            { id: 'm2', oferta_id: 'may', fecha: '2026-12-09', hora_inicio: '20:00:00', hora_fin: '22:00:00', lugar: 'Universidad ECCI', genero: 'masculino', notas: 'Una cancha femenino y otra masculino' },
+            { id: 's1', oferta_id: 'suba', fecha: '2026-12-11', hora_inicio: '16:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba', genero: 'mixto', publico: 'Nacidos en 2013 y 2014' },
+            { id: 's2', oferta_id: 'suba', fecha: '2026-12-11', hora_inicio: '18:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba', genero: 'mixto', publico: 'Nacidos en 2011 y 2012' },
+            { id: 'n1', oferta_id: 'norte', fecha: '2026-12-12', hora_inicio: '07:00:00', hora_fin: '09:00:00', lugar: 'Locos por Pádel', genero: 'femenino' },
+            { id: 'n2', oferta_id: 'norte', fecha: '2026-12-12', hora_inicio: '09:00:00', hora_fin: '11:00:00', lugar: 'Locos por Pádel', genero: 'masculino' },
+        ],
+        bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null }],
+        ajustesClasePrueba: null, mensajeSinOfertas: null, preguntasOfertas: PREGUNTAS, notaOfertas: NOTA,
+    };
+    const GUIADA = armarEstado('s1', FILAS_GUIADA, DIC_3);
+    const textosDesde = (f: ReturnType<typeof falso>, desde: number) => f.salidas.slice(desde).map((s) => s.texto).join('\n---\n');
+
+    it('iniciarConvocatoria: la presentación de la escuela + UNA pregunta con botones (paso oferta); sin preguntas → false', async () => {
+        const f = falso({ ofertas: GUIADA });
+        expect(await iniciarConvocatoria(f.ctx, {}, { encabezado: 'Hola 👋' })).toBe(true);
+        const m = f.ultimo();
+        expect(m.step).toBe(PASO_PUERTA_OFERTA);
+        expect(m.estado).toMatchObject({ paso: 'oferta', datos: { ultimoPaso: 'genero', intentos: 0 } });
+        expect(m.texto).toBe('Hola 👋\n\n¡Queremos conocerte y conocer tu experiencia en el voleibol!\n\n¿La convocatoria es para *femenino* o *masculino*?');
+        expect(m.titulos).toEqual(['Femenino', 'Masculino']);
+        expect(m.texto).not.toContain('*Año de nacimiento:*');       // nunca todas las preguntas de una
+        expect(m.botones.every((id) => esBotonOferta(id))).toBe(true);
+
+        const g = falso({ ofertas: SIN_CLASE });                     // escuela sin preguntas: lo de siempre
+        expect(await iniciarConvocatoria(g.ctx, {})).toBe(false);
+        expect(g.salidas).toHaveLength(0);
+    });
+
+    it('niña 2014: género → año (lista «Elegir») → sede → SOLO Suba (2013–2014) → inscribirse → nombre → fecha → confirmación y aviso', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, {});
+        expect(await f.turno('Femenino', 'of_g_femenino')).toBe(true);
+        expect(f.ultimo().texto).toContain('¿En qué año nació');
+        expect(f.ultimo().titulos).toEqual(['2015 o después', '2013 a 2014', '2011 a 2012', '2008 o antes']);
+        expect(f.ultimo().lista).toBe('Elegir');
+
+        expect(await f.turno('2013 a 2014', 'of_a_2013_2014')).toBe(true);
+        expect(f.ultimo().texto).toContain('¿Qué sede te queda mejor?');
+        expect([...f.ultimo().titulos].sort()).toEqual(['Sede Norte', 'Sede Suba']);
+        expect(f.ultimo().lista).toBeUndefined();
+
+        const n = f.salidas.length;
+        expect(await f.turno('Sede Suba', f.ultimo().botones[f.ultimo().titulos.indexOf('Sede Suba')])).toBe(true);
+        const ofertasTxt = f.salidas[n];
+        expect(ofertasTxt.step).toBe(PASO_PUERTA_OFERTA_LISTA);
+        expect(ofertasTxt.texto).toContain('grupos de proyección de nuestra sede Suba');
+        expect(ofertasTxt.texto).toContain('Nacidos en 2013 y 2014');
+        expect(ofertasTxt.texto).not.toContain('Nacidos en 2011 y 2012');
+        expect(textosDesde(f, n)).not.toMatch(/sede norte|equipos mayores/);
+        expect(textosDesde(f, n)).not.toContain(NOTA);                // la nota solo si la pide
+        const accion = f.ultimo();
+        expect(accion.texto).toBe('¿Qué quieres hacer? 👇');
+        expect(accion.titulos).toEqual(['Quiero inscribirme', 'Cómo es la evaluación', 'Hablar con alguien']);
+        expect(accion.estado).toMatchObject({ paso: 'oferta', datos: { ultimoPaso: 'accion', mostradas: ['suba'] } });
+
+        // «Cómo es la evaluación»: la nota y los botones que quedan.
+        expect(await f.turno('Cómo es la evaluación', 'of_evaluacion')).toBe(true);
+        expect(f.ultimo().texto).toContain(NOTA);
+        expect(f.ultimo().titulos).toEqual(['Quiero inscribirme', 'Hablar con alguien']);
+
+        expect(await f.turno('Quiero inscribirme', 'of_inscribirme')).toBe(true);
+        expect(f.ultimo().texto).toContain('*nombre completo* del deportista');
+        expect(await f.turno('Sofía Gómez Uribe')).toBe(true);
+        const fechas = f.ultimo();
+        expect(fechas.texto).toContain('¿A cuál fecha vas a ir con *Sofía*?');
+        expect(fechas.botones).toEqual(['of_f_s1']);                  // solo la fila de su año
+        expect(fechas.lista).toBe('Elegir');
+
+        expect(await f.turno('Vie 11 dic · 4:00 p. m.', 'of_f_s1')).toBe(true);
+        const fin = f.ultimo();
+        expect(fin.step).toBe('puerta_info_listo');
+        expect(fin.estado).toBeNull();
+        expect(fin.texto).toContain('¡Listo! ✅');
+        expect(fin.texto).toContain('*Sofía Gómez Uribe*');
+        expect(fin.texto).toContain('viernes 11 de diciembre, 4:00 p. m. · Parque Pinar de Suba');
+        expect(fin.texto).not.toContain('Valor');
+        expect(fin.contexto).toMatchObject({ pendiente_escuela: expect.stringContaining('inscripción: Convocatorias Sede Suba') });
+        expect(f.avisos).toHaveLength(1);
+        expect(f.avisos[0].motivo).toBe('otro');
+        for (const dato of ['Convocatorias Sede Suba', 'viernes 11 de diciembre', 'Deportista: Sofía Gómez Uribe.', 'Género: femenino.',
+            'Año de nacimiento: 2013 a 2014.', 'Sede: Sede Suba.']) expect(f.avisos[0].detalle).toContain(dato);
+        expect(f.leads).toEqual([expect.objectContaining({ deportista: 'Sofía Gómez Uribe', quiere: 'convocatoria' })]);
+    });
+
+    it('hombre 1998 con trayectoria: mayores SOLO masculino, el detalle llega a la escuela y la confirmación trae el valor', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, {});
+        await f.turno('Masculino', 'of_g_masculino');
+        await f.turno('2008 o antes', 'of_a_x_2008');
+        expect(f.ultimo().texto).toContain('¿Ha entrenado en algún club o jugado torneos?');
+        expect(f.ultimo().titulos).toEqual(['Sí', 'No']);
+        await f.turno('Sí', 'of_t_si');
+        expect(f.ultimo().estado).toMatchObject({ datos: { ultimoPaso: 'detalle' } });
+        expect(f.ultimo().botones).toEqual([]);
+        const n = f.salidas.length;
+        expect(await f.turno('Club X y torneo departamental, opuesto')).toBe(true);
+        const t = textosDesde(f, n);
+        expect(t).toContain('equipos mayores de competencia');
+        expect(t).toContain('8:00 a 10:00 p. m.');
+        expect(t).not.toContain('7:00 a 9:00 p. m.');                // la sesión femenina
+        expect(t).not.toContain('Una cancha femenino y otra masculino');   // con el género elegido, la nota sobra
+        expect(t).not.toMatch(/sede Suba|sede norte/);
+
+        await f.turno('Quiero inscribirme', 'of_inscribirme');
+        await f.turno('Juan Pérez');
+        expect(f.ultimo().botones).toEqual(['of_f_m2']);
+        await f.turno('', 'of_f_m2');
+        const fin = f.ultimo();
+        expect(fin.texto).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
+        expect(f.avisos[0].detalle).toContain('Trayectoria: sí (Club X y torneo departamental, opuesto).');
+        expect(f.avisos[0].detalle).toContain('Valor: $50.000');
+    });
+
+    it('respuestas escritas en vez de tocar: «femenino», «2014», «suba», «quiero inscribirme»', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, {});
+        expect(await f.turno('femenino')).toBe(true);
+        expect(await f.turno('2014')).toBe(true);
+        expect(f.ultimo().texto).toContain('¿Qué sede te queda mejor?');
+        expect(await f.turno('suba')).toBe(true);
+        expect(textosDesde(f, 0)).toContain('Nacidos en 2013 y 2014');
+        expect(await f.turno('quiero inscribirme')).toBe(true);
+        expect(f.ultimo().estado).toMatchObject({ datos: { ultimoPaso: 'nombre' } });
+    });
+
+    it('a mitad del flujo, una pregunta o un «gracias» no se toman (los contesta el bot de siempre) y el botón después sigue', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, {});
+        expect(await f.turno('¿Y cuánto cuesta?')).toBe(false);
+        expect(await f.turno('gracias')).toBe(false);
+        expect(await f.turno('Ver mis pagos', 'sm_ver_pagos')).toBe(false);
+        expect(f.salidas).toHaveLength(1);
+        expect(await f.turno('Femenino', 'of_g_femenino')).toBe(true);
+        expect(f.ultimo().estado).toMatchObject({ datos: { ultimoPaso: 'anio' } });
+    });
+
+    it('no se entiende: repite UNA vez; a la segunda pasa a la escuela', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, {});
+        expect(await f.turno('mmm')).toBe(true);
+        expect(f.ultimo().texto).toContain('Elige una opción 👇');
+        expect(f.ultimo().estado).toMatchObject({ datos: { ultimoPaso: 'genero', intentos: 1 } });
+        expect(await f.turno('jaja')).toBe(true);
+        expect(f.ultimo()).toMatchObject({ step: 'puerta_info_listo', estado: null, texto: 'Listo, la escuela te escribe por aquí 🙌' });
+        expect(f.avisos).toHaveLength(1);
+    });
+
+    it('«Hablar con alguien» → la escuela le escribe y recibe lo que contó', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await iniciarConvocatoria(f.ctx, { genero: 'femenino', anio: 2014, sede: 'Sede Suba' });
+        expect(f.ultimo().titulos).toEqual(['Quiero inscribirme', 'Cómo es la evaluación', 'Hablar con alguien']);
+        expect(await f.turno('Hablar con alguien', 'of_persona')).toBe(true);
+        expect(f.ultimo()).toMatchObject({ texto: 'Listo, la escuela te escribe por aquí 🙌', estado: null });
+        expect(f.avisos[0].detalle).toContain('Pidió hablar con alguien.');
+        expect(f.avisos[0].detalle).toContain('Ofertas que vio: Convocatorias Sede Suba.');
+    });
+
+    it('la promo vigente va después de la oferta y antes de los botones', async () => {
+        const conPromo = { ...GUIADA, promoOfertas: '🎁 Inscríbete antes del 15 y la camiseta es gratis.' };
+        const f = falso({ ofertas: conPromo as EstadoOfertas });
+        await iniciarConvocatoria(f.ctx, { genero: 'femenino', anio: 2014, sede: 'Sede Suba' });
+        const pasos = f.salidas.map((s) => s.texto);
+        expect(pasos.at(-2)).toBe('🎁 Inscríbete antes del 15 y la camiseta es gratis.');
+        expect(pasos.at(-1)).toBe('¿Qué quieres hacer? 👇');
+        expect(pasos.at(-3)).toContain('sede Suba');
+    });
+
+    it('«Convocatorias» del mini-registro arranca la convocatoria guiada con lo que el registro ya sabe', async () => {
+        const f = falso({ ofertas: GUIADA });
+        await hastaQueQuiere(f);
+        expect(await f.turno('', BOTON_PUERTA.OFERTAS)).toBe(true);
+        const m = f.ultimo();
+        expect(m.texto).toContain('registré a *Sofía Gómez Uribe* (9 años)');
+        expect(m.estado).toMatchObject({ paso: 'oferta', datos: { ultimoPaso: 'genero', deportista: 'Sofía Gómez Uribe', oferta: { nombre: 'Sofía Gómez Uribe' } } });
+    });
+
+    it('mensajesDeOfertas: todas en un mensaje si caben; si no, una por mensaje', () => {
+        const ofs = GUIADA.ofertas;
+        const [uno, ...resto] = mensajesDeOfertas(ofs, GUIADA, 'Encabezado');
+        expect(resto).toHaveLength(0);
+        expect(uno.startsWith('Encabezado\n\n')).toBe(true);
+        expect(uno).not.toContain(NOTA);
+        const porOferta = mensajesDeOfertas(ofs, GUIADA, 'Encabezado', uno.length - 1);
+        expect(porOferta).toHaveLength(ofs.length);
+        expect(porOferta[0].startsWith('Encabezado\n\n')).toBe(true);
+        expect(mensajesDeOfertas([], GUIADA)).toEqual([]);
     });
 });
 

@@ -18,8 +18,11 @@ import {
     type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo, type LugarDeClase,
 } from './whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
-import { armarEstado, type EstadoOfertas, type FilasCrudas } from './bot-ofertas.service';
+import { armarEstado, textoOfertasParaPersona, type EstadoOfertas, type FilasCrudas } from './bot-ofertas.service';
 import { recordatorioDePasoEmbudo, textoSinClaseDePrueba, textoDeMatriculaSinClase } from './whatsapp-embudo-prospecto';
+import {
+    MAX_TEXTO_OFERTAS, datosDePersonaDeEmbudo, trayectoriaDeTexto, ofertasConCriterios, prefillDeOfertas,
+} from './whatsapp-embudo-prospecto';
 import {
     ajustesDesdeFila, ajustesClasePruebaDesdeFila, type AjustesWhatsAppEscuela, type AjustesClasePrueba,
 } from './whatsapp-ajustes-escuela.service';
@@ -83,6 +86,8 @@ function crear(op: {
     lugar?: LugarDeClase | null;
     /** Qué se puede ofrecer hoy (bot-ofertas); sin la clave, el contexto no lo trae (como antes). */
     ofertas?: EstadoOfertas;
+    /** La conversación compartida de ofertas; sin la clave, el contexto no la trae. */
+    iniciarOfertas?: (prefill: any) => Promise<boolean>;
 } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null };
     const ctx: CtxEmbudo = {
@@ -118,6 +123,7 @@ function crear(op: {
         ...(op.yaSoyDelClub ? { yaSoyDelClub: vi.fn(async () => {}) } : {}),
         ...(op.lugar !== undefined ? { lugarDeLaClase: vi.fn(async () => op.lugar ?? null) } : {}),
         ...(op.ofertas ? { ofertas: vi.fn(async () => op.ofertas!) } : {}),
+        ...(op.iniciarOfertas ? { iniciarOfertas: vi.fn(op.iniciarOfertas) } : {}),
         leadDelContacto: vi.fn(async () => op.lead ?? null),
         leerEstado: async () => s.estado,
         ahora: () => AHORA,
@@ -1067,5 +1073,307 @@ describe('embudo sin clase de prueba (bot-ofertas)', () => {
         expect(con.s.enviados).toEqual(sin.s.enviados);
         expect(con.ctx.tomarCupo).toHaveBeenCalledTimes(1);
         expect(leadCompletoDeEmbudo(leadDeDatos({ nombre: 'X' }, null)).quiere).toBe('clase_prueba');
+    });
+});
+
+// ─── Sin clase de prueba: SOLO la convocatoria que le aplica (Monster 2026-11-25, 2.ª vuelta) ──
+//
+// Las tres convocatorias de Monster con sus criterios reales (20261125134852): mayores =
+// nacidos hasta 2008 y con trayectoria; Suba = 2009–2022; Norte = todas. Textos de la
+// escuela (descripción + cierre) y su nota común. Hoy: jueves 3-dic-2026, 10:00 a. m.
+
+describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios de la oferta)', () => {
+    const T_NORTE = 'Convocatorias Sede Norte — grupos de formación';
+    const T_MAYORES = 'Convocatorias equipos mayores de competencia — Superliga';
+    const T_SUBA = 'Convocatorias Sede Suba (Parque Pinar de Suba)';
+    const DESC_MAYORES = '¡Tu experiencia en el voleibol puede llevarte a un nuevo nivel!\n\n'
+        + 'Por tu trayectoria y perfil deportivo, te invitamos a participar en las *convocatorias de los equipos mayores de competencia de Monster’s Volley*, '
+        + 'orientadas a conformar nuestros equipos para el proyecto Superliga 2027.\n\n'
+        + 'Buscamos deportistas comprometidos, con experiencia, mentalidad competitiva y disposición para asumir nuevos retos deportivos.';
+    const CTA_MAYORES = 'Esta es una oportunidad para demostrar tu nivel, integrarte a un proceso competitivo y proyectarte hacia nuevos desafíos.\n\n'
+        + '¡Queremos conocer tu talento y contar contigo en este nuevo proyecto!';
+    const DESC_SUBA = '¡Queremos descubrir tu talento y ayudarte a dar el siguiente paso en el voleibol!\n\n'
+        + 'Por tu año de nacimiento, te invitamos a participar en las *convocatorias de los grupos de proyección de nuestra sede Suba*.\n\n'
+        + 'Estas jornadas nos permitirán conocer tus habilidades, evaluar tu nivel deportivo e identificar el grupo más adecuado para continuar tu proceso de formación y proyección.';
+    const CTA_SUBA = 'Queremos que cada deportista tenga la oportunidad de demostrar sus capacidades y encontrar un espacio donde pueda seguir creciendo.\n\n'
+        + '*¡Tu próximo paso en el voleibol puede comenzar aquí!* Te esperamos en las convocatorias de Monster’s Volley.';
+    const DESC_NORTE = '¡Tenemos una oportunidad para que sigas creciendo en el voleibol!\n\n'
+        + 'Por tu edad y perfil, te invitamos a participar en las *convocatorias de los grupos de formación de nuestra sede norte*.\n\n'
+        + 'Buscamos identificar tus habilidades, conocer tu nivel de juego y orientarte hacia el grupo que mejor acompañe tu desarrollo deportivo.';
+    const CTA_NORTE = 'Queremos brindarte un espacio donde puedas aprender, mejorar tus habilidades y disfrutar del voleibol mientras avanzas en tu proceso deportivo.\n\n'
+        + '¡Anímate a participar y comienza a construir tu camino en Monster’s Volley!';
+    const NOTA = '¡Queremos conocer tu potencial y ayudarte a encontrar el grupo ideal para tu desarrollo deportivo!\n\n'
+        + 'Durante las convocatorias realizaremos una evaluación objetiva de tus habilidades técnicas, capacidades físicas y fundamentos de juego.\n\n'
+        + 'Nuestro propósito es identificar tus fortalezas y oportunidades de mejora para que, al finalizar enero, podamos asignarte al grupo de proyección o '
+        + 'competencia que mejor se ajuste a tu nivel y proceso deportivo.\n\n'
+        + 'No se trata solamente de seleccionar jugadores, sino de encontrar el espacio donde puedas crecer, mejorar y alcanzar tus objetivos en el voleibol.';
+    const PREGUNTAS_OFERTAS = '¡Queremos conocerte y conocer tu experiencia en el voleibol!\n\n- *Año de nacimiento:*\n- *Trayectoria deportiva:*';
+
+    function filasMonster(conCriterios = true): FilasCrudas {
+        const oferta = (o: Record<string, any>) => ({
+            tipo: 'convocatoria', sede: null, publico: null, genero: null, estado: 'activa', vigente_desde: '2026-11-25',
+            requiere_inscripcion: true, requiere_pago: false, valor: null, mensaje_sin_cupos: null,
+            ...o,
+            ...(conCriterios ? {} : { anio_nacimiento_desde: null, anio_nacimiento_hasta: null, requiere_trayectoria: false }),
+        });
+        let n = 0;
+        const ses = (oferta_id: string, fecha: string, ini: string, fin: string | null, lugar: string, extra: Record<string, any> = {}) => ({
+            id: `ses-${++n}`, oferta_id, fecha, hora_inicio: `${ini}:00`, hora_fin: fin ? `${fin}:00` : null, lugar,
+            genero: null, publico: null, notas: null, ...extra,
+        });
+        const sesiones: any[] = [
+            ses('of-norte', '2026-12-05', '07:00', '09:00', 'Locos por Pádel'),
+            ses('of-norte', '2026-12-06', '07:00', '09:00', 'Locos por Pádel'),
+            ses('of-norte', '2026-12-12', '08:00', '10:00', 'Universidad ECCI'),
+            ...(['femenino', 'masculino'] as const).flatMap((g) => [
+                ses('of-mayores', '2026-12-01', '19:00', '21:00', 'Universidad ECCI', { genero: g }),
+                ses('of-mayores', '2026-12-03', '19:00', '21:00', 'Universidad ECCI', { genero: g }),
+                ses('of-mayores', '2026-12-09', g === 'femenino' ? '19:00' : '20:00', g === 'femenino' ? '21:00' : '22:00', 'Universidad ECCI', { genero: g }),
+                ses('of-mayores', '2026-12-11', '19:00', '21:00', 'Universidad ECCI', { genero: g, notas: 'Una cancha femenino y otra masculino' }),
+            ]),
+        ];
+        const GRUPOS = ['Nacidos entre 2017 y 2022', 'Nacidos en 2015 y 2016', 'Nacidos en 2013 y 2014', 'Nacidos en 2011 y 2012', 'Nacidos en 2009 y 2010'];
+        for (const f of ['2026-12-04', '2026-12-11']) {
+            GRUPOS.forEach((publico, i) => sesiones.push(ses('of-suba', f, ['14:00', '14:00', '16:00', '18:00', '20:00'][i], null,
+                'Parque Pinar de Suba', { genero: 'mixto', publico })));
+        }
+        for (const f of ['2026-12-05', '2026-12-12', '2026-12-06', '2026-12-13']) {
+            GRUPOS.forEach((publico, i) => sesiones.push(ses('of-suba', f, ['07:00', '07:00', '09:00', '11:00', '13:00'][i], null,
+                'Parque Pinar de Suba', { genero: 'mixto', publico })));
+        }
+        return {
+            ofertas: [
+                oferta({ id: 'of-norte', titulo: T_NORTE, sede: 'Sede Norte', publico: 'Grupos de formación, todas las categorías',
+                    vigente_hasta: '2026-12-12', prioridad: 30, descripcion: DESC_NORTE, cta: CTA_NORTE }),
+                oferta({ id: 'of-mayores', titulo: T_MAYORES, sede: 'Sede Norte', vigente_hasta: '2026-12-11', prioridad: 20,
+                    descripcion: DESC_MAYORES, cta: CTA_MAYORES, anio_nacimiento_hasta: 2008, requiere_trayectoria: true }),
+                oferta({ id: 'of-suba', titulo: T_SUBA, sede: 'Sede Suba', genero: 'mixto', vigente_hasta: '2026-12-13', prioridad: 10,
+                    publico: 'Grupos de proyección, nacidas y nacidos de 2009 a 2022', descripcion: DESC_SUBA, cta: CTA_SUBA,
+                    anio_nacimiento_desde: 2009, anio_nacimiento_hasta: 2022 }),
+            ],
+            sesiones,
+            bloqueos: [{ tipo: 'clase_prueba', desde: '2026-12-01', hasta: '2027-01-31', motivo: null }],
+            ajustesClasePrueba: null, mensajeSinOfertas: null, preguntasOfertas: PREGUNTAS_OFERTAS, notaOfertas: NOTA,
+        };
+    }
+    const DIC_3 = Date.parse('2026-12-03T10:00:00-05:00');
+    const MONSTER = armarEstado('monster', filasMonster(), DIC_3);
+    /** Monster sin la pregunta de trayectoria (nombre, fecha, sexo, posición): la trayectoria no se sabe. */
+    const AJ_SIN_TRAYECTORIA: AjustesWhatsAppEscuela = ajustesDesdeFila({
+        wa_modo_cortesia: 'clase', wa_bienvenida: BIENVENIDA,
+        wa_botones_sede: [{ branch_id: NORTE, titulo: '🟡 Sede Norte' }, { branch_id: SUBA, titulo: '⚫ Sede Suba' }],
+        wa_preguntas_prospecto: PREGUNTAS_MONSTER.slice(0, 4), wa_modo_discreto: 'no', wa_temas_a_persona: null,
+    });
+    const SIN_GRUPO = { [NORTE]: null, [SUBA]: null };
+    const lineas = (t: string) => t.split('\n').filter((l) => l.startsWith('•'));
+
+    async function nina2014(c: ReturnType<typeof crear>) {
+        await iniciarEmbudo(c.ctx);
+        await c.turno('🟡 Sede Norte', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Sofía Ramírez Peña');
+        await c.turno('22/05/2014');
+        await c.turno('Mujer', `${BOTON_EMBUDO.OPCION}sexo:0`);
+        await c.turno('Punta');
+        await c.turno('Estoy empezando', `${BOTON_EMBUDO.OPCION}trayectoria:0`);
+    }
+
+    async function hombre1998ConClubes(c: ReturnType<typeof crear>) {
+        await iniciarEmbudo(c.ctx);
+        await c.turno('🟡 Sede Norte', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Andrés Felipe Torres');
+        await c.turno('07/08/1998');
+        await c.turno('Hombre', `${BOTON_EMBUDO.OPCION}sexo:1`);
+        await c.turno('Opuesto');
+        await c.turno('Club y torneos', `${BOTON_EMBUDO.OPCION}trayectoria:2`);
+        await c.turno('Jugué en Titanes y la liga distrital');
+    }
+
+    async function hombre1998(c: ReturnType<typeof crear>) {
+        await iniciarEmbudo(c.ctx);
+        await c.turno('🟡 Sede Norte', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Andrés Felipe Torres');
+        await c.turno('07/08/1998');
+        await c.turno('Hombre', `${BOTON_EMBUDO.OPCION}sexo:1`);
+        await c.turno('Opuesto');
+    }
+
+    it('niña de 2014 sin clubes: Suba (solo 2013–2014) y Norte, sin sesiones masculinas, con la nota y sin mayores', async () => {
+        const c = crear({ ofertas: MONSTER });
+        await nina2014(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_ofertas');
+        expect(m.estado).toMatchObject({ paso: 'elegir_oferta', datos: { leadId: 'lead-1', teamId: 't-infantil-fem' } });
+        // La de su año (Suba) primero, después la de todas las categorías (Norte).
+        expect(m.estado!.datos.ofertasMostradas).toEqual([
+            { titulo: T_SUBA, tipo: 'convocatoria' }, { titulo: T_NORTE, tipo: 'convocatoria' },
+        ]);
+        const t = m.texto;
+        expect(t.startsWith('¡Listo! ✨ Por su año (2014) a Sofía le corresponde *Infantil Femenino* en la Sede Norte.\n'
+            + 'Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).\n\n' + DESC_SUBA)).toBe(true);
+        expect(t).toContain(CTA_SUBA);
+        expect(t).toContain(DESC_NORTE);
+        expect(t).toContain(CTA_NORTE);
+        expect(t).toContain('*Lugar:* Parque Pinar de Suba.');
+        expect(lineas(t)).toEqual([
+            '• viernes 4 y viernes 11 de diciembre, 4:00 p. m. · Nacidos en 2013 y 2014',
+            '• sábado 5, domingo 6, sábado 12 y domingo 13 de diciembre, 9:00 a. m. · Nacidos en 2013 y 2014',
+            '• sábado 5 y domingo 6 de diciembre, 7:00 a 9:00 a. m. · Locos por Pádel',
+            '• sábado 12 de diciembre, 8:00 a 10:00 a. m. · Universidad ECCI',
+        ]);
+        expect(t).not.toMatch(/masculino|Superliga|equipos mayores|2015|2017|2011|2009/);
+        expect(t).toContain(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`);
+        expect(t.length).toBeLessThanOrEqual(MAX_TEXTO_OFERTAS);
+        expect(c.ctx.franjas).not.toHaveBeenCalled();
+        expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Sofía Ramírez Peña', quiere: 'convocatoria' }));
+
+        // El aviso a la escuela nombra las convocatorias que se le mostraron.
+        expect(await c.turno('La del sábado 5 a las 9')).toBe(true);
+        expect(c.ultimo().step).toBe('embudo_inscripcion_oferta');
+        expect(c.ctx.avisarEscuela).toHaveBeenLastCalledWith('inscripcion_oferta',
+            'Interesado: Sofía Ramírez Peña (2014). Quiere inscribirse (convocatoria): «La del sábado 5 a las 9». '
+            + `Le ofrecí: «${T_SUBA}» y «${T_NORTE}». Sede: Sede Norte.`);
+        expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({
+            quiere: 'convocatoria', respuestas: expect.objectContaining({ oferta_elegida: 'La del sábado 5 a las 9' }),
+        }));
+    });
+
+    it('reserva: hombre de 1998 con «Club y torneos» → solo mayores, sesiones masculinas', async () => {
+        const c = crear({ ofertas: MONSTER, grupos: SIN_GRUPO });
+        await hombre1998ConClubes(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_ofertas');
+        expect(m.estado?.datos.ofertasMostradas).toEqual([{ titulo: T_MAYORES, tipo: 'convocatoria' }]);
+        expect(m.texto).toContain(DESC_MAYORES);
+        expect(m.texto).toContain(CTA_MAYORES);
+        expect(m.texto).toContain('*Lugar:* Universidad ECCI.');
+        expect(lineas(m.texto)).toEqual([
+            '• jueves 3 de diciembre, 7:00 a 9:00 p. m. · masculino',
+            '• miércoles 9 de diciembre, 8:00 a 10:00 p. m. · masculino',
+            '• viernes 11 de diciembre, 7:00 a 9:00 p. m. · masculino · Una cancha femenino y otra masculino',
+        ]);
+        expect(m.texto).not.toContain(DESC_NORTE);
+        expect(m.texto).not.toContain(DESC_SUBA);
+        expect(m.texto).toContain(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Andrés*?`);
+    });
+
+    it('reserva: hombre de 1998 sin saberse su trayectoria → sin pregunta extra, solo Norte', async () => {
+        const c = crear({ aj: AJ_SIN_TRAYECTORIA, ofertas: MONSTER, grupos: SIN_GRUPO });
+        await hombre1998(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_ofertas');
+        expect(m.estado?.datos.ofertasMostradas).toEqual([{ titulo: T_NORTE, tipo: 'convocatoria' }]);
+        expect(m.texto).toContain(DESC_NORTE);
+        expect(m.texto).not.toContain(DESC_MAYORES);
+        expect(m.texto).not.toContain(DESC_SUBA);
+        expect(m.texto).not.toContain('¿Has entrenado');
+        expect(lineas(m.texto)).toHaveLength(2);
+        expect(m.texto).toContain(NOTA);
+    });
+
+    it('con la conversación compartida (iniciarOfertas): se guarda el lead y se le entrega lo que ya contó; el embudo no manda ofertas', async () => {
+        const c = crear({ ofertas: MONSTER, iniciarOfertas: async () => true });
+        await iniciarEmbudo(c.ctx);
+        await c.turno('🟡 Sede Norte', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+        await c.turno('Sofía Ramírez Peña');
+        await c.turno('22/05/2014');
+        await c.turno('Mujer', `${BOTON_EMBUDO.OPCION}sexo:0`);
+        await c.turno('Punta');
+        const n = c.s.enviados.length;
+        expect(await c.turno('Estoy empezando', `${BOTON_EMBUDO.OPCION}trayectoria:0`)).toBe(true);
+        expect(c.s.enviados).toHaveLength(n);
+        expect(c.ctx.iniciarOfertas).toHaveBeenCalledTimes(1);
+        expect(c.ctx.iniciarOfertas).toHaveBeenCalledWith({
+            genero: 'femenino', anio: 2014, trayectoria: false, nombre: 'Sofía Ramírez Peña', sede: 'Sede Norte',
+        });
+        expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Sofía Ramírez Peña', quiere: 'convocatoria' }));
+        expect(c.ctx.franjas).not.toHaveBeenCalled();
+    });
+
+    it('prefill: con clubes va la trayectoria y lo que contó; sin respuesta clara, la trayectoria no va', async () => {
+        const con = crear({ ofertas: MONSTER, grupos: SIN_GRUPO, iniciarOfertas: async () => true });
+        await hombre1998ConClubes(con);
+        expect(con.ctx.iniciarOfertas).toHaveBeenCalledWith({
+            genero: 'masculino', anio: 1998, trayectoria: true,
+            detalle: 'Club y torneos · Jugué en Titanes y la liga distrital', nombre: 'Andrés Felipe Torres', sede: 'Sede Norte',
+        });
+        const sin = crear({ aj: AJ_SIN_TRAYECTORIA, ofertas: MONSTER, grupos: SIN_GRUPO, iniciarOfertas: async () => true });
+        await hombre1998(sin);
+        expect(sin.ctx.iniciarOfertas).toHaveBeenCalledWith({ genero: 'masculino', anio: 1998, nombre: 'Andrés Felipe Torres', sede: 'Sede Norte' });
+        // Una sede que ninguna oferta nombra no va.
+        expect(prefillDeOfertas({ sedeTitulo: '⚫ Sede Chía', respuestas: {} }, [], MONSTER, AHORA)).toEqual({});
+        expect(prefillDeOfertas({ sedeTitulo: '⚫ Sede Suba', respuestas: {} }, [], MONSTER, AHORA)).toEqual({ sede: 'Sede Suba' });
+    });
+
+    it('iniciarOfertas que no la toma (false) → el mensaje de reserva, igual que sin ella; sin preguntasOfertas no se llama', async () => {
+        const nolatoma = crear({ ofertas: MONSTER, iniciarOfertas: async () => false });
+        const sin = crear({ ofertas: MONSTER });
+        await nina2014(nolatoma);
+        await nina2014(sin);
+        expect(nolatoma.ctx.iniciarOfertas).toHaveBeenCalledTimes(1);
+        expect(nolatoma.s.enviados).toEqual(sin.s.enviados);
+        const sinPreguntas = armarEstado('monster', { ...filasMonster(), preguntasOfertas: null }, DIC_3);
+        const c = crear({ ofertas: sinPreguntas, iniciarOfertas: async () => true });
+        await nina2014(c);
+        expect(c.ctx.iniciarOfertas).not.toHaveBeenCalled();
+        expect(c.ultimo().step).toBe('embudo_ofertas');
+    });
+
+    it('regresión: una escuela sin criterios en sus ofertas ve el mensaje de siempre, letra por letra (todas las de su género, sin la nota)', async () => {
+        const sinCriterios = armarEstado('otra', filasMonster(false), DIC_3);
+        expect(ofertasConCriterios(sinCriterios)).toBe(false);
+        expect(ofertasConCriterios(MONSTER)).toBe(true);
+        const c = crear({ ofertas: sinCriterios });
+        await nina2014(c);
+        const m = c.ultimo();
+        expect(m.step).toBe('embudo_ofertas');
+        expect(m.texto).toBe([
+            '¡Listo! ✨ Por su año (2014) a Sofía le corresponde *Infantil Femenino* en la Sede Norte.\n'
+                + 'Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).',
+            textoOfertasParaPersona(sinCriterios, { genero: 'femenino' }),
+            '¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌',
+        ].join('\n\n'));
+        expect(m.texto).toContain(DESC_MAYORES); // todas las de su género, como antes
+        expect(m.texto).not.toContain(NOTA);
+        expect(m.estado!.datos.ofertasMostradas).toBeUndefined();
+        await c.turno('La del sábado 5 a las 9');
+        expect(c.ctx.avisarEscuela).toHaveBeenLastCalledWith('inscripcion_oferta',
+            'Interesado: Sofía Ramírez Peña (2014). Quiere inscribirse (convocatoria): «La del sábado 5 a las 9». Sede: Sede Norte.');
+    });
+
+    it('si el mensaje pasaría el tope de WhatsApp, la nota va aparte con la pregunta', async () => {
+        const filas = filasMonster();
+        filas.ofertas = filas.ofertas.map((o: any) => o.id === 'of-norte' ? { ...o, descripcion: `${DESC_NORTE}\n\n${'Texto largo de la escuela. '.repeat(60)}` } : o);
+        const largo = armarEstado('monster', filas, DIC_3);
+        const c = crear({ ofertas: largo });
+        await nina2014(c);
+        const [ofertas, nota] = c.s.enviados.slice(-2);
+        expect(ofertas.step).toBe('embudo_ofertas');
+        expect(ofertas.texto).toContain(DESC_SUBA);
+        expect(ofertas.texto).not.toContain(NOTA);
+        expect(ofertas.texto.length).toBeLessThanOrEqual(4096);
+        expect(nota.texto).toBe(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`);
+        expect(nota.estado).toMatchObject({ paso: 'elegir_oferta' });
+    });
+
+    it('los datos de la persona salen de lo que contó en el embudo', () => {
+        const hoy = '2026-12-03';
+        const opciones = [{ titulo: 'Estoy empezando' }, { titulo: 'Colegio o escuela' }, { titulo: 'Club y torneos' }];
+        expect(trayectoriaDeTexto('Club y torneos', hoy, opciones)).toBe(true);
+        expect(trayectoriaDeTexto('Estoy empezando', hoy, opciones)).toBe(false);
+        expect(trayectoriaDeTexto('Colegio o escuela', hoy, opciones)).toBe(false);
+        expect(trayectoriaDeTexto('Sí, claro', hoy)).toBe(true);
+        expect(trayectoriaDeTexto('Nop', hoy)).toBe(false);
+        expect(trayectoriaDeTexto('Titanes', hoy)).toBeNull();
+        const preguntas = AJ_MONSTER.preguntasProspecto!;
+        expect(datosDePersonaDeEmbudo({
+            anio: 2011, genero: 'f', respuestas: { trayectoria: 'Club y torneos', trayectoria_detalle: 'Dos años en Titanes' },
+        }, preguntas, AHORA)).toEqual({ anio: 2011, genero: 'femenino', trayectoria: true });
+        // La fecha y el sexo en otras claves: se leen de su respuesta.
+        const otras = [
+            { clave: 'nacimiento', texto: '¿Fecha de nacimiento?', tipo: 'fecha' as const },
+            { clave: 'genero_deportista', texto: '¿Género?', tipo: 'botones' as const, opciones: [{ titulo: 'Mujer' }, { titulo: 'Hombre' }] },
+        ];
+        expect(datosDePersonaDeEmbudo({ respuestas: { nacimiento: '1998-08-07', genero_deportista: 'Hombre' } }, otras, AHORA))
+            .toEqual({ anio: 1998, genero: 'masculino', trayectoria: null });
     });
 });

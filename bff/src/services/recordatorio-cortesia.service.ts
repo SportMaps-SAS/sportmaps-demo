@@ -64,6 +64,7 @@ import {
 import { lugaresDeEscuela, type LugarDeEscuela } from './grupos-por-edad.service';
 import { textosClaseDeEscuela, TEXTOS_POR_DEFECTO, type TextosClase } from './textos-clase-prueba';
 import type { BotonInteractivo } from './whatsapp.service';
+import { estadoDeOfertas, claseDePruebaPermitidaEn, type EstadoOfertas } from './bot-ofertas.service';
 
 /** Botones del recordatorio de la escuela con embudo (los atiende el embudo, ids `sm_em_*`). */
 export const BOTONES_RECORDATORIO_EMBUDO: BotonInteractivo[] = [
@@ -214,6 +215,8 @@ export interface DepsRecordatorio {
     enviarTexto: (integ: WhatsAppIntegration, waId: string, texto: string, botones?: BotonInteractivo[]) => Promise<SendTextResult>;
     registrarTexto: (a: { integ: WhatsAppIntegration; conversationId: string; waId: string; waMessageId: string | null; texto: string; payload: Record<string, unknown> }) => Promise<void>;
     enviarPlantilla: typeof enviarCobroPorPlantilla;
+    /** Estado de ofertas de la escuela (bloqueos de la clase de prueba). Nunca lanza. */
+    estadoOfertas: (schoolId: string) => Promise<EstadoOfertas>;
 }
 
 // La pista `!school_signup_leads_trial_slot_id_fkey` es obligatoria: desde M1 (20261030123543)
@@ -334,6 +337,7 @@ const DEPS: DepsRecordatorio = {
         });
     },
     enviarPlantilla: enviarCobroPorPlantilla,
+    estadoOfertas: (schoolId) => estadoDeOfertas(schoolId),
 };
 
 // ─── Job ─────────────────────────────────────────────────────────────────────
@@ -360,6 +364,9 @@ export async function runRecordatorioCortesia(
 
     const integraciones = new Map<string, WhatsAppIntegration | null>();
     const escuelas = new Map<string, Awaited<ReturnType<DepsRecordatorio['escuela']>>>();
+    // Una lectura de ofertas por escuela y corrida (no N+1: el cron comparte la base).
+    // null = no se pudo leer: falla CERRADO (como el bot en vivo).
+    const ofertas = new Map<string, EstadoOfertas | null>();
 
     for (const r of reservas) {
         try {
@@ -382,6 +389,28 @@ export async function runRecordatorioCortesia(
             // se reserva, así un tick posterior lo manda si el prospecto escribe.
             if (tipo === 'mismo_dia' && (!abierta || !conv)) { resumen.omitidos++; continue; }
 
+            // La escuela bloqueó la clase de prueba ese día (p. ej. vacaciones de Monster
+            // 2026-12-01..2027-01-31): no se le recuerda una clase que no va a pasar. Se
+            // reserva igual para dejar el motivo en school_trial_reminders, sin escribirle.
+            if (!ofertas.has(r.schoolId)) ofertas.set(r.schoolId, await leerOfertas(d, r.schoolId));
+            const estado = ofertas.get(r.schoolId);
+            // Sin el estado de ofertas no se sabe si la fecha está bloqueada: no se manda
+            // nada y NO se reserva (un tick posterior lo intenta con la lectura sana).
+            if (!estado) {
+                resumen.omitidos++;
+                opciones.log?.warn?.({ leadId: r.leadId, schoolId: r.schoolId, motivo: 'ofertas_sin_leer' },
+                    '[recordatorio-cortesia] no se pudo leer el estado de ofertas: no se manda nada');
+                continue;
+            }
+            if (!claseDePruebaPermitidaEn(estado, r.slot.slot_date)) {
+                resumen.omitidos++;
+                opciones.log?.warn?.({ leadId: r.leadId, schoolId: r.schoolId, fecha: r.slot.slot_date, motivo: 'clase_prueba_bloqueada' },
+                    '[recordatorio-cortesia] clase de prueba en fecha bloqueada: no se manda nada');
+                const bloq = await d.reservar(r, tipo, waId);
+                if (bloq.estado === 'ok') await d.cerrar(bloq.id, { estado: 'no_enviado', motivo: 'clase_prueba_bloqueada' }).catch(() => undefined);
+                continue;
+            }
+
             const toma = await d.reservar(r, tipo, waId);
             if (toma.estado === 'sin_tabla') {
                 opciones.log?.warn?.('[recordatorio-cortesia] falta la tabla school_trial_reminders (migración 20261007095845): no se manda nada');
@@ -398,6 +427,16 @@ export async function runRecordatorioCortesia(
         }
     }
     return resumen;
+}
+
+/** Estado de ofertas o null si la lectura falló (lanzó o vino `motivo: 'error'`). */
+async function leerOfertas(d: DepsRecordatorio, schoolId: string): Promise<EstadoOfertas | null> {
+    try {
+        const e = await d.estadoOfertas(schoolId);
+        return e && e.claseDePrueba?.motivo !== 'error' ? e : null;
+    } catch {
+        return null;
+    }
 }
 
 async function enviarUno(
