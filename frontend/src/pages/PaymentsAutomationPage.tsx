@@ -44,6 +44,7 @@ import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
 import { PorClasificarCard } from '@/components/payment/PorClasificarCard';
 import { claveAtleta, juntarPorAtleta, marcarGrupos, ordenarPagosRecibidos } from '@/lib/pagosRecibidosOrden';
 import { ClasesDePruebaDialog } from '@/components/payment/ClasesDePruebaDialog';
+import { ClasePruebaFechaChip } from '@/components/payment/ClasePruebaFechaChip';
 import { OperacionesTab } from '@/components/payment/OperacionesTab';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
 import { canManageCharges, canReadChargeBatches, isMensualidad } from '@/lib/cobrosYPagos';
@@ -2492,6 +2493,7 @@ export default function PaymentsAutomationPage() {
                           )}
                           <div className="flex gap-1 flex-wrap items-start mt-0.5">
                             <TipoDeCobroBadge payment={payment} className="max-w-full" />
+                            {payment.payment_category === 'clase_prueba' && canManageCharges(currentUserRole) && <ClasePruebaFechaChip paymentId={payment.id} schoolId={schoolId} />}
                             {payment.team?.name && (
                               <Badge variant="outline" className={`${CHIP_QUE_SE_COBRA} bg-red-50 text-red-700 border-red-200`}>
                                 <Trophy className="h-2.5 w-2.5 mr-1 shrink-0" /> {payment.team.name}
@@ -2597,6 +2599,7 @@ export default function PaymentsAutomationPage() {
                             <div className="font-medium text-blue-600 mb-1">{payment.concept}</div>
                             <div className="flex flex-col gap-1">
                               <TipoDeCobroBadge payment={payment} />
+                              {payment.payment_category === 'clase_prueba' && canManageCharges(currentUserRole) && <ClasePruebaFechaChip paymentId={payment.id} schoolId={schoolId} />}
                               {payment.team?.name && (
                                 <Badge variant="outline" className="text-[10px] bg-red-50 text-red-700 border-red-200 w-fit">
                                   <Trophy className="h-3 w-3 mr-1" /> {payment.team.name}

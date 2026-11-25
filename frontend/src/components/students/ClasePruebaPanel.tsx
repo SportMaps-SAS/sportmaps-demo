@@ -177,7 +177,7 @@ export function ClasePruebaPanel({ schoolId, onCompletar, onConfigurar }: Props)
   );
 }
 
-function RegistroRapidoDialog({ open, onClose, onGuardar, guardando }: {
+export function RegistroRapidoDialog({ open, onClose, onGuardar, guardando }: {
   open: boolean;
   onClose: () => void;
   guardando: boolean;
