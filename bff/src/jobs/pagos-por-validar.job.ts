@@ -235,7 +235,18 @@ export function comprobantesCompartidos(pagos: readonly Pick<PagoPorValidar, 're
  * de grupos de `bulkGreenSelection` (frontend/src/lib/receiptReview.ts).
  * Devuelve el motivo de exclusión, o null si entra. Pura.
  */
+/**
+ * «Aprobar todos los verdes» PAUSADO por defecto (Paso 0 de
+ * docs/specs/seguridad-veredicto-comprobante-plan.md, 2026-11-25): el veredicto y
+ * el monto leído los puede escribir la familia desde su navegador, así que un
+ * «verde» guardado no prueba nada hasta que lo selle el servidor (Paso 4). Se
+ * reactiva con LOTE_VERDES_ACTIVO=true. Espejo de greenExclusion del frontend.
+ */
+export const LOTE_VERDES_PAUSADO = 'aprobación en lote pausada: revisa cada comprobante desde su fila';
+const loteVerdesActivo = () => process.env.LOTE_VERDES_ACTIVO === 'true';
+
 export function exclusionVerde(p: PagoPorValidar, ctx: ContextoVerdes): string | null {
+    if (!loteVerdesActivo()) return LOTE_VERDES_PAUSADO;
     if (p.receipt_verdict !== 'verde') return 'no está en verde';
     if (!p.receipt_url) return 'sin comprobante';
     if (ctx.compartidos.has(p.receipt_url)) return 'el comprobante cubre varios cobros';

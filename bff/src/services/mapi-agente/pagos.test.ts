@@ -122,6 +122,7 @@ function responderBase(c: Consulta): any {
 }
 
 beforeEach(() => {
+    process.env.LOTE_VERDES_ACTIVO = 'true'; // reglas del lote; la pausa por defecto se prueba en pagos-por-validar.job.test.ts
     consultas().length = 0;
     pagos = [P1, P2, P3, P4];
     glosas = [];

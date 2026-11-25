@@ -170,7 +170,18 @@ export function compareReceipt(
  * sin rechazo previo de pasarela y sin ser un mes que ya estaba pagado.
  * Devuelve el motivo de exclusión, o null si entra.
  */
+/**
+ * «Aprobar todos los verdes» PAUSADO por defecto (Paso 0 de
+ * docs/specs/seguridad-veredicto-comprobante-plan.md, 2026-11-25): el veredicto y
+ * el monto leído los puede escribir la familia, así que un «verde» guardado no
+ * prueba nada hasta que lo selle el servidor. Se reactiva con
+ * VITE_LOTE_VERDES_ACTIVO=true. Espejo de exclusionVerde del BFF.
+ */
+export const LOTE_VERDES_PAUSADO = 'aprobación en lote pausada: revisa cada comprobante desde su fila';
+const loteVerdesActivo = () => import.meta.env.VITE_LOTE_VERDES_ACTIVO === 'true';
+
 export function greenExclusion(p: QueueItem): string | null {
+  if (!loteVerdesActivo()) return LOTE_VERDES_PAUSADO;
   if (p.status !== 'awaiting_approval') return 'no está por validar';
   if (p.receipt_verdict !== 'verde') return 'no está en verde';
   if (!p.receipt_url) return 'sin comprobante';

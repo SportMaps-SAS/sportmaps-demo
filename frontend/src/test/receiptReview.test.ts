@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   sortReviewQueue, waitingLabel, greenExclusion, bulkGreenSelection, rejectReasonError, rejectErrorMessage,
   REJECT_REASONS, type QueueItem, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish, compareReceipt,
+  LOTE_VERDES_PAUSADO,
 } from '@/lib/receiptReview';
+
+// Las reglas del lote se prueban con el lote ACTIVO; la pausa por defecto (Paso 0) tiene su caso.
+beforeEach(() => { vi.stubEnv('VITE_LOTE_VERDES_ACTIVO', 'true'); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 const base = (o: Partial<QueueItem> & { id: string }): QueueItem => ({
   status: 'awaiting_approval', amount: 180000, amount_paid: null, receipt_verdict: 'verde', ocr_amount: 180000,
@@ -40,6 +45,11 @@ describe('espera', () => {
 });
 
 describe('aprobar todos los verdes', () => {
+  // Las reglas del lote se prueban ACTIVO; la pausa por defecto (Paso 0) tiene su caso.
+  it('sin VITE_LOTE_VERDES_ACTIVO el lote queda pausado', () => {
+    vi.stubEnv('VITE_LOTE_VERDES_ACTIVO', '');
+    expect(greenExclusion({ status: 'awaiting_approval', receipt_verdict: 'verde' } as any)).toBe(LOTE_VERDES_PAUSADO);
+  });
   it('entra solo lo que se aprobaría sin dudar', () => {
     expect(greenExclusion(base({ id: 'ok' }))).toBeNull();
     expect(greenExclusion(base({ id: 'x', receipt_verdict: 'amarillo' }))).toBe('no está en verde');

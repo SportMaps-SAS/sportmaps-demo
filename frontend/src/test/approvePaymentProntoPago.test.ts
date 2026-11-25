@@ -46,7 +46,7 @@ const PRONTO = {
 const OPTS = { userId: 'admin-1', schoolId: 'esc-1', schoolName: 'Monster´s Volley Club' };
 const digitos = (s: unknown) => String(s).replace(/[^\d]/g, '');
 
-beforeEach(() => { st.updates = []; st.notifs = []; });
+beforeEach(() => { st.updates = []; st.notifs = []; vi.stubEnv('VITE_LOTE_VERDES_ACTIVO', 'true'); });
 
 describe('approvePayment con pronto pago', () => {
   it('pago completo: amount_paid = $137.750 (no $145.000), estado paid y aviso «confirmó tu pago de $137.750»', async () => {
