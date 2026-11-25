@@ -654,7 +654,7 @@ async function armarConvocatoria(a: Alcance, args: ArgsConvocar): Promise<{ ok: 
 export const convocarATorneo: HerramientaAccion<ArgsConvocar> = {
     tipo: 'accion',
     nombre: 'convocar_a_torneo',
-    descripcion: 'PREPARA agregar deportistas de la escuela a la nómina de un equipo de la escuela en un torneo que organiza (el «Traer de la escuela» del torneo). No cobra ni avisa a la familia. La persona confirma en la tarjeta. Solo administración.',
+    descripcion: 'PREPARA CONVOCAR: agrega deportistas a la NÓMINA de un equipo de la escuela ya creado en un torneo que organiza (el «Traer de la escuela» del torneo). No inscribe en categoría, no cobra ni avisa a la familia. Úsala cuando piden «convocar» o «armar la nómina»; para inscribir con cobro es inscribir_a_torneo. La persona confirma en la tarjeta. Solo administración.',
     esquema: {
         type: 'object',
         properties: {
@@ -856,7 +856,7 @@ function motivoInscripcion(r: { status: number; body: any }): string {
 export const inscribirATorneo: HerramientaAccion<ArgsInscribir> = {
     tipo: 'accion',
     nombre: 'inscribir_a_torneo',
-    descripcion: 'PREPARA inscribir deportistas (o un equipo de la escuela completo) en una categoría de un torneo INTERNO que organiza la escuela. La inscripción queda aprobada, avisa a la familia y, si el torneo cobra, crea un cobro a cada familia: la vista previa dice cuánto. La persona confirma en la tarjeta. Solo administración.',
+    descripcion: 'PREPARA INSCRIBIR deportistas (o un equipo de la escuela completo) en una categoría de un torneo INTERNO que organiza la escuela. La inscripción queda aprobada, avisa a la familia y, si el torneo cobra, crea un cobro a cada familia: la vista previa dice cuánto. Para «convocar» o armar la nómina usa convocar_a_torneo. Los torneos EXTERNOS (de otro organizador) no se inscriben desde aquí: se hacen por delegaciones en la pantalla del torneo. La persona confirma en la tarjeta. Solo administración.',
     esquema: {
         type: 'object',
         properties: {

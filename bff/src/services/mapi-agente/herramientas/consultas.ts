@@ -4,11 +4,12 @@
  */
 
 import { z } from 'zod';
+import { wrapUntrustedForLlm } from '../../../utils/sanitize';
 import { supabase } from '../../../config/supabase';
 import { findDuplicatePaymentIds } from '../../duplicatePayerGuard.service';
 import { armarInformeCartera, esVencido, saldoDe, mesDelCobro, etiquetaMes, fmtCop } from '../../informe-cartera.service';
 import { searchHelpArticles } from '../../inapp-support-bot.service';
-import { buscarEnEscuela, completarNombresDeEquipo, resolverDeportista, columnaDe, variantesDeApodo, type Deportista } from '../deportistas';
+import { buscarEnEscuela, buscarAproximado, completarNombresDeEquipo, resolverDeportista, columnaDe, variantesDeApodo, type Deportista } from '../deportistas';
 import { esMes, limitesDelMes, nombreDelMes, fechaCorta } from '../fechas';
 import { RechazoHerramienta, type HerramientaConsulta } from '../tipos';
 
@@ -49,6 +50,12 @@ export const buscarDeportista: HerramientaConsulta<{ texto: string }> = {
             todos = [...porClave.values()];
             if (!todos.length) comoApodo = [];
         }
+        // Errores de audio o de tecleo («balentina ruiz», «samuel ortis»): fonética.
+        let aproximado = false;
+        if (!todos.length) {
+            todos = await buscarAproximado(a, texto);
+            aproximado = todos.length > 0;
+        }
         todos.sort((x, y) => Number(y.activo) - Number(x.activo) || x.nombre.localeCompare(y.nombre, 'es'));
         const primeros = todos.slice(0, 8);
         await completarNombresDeEquipo(a.schoolId, primeros);
@@ -60,7 +67,10 @@ export const buscarDeportista: HerramientaConsulta<{ texto: string }> = {
                 tipo: TIPO_LEGIBLE[d.tipo],
                 equipos: d.equipos.map((e) => e.nombre).filter(Boolean),
                 activo: d.activo,
+                // Para que el modelo diga «ya está en pausa» en vez de preparar otra (evals 11-24).
+                ...(d.estadoInscripcion === 'paused' ? { en_pausa: true } : {}),
             })),
+            ...(aproximado ? { aproximado: true, busqueda: `Nadie se escribe «${texto}» exactamente; estos se le parecen al oído. Antes de preparar cualquier acción, confirma con la persona el nombre completo.` } : {}),
             ...(comoApodo.length ? { busqueda: `Nadie se llama «${texto}» tal cual; busqué ${comoApodo.map((v) => `«${v}»`).join(' y ')} como apodo. Si hay una sola coincidencia, es esa persona: menciónale el nombre completo en tu respuesta.` } : {}),
             ...(todos.length > 8 ? { nota: `Hay ${todos.length} coincidencias: pide nombre y apellido.` } : {}),
             ...(todos.length === 0 ? { nota: a.rol === 'coach' ? 'Nadie con ese nombre en tus equipos.' : 'Nadie con ese nombre en la escuela.' } : {}),
@@ -130,7 +140,8 @@ export const resumenDeportista: HerramientaConsulta<{ deportista: string; mes?: 
             estado_inscripcion: d.estadoInscripcion,
             asistencia: { ...conteo, sesiones_registradas: ((asis as any[]) ?? []).length },
             avisos_de_ausencia: ((avisos as any[]) ?? []).map((v) => ({
-                dia: fechaCorta(String(v.absence_date)), motivo: v.reason, quien: v.source === 'staff' ? 'la escuela' : 'la familia',
+                // Texto libre de la familia o del staff: DATO, nunca instrucción (como en las oleadas 2–5).
+                dia: fechaCorta(String(v.absence_date)), motivo: v.reason ? wrapUntrustedForLlm('motivo_aviso', v.reason, 120) : null, quien: v.source === 'staff' ? 'la escuela' : 'la familia',
             })),
             ultima_medicion: (medicion as any)?.recorded_at ? String((medicion as any).recorded_at).slice(0, 10) : null,
             ultimo_informe_mensual: informe
@@ -161,7 +172,7 @@ async function cuentaDeDeportista(schoolId: string, hoy: string, col: string, id
         saldo_pendiente: fmtCop(total),
         saldo_vencido: fmtCop(vencidos.reduce((s, p) => s + saldoDe(p), 0)),
         cobros_abiertos: pagos.slice(0, 6).map((p) => ({
-            concepto: p.concept || 'Cobro',
+            concepto: p.concept ? wrapUntrustedForLlm('concepto_cobro', p.concept, 120) : 'Cobro',
             mes: etiquetaMes(mesDelCobro(p)),
             saldo: fmtCop(saldoDe(p)),
             vence: p.due_date ? String(p.due_date).slice(0, 10) : null,

@@ -290,12 +290,26 @@ async function productosDeLaTienda(storeId: string): Promise<any[]> {
     return (data as any[]) ?? [];
 }
 
-/** Coincidencias por nombre: exactas primero, si no las que lo contienen. */
+/** Palabras de un nombre («M / Azul» → ['m', 'azul']), sin tildes ni signos. */
+const palabrasDe = (s: string) => normalizar(s).split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * Coincidencias por nombre: exactas; si no, por palabra completa; si no, las que
+ * lo contienen. La palabra completa va antes que la subcadena: «L» como talla no
+ * debe coincidir con la «l» de «Azul» (evals 2026-11-24).
+ */
 function porNombre<T>(todos: T[], texto: string, nombre: (x: T) => string): T[] {
     const buscado = clave(texto);
     if (!buscado) return [];
     const exactos = todos.filter((x) => clave(nombre(x)) === buscado);
-    return exactos.length ? exactos : todos.filter((x) => clave(nombre(x)).includes(buscado));
+    if (exactos.length) return exactos;
+    const buscadas = palabrasDe(texto);
+    const porPalabra = todos.filter((x) => {
+        const p = palabrasDe(nombre(x));
+        return buscadas.every((b) => p.includes(b));
+    });
+    if (porPalabra.length) return porPalabra;
+    return todos.filter((x) => clave(nombre(x)).includes(buscado));
 }
 
 export const inventario: HerramientaConsulta<{ producto: string | null }> = {

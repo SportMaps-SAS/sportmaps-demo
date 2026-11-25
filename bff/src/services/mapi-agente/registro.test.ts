@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../config/supabase', () => ({ supabase: {}, supabaseUrl: 'http://supabase.local', supabaseServiceKey: 'clave-de-prueba' }));
 
-import { CATALOGO, definicionesApi, normalizarEsquema } from './registro';
+import { CATALOGO, definicionesApi, normalizarEsquema, MAX_STRICT } from './registro';
 
 function recorrer(nodo: any, visitar: (n: any, ruta: string) => void, ruta = '$'): void {
     if (!nodo || typeof nodo !== 'object') return;
@@ -29,6 +29,26 @@ describe('CATALOGO', () => {
     it('nombres únicos', () => {
         const nombres = CATALOGO.map((h) => h.nombre);
         expect(new Set(nombres).size).toBe(nombres.length);
+    });
+
+    it('por defecto ninguna herramienta va strict (la API rechazaba la gramática del catálogo)', () => {
+        delete process.env.MAPI_AGENT_STRICT;
+        expect(definicionesApi(CATALOGO).filter((d) => d.strict)).toEqual([]);
+    });
+
+    it(`con MAPI_AGENT_STRICT=true: solo las acciones, y como máximo ${MAX_STRICT}`, () => {
+        process.env.MAPI_AGENT_STRICT = 'true';
+        try {
+            const defs = definicionesApi(CATALOGO);
+            for (const d of defs) {
+                const h = CATALOGO.find((x) => x.nombre === d.name)!;
+                expect(Boolean(d.strict), d.name).toBe(h.tipo === 'accion');
+            }
+            // La API responde 400 «Too many strict tools» por encima de 20.
+            expect(defs.filter((d) => d.strict).length).toBeLessThanOrEqual(MAX_STRICT);
+        } finally {
+            delete process.env.MAPI_AGENT_STRICT;
+        }
     });
 
     it('ningún esquema enviado a la API trae enum con type en arreglo', () => {

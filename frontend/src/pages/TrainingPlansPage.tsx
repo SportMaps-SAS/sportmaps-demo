@@ -19,6 +19,7 @@ import { FootballDashboardModal } from '@/components/school/FootballDashboardMod
 import { TacticalBoard } from '@/components/school/TacticalBoard';
 import { PerformanceEntryModal } from '@/components/school/PerformanceEntryModal';
 import { AthleteEvolutionModal } from '@/components/school/AthleteEvolutionModal';
+import { useEntidadParaMapi } from '@/lib/mapiPantalla';
 import { PlayerCard } from '@/components/school/PlayerCard';
 import { useTeamPerformanceRoster } from '@/hooks/usePerformanceData';
 import type { RosterSubject } from '@/lib/school/performanceQueries';
@@ -66,6 +67,7 @@ export default function TrainingPlansPage() {
   const [footballDialogOpen, setFootballDialogOpen] = useState(false);
   const [individualStudent, setIndividualStudent] = useState<any>(null);
   const [evolutionStudent, setEvolutionStudent] = useState<any>(null);
+  useEntidadParaMapi(evolutionStudent ? { tipo: 'deportista', id: `${evolutionStudent.athlete_type}:${evolutionStudent.id}` } : null);
   const [cardSubject, setCardSubject] = useState<RosterSubject | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [editingSession, setEditingSession] = useState<any>(null);

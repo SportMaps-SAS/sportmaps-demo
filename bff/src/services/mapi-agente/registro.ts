@@ -96,12 +96,26 @@ export function normalizarEsquema<T>(nodo: T): T {
     return o as T;
 }
 
+/**
+ * `strict` va APAGADO por defecto (evals 2026-11-24). La API tiene dos topes que
+ * count_tokens NO valida y que tumbaban cada turno del admin a modo soporte:
+ *   · máx. 20 herramientas strict por request («Too many strict tools (39)»);
+ *   · tamaño de la gramática compilada: con 19 acciones strict igual respondió
+ *     400 «The compiled grammar is too large». No hay número publicado, así que
+ *     cualquier herramienta nueva podía romperlo de nuevo.
+ * Sin strict no se pierde seguridad: toda entrada pasa por `validar` (zod) en el
+ * servidor antes de preparar o ejecutar, y un error vuelve al modelo como
+ * tool_result con is_error. MAPI_AGENT_STRICT=true lo prende solo en las ACCIONES,
+ * para probarlo (registro.test.ts vigila el tope de 20).
+ */
+export const MAX_STRICT = 20;
+
 export function definicionesApi(hs: Herramienta[]): any[] {
-    const strict = process.env.MAPI_AGENT_STRICT !== 'false';
+    const strict = process.env.MAPI_AGENT_STRICT === 'true';
     return hs.map((h) => ({
         name: h.nombre,
         description: h.descripcion,
         input_schema: normalizarEsquema(h.esquema),
-        ...(strict ? { strict: true } : {}),
+        ...(strict && h.tipo === 'accion' ? { strict: true } : {}),
     }));
 }

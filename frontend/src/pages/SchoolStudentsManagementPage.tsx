@@ -59,6 +59,7 @@ import { SoportesInsignia, SoportesFiltroToggle } from '@/components/soportes/So
 import { SoportesPendientesInforme } from '@/components/soportes/SoportesPendientesInforme';
 import { BandejaSolicitudesPlan } from '@/components/solicitudes-de-plan';
 import { FichaDeportistaExtras } from '@/components/students/FichaDeportistaExtras';
+import { useEntidadParaMapi } from '@/lib/mapiPantalla';
 import { llaveSujeto, tipoSujetoDeAtleta } from '@/lib/api/soportes';
 import { CobrosYPagosModal } from '@/components/payment/CobrosYPagosModal';
 import { isCobrosYPagosEnabled } from '@/lib/cobrosYPagosFlag';
@@ -1035,6 +1036,7 @@ export default function SchoolStudentsManagementPage() {
     if (student.user_id) return 'adult';
     return 'unregistered';
   };
+  useEntidadParaMapi(viewingStudent ? { tipo: 'deportista', id: `${getAthleteType(viewingStudent)}:${viewingStudent.id}` } : null);
 
   const handleEditStudent = async (student: any) => {
     const athleteType = getAthleteType(student);
