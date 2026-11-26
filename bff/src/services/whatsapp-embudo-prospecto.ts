@@ -942,7 +942,7 @@ export function recordatorioDePasoEmbudo(
         return { texto: `${cabeza} Elige tu horario en la lista de arriba 👆 o escríbeme su número.`, clave };
     }
     if (estado.paso === 'elegir_oferta') {
-        return { texto: `${cabeza} Escríbeme a cuál fecha quieres ir y se lo paso a la escuela.`, clave };
+        return { texto: `${cabeza} Respóndeme *sí* y le paso tu inscripción a la escuela (es a todas las fechas de la convocatoria).`, clave };
     }
     return null;
 }
@@ -1459,9 +1459,9 @@ async function ofrecerSinClaseDePrueba(
             : 'Ya le pasé tus datos a la escuela y te escriben por aquí cuando haya fechas 🙌';
         return aPersona(ctx, datos, 'sin_horarios', 'Sin clase de prueba hoy ni ofertas vigentes.', `${cabeza}\n\n${cierre}`);
     }
-    const pregunta = nombre
-        ? `¿A cuál fecha quieres inscribir a *${nombre}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
-        : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
+    // (Monster 2026-11-26) La inscripción a una convocatoria es a TODAS sus fechas, en orden: nunca se elige una.
+    const pregunta = nombre ? `¿Inscribo a *${nombre}* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌`
+        : '¿Te inscribo a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌';
     const estado: EstadoEmbudo = {
         paso: 'elegir_oferta',
         datos: elegidas ? { ...datos, ofertasMostradas: elegidas.map((x) => ({ titulo: x.titulo, tipo: x.tipo })) } : datos,
@@ -1504,7 +1504,7 @@ async function pasoElegirOferta(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: str
     if (!n || texto.includes('?') || esOtroTema(texto) || n.split(' ').length > 40) return false;
     if (esCortesiaSimple(texto)) {
         if (d.recordado === 'elegir_oferta') return true;
-        await ctx.enviar('¡Con gusto! 🙌 Cuando quieras, escríbeme a cuál fecha quieres ir y se lo paso a la escuela.',
+        await ctx.enviar('¡Con gusto! 🙌 Cuando quieras, respóndeme *sí* y le paso tu inscripción a la escuela (es a todas las fechas de la convocatoria).',
             PASO_EMBUDO.RECORDATORIO, { paso: 'elegir_oferta', datos: { ...d, recordado: 'elegir_oferta' } });
         return true;
     }

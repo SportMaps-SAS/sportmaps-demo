@@ -634,11 +634,10 @@ describe('convocatoria guiada con botones para el desconocido (Monster 2026-11-2
         r = await turno('Quiero inscribirme', 'of_inscribirme');
         expect(r.at(-1).proposed_text).toContain('*nombre completo* del deportista');
         r = await turno('Sofía Gómez Uribe');
-        expect(r.at(-1).proposed_text).toContain('¿A cuál fecha vas a ir con *Sofía*?');
-        expect(botonesDe(r.at(-1))).toEqual(['of_f_s1']);
-
-        r = await turno('Vie 11 ene · 4:00 p. m.', 'of_f_s1');
+        // (2026-11-26) Sin elegir fecha: la inscripción es a TODAS las fechas de la convocatoria, en orden.
         const fin = r.at(-1);
+        expect(fin.proposed_text).toContain('*Fechas:*');
+        expect(fin.proposed_text).not.toContain('¿A cuál fecha');
         expect(fin.proposed_text).toContain('¡Listo! ✅');
         expect(fin.proposed_text).toContain('*Sofía Gómez Uribe* a *Convocatorias Sede Suba*');
         expect(fin.tool_context).toMatchObject({ step: 'desconocido_tema_escolar', intencion: 'puerta_info',
@@ -661,8 +660,7 @@ describe('convocatoria guiada con botones para el desconocido (Monster 2026-11-2
         expect(todo).not.toMatch(/sede Suba|sede norte/);
         await turno('Quiero inscribirme', 'of_inscribirme');
         r = await turno('Juan Pérez');
-        expect(botonesDe(r.at(-1))).toEqual(['of_f_m2']);
-        r = await turno('', 'of_f_m2');
+        expect(r.at(-1).proposed_text).toContain('*Fechas:*');
         expect(r.at(-1).proposed_text).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
     });
 

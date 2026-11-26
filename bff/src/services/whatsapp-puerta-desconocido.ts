@@ -636,9 +636,9 @@ async function mostrarOfertas(ctx: CtxPuerta, datos: DatosPuerta, ofertas: Ofert
         return iniciarConvocatoria(ctx, { ...(anio != null ? { anio } : {}), ...(datos.deportista ? { nombre: datos.deportista } : {}) },
             { encabezado, ofertas, datos });
     }
-    const pregunta = datos.deportista
-        ? `¿A cuál fecha quieres inscribir a *${primerNombre(datos.deportista)}*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`
-        : '¿A cuál fecha quieres ir? Escríbeme el día y la hora y se lo paso a la escuela 🙌';
+    // (Monster 2026-11-26) La inscripción a una convocatoria es a TODAS sus fechas, en orden: nunca se elige una.
+    const pregunta = datos.deportista ? `¿Inscribo a *${primerNombre(datos.deportista)}* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌`
+        : '¿Te inscribo a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌';
     await ctx.enviar([registrado, ...previos, texto, pregunta].filter(Boolean).join('\n\n'), 'puerta_info_ofertas',
         { paso: 'info_oferta', datos: { ...datos, quiere: 'ofertas', intentos: 0 } });
     return true;
@@ -995,16 +995,13 @@ function ofertaElegida(ofertas: OfertasDePuerta, d: DatosPuerta): OfertaBot | nu
     return mostradas.find((o) => o.id === d.ofertaId) ?? mostradas[0] ?? null;
 }
 
-/** «¿A cuál fecha vas a ir?» como lista (`opcionesDeFechas`). Sin fechas, se confirma sin fecha. */
-async function pedirFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, intentos = 0): Promise<boolean> {
+/**
+ * (Monster 2026-11-26) Ya no se pregunta la fecha: la inscripción a una convocatoria es a TODAS sus fechas, en orden.
+ * Se confirma con la lista completa. (El paso 'fecha' queda solo para conversaciones que ya lo tenían abierto.)
+ */
+async function pedirFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, _intentos = 0): Promise<boolean> {
     const oferta = ofertaElegida(ofertas, d);
-    if (!oferta) return confirmarInscripcion(ctx, ofertas, d, null, null);
-    const filas = botonesDe(opcionesDeFechas(oferta, ofertas.hoy), 'Fechas');
-    if (!filas.length) return confirmarInscripcion(ctx, ofertas, d, oferta, null);
-    const quien = d.oferta?.nombre ?? d.deportista;
-    await preguntarConvocatoria(ctx,
-        `¿A cuál fecha vas a ir${quien ? ` con *${primerNombre(quien)}*` : ''}? 👇`, { ...d, ofertaId: oferta.id }, 'fecha', filas, { intentos });
-    return true;
+    return confirmarInscripcion(ctx, ofertas, d, oferta, null, null, { todas: true });
 }
 
 async function pasoFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, texto: string, botonId: string | null): Promise<boolean> {
@@ -1033,6 +1030,13 @@ async function pasoFecha(ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuert
     return confirmarInscripcion(ctx, ofertas, d, oferta, sesion);
 }
 
+/** Las sesiones de la oferta que aún no pasaron, por fecha y hora. Pura. */
+function sesionesEnOrden(oferta: OfertaBot, hoy: string): OfertaBot['sesiones'] {
+    return [...oferta.sesiones]
+        .filter((s) => !hoy || s.fecha >= hoy)
+        .sort((a, b) => (a.fecha + (a.horaInicio ?? '')).localeCompare(b.fecha + (b.horaInicio ?? '')));
+}
+
 /** «sábado 12 de diciembre, 7:00 a 9:00 a. m. · Locos por Pádel». */
 function fechaDeSesion(s: OfertaBot['sesiones'][number], hoy: string): string {
     return `${fechaLegible(s.fecha, hoy)}, ${rangoLegible(s.horaInicio, s.horaFin)}${s.lugar ? ` · ${s.lugar}` : ''}`;
@@ -1050,9 +1054,13 @@ function fechaDeSesion(s: OfertaBot['sesiones'][number], hoy: string): string {
 async function confirmarInscripcion(
     ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, oferta: OfertaBot | null,
     sesion: OfertaBot['sesiones'][number] | null, fechaEscrita: string | null = null,
+    o: { todas?: boolean } = {},
 ): Promise<boolean> {
     const nombre = d.oferta?.nombre ?? d.deportista ?? null;
-    const cuando = sesion ? fechaDeSesion(sesion, ofertas.hoy) : fechaEscrita ? `«${fechaEscrita}»` : null;
+    // Todas las fechas de la convocatoria, en orden (las que aún no pasaron).
+    const fechas = o.todas && oferta ? sesionesEnOrden(oferta, ofertas.hoy).map((s) => `• ${fechaDeSesion(s, ofertas.hoy)}`) : [];
+    const cuando = sesion ? fechaDeSesion(sesion, ofertas.hoy) : fechaEscrita ? `«${fechaEscrita}»`
+        : o.todas && oferta ? 'todas las fechas' : null;
     const valor = oferta?.requierePago && oferta.valor != null ? `$${oferta.valor.toLocaleString('es-CO')}` : null;
     const ahora = ctx.ahora?.() ?? new Date();
     const promo = oferta?.requierePago && oferta.valor != null ? precioConPromo(oferta.valor, ofertas, ahora) : null;
@@ -1063,6 +1071,7 @@ async function confirmarInscripcion(
     const texto = [
         `¡Listo! ✅ Le pasé a la escuela tu inscripción${nombre ? ` de *${nombre}*` : ''}`
             + `${oferta ? ` a *${oferta.titulo}*` : ''}${cuando ? `: ${cuando}` : ''}.`,
+        fechas.length ? `*Fechas:*\n${fechas.join('\n')}` : '',
         lineaValor,
         'La escuela te confirma el cupo por aquí 🙌',
     ].filter(Boolean).join('\n\n');
@@ -1077,7 +1086,8 @@ async function confirmarInscripcion(
     }
     await ctx.avisarEscuela('otro', [
         `Inscripción (${(etiquetaDeOfertas(ofertas.ofertas)?.boton ?? 'Oferta').toLocaleLowerCase('es-CO')}):`
-            + ` ${oferta?.titulo ?? 'sin oferta elegida'}${cuando ? ` — ${cuando}` : ''}.`,
+            + ` ${oferta?.titulo ?? 'sin oferta elegida'}${cuando ? ` — ${cuando}` : ''}.`
+            + (fechas.length ? ` Fechas: ${fechas.map((f) => f.replace(/^• /, '')).join('; ')}.` : ''),
         nombre ? `Deportista: ${nombre}.` : 'Sin nombre del deportista.',
         resumenDeConvocatoria(d),
         conDescuento != null
