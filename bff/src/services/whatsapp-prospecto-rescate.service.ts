@@ -138,7 +138,14 @@ const DEPS: DepsRescate = {
     },
     async consentimiento(integrationId, waId) {
         const { consentimientoDe } = await import('./whatsapp-plantilla-manual.service');
-        return (await consentimientoDe(integrationId, waId)) === 'ok';
+        if ((await consentimientoDe(integrationId, waId)) !== 'ok') return false;
+        // F3-03: la plantilla del rescate es de MARKETING. `wa_can_send_template` no mira la baja de
+        // promociones («No recibir más» de una campaña): se exige además `wa_puede_recibir_promos`.
+        // Ante la duda (error de consulta) NO se envía.
+        const { data: puede, error } = await supabase.rpc('wa_puede_recibir_promos', {
+            p_integration_id: integrationId, p_contact_wa_id: waId,
+        });
+        return !error && puede === true;
     },
     async reclamar(lead, iso) {
         const { data, error } = await supabase.from('school_signup_leads')

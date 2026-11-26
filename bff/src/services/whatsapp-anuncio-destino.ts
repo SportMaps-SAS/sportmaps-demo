@@ -43,7 +43,7 @@ import {
 } from './whatsapp-venta-servicios.service';
 import type { CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import {
-    abonoMinimo, hoyBogota, opcionesDelItem, precioVigente, tramosPorFecha, type ItemDeServicio,
+    abonoMinimo, hoyBogota, opcionesDelItem, opcionesVigentes, precioVigente, tramosPorFecha, type ItemDeServicio,
 } from './wa-cobro-desde-comprobante.service';
 // Ciclo a propósito (venta-servicio usa el precio de acá): solo se usan dentro de funciones.
 import { MARCA_VENTA } from './whatsapp-venta-contexto';
@@ -697,7 +697,8 @@ export function precioAntesDelTramo(item: ItemDeServicio, o: { afiliado: boolean
 
 /** El precio de hoy, el tramo que sigue, el abono y las opciones. `hoy` = 'YYYY-MM-DD' (Bogotá). Pura. */
 export function precioDelServicio(item: ItemDeServicio, o: { afiliado: boolean; hoy: string }): PrecioDeServicio {
-    const opciones = opcionesDelItem(item)
+    // F1-01/F10-03: solo las opciones que hoy todavía caben (la 4.ª semana no se ofrece el 3-dic).
+    const opciones = opcionesVigentes(item, o.hoy)
         .map((op) => {
             const precio = precioVigente(item, { afiliado: o.afiliado, hoy: o.hoy, opcion: op });
             // (2026-11-18, Monster: vacacional) A quien no es afiliado también se le dice el valor de afiliado de la opción
