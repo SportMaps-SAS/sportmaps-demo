@@ -251,6 +251,22 @@ El caso real: llegar a la entrada del club sin datos. `AthleteCardV2` no usa Rea
 
 **Límite honesto:** un carnet **anulado** después de la copia se sigue viendo sin señal (el lector del club valida contra el servidor, así que no abre puertas por sí solo). «Descargar imagen» y «Compartir» necesitan red. La foto y el logo son URLs: sin señal pueden no cargar (el QR y el nombre sí).
 
+#### Auditoría de seguridad de las fases 1–5 (2026-11-26)
+
+Revisión sobre el código, no sobre producción. Lo que se cerró y lo que queda abierto, sin maquillar.
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| S1 | **Salida forzada no borraba lo guardado.** Solo `signOut()` limpiaba; un `SIGNED_OUT` por token revocado, cierre desde otra pestaña/dispositivo o cambio de clave dejaba lecturas, carnet y perfil (datos de menores) en el teléfono. | **Cerrado:** `AuthContext` llama `limpiarDatosOffline()` en todo `SIGNED_OUT` real (idempotente; nunca en el «sin red» del refresco). |
+| S2 | **La bandeja no vencía.** No se borra al salir (es trabajo sin enviar), pero una acción rechazada o atascada se quedaba para siempre con datos de menores. | **Cerrado:** `MAX_EDAD_ACCION_MS` = 30 días, se borra con o sin error. Prueba nueva. |
+| S3 | Caché cruzada entre usuarios (`supabase-api` por URL sin token). | **Ya cerrado antes:** el SW ya no intercepta `supabase.co` (`sw.js:96`); las lecturas van por la copia por usuario. |
+| S4 | Reenvío de la bandeja como vector de escalada (alguien edita el IndexedDB y manda otra cosa). | **Sin riesgo nuevo:** el servidor decide. `submit_post_training_coach_rating` y `submit_post_training_self_eval` validan adentro con `auth.uid()` (coach del equipo / acudiente del hijo / ficha vinculada / la propia cuenta), sesión cerrada, asistencia y plazo. La acción lleva su `userId` y otra cuenta no la envía. |
+| S5 | Copias separadas por usuario. | Verificado con pruebas: otra cuenta no lee `rq:`, copias de arranque ni el carnet; el carnet de un hijo no se guarda. |
+| S6 | **IndexedDB/localStorage sin cifrar.** Quien tenga el teléfono desbloqueado, o un XSS, lee lo guardado. | **Abierto, inherente.** Se mitiga con lista blanca estricta, vencimientos (36 h lecturas, 14 días copias, 30 días bandeja) y borrado al salir. Cifrar con una clave que viva en el mismo navegador no aporta. |
+| S7 | **Sin `Content-Security-Policy` de scripts** (`vercel.json` solo trae `frame-ancestors`). Un XSS leería lo guardado. | **Abierto, recomendado aparte:** una CSP mal puesta rompe la app (Supabase, Wompi, Mercado Pago, Bold, mapas, Meta). Va como tarea propia, primero en modo `Report-Only`. |
+| S8 | Permisos revocados mientras no hay señal: la pantalla sigue mostrando lo guardado hasta 36 h / 14 días. | **Aceptado:** es solo la copia visible; cualquier acción la decide el servidor al sincronizar. |
+| S9 | `qr_token` del carnet en localStorage. | **Aceptado:** es el mismo dato que la pantalla muestra y que cualquier script de la página ya puede pedir con la sesión. Vence a los 14 días y se borra al salir. |
+
 **Calendario del deportista:** sin revisar. `AthleteTrainingV2` ya reutiliza `athlete-v2-teams` (Fase 4); `useAthleteTrainingToday` (`TrainingPage`) queda pendiente de revisar qué datos trae.
 
 ---
