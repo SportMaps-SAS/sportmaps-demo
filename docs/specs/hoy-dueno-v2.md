@@ -3,9 +3,11 @@
 **Estado:** propuesta para aprobar (2026-11-26). Sin código, sin migraciones, sin consultas a la base.
 **Track:** V2, ola 1 («Dueño · Hoy», `V2-1…V2-4`). Define: `docs/specs/modulos-v2-definicion.md` §2.1.
 **Criterios:** `DESIGN.md` §12 (8 reglas de la V2) · `CLAUDE.md` (base de datos, Disk IO).
-**Fuente:** lectura del código del 2026-11-26 (rutas y líneas en §3). El lienzo de la V2 no se pudo
-abrir desde la sesión que escribió esto: los textos de pantalla de §4 se ajustan contra el lienzo
-antes de F1.
+**Fuentes:** lectura del código del 2026-11-26 (rutas y líneas en §3) y el PDF «SportMaps — Rediseño
+global» en su versión del **13-nov-2026** («Dueño y administrador: cinco pestañas y Mapi»), con las
+pantallas Deportistas y Cobros (celular y computador), Más y Mapi dibujadas. **Hoy · celular**, **Hoy ·
+computador** y **Aprobar con deshacer** figuran en su índice pero no vienen dibujadas en el PDF: su
+composición se ajusta contra el lienzo cuando esté; los textos salen del PDF.
 
 ---
 
@@ -63,32 +65,57 @@ antes de F1.
 ## 4. La pantalla
 
 Celular primero (390 px); en escritorio, la misma pantalla con más aire. Un solo árbol para owner y
-school_admin; school_admin con sede ve solo su sede (`p_branch_id`).
+school_admin; school_admin con sede ve solo su sede (`p_branch_id`). Vocabulario de la regla 06:
+deportista, acudiente, profe, mensualidad, cobro, solicitud de ingreso. Mapi habla en primera persona
+**solo cuando hizo algo**: en Hoy la pantalla habla normal.
 
-1. **Frase y un botón** (regla 02): «Hoy hay 3 cosas para ti» · botón de la más urgente.
-   Si no hay nada: «Todo al día» — **solo** si los datos cargaron (si la consulta falla, se dice que
-   falló; patrón de `ParentHomeV2`).
-2. **Comprobantes** (regla 03, lo normal ya marcado): «9 coinciden con el monto y la cuenta:
-   **Aprobar los 9**». Al tocar: desaparecen de la lista y sale el aviso «9 aprobados · Deshacer»
-   (8 s). Los dudosos (amarillo/rojo, o sin evaluar) van debajo, uno por uno, con la razón en
-   palabras («la cuenta no coincide», «monto distinto»).
-3. **Vencidos:** «12 familias con la mensualidad vencida · $1.840.000» → Cobros › Vencidos (con el
-   WhatsApp a deudores que hoy está en `PaymentAgingCard`).
-4. **Solicitudes de ingreso:** «4 familias quieren entrar» → Deportistas › Ingreso.
-5. **Profes sin lista (ayer):** «2 profes no tomaron lista ayer: Sub 11, Sub 13» → Entrenadores.
-6. **Dinero del mes:** recaudado este mes y por cobrar, con la palabra «este mes» (no «periodo»).
-7. **Entrenos de hoy:** lista corta, plegable.
-8. El resto («Ver todo»): accesos a los módulos. Panel, Reportes, Finanzas y Panel de reportes **no
-   se tocan en esta fase** (decisión D-HOY-7).
+### 4.1 Navegación (decidida el 13-nov en el PDF)
 
-Estados distintos de carga, vacío y error en cada bloque. Montos con `tabular-nums` y formato COP
-(`Intl.NumberFormat('es-CO')`).
+- **Celular, barra inferior:** Hoy · Deportistas · Cobros · WhatsApp · Más, con contadores
+  (Cobros: comprobantes por revisar; WhatsApp: «Te esperan»). **Entrenadores pasa a «Más».**
+- **Computador, lateral:** Hoy · Deportistas · Entrenadores · Asistencia · Calendario | Cobros ·
+  Tienda · WhatsApp | Escuela · Configuración, con contadores, y arriba la escuela y el rol
+  («Club Campestre Demo · Dueño») con su selector.
+- **Más (celular):** Mapi arriba con su estado; grupos «Cada día» (Asistencia con «2 profes sin
+  lista», Equipos y horarios, Seguimiento deportivo, Entrenadores), «Con las familias» (Informes del
+  mes, Avisos y calendario, Clases de prueba, Solicitudes de ingreso), «Torneos y espacios», cuentas y
+  la escuela. Cada ítem con su número al lado.
+
+### 4.2 Hoy
+
+1. **Frase y un botón** (regla 02): «**Llegaron 12 comprobantes. 9 coinciden.**» · **Aprobar los 9**.
+   Sin comprobantes, la frase pasa a lo siguiente más urgente. Sin nada: «No hay nada pendiente. El
+   próximo corte es el 1.» — **solo** si los datos cargaron (si la consulta falla, se dice que falló;
+   patrón de `ParentHomeV2`).
+2. **Barra de avance del mes**, el único número grande además de la frase: «Octubre va en 76 %»
+   (recaudado contra lo esperado del mes, misma fórmula que Cobros: `finance_income_summary`).
+3. **Aprobar con deshacer** (reglas 03 y 04): al tocar, los 9 salen de la lista y aparece
+   «9 aprobados · Deshacer» (8 s). **Nada se escribe ni se le avisa a ninguna familia antes de que
+   venza el Deshacer.**
+4. **Los dudosos** («los otros 3»): en Hoy, un enlace a **Cobros › Revisar los 3 comprobantes
+   dudosos** (ahí viven, como en el dibujo de Cobros), cada uno con el porqué en una línea («Pagó
+   $ 20.000 menos», «La cuenta destino no es la del club») y Aprobar · Abonar · Preguntar. «Abonar en
+   un toque» **no existe hoy**: fase propia.
+5. **«Además, hoy»** — una tarjeta por pendiente, cada una con su acción:
+   - «23 familias deben» → Cobros › Deben (tarea de la prueba «Saber quién debe y escribirle», meta
+     30 s; el recordatorio preparado por Mapi es del plan de Mapi, fuera de esta fase).
+   - «4 solicitudes de ingreso» → Más › Solicitudes de ingreso.
+   - «2 profes sin lista ayer: Sub 11, Sub 13» → Más › Asistencia.
+   - «3 te esperan en WhatsApp» → WhatsApp (el conteo sale de la bandeja; la pantalla es de
+     Comunicaciones).
+6. **«Ver todo»** (plegado): entrenos de hoy y accesos. Panel, Reportes, Finanzas y Panel de reportes
+   **no se tocan en esta fase** (D-HOY-7).
+
+Los contadores de la barra y del lateral salen de la misma RPC de Hoy (una llamada para todo). La
+misma RPC alimenta después el resumen de las 7:00 por WhatsApp del administrador («Hoy: 12
+comprobantes (9 listos), 23 familias en mora, 2 profes sin lista. Aprobar los 9 →»), que hoy sale por
+correo (`pagos-por-validar.job.ts`); ese canal no es parte de esta fase.
 
 ## 5. Fases (una rama por fase, revisión entre fases)
 
 | Fase | Qué | Base de datos | Hecho cuando |
 |---|---|---|---|
-| **F0 · Cascarón** | Bandera `ESCUELA_V2` (**apagada por defecto**), `RutasSegunRol` para owner/school_admin, barra inferior V2 de escuela (Hoy · Deportistas · Cobros · Entrenadores · Más) y «Más»; mover `useAccionConDeshacer` a `components/v2/` | No | Con la bandera apagada nada cambia; encendida, owner y school_admin ven el cascarón con los dos roles; tests de rutas |
+| **F0 · Cascarón** | Bandera `ESCUELA_V2` (**apagada por defecto**), `RutasSegunRol` para owner/school_admin, barra inferior V2 de escuela (Hoy · Deportistas · Cobros · WhatsApp · Más), lateral de escritorio de §4.1 y «Más» agrupado (los destinos son las pantallas actuales); mover `useAccionConDeshacer` a `components/v2/` | No | Con la bandera apagada nada cambia; encendida, owner y school_admin ven el cascarón con los dos roles; tests de rutas |
 | **F1 · Hoy en solo lectura** | RPC `school_hoy_resumen(p_school_id, p_branch_id)` y la pantalla con los bloques 1 y 3–8 (sin aprobar todavía; los comprobantes enlazan a la pantalla actual) | **Sí: 1 RPC nueva** (plan aprobado antes de escribirla) | Una llamada; `EXPLAIN` con índices por `school_id`; tests de alcance (owner, school_admin con sede, coach → 42501, padre → 42501) |
 | **F2 · Aprobar los N con Deshacer** | Bloque 2 completo: selección «verde» (regla de §3), aprobar en lote con escritura diferida, dudosos uno por uno | No (reusa `approvePayment`) — ver D-HOY-5 | 9 aprobados en ≤ 30 s en la prueba; recargar o salir durante los 8 s **sí** aprueba; Deshacer no escribe nada; `already_handled` no se cuenta como error |
 | **F3 · Medir y encender** | Línea base, prueba de 5 personas (las tareas del dueño), encendido escuela de pruebas → piloto → resto | No | Números de antes/después en este spec |
@@ -121,7 +148,7 @@ Estados distintos de carga, vacío y error en cada bloque. Montos con `tabular-n
 | **D-HOY-5** | ¿Aprobar en lote con el bucle actual (`approvePayment` × N, ya probado) o con una RPC transaccional nueva? | F2 con el bucle (sin migración); RPC en una fase posterior si la prueba muestra fallas parciales. Un lote que falla a la mitad hoy deja aprobados los primeros: se reporta «7 de 9 aprobados, 2 quedaron por revisar» |
 | **D-HOY-6** | ¿Se arregla en esta fase el 403 de auto-evaluación con `parent_id` nulo (589 menores)? | Aparte (BFF, otra rama): sin eso «los 9» serán menos, pero no bloquea |
 | **D-HOY-7** | Panel, Reportes, Finanzas: ¿se funden ya en Hoy? | No en esta fase: no hay medición de lo que se **mira** (`analytics_events` vacía). Medir primero |
-| **D-V2NAV** | ¿«Cobros» o «Dinero»? ¿«Entrenadores» o «Deportivo»? | «Cobros» y «Entrenadores» (lo que ya asume el spec de Comunicaciones) |
+| ~~D-V2NAV~~ | **Resuelta en el PDF del 13-nov:** Hoy · Deportistas · Cobros · WhatsApp · Más; Entrenadores en «Más» | Actualizar `modulos-v2-definicion.md` §1, que todavía dice Cobros · Entrenadores |
 
 ## 7. Fuera de alcance
 

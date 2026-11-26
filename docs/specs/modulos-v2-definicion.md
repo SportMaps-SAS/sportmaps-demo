@@ -40,7 +40,7 @@ Estados usados: ✅ existe · ◐ parcial · ✖ no existe · 🔒 existe oculto
 
 | Rol | Barra del celular | Menú lateral |
 |---|---|---|
-| **Escuela** (owner y school_admin, un solo árbol) | Hoy · Deportistas · Cobros · Entrenadores · Más | Hoy · Deportistas · Entrenadores · Asistencia · Calendario · Cobros · Tienda · WhatsApp · Escuela · Configuración |
+| **Escuela** (owner y school_admin, un solo árbol) | Hoy · Deportistas · Cobros · WhatsApp · Más (decidido en el PDF del rediseño del 13-nov-2026; Entrenadores pasa a «Más»; ver `hoy-dueno-v2.md` §4.1) | Hoy · Deportistas · Entrenadores · Asistencia · Calendario · Cobros · Tienda · WhatsApp · Escuela · Configuración |
 | **Entrenador** | Hoy · Equipos · Sesiones · Asistencia · Más | Hoy · Mis equipos · Sesiones · Asistencia · Evaluar · Calendario · Más |
 | **Acudiente** | Inicio · Calendario · Hijos · Pagos · Más | (sin lateral: celular primero) |
 | **Deportista** | Hoy · Entrenos · Progreso · Carnet · Más | (sin lateral) |
