@@ -1,6 +1,6 @@
 # Carnet 3D por club — spec (F0)
 
-**Estado:** borrador para aprobar · **Fecha:** 2026-11-24 · **Autor:** Brayan Steven Lopez (con Claude)
+**Estado:** aprobada (puntos 1–6 de §11 el 2026-11-26; 7–8 pendientes) · **F1 APLICADA** (`20261126095105`, 2026-11-26) · **Fecha:** 2026-11-24 · **Autor:** Brayan Steven Lopez (con Claude)
 **Fuente de verdad** de las fases F1–F5. Cada fase va con revisión antes de la siguiente; ninguna migración se escribe antes de aprobar esta spec.
 
 ---
@@ -149,7 +149,20 @@ Hoy `staff` incluye coaches y admins por igual: se separan en `coach` y `admin`.
 - **Habilitación (F5):** casos por criterio y por nivel (verde/amarillo/rojo, sin montos para coach).
 - Cierre de cada fase con BD: `npm run seguridad:invariantes` sin críticas.
 
+## 10.1 F1 — lo que quedó vivo (migración `20261126095105`, 2026-11-26)
+
+- `athlete_id_cards.codigo` (`NOT NULL`, `UNIQUE`, CHECK de formato): 517 carnets con `SM-2026-00001…00517` por `created_at`, sin tocar su `updated_at`. Contador `athlete_card_code_counters` (RLS sin policies, sin permisos para `anon`/`authenticated`); el trigger `trg_athlete_id_cards_codigo` lo asigna **siempre** el servidor al insertar y lo hace inmutable.
+- `enrollments.jersey_number` (0–999) y `enrollments.position` (1–40 caracteres). Lectura con respaldo en la última alineación: `_carnet_numero_posicion()` (interna).
+- `update_school_branding` (firma nueva, los argumentos viejos siguen igual): `p_accent_color`, `p_reset_colores` (log `reset_default`) y `p_confirma_derechos_escudo` → `branding_settings.escudo_derechos = { confirmado_por: auth.uid(), confirmado_en: now(), logo_url }`. El BFF deberá mapear el error nuevo `invalid_accent_color` (F2).
+- `verify_athlete_id_card_public` agrega `codigo`, `numero`, `posicion` (también `codigo` en revocado/vencido). Nada de lo anterior cambió.
+- `verificar_carnet_por_codigo(p_codigo)` (`anon`): `found`, `estado`, `valido`, nombre enmascarado («Brayan S. L.»), club. Sin token, foto ni documento.
+- `card_back_data(p_qr_token)` (solo `authenticated`; personal de esa escuela, acudiente, deportista adulto): `deporte` (`futbol`/`generico`), `zona_de_juego` {posicion, numero, origen}, 4 estadísticas genéricas (asistencia y sesiones de 90 días, último informe publicado, antigüedad). **Las de fútbol se agregan en F4.**
+- **Quedan para F5:** punto 3 (nombre del menor enmascarado en `/c/:token` público) y punto 6 (separar coach/admin). F1 no cambió lo que ve cada nivel.
+- `types.ts` **sin regenerar** (se hace una vez al cerrar el lote, ver CLAUDE.md).
+
 ## 11. Pendiente de confirmar en la revisión de esta spec
+
+**1–6 aprobados como se proponen (2026-11-26).** Siguen abiertos 7 y 8.
 
 1. **3D y plantillas clásicas:** propuesta: en la app (familia, admin, verificación) se ve el **carnet 3D**; la **impresión y el PDF por equipo** siguen con las plantillas clásicas (el papel no es 3D).
 2. **Código por emisión:** cada reemisión lleva **código nuevo** (el viejo queda «no válido»). Alternativa: un código fijo por jugador.
