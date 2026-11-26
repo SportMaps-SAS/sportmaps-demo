@@ -53,6 +53,20 @@ describe('cancelUnpaidPeriodCharges', () => {
         expect(state.updated).toEqual([['m']]);
     });
 
+    it('no toca torneo, artículos, viaje ni ningún cobro aparte (Monster, Copa Navidad 2026-11-18)', async () => {
+        state.rows = [
+            { id: 't', amount_paid: 0, payment_category: 'torneo' },
+            { id: 'a', amount_paid: 0, payment_category: 'articulos' },
+            { id: 'v', amount_paid: 0, payment_category: 'viaje' },
+            { id: 'x', amount_paid: 0, payment_category: 'clase_extra' },
+            { id: 'o', amount_paid: 0, payment_category: 'otro' },
+            { id: 'n', amount_paid: 0, payment_category: null },
+        ];
+        const r = await cancelUnpaidPeriodCharges(base);
+        expect(r.cancelled).toBe(1);
+        expect(state.updated).toEqual([['n']]);
+    });
+
     it('si falla la anulación no declara nada anulado', async () => {
         state.rows = [{ id: 'a', amount_paid: 0, payment_category: 'mensualidad' }];
         state.updateError = { message: 'boom' };

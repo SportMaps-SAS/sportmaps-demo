@@ -33,7 +33,7 @@ import { crearInscripcion, type DatosInscripcion } from '../../../routes/enrollm
 import { nivelFinanzasEnEscuela } from '../../../middlewares/assertSchoolFinanceAdmin';
 import { MAX_MESES_PAUSA, mapearErrorRpc, mesesEntre } from '../../retiro-y-pausa.service';
 import { previewPlanChange } from '../../planChange.service';
-import { ONE_OFF_PAYMENT_CATEGORIES } from '../../enrollmentBilling';
+import { isPeriodCharge } from '../../enrollmentBilling';
 import { ChargeBatchCreateSchema, ChargeBatchRequestSchema, primerError, type ChargeBatchRequest } from '../../charge-batches.schemas';
 import { CobrosError, atletasDelGrupo, createChargeBatch, previewChargeBatch, verificarPertenencia } from '../../charge-batches.service';
 import { buscarCobroDuplicadoReciente, mensajeDeDuplicado, type CobroReciente } from '../../cobro-duplicado-reciente';
@@ -479,7 +479,6 @@ export const darDeBaja: HerramientaAccion<ArgsBaja> = {
 
 // ─── cambiar_plan ───────────────────────────────────────────────────────────
 
-const ONE_OFF: readonly string[] = ONE_OFF_PAYMENT_CATEGORIES;
 
 export interface ArgsCambiarPlan {
     deportista: string;
@@ -535,7 +534,7 @@ async function armarCambioDePlan(a: Alcance, args: ArgsCambiarPlan): Promise<{ o
     const anulados: any[] = [];
     const conPagos: any[] = [];
     for (const p of ((abiertos as any[]) ?? []).sort((u, v) => String(u.id).localeCompare(String(v.id)))) {
-        if (ONE_OFF.includes(p.payment_category)) continue;
+        if (!isPeriodCharge(p.payment_category)) continue;
         const delPlanViejo = p.status === 'pending' && idsViejos.has(p.offering_plan_id);
         const delPeriodo = Number(p.period_year) === y && Number(p.period_month) === m;
         const conPago = Number(p.amount_paid) > 0;

@@ -22,9 +22,21 @@ export type AthleteType = 'child' | 'adult' | 'unregistered';
  */
 export const ONE_OFF_PAYMENT_CATEGORIES = ['inscripcion', 'seguro', 'excedente'] as const;
 
-/** Filtro PostgREST (`.or(...)`) que deja solo cobros de mensualidad / sin categoría. */
-export const PLAN_PERIOD_CHARGE_FILTER =
-    `payment_category.is.null,payment_category.not.in.(${ONE_OFF_PAYMENT_CATEGORIES.join(',')})`;
+/**
+ * ¿Es la mensualidad de un período? LISTA BLANCA: solo `mensualidad` o sin
+ * categoría (los cobros viejos). Todo lo demás —torneo, artículos, viaje,
+ * vacacional, clase extra, inscripción, seguro, excedente…— es un cobro aparte
+ * que un cambio de plan/equipo NO anula ni re-precia.
+ *
+ * Antes era lista negra (inscripción/seguro/excedente) y los cobros de torneo
+ * caían como si fueran mensualidad: Monster, 2026-11-18, cuatro cobros de la
+ * «Copa Navidad» anulados al guardar la ficha del atleta segundos después.
+ */
+export const isPeriodCharge = (category: string | null | undefined): boolean =>
+    category == null || category === 'mensualidad';
+
+/** Filtro PostgREST (`.or(...)`) equivalente a `isPeriodCharge`. */
+export const PLAN_PERIOD_CHARGE_FILTER = 'payment_category.is.null,payment_category.eq.mensualidad';
 export type AthleteCol = 'child_id' | 'user_id' | 'unregistered_athlete_id';
 
 export const athleteColFor = (t: AthleteType): AthleteCol =>
@@ -598,8 +610,7 @@ export async function cancelUnpaidPeriodCharges(opts: {
         console.error('[enrollmentBilling] cancelUnpaidPeriodCharges lectura falló:', error.message);
         return { cancelled: 0, withPayments: 0 };
     }
-    const oneOff: readonly string[] = ONE_OFF_PAYMENT_CATEGORIES;
-    const rows = (data ?? []).filter((r: any) => !oneOff.includes(r.payment_category));
+    const rows = (data ?? []).filter((r: any) => isPeriodCharge(r.payment_category));
     const unpaid = rows.filter((r: any) => !(Number(r.amount_paid) > 0)).map((r: any) => r.id);
     if (unpaid.length) {
         const { error: upErr } = await supabase
