@@ -443,7 +443,37 @@ export const ESTADOS_ENVIO: readonly EstadoEnvio[] = ['pendiente', 'enviando', '
 export const INTERESES_AUDIENCIA = ['clase_prueba', 'inscripcion', 'clinica', 'vacacional', 'campamento', 'precio', 'horarios', 'informacion'] as const;
 export type InteresAudiencia = typeof INTERESES_AUDIENCIA[number];
 
-export interface FiltroCampana { intereses?: string[]; branch_ids?: string[] }
+/**
+ * (2026-11-26) `anuncio`: la campaña va a quien escribió por un anuncio (clic a WhatsApp) cuyo texto contiene
+ * alguna de `contiene` (o cualquiera, vacío) y ninguna de `excluye`; la foto sale de `whatsapp_atribucion` y no se
+ * mezcla con intereses ni sedes. `destino: 'convocatorias'`: el «Sí» arranca la convocatoria guiada del bot.
+ */
+export interface FiltroAnuncio { contiene?: string[]; excluye?: string[] }
+export interface FiltroCampana {
+    intereses?: string[]; branch_ids?: string[];
+    anuncio?: FiltroAnuncio | null;
+    destino?: 'convocatorias' | null;
+}
+export const DESTINOS_CAMPANA = ['convocatorias'] as const;
+
+/** Las palabras de un filtro de anuncio, limpias (minúsculas, sin vacías). Pura. */
+export function palabrasDeAnuncio(xs: unknown): string[] {
+    return Array.isArray(xs) ? xs.map((x) => String(x ?? '').trim().toLowerCase()).filter(Boolean) : [];
+}
+
+/** ¿El texto del anuncio entra en el filtro? El mismo criterio que `wa_campana_aprobar` (substring, minúsculas). Pura. */
+export function anuncioCoincide(texto: string | null | undefined, f: FiltroAnuncio | null | undefined): boolean {
+    const t = String(texto ?? '').toLowerCase();
+    const si = palabrasDeAnuncio(f?.contiene);
+    const no = palabrasDeAnuncio(f?.excluye);
+    if (si.length && !si.some((w) => t.includes(w))) return false;
+    return !no.some((w) => t.includes(w));
+}
+
+/** ¿La campaña lleva un interés concreto (o un anuncio concreto), como pide la base «contacto previo»? Pura. */
+export function filtroConcreto(f: FiltroCampana | null | undefined): boolean {
+    return !!(f?.intereses?.length) || palabrasDeAnuncio(f?.anuncio?.contiene).length > 0;
+}
 
 export interface CampanaFila {
     id: string;
@@ -1015,6 +1045,14 @@ export async function audienciaVigente(integrationId: string, ajustes: AjustesCa
         filas.push(...(data as FilaAudiencia[]));
         if (data.length < 1000) break;
     }
+    return contactables(integrationId, ajustes, filas);
+}
+
+/**
+ * Lo que comparten la audiencia clasificada y la de un anuncio: fuera quien se dio de baja, los bloqueados y los
+ * contactos marcados (personal, negocio, otro club, plataforma, staff, familia); con base 'optin', solo opt-in vigente.
+ */
+async function contactables(integrationId: string, ajustes: AjustesCampanas, filas: FilaAudiencia[]): Promise<FilaAudiencia[]> {
     if (filas.length === 0) return filas;
 
     const conOptin = new Set<string>();
@@ -1041,6 +1079,50 @@ export async function audienciaVigente(integrationId: string, ajustes: AjustesCa
     }
     return filas.filter((f) => !fuera.has(f.contact_wa_id)
         && (ajustes.baseConsentimiento !== 'optin' || conOptin.has(f.contact_wa_id)));
+}
+
+/**
+ * (2026-11-26) La audiencia de una campaña por anuncio, con el MISMO criterio que `wa_campana_aprobar`: quien escribió
+ * por un anuncio que entra en el filtro dentro de la antigüedad máxima (≤ 90 días), sin familias/staff/inscritos
+ * (`wa_audiencia_excluidos`), sin excluidos de la audiencia clasificada y con las exclusiones de `contactables`.
+ * Solo para el conteo que ve la escuela: la foto de verdad la toma la base al aprobar. Sin intereses ni sede.
+ */
+export async function audienciaPorAnuncio(
+    schoolId: string, integrationId: string, ajustes: AjustesCampanas, filtro: FiltroAnuncio, ahora = Date.now(),
+): Promise<FilaAudiencia[]> {
+    const desde = new Date(ahora - Math.min(ajustes.antiguedadMaxDias, 90) * 24 * 3600_000).toISOString();
+    const vistos = new Set<string>();
+    for (let desdeFila = 0; desdeFila < 50_000; desdeFila += 1000) {
+        const { data, error } = await supabase.from('whatsapp_atribucion')
+            .select('contact_wa_id, primer_headline, primer_body, ultimo_headline')
+            .eq('integration_id', integrationId).eq('school_id', schoolId).gte('ultimo_at', desde)
+            .order('contact_wa_id', { ascending: true })
+            .range(desdeFila, desdeFila + 999);
+        if (error || !Array.isArray(data)) break;
+        for (const a of data as any[]) {
+            const wa = String(a.contact_wa_id ?? '');
+            if (!/^[0-9]{6,20}$/.test(wa)) continue;
+            const texto = [a.primer_headline, a.primer_body, a.ultimo_headline].filter(Boolean).join(' ');
+            if (anuncioCoincide(texto, filtro)) vistos.add(wa);
+        }
+        if (data.length < 1000) break;
+    }
+    const ids = [...vistos];
+    if (!ids.length) return [];
+    const fuera = new Set<string>();
+    for (let i = 0; i < ids.length; i += 1000) {
+        const lote = ids.slice(i, i + 1000);
+        const [fam, excl] = await Promise.all([
+            supabase.rpc('wa_audiencia_excluidos', { p_school_id: schoolId, p_wa_ids: lote }),
+            supabase.from('whatsapp_audiencia').select('contact_wa_id')
+                .eq('integration_id', integrationId).in('contact_wa_id', lote).not('excluido', 'is', null),
+        ]);
+        for (const f of ((fam as any)?.data as any[]) ?? []) fuera.add(String(f.contact_wa_id));
+        for (const f of ((excl as any)?.data as any[]) ?? []) fuera.add(String(f.contact_wa_id));
+    }
+    const filas: FilaAudiencia[] = ids.filter((w) => !fuera.has(w))
+        .map((w) => ({ contact_wa_id: w, intereses: [], branch_id: null }));
+    return contactables(integrationId, ajustes, filas);
 }
 
 export interface Conteo { total: number; porInteres: Record<string, number>; porSede: Record<string, number> }
@@ -1097,6 +1179,19 @@ export function errorEnDatosDeCampana(d: DatosNuevaCampana, ahora = Date.now()):
     }
     const sedes = d.filtro?.branch_ids ?? [];
     if (!Array.isArray(sedes) || sedes.some((s) => !UUID.test(String(s)))) return 'Hay una sede inválida.';
+    if (d.filtro?.anuncio != null) {
+        const a = d.filtro.anuncio;
+        for (const xs of [a.contiene, a.excluye]) {
+            if (xs == null) continue;
+            if (!Array.isArray(xs) || xs.length > 20 || xs.some((x) => typeof x !== 'string' || !x.trim() || x.length > 60)) {
+                return 'Las palabras del anuncio van en una lista (hasta 20, de hasta 60 caracteres).';
+            }
+        }
+        if (intereses.length || sedes.length) return 'El filtro por anuncio no se mezcla con intereses ni sedes.';
+    }
+    if (d.filtro?.destino != null && !(DESTINOS_CAMPANA as readonly string[]).includes(String(d.filtro.destino))) {
+        return 'El destino del «Sí» no existe.';
+    }
     if (d.respuestaSi != null && String(d.respuestaSi).length > 4000) return 'La respuesta al «Sí» va hasta 4000 caracteres.';
     if (d.venceAt) {
         const t = new Date(d.venceAt).getTime();
@@ -1113,7 +1208,7 @@ export async function crearCampana(schoolId: string, por: string | null, d: Dato
     if (!ajustes?.habilitadas) return falla(409, 'campanas_apagadas');
     const err = errorEnDatosDeCampana(d);
     if (err) return falla(400, 'datos_invalidos', err);
-    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !(d.filtro?.intereses?.length)) {
+    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !filtroConcreto(d.filtro)) {
         return falla(400, 'falta_interes');
     }
     const integ = await integracionActivaDeEscuela(schoolId);
@@ -1134,7 +1229,13 @@ export async function crearCampana(schoolId: string, por: string | null, d: Dato
         nombre: d.nombre.trim(),
         plantilla: d.plantilla,
         idioma: d.idioma || 'es_CO',
-        filtro: { intereses: d.filtro?.intereses ?? [], branch_ids: d.filtro?.branch_ids ?? [] },
+        filtro: {
+            intereses: d.filtro?.intereses ?? [], branch_ids: d.filtro?.branch_ids ?? [],
+            ...(d.filtro?.anuncio ? { anuncio: {
+                contiene: palabrasDeAnuncio(d.filtro.anuncio.contiene), excluye: palabrasDeAnuncio(d.filtro.anuncio.excluye),
+            } } : {}),
+            ...(d.filtro?.destino ? { destino: d.filtro.destino } : {}),
+        },
         variables: plantilla.ok && plantilla.variables === 1 ? ['nombre'] : [],
         respuesta_si: d.respuestaSi?.trim() || null,
         vence_at: d.venceAt || null,
@@ -1154,12 +1255,14 @@ export async function simularCampana(schoolId: string, campanaId: string): Promi
     if (!ajustes?.habilitadas) return falla(409, 'campanas_apagadas');
     const integ = await integracionPorId(campana.integration_id);
     if (!integ) return falla(409, 'sin_integracion');
+    const anuncio = campana.filtro?.anuncio ?? null;
     const [filas, plantilla] = await Promise.all([
-        audienciaVigente(integ.id, ajustes),
+        anuncio ? audienciaPorAnuncio(schoolId, integ.id, ajustes, anuncio) : audienciaVigente(integ.id, ajustes),
         plantillaDeCampana(integ, campana.plantilla, campana.idioma),
     ]);
     const fuera = campana.servicio_id ? await compradoresDeServicio(schoolId, campana.servicio_id) : null;
-    return { ok: true, conteo: contarFilas(filas, campana.filtro, fuera), plantilla };
+    // Por anuncio no hay intereses ni sede que filtrar (la base los rechaza juntos).
+    return { ok: true, conteo: contarFilas(filas, anuncio ? null : campana.filtro, fuera), plantilla };
 }
 
 /**
@@ -1207,7 +1310,7 @@ export async function aprobarCampana(p: {
     if (ajustes.pausadaAt) return falla(409, 'escuela_en_pausa', ajustes.pausaMotivo ?? undefined);
     if (!p.declaracionAceptada) return falla(400, 'falta_declaracion');
     // Con la base «contacto previo» la campaña va a un interés concreto, nunca a toda la lista.
-    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !(campana.filtro?.intereses?.length)) {
+    if (ajustes.baseConsentimiento === 'contacto_previo_declarado' && !filtroConcreto(campana.filtro)) {
         return falla(400, 'falta_interes');
     }
 
@@ -1248,6 +1351,7 @@ function fallaDeRpc(error: { message?: string; code?: string }) {
     if (m.includes('SIN_AJUSTES')) return falla(404, 'sin_ajustes');
     if (m.includes('PLANTILLA_NO_APROBADA')) return falla(409, 'plantilla_no_lista');
     if (m.includes('INTERES_REQUERIDO')) return falla(400, 'falta_interes');
+    if (m.includes('FILTRO_ANUNCIO_EXCLUSIVO')) return falla(400, 'datos_invalidos', 'El filtro por anuncio no se mezcla con intereses ni sedes.');
     return falla(409, 'no_se_pudo_aprobar', m);
 }
 

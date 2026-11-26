@@ -122,6 +122,13 @@ interface CampanaMin {
     id: string; school_id: string; integration_id: string; nombre: string; respuesta_si: string | null;
     /** (2026-11-25) Para saber si la oferta ya terminó. Pueden no venir (base vieja). */
     estado?: string | null; vence_at?: string | null; servicio_id?: string | null;
+    /** (2026-11-26) `destino: 'convocatorias'`: el «Sí» arranca la convocatoria guiada del bot. */
+    filtro?: { destino?: string | null } | null;
+}
+
+/** ¿El «Sí» de esta campaña arranca la convocatoria guiada? Pura. */
+export function esCampanaDeConvocatorias(c: Pick<CampanaMin, 'filtro'> | null | undefined): boolean {
+    return c?.filtro?.destino === 'convocatorias';
 }
 
 /**
@@ -242,7 +249,7 @@ async function ofertaTerminadaDeLaCampana(
 async function campanaPorId(id: string): Promise<CampanaMin | null> {
     const leer = (cols: string) => supabase.from('whatsapp_campanas').select(cols).eq('id', id).maybeSingle();
     const base = 'id, school_id, integration_id, nombre, respuesta_si';
-    let { data, error } = await leer(`${base}, estado, vence_at, servicio_id`);
+    let { data, error } = await leer(`${base}, estado, vence_at, servicio_id, filtro`);
     // Base vieja sin alguna de esas columnas: las de siempre (la campaña se atiende igual).
     if (error) ({ data, error } = await leer(base));
     return error ? null : ((data as unknown as CampanaMin) ?? null);
@@ -272,6 +279,12 @@ export async function atenderRespuestaDeCampana(p: {
     integration: WhatsAppIntegration;
     conversationId: string;
     msg: ParsedInboundMessage;
+    /**
+     * (2026-11-26) Arranca la convocatoria guiada del bot (lo inyecta el webhook: este módulo no importa el bot, por
+     * el ciclo). true = salió la primera pregunta o la convocatoria; false = la escuela no tiene preguntas u ofertas
+     * vigentes, y sale la respuesta de siempre.
+     */
+    iniciarConvocatoria?: () => Promise<boolean>;
 }): Promise<ResultadoRespuesta> {
     try {
         const boton = parsearBotonDeCampana(p.msg.botonId);
@@ -285,7 +298,7 @@ export async function atenderRespuestaDeCampana(p: {
 }
 
 async function atenderBoton(
-    p: { integration: WhatsAppIntegration; conversationId: string; msg: ParsedInboundMessage },
+    p: { integration: WhatsAppIntegration; conversationId: string; msg: ParsedInboundMessage; iniciarConvocatoria?: () => Promise<boolean> },
     boton: { campanaId: string; accion: AccionCampana },
 ): Promise<ResultadoRespuesta> {
     const { integration, conversationId, msg } = p;
@@ -391,7 +404,25 @@ async function atenderBoton(
     // los datos de pago salen al tocar «Separar mi cupo» (los atiende el bot: id `vs:`).
     // Texto largo (Meta no deja botones bajo más de 1024 caracteres): el texto y los botones aparte.
     const textoSi = (!vieja && campana.respuesta_si?.trim()) || (item ? lineaDeSaludoDeVenta(item) : '');
-    if (textoSi) {
+    // (2026-11-26) Retoma de convocatorias: la respuesta de la campaña (si hay) y enseguida la conversación guiada
+    // del bot (género → año → … → la convocatoria que le aplica, con botones). Sin ofertas vigentes, lo de siempre.
+    if (!vieja && !item && esCampanaDeConvocatorias(campana) && p.iniciarConvocatoria) {
+        if (textoSi) {
+            await enviarDirecto({
+                integration, conversationId, contactWaId: msg.contactWaId, texto: textoSi,
+                step: PASO_RESPUESTA_SI, campanaId: campana.id,
+            });
+        }
+        let guiada = false;
+        try { guiada = await p.iniciarConvocatoria(); } catch { guiada = false; }
+        if (!guiada && !textoSi) {
+            await enviarDirecto({
+                integration, conversationId, contactWaId: msg.contactWaId, texto: TEXTO_CAMPANA_TERMINADA,
+                step: PASO_RESPUESTA_SI, campanaId: campana.id,
+                extra: { pendiente_escuela: `respondió «Sí» a «${campana.nombre}» y no hay convocatorias vigentes`.slice(0, 300) },
+            });
+        }
+    } else if (textoSi) {
         const botones = item ? botonesDeVenta(item, BOTONES_DE_ENTRADA) : undefined;
         const caben = !botones || textoSi.length <= MAX_CUERPO_CON_BOTONES;
         await enviarDirecto({

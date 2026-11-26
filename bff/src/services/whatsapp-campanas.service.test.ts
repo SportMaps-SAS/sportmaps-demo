@@ -126,7 +126,7 @@ const {
     validarPlantillaDeCampana, destinoTrasErrorDeEnvio, destinoTrasFalloAsincrono, leaseVencido,
     motivoParaPosponer, runCampanas, aprobarCampana, simularCampana, filtroCoincide, contarFilas,
     ajustesCampanasDesdeFila, payloadDeBoton, audienciaVigente, reanudarCampana, reanudarEscuela, activarCampanas,
-    textoDeAceptacionDePausa, RESPONSABILIDAD,
+    textoDeAceptacionDePausa, RESPONSABILIDAD, anuncioCoincide, filtroConcreto, errorEnDatosDeCampana,
 } = svc;
 
 const cupoMod = await import('./whatsapp-campanas-cupo');
@@ -426,6 +426,22 @@ describe('ajustes y filtro', () => {
         expect(filtroCoincide({ intereses: ['clinica'], branch_id: null }, { branch_ids: ['S1'] })).toBe(false);
         expect(contarFilas([{ contact_wa_id: 'a', ...f }, { contact_wa_id: 'b', intereses: ['precio'], branch_id: null }]))
             .toEqual({ total: 2, porInteres: { clinica: 1, clase_prueba: 1, precio: 1 }, porSede: { S1: 1, sin_sede: 1 } });
+    });
+
+    it('filtro por anuncio (retoma 2026-11-26): contiene alguna, ninguna excluida; cuenta como interés concreto; no se mezcla', () => {
+        expect(anuncioCoincide('VACACIONAL DE VOLEIBOL en Suba', { contiene: ['vacacional'] })).toBe(true);
+        expect(anuncioCoincide('Clínica de armadores', { contiene: ['vacacional', 'vacaciones'] })).toBe(false);
+        expect(anuncioCoincide('Clínica de armadores', { contiene: [], excluye: ['vacacional'] })).toBe(true);
+        expect(anuncioCoincide('Vacacional y clínica', { excluye: ['Vacacional'] })).toBe(false);
+        expect(anuncioCoincide(null, {})).toBe(true);
+        expect(filtroConcreto({ anuncio: { contiene: ['vacacional'] } })).toBe(true);
+        expect(filtroConcreto({ anuncio: { contiene: [], excluye: ['x'] } })).toBe(false);
+        expect(filtroConcreto({ intereses: ['clinica'] })).toBe(true);
+        const base = { nombre: 'Retoma vacacional', plantilla: 'monster_retoma_vacacional' };
+        expect(errorEnDatosDeCampana({ ...base, filtro: { anuncio: { contiene: ['vacacional'] }, destino: 'convocatorias' } })).toBeNull();
+        expect(errorEnDatosDeCampana({ ...base, filtro: { anuncio: { contiene: ['x'] }, intereses: ['clinica'] } })).toMatch(/no se mezcla/);
+        expect(errorEnDatosDeCampana({ ...base, filtro: { anuncio: { contiene: [''] } } })).toMatch(/palabras del anuncio/);
+        expect(errorEnDatosDeCampana({ ...base, filtro: { destino: 'otra' as any } })).toMatch(/destino/);
     });
 });
 
