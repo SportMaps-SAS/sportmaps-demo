@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bandeja, type EventoBandeja } from './bandeja';
 import { enviarEvaluacion, TIPO_EVALUAR } from './bandejaEvaluar';
+import { enviarAutoeval, TIPO_AUTOEVAL } from './bandejaAutoeval';
 import { armarPendientes, type PendienteVista } from './pendientesModel';
 import { OFFLINE_ENABLED } from './offlineConfig';
 import { obtenerCola, useEnLinea } from '@/components/coach/v2/useCoachV2Senal';
@@ -23,7 +24,7 @@ export function obtenerBandeja(userId: string) {
     const oyentes = new Set<() => void>();
     const bandeja = new Bandeja({
       userId,
-      manejadores: { [TIPO_EVALUAR]: enviarEvaluacion },
+      manejadores: { [TIPO_EVALUAR]: enviarEvaluacion, [TIPO_AUTOEVAL]: enviarAutoeval },
       onChange: () => oyentes.forEach((f) => f()),
     });
     e = { bandeja, oyentes };

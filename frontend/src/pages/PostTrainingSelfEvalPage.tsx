@@ -3,6 +3,9 @@ import { useParams, useSearchParams, useNavigate, useLocation } from 'react-rout
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { faltoLaSenal, guardarAutoeval } from '@/lib/offline/autoevalOffline';
+import { paramsAutoeval, type PayloadAutoeval } from '@/lib/offline/bandejaAutoeval';
+import { fechaCorta } from '@/components/athlete/v2/athleteV2Model';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
@@ -129,6 +132,8 @@ export default function PostTrainingSelfEvalPage() {
   const [answers, setAnswers] = useState<EvalAnswers>(EMPTY_ANSWERS);
   const [showOtherInput, setShowOtherInput] = useState(false);
   const [result, setResult] = useState<{ saved: number; streak: number; month_avg_borg: number | null } | null>(null);
+  /** Se contestó sin señal: la respuesta quedó en el teléfono y sube sola (bandeja de salida). */
+  const [guardadaEnTelefono, setGuardadaEnTelefono] = useState(false);
 
   // ── Sesión + equipo + escuela + deporte ────────────────────────────────────
   const { data: ctx, isLoading, isError, refetch } = useQuery({
@@ -219,30 +224,27 @@ export default function PostTrainingSelfEvalPage() {
   const submit = useMutation({
     mutationFn: async () => {
       if (!sessionId || !ctx?.subjectId) throw new Error('Falta información de la sesión.');
-      if (ctx.subjectType === 'unregistered') {
+      const datos: PayloadAutoeval = {
+        sessionId,
+        sujeto: { tipo: ctx.subjectType, id: ctx.subjectId },
+        answers: buildPayload(answers) as unknown as Record<string, unknown>,
+      };
+      try {
         // p_unregistered_athlete_id (migración 20261026155123) aún no está en types.ts.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data, error } = await (supabase as any).rpc('submit_post_training_self_eval', {
-          p_session_id: sessionId,
-          p_child_id: null,
-          p_user_id: null,
-          p_answers: buildPayload(answers),
-          p_unregistered_athlete_id: ctx.subjectId,
-        });
+        const { data, error } = await (supabase as any).rpc('submit_post_training_self_eval', paramsAutoeval(datos));
         if (error) throw error;
         return data as { saved: number; streak: number; month_avg_borg: number | null };
+      } catch (e) {
+        // Sin señal (o se cayó al enviar): queda en el teléfono y sube sola; la RPC es idempotente.
+        const etiqueta = `¿Qué tan duro fue? · ${ctx.teamName ?? 'Entreno'} · ${fechaCorta(ctx.session.session_date)}`;
+        if (faltoLaSenal(e) && await guardarAutoeval(user?.id, datos, etiqueta)) return null;
+        throw e;
       }
-      const { data, error } = await supabase.rpc('submit_post_training_self_eval', {
-        p_session_id: sessionId,
-        p_child_id: ctx.subjectType === 'child' ? ctx.subjectId : null,
-        p_user_id: ctx.subjectType === 'profile' ? ctx.subjectId : null,
-        p_answers: buildPayload(answers),
-      });
-      if (error) throw error;
-      return data as { saved: number; streak: number; month_avg_borg: number | null };
     },
     onSuccess: (data) => {
-      setResult(data);
+      if (!data) setGuardadaEnTelefono(true);
+      else setResult(data);
       setStep(6);
     },
     onError: (err: unknown) => {
@@ -531,6 +533,22 @@ export default function PostTrainingSelfEvalPage() {
               )}
             </div>
           </Pregunta>
+        )}
+
+        {/* Paso 6 — Guardada sin señal */}
+        {step === 6 && !result && guardadaEnTelefono && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <PartyPopper className="h-9 w-9" aria-hidden="true" />
+            </div>
+            <div className="space-y-1">
+              <h1 className="text-2xl font-semibold">¡Guardada en tu teléfono!</h1>
+              <p className="text-sm text-muted-foreground">Se envía sola cuando vuelva la señal. No tienes que hacer nada más.</p>
+            </div>
+            <Button size="lg" className="min-h-touch h-12 w-full rounded-xl text-base font-semibold" onClick={() => navigate('/')}>
+              Cerrar
+            </Button>
+          </div>
         )}
 
         {/* Paso 6 — Listo */}

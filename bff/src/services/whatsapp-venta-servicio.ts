@@ -45,7 +45,7 @@ import {
 } from './whatsapp-anuncio-destino';
 import { comoPagar, estadoDeSalientes, numeroLegible, type CuentaDePagoEmbudo } from './whatsapp-embudo-prospecto';
 import { cop, tokensDistintivos } from './whatsapp-venta-servicios.service';
-import { hoyBogota, opcionesDelItem, type ItemDeServicio } from './wa-cobro-desde-comprobante.service';
+import { hoyBogota, opcionesDelItem, opcionVigente, type ItemDeServicio } from './wa-cobro-desde-comprobante.service';
 import { cobroConAbono, lineasDeSaldoDelCobro, type CobroPrevioParaIa } from './whatsapp-catalogo-para-ia';
 import type { Motivo } from './motivos-de-cobro';
 import type { PreguntaDeServicio, RespuestaDeServicio } from './whatsapp-servicio-ia';
@@ -1554,6 +1554,28 @@ export async function atenderVentaDeServicio(
     const ruta: IntencionVenta = conDatosDeAsistente && !colaEnYaPago ? 'detalle' : intencion;
     // «3 semanas», «Pago 2 semanas», «Del 23 al 27 nov / Del 30 al 04 dic»: eligió una opción del servicio.
     const eleccion = intencion === 'detalle' || intencion === 'pago' || intencion === 'ya_pago' ? opcionElegidaEnVenta(texto, item) : null;
+
+    // (Auditoría F10-03) Eligió una opción que ya no cabe («3 semanas» el 2-dic con el servicio terminando el 10):
+    // NO se confirma con precio; se dice cuáles quedan. Con comprobante ya enviado se deja a la escuela y a la cola.
+    if (eleccion && (intencion === 'detalle' || intencion === 'pago') && !pagoRecibidoEnVenta(ctx.recientes, venta, ahora)) {
+        const hoyOpcion = hoyBogota(ahora);
+        const opElegida = opcionesDelItem(item).find((o) => o.clave === eleccion.clave);
+        if (opElegida && !opcionVigente(item, opElegida, hoyOpcion)) {
+            const afiliadoOpcion = await afiliadoSiHaceFalta(ctx, item);
+            const quedan = precioDelServicio(item, { afiliado: afiliadoOpcion, hoy: hoyOpcion }).opciones;
+            const lista = quedan.map((p) => `• ${p.etiqueta}: ${cop(p.precio)}`).join('\n');
+            await ctx.enviar(
+                quedan.length
+                    ? `Esa opción (*${eleccion.etiqueta}*) ya no alcanza a cumplirse antes de que termine ${item.name}. Hoy puedes elegir:\n${lista}\n¿Cuál prefieres?`
+                    : `Esa opción (*${eleccion.etiqueta}*) ya no está disponible. Le paso tu mensaje a la escuela para que te confirme qué queda. 🙌`,
+                { ...marca, intencion_venta: 'opcion_vencida', step: PASO_VENTA.RESPUESTA, fija_de_venta: 'opcion_vencida', repetible: true });
+            if (!quedan.length) {
+                await seguro(() => ctx.avisarEscuela(`En «${item.name}» pidió «${eleccion.etiqueta}», que ya no cabe antes del cierre: confírmale qué queda.`), undefined);
+                return 'venta_a_la_escuela';
+            }
+            return 'venta_respuesta';
+        }
+    }
 
     // (2026-11-22) Tres respuestas fijas ANTES de cotizar o de pasar a la IA, solo sin comprobante en curso.
     if ((intencion === 'detalle' || intencion === 'pago') && !(await colaContesta())) {

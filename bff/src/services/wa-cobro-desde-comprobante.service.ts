@@ -451,6 +451,8 @@ export interface OpcionDeServicio {
     etiqueta: string;
     precio: number | null;
     precio_afiliado?: number | null;
+    /** 'YYYY-MM-DD': último día en que se vende esta opción (opcional; sin él se deduce de las semanas y `ends_at`). */
+    hasta?: string | null;
 }
 
 /** Una fila de `school_tournament_items` (servicio: torneo, viaje, clínica, vacacional…). */
@@ -492,9 +494,51 @@ export function opcionesDelItem(item: Pick<ItemDeServicio, 'opciones'>): OpcionD
             etiqueta: typeof o.etiqueta === 'string' && o.etiqueta.trim() ? o.etiqueta.trim() : o.clave,
             precio: num(o.precio),
             precio_afiliado: num(o.precio_afiliado),
+            hasta: typeof o.hasta === 'string' && /^\d{4}-\d{2}-\d{2}/.test(o.hasta) ? o.hasta.slice(0, 10) : null,
         });
     }
     return out;
+}
+
+const NUMERO_EN_LETRAS: Record<string, number> = { una: 1, un: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5, seis: 6 };
+
+/** Las semanas que dice la opción («3 semanas», «dos semanas»), o null si no habla de semanas. Pura. */
+export function semanasDeOpcion(op: Pick<OpcionDeServicio, 'clave' | 'etiqueta'>): number | null {
+    const t = `${op.etiqueta} ${op.clave}`.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').replace(/[_-]+/g, ' ');
+    const m = t.match(/\b(\d{1,2}|una|un|dos|tres|cuatro|cinco|seis)\s+semanas?\b/);
+    if (!m) return null;
+    const n = /^\d/.test(m[1]) ? Number(m[1]) : NUMERO_EN_LETRAS[m[1]];
+    return n > 0 ? n : null;
+}
+
+const sumarDias = (ymd: string, dias: number): string =>
+    new Date(Date.UTC(Number(ymd.slice(0, 4)), Number(ymd.slice(5, 7)) - 1, Number(ymd.slice(8, 10)) + dias)).toISOString().slice(0, 10);
+
+/**
+ * ¿Esta opción todavía se puede comprar HOY? (Auditoría F1-01/F1-02/F10-03.) Pura.
+ *  · Con `hasta` ('YYYY-MM-DD'): hasta ese día.
+ *  · Sin `hasta` y con semanas («3 semanas») y `ends_at` del servicio: caben si, empezando hoy (o en `starts_at`, lo
+ *    que sea más tarde), la última semana aún empieza antes del fin: hoy + 7·(N−1) días ≤ ends_at. Conservadora:
+ *    solo oculta lo que claramente ya no cabe.
+ *  · Sin ninguna de las dos señales: vigente (no se inventa un cierre).
+ */
+export function opcionVigente(
+    item: Pick<ItemDeServicio, 'starts_at' | 'ends_at'>, op: OpcionDeServicio, hoy: string,
+): boolean {
+    if (op.hasta) return op.hasta >= hoy;
+    const n = semanasDeOpcion(op);
+    const fin = typeof item.ends_at === 'string' && /^\d{4}-\d{2}-\d{2}/.test(item.ends_at) ? item.ends_at.slice(0, 10) : null;
+    if (n === null || !fin) return true;
+    const ini = typeof item.starts_at === 'string' && /^\d{4}-\d{2}-\d{2}/.test(item.starts_at) && item.starts_at.slice(0, 10) > hoy
+        ? item.starts_at.slice(0, 10) : hoy;
+    return sumarDias(ini, 7 * (n - 1)) <= fin;
+}
+
+/** Las opciones que hoy se pueden comprar (para cotizar y ofrecer). Los cobros ya hechos siguen usando `opcionesDelItem`. Pura. */
+export function opcionesVigentes(
+    item: Pick<ItemDeServicio, 'opciones' | 'starts_at' | 'ends_at'>, hoy: string,
+): OpcionDeServicio[] {
+    return opcionesDelItem(item).filter((op) => opcionVigente(item, op, hoy));
 }
 
 /** Los tramos de precio por fecha, ordenados (jsonb sin esquema garantizado). Pura. */

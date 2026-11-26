@@ -157,6 +157,7 @@ import bulkUploadRouter from './routes/athletes/bulkUpload';
 import meRouter from './routes/me.routes';
 import upgradeRequestsRouter from './routes/upgrade-requests.routes';
 import schoolsRouter from './routes/schools.routes';
+import brandingEscudoRouter from './routes/branding-escudo';
 import customDomainsRouter from './routes/custom-domains.routes';
 import devicesRouter from './routes/devices.routes';
 import usageRouter from './routes/usage.routes';
@@ -428,6 +429,8 @@ app.use('/api/v1/upgrade-requests', generalLimiter, upgradeRequestsRouter);
 // Schools: branding (white-label), settings. Rate-limit propio del router
 // (10/hora por escuela en branding). generalLimiter actua como segundo cap.
 app.use('/api/v1/schools', generalLimiter, schoolsRouter);
+// Escudo del club (carnet 3D, F2): firma de bytes, SVG -> PNG, WebP con alfa.
+app.use('/api/v1/branding', generalLimiter, brandingEscudoRouter);
 // Dominios propios (Fase 5 — Enterprise) — montado tambien bajo /schools
 // para alinear con el modelo "recurso de la escuela".
 app.use('/api/v1/schools', generalLimiter, customDomainsRouter);

@@ -29,7 +29,8 @@ export interface AccionEnBandeja<P = unknown> {
   id: string;
   tipo: string;
   userId: string;
-  schoolId: string;
+  /** Solo informativo (para el listado). Puede faltar cuando la pantalla que encola no lo conoce. */
+  schoolId: string | null;
   payload: P;
   /** «Evaluación · Sub 11 · jueves 8 de octubre» — lo que ve el usuario en «Pendientes». */
   etiqueta: string;
@@ -154,12 +155,17 @@ export class Bandeja {
    * Guarda (o reemplaza) la acción. Devuelve cuando YA quedó escrita en el teléfono: desde ahí
    * se le puede decir al usuario «guardado» con honestidad.
    */
-  encolar<P>(e: { id: string; tipo: string; schoolId: string; payload: P; etiqueta: string }): Promise<AccionEnBandeja<P>> {
+  encolar<P>(
+    e: { id: string; tipo: string; schoolId: string | null; payload: P; etiqueta: string },
+    /** Si ya había una acción con ese id, decide qué payload queda (por defecto gana el nuevo). Corre dentro de la serie: es atómico. */
+    fusionar?: (previo: P | undefined, nuevo: P) => P,
+  ): Promise<AccionEnBandeja<P>> {
     return this.serie(async () => {
       const previa = await this.almacen.get<AccionEnBandeja>(this.clave(e.id));
       const t = this.now();
       const accion: AccionEnBandeja<P> = {
-        ...e, userId: this.o.userId, created_at: previa?.created_at ?? t, updated_at: t,
+        ...e, payload: fusionar ? fusionar(previa?.payload as P | undefined, e.payload) : e.payload,
+        userId: this.o.userId, created_at: previa?.created_at ?? t, updated_at: t,
         version: (previa?.version ?? 0) + 1, rev: nuevoRev(), intentos: 0, nextAttemptAt: 0,
       };
       await this.almacen.set(this.clave(e.id), accion);

@@ -31,7 +31,6 @@ import {
   ClipboardList,
   IdCard,
   FileCheck2,
-  QrCode,
   Truck,
   ShieldCheck,
   CreditCard,
@@ -73,6 +72,11 @@ export interface NavItem {
    * tiene los dos, la visibilidad efectiva es `hasAddon AND isModuleEnabled`.
    */
   moduleKey?: ModuleKey;
+  /**
+   * Como `moduleKey`, pero para una pantalla que junta varios módulos: el ítem se
+   * ve si AL MENOS UNO está prendido (la pantalla oculta por dentro lo apagado).
+   */
+  anyModuleKeys?: ModuleKey[];
   /**
    * Pertenece a la tienda (productos, carrito, pedidos, inventario, envíos,
    * liquidaciones). Se oculta mientras `store_enabled()` sea false — flag
@@ -247,6 +251,7 @@ function filterByAddon(items: NavItem[], hasAddon: (key: AddonKey) => boolean): 
 function filterByModuleOverride(items: NavItem[], isModuleEnabled: (key: ModuleKey) => boolean): NavItem[] {
   return items
     .filter(item => !item.moduleKey || isModuleEnabled(item.moduleKey))
+    .filter(item => !item.anyModuleKeys || item.anyModuleKeys.some(k => isModuleEnabled(k)))
     .map(item => item.submenu ? { ...item, submenu: filterByModuleOverride(item.submenu, isModuleEnabled) } : item)
     .filter(item => !item.submenu || item.submenu.length > 0);
 }
@@ -605,17 +610,16 @@ export function getNavigationByRole(
       {
         title: 'Documentos e Identidad',
         items: [
+          // V2 del dueño (spec carnet-3d-club §12): una sola entrada reemplaza Carnets
+          // Digitales, Plantillas de Carnets, Constancias y QR de Inscripción. Las rutas
+          // V1 siguen vivas (se enlazan desde la pantalla para lo avanzado). Se ve si
+          // CUALQUIERA de los tres módulos está prendido; la pantalla oculta las secciones apagadas.
           {
-            title: 'Carnets',
+            title: 'Carnets, constancias y QR',
+            href: '/carnets-constancias',
             icon: IdCard,
-            moduleKey: 'documentos_carnets',
-            submenu: [
-              { title: 'Carnets Digitales', href: '/cards', icon: IdCard },
-              { title: 'Plantillas de Carnets', href: '/cards?tab=templates', icon: FileText },
-            ],
+            anyModuleKeys: ['documentos_carnets', 'documentos_constancias', 'documentos_qr_inscripcion'],
           },
-          { title: 'Constancias', href: '/certificates', icon: FileCheck2, moduleKey: 'documentos_constancias' },
-          { title: 'QR de Inscripción', href: '/qr-signup', icon: QrCode, moduleKey: 'documentos_qr_inscripcion' },
         ]
       },
       {
@@ -856,17 +860,16 @@ export function getNavigationByRole(
       {
         title: 'Documentos e Identidad',
         items: [
+          // V2 del dueño (spec carnet-3d-club §12): una sola entrada reemplaza Carnets
+          // Digitales, Plantillas de Carnets, Constancias y QR de Inscripción. Las rutas
+          // V1 siguen vivas (se enlazan desde la pantalla para lo avanzado). Se ve si
+          // CUALQUIERA de los tres módulos está prendido; la pantalla oculta las secciones apagadas.
           {
-            title: 'Carnets',
+            title: 'Carnets, constancias y QR',
+            href: '/carnets-constancias',
             icon: IdCard,
-            moduleKey: 'documentos_carnets',
-            submenu: [
-              { title: 'Carnets Digitales', href: '/cards', icon: IdCard },
-              { title: 'Plantillas de Carnets', href: '/cards?tab=templates', icon: FileText },
-            ],
+            anyModuleKeys: ['documentos_carnets', 'documentos_constancias', 'documentos_qr_inscripcion'],
           },
-          { title: 'Constancias', href: '/certificates', icon: FileCheck2, moduleKey: 'documentos_constancias' },
-          { title: 'QR de Inscripción', href: '/qr-signup', icon: QrCode, moduleKey: 'documentos_qr_inscripcion' },
         ]
       },
       {

@@ -13,7 +13,7 @@ export type CardData = {
   status: 'active' | 'revoked' | 'expired' | string;
   /** Quién está mirando, según la RPC: el público no recibe datos médicos,
    *  de emergencia, documento ni pagos (mig 20261010201231). */
-  viewer?: 'public' | 'staff' | 'guardian';
+  viewer?: 'public' | 'staff' | 'coach' | 'guardian';
   card_id?: string;
   qr_token?: string;
   issued_at?: string;

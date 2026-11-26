@@ -57,6 +57,7 @@ import {
 } from '../services/whatsapp-asistencia-staff.service';
 import { atenderRespuestaDeCampana, esPosibleRespuestaDeCampana } from '../services/whatsapp-campana-respuesta.service';
 import { atribuirPorTexto } from '../services/whatsapp-atribucion-texto';
+import { pideBajaTotal } from '../services/whatsapp-baja-texto';
 import { motivoConCodigo } from '../services/whatsapp-errores-meta';
 import { atenderAdjuntoEntrante } from '../services/whatsapp-bot-oleada1';
 import { esAliasDeUsuario, nombreConUsuario } from '../services/whatsapp-usuario-meta';
@@ -501,7 +502,23 @@ async function processInboundMessage(req: Request, msg: ParsedInboundMessage): P
     // La ingesta detecta las palabras de baja (STOP, baja, no molestar…) y ya
     // registró el opt-out. El bot tiene que confirmarlo y NO seguir su flujo
     // normal: a quien pide que no le escriban no se le pregunta el email.
-    const optedOut = (ingest as any)?.opted_out === true;
+    let optedOut = (ingest as any)?.opted_out === true;
+    // Auditoría F3-01/F3-02: la ingesta solo entiende 6 frases exactas. «Ya no quiero mensajes», «no me
+    // escriban más», «parar», «quítenme de la lista»… las reconoce `pideBajaTotal` y registra la baja con
+    // la misma RPC (sin migración). Si el registro falla, NO se finge: sigue el flujo normal.
+    if (!optedOut && msg.type === 'text' && pideBajaTotal(msg.textBody)) {
+        const { error: bajaErr } = await supabase.rpc('wa_register_optin', {
+            p_integration_id: integration.id,
+            p_school_id: integration.school_id,
+            p_contact_wa_id: msg.contactWaId,
+            p_source: 'baja_directa',
+            p_source_ref: msg.waMessageId,
+            p_parent_id: null,
+            p_opt_out: true,
+        });
+        if (bajaErr) req.log?.error({ err: bajaErr, conversationId }, 'WhatsApp: no se pudo registrar la baja por frase');
+        else optedOut = true;
+    }
     if (optedOut) {
         req.log?.info({ conversationId, contactWaId: msg.contactWaId }, 'WhatsApp: opt-out registrado');
     }

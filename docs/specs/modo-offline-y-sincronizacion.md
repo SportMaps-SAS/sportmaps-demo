@@ -207,6 +207,23 @@ La base es **una sola** para dev/stg/prod; una ráfaga al reconectar es exactame
 - Encuesta post-entreno, otros flujos del entrenador/atleta que pasen el checklist.
 - Migrar `LiveQueue` y `ActionQueue` a la cola común **solo si** hay una razón (hoy funcionan): no migrar por estética.
 
+#### Qué se construyó en la Fase 3 (hasta ahora)
+
+| Pieza | Dónde | Nota |
+|---|---|---|
+| **Autoevaluación post-entreno** («¿Qué tan duro fue?») | `lib/offline/bandejaAutoeval.ts`, `autoevalOffline.ts` | Pasa el checklist §9 **sin migración**: `submit_post_training_self_eval` es upsert por sujeto + métrica + sesión, valida adentro quién responde (acudiente del hijo / ficha vinculada / la propia cuenta), exige sesión cerrada, asistencia y plazo, y no mueve dinero ni cupos. Id = sesión + sujeto: dos hijos del mismo acudiente no se pisan. |
+| Dónde se guarda sin señal | tarjeta del deportista (`AthleteHomeV2`) y formulario completo (`PostTrainingSelfEvalPage`, deportista o acudiente) | Solo si faltó la señal (navegador sin red o error de red). Un rechazo de regla se muestra como antes, no se guarda. Con `VITE_OFFLINE_MODE=off` todo se comporta como antes. |
+| Fusión al re-guardar | `Bandeja.encolar(e, fusionar?)` | Atómica dentro de la serie. El «un toque» fusiona (no borra el formulario completo ya guardado); el formulario completo reemplaza. |
+| Errores | `clasificarErrorAutoeval` | Red → «Sin señal» (reintenta). «Sesión sin cerrar» → reintenta contando como fallo de servidor (queda atascada con motivo si la lista del profe no llega). Plazo vencido, no asistió, sin permiso, sesión inexistente, valor inválido → se aparta **con su motivo**. |
+| Montaje | `components/offline/BandejaFamiliaSync.tsx` (+ `BandaPendientes`) en `AuthLayout` para `athlete` y `parent`; `/pendientes` abierta a `coach`, `athlete`, `parent` | Sincronizan al abrir, al volver la red, al volver a primer plano y al vencer la espera. |
+| Pruebas | `lib/offline/bandejaAutoeval.test.ts` | Parámetros por sujeto, clasificación, fusión, doble envío, rechazo visible, sin señal, red que se cae al enviar, sesión vencida, otra cuenta en el mismo teléfono, dos pestañas. |
+
+**Cambio menor:** `AccionEnBandeja.schoolId` pasó a `string | null` (es solo informativo; la autoevaluación no lo conoce).
+
+**Límite honesto:** el valor real es el caso «se vio la tarjeta/formulario y la señal se cayó antes de tocar». Las **lecturas** del deportista y del acudiente siguen sin persistirse offline (la Fase 1 fue solo del entrenador, D4): si abre la app sin señal, la tarjeta no aparece.
+
+**Pendiente de la Fase 3:** probar en un teléfono real; decidir si las lecturas del deportista (carnet, calendario) entran como Fase 4 (lectura pura, D4); `LiveQueue`/`ActionQueue` siguen sin migrar a propósito.
+
 ---
 
 ## 9. Checklist para habilitar un flujo offline

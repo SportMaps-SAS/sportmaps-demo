@@ -220,6 +220,7 @@ const PayrollConfigPage = lazy(() => import("./pages/admin/PayrollConfigPage"));
 const AdminAccessLogsPage = lazy(() => import("./pages/AdminAccessLogsPage"));
 const AdminWhatsAppPlataformaPage = lazy(() => import("./pages/admin/AdminWhatsAppPlataformaPage"));
 const AthleteCardPublicPage = lazy(() => import("./pages/AthleteCardPublicPage"));
+const VerificarCarnetPage = lazy(() => import("./pages/VerificarCarnetPage"));
 const CobroPublicoPage = lazy(() => import("./pages/CobroPublicoPage"));
 const EstadoCuentaPublicoPage = lazy(() => import("./pages/EstadoCuentaPublicoPage"));
 // Pizarra: jugada compartida por enlace (pública) y pizarra libre sin sesión.
@@ -227,6 +228,8 @@ const JugadaCompartidaPage = lazy(() => import("./pages/JugadaCompartidaPage"));
 const PizarraLibrePage = lazy(() => import("./pages/PizarraLibrePage"));
 const SchoolCardsAdminPage = lazy(() => import("./pages/SchoolCardsAdminPage"));
 const SchoolCertificatesAdminPage = lazy(() => import("./pages/SchoolCertificatesAdminPage"));
+// V2 del dueño: carnets, constancias y QR en una sola pantalla (spec carnet-3d-club §12).
+const CarnetsConstanciasQRPage = lazy(() => import("./pages/school/CarnetsConstanciasQRPage"));
 const CertificateTemplatesPage = lazy(() => import("./pages/CertificateTemplatesPage"));
 const MyCertificatesPage = lazy(() => import("./pages/MyCertificatesPage"));
 const CertificateVerifyPublicPage = lazy(() => import("./pages/CertificateVerifyPublicPage"));
@@ -377,6 +380,7 @@ const App = () => (
                     <Route path="/join-team/:teamId" element={<JoinTeamPage />} />
                     <Route path="/join-plan/:planId" element={<JoinPlanPage />} />
                     <Route path="/c/:qrToken" element={<AthleteCardPublicPage />} />
+                    <Route path="/verificar-carnet" element={<VerificarCarnetPage />} />
                     {/* Enlace sin login de UN cobro: botón de las plantillas de cobranza de WhatsApp
                         (sportmaps.co/p/* redirige aquí desde la landing). El token es la credencial. */}
                     <Route path="/p/:token" element={<CobroPublicoPage />} />
@@ -512,7 +516,7 @@ const App = () => (
                       } />
                       {/* Pendientes por enviar (modo offline): listas y evaluaciones guardadas sin señal. */}
                       <Route path="pendientes" element={
-                        <ProtectedRoute allowedRoles={['coach']}>
+                        <ProtectedRoute allowedRoles={['coach', 'athlete', 'parent']}>
                           <PendientesPage />
                         </ProtectedRoute>
                       } />
@@ -913,6 +917,13 @@ const App = () => (
                           <ModuleGate moduleKey="documentos_carnets">
                             <SchoolCardsAdminPage />
                           </ModuleGate>
+                        </ProtectedRoute>
+                      } />
+                      {/* Sin ModuleGate: la pantalla junta tres módulos (carnets, constancias, QR) y oculta
+                          cada sección cuyo módulo esté apagado; si están los tres apagados, avisa. */}
+                      <Route path="carnets-constancias" element={
+                        <ProtectedRoute allowedRoles={['school', 'admin', 'school_admin', 'super_admin']}>
+                          <CarnetsConstanciasQRPage />
                         </ProtectedRoute>
                       } />
                       <Route path="certificates" element={

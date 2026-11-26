@@ -208,10 +208,12 @@ export const soportesApi = {
     tipoDocumento: string,
     archivoBase64: string,
     nombre?: string,
+    /** Carnet 3D F5: «Vence el» (YYYY-MM-DD) y evento, solo en seguro / certificado / autorización. */
+    vigencia?: { vence_el?: string | null; event_id?: string | null },
   ) =>
     bffClient.post<SubidaSoporteResultado>(
       `${base}/${schoolId}/deportistas/${tipoSujeto}/${sujetoId}/${tipoDocumento}`,
-      { archivoBase64, nombre },
+      { archivoBase64, nombre, ...(vigencia ?? {}) },
       conEscuela(schoolId),
     ),
 };

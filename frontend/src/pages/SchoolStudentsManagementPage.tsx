@@ -216,6 +216,9 @@ const DOCUMENT_TYPE_LABELS: Record<string, string> = {
   guardian_signature:        'Firma del acudiente',
   athlete_signature:         'Firma del deportista',
   good_standing_certificate: 'Paz y salvo',
+  sports_insurance:          'Seguro deportivo',
+  medical_certificate:       'Certificado médico',
+  event_authorization:       'Autorización para un evento',
   other:                     'Otro documento',
 };
 

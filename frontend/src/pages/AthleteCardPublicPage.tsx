@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Loader2, Download, AlertCircle, CheckCircle2, AlertTriangle, XCircle, LogIn, ShieldCheck, RotateCw, Lock } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import { Loader2, Download, AlertCircle, CheckCircle2, AlertTriangle, XCircle, LogIn, ShieldCheck, Lock, Hash } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { supabase } from '@/integrations/supabase/client';
 import { AthleteIdCard, type CardData } from '@/components/cards/AthleteIdCard';
+import { AthleteCard3D, DatosDelDeportista } from '@/components/cards/AthleteCard3D';
+import { EstadoHabilitacionPanel } from '@/components/cards/EstadoHabilitacionPanel';
+import { filasDatosDeportista, useCarnet3DDesdeVerify, type VerifyCarnet3D } from '@/hooks/useCarnet3D';
 import { useToast } from '@/hooks/use-toast';
 import { exportCardPng } from '@/lib/cards/cardExport';
 import { maskPrivateCardData, slugifyFileName } from '@/lib/cards/cardLayout';
@@ -21,12 +24,28 @@ import { type CheckInResponse, resolveOutcomeInfo, MARKED_PRESENT } from '@/lib/
 // cero porque la escritura se valida en el servidor pase lo que pase acá).
 const STAFF_ROLES = new Set(['owner', 'super_admin', 'admin', 'school_admin', 'coach']);
 
+// Carnet 3D (spec carnet-3d-club.md §4, F3): el vigente se pinta en 3D; el
+// reverso solo si card_back_data responde found (personal, acudiente o el
+// deportista adulto con sesión). Revocado/vencido siguen con la vista clásica.
+// Los datos privados por nivel (D8) van en la lista de abajo, fuera del carnet.
+
+function EnlaceVerificarPorCodigo() {
+  return (
+    <Link
+      to="/verificar-carnet"
+      className="inline-flex min-h-touch items-center gap-1.5 text-xs text-muted-foreground underline underline-offset-2"
+    >
+      <Hash className="h-3.5 w-3.5" aria-hidden="true" />
+      ¿Tienes el código impreso? Verificar por código
+    </Link>
+  );
+}
+
 export default function AthleteCardPublicPage() {
   const { qrToken } = useParams<{ qrToken: string }>();
   const [data, setData] = useState<CardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-  const [face, setFace] = useState<'front' | 'back'>('front');
   const { toast } = useToast();
   const { user, profile, loading: authLoading, signIn } = useAuth();
 
@@ -38,6 +57,8 @@ export default function AthleteCardPublicPage() {
   const [checkInResult, setCheckInResult] = useState<{ athleteName: string; label: string; tone: 'ok' | 'warn' | 'err' } | null>(null);
 
   const isStaffRole = !!profile && STAFF_ROLES.has(profile.role);
+  const { datos: datos3d, listo: listo3d } = useCarnet3DDesdeVerify(data as VerifyCarnet3D | null);
+  const codigo = (data as VerifyCarnet3D | null)?.codigo ?? null;
 
   useEffect(() => {
     if (!qrToken) return;
@@ -58,7 +79,7 @@ export default function AthleteCardPublicPage() {
       let card = rpc as CardData;
       // Sin sesión no se pinta nada privado aunque la RPC (versión vieja, sin
       // 'viewer') lo mande. El arreglo de fondo está en la RPC.
-      if (card?.found && card.status === 'active' && card.viewer !== 'staff' && card.viewer !== 'guardian') {
+      if (card?.found && card.status === 'active' && card.viewer !== 'staff' && card.viewer !== 'coach' && card.viewer !== 'guardian') {
         const { data: sess } = await supabase.auth.getSession();
         if (!sess.session || card.viewer === 'public') card = maskPrivateCardData(card);
       }
@@ -134,6 +155,7 @@ export default function AthleteCardPublicPage() {
           El código escaneado no corresponde a un carnet válido. Si crees que es un error,
           contacta a tu escuela.
         </p>
+        <div className="mt-4"><EnlaceVerificarPorCodigo /></div>
       </div>
     );
   }
@@ -149,16 +171,32 @@ export default function AthleteCardPublicPage() {
         <p className="text-xs text-muted-foreground">
           {data.school?.name ? `Verificación oficial de ${data.school.name}` : "Verificación oficial SportMaps"}
         </p>
+        {data.status !== 'active' && codigo && (
+          <p className="mt-1 font-mono text-xs text-muted-foreground">{codigo}</p>
+        )}
       </div>
 
-      <AthleteIdCard data={data} publicUrl={publicUrl} face={face} />
+      {data.status === 'active' ? (
+        datos3d && listo3d ? (
+          <div className="flex flex-col items-center gap-1">
+            <AthleteCard3D datos={datos3d} ancho={300} />
+            <p className="text-xs text-muted-foreground">
+              {datos3d.reverso ? 'Toca el carnet para ver el reverso.' : 'Toca el carnet para ver el código QR.'}
+            </p>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center rounded-2xl bg-white/60" style={{ width: 300, height: Math.round(300 * 540 / 340) }}>
+            <Loader2 className="h-6 w-6 animate-spin text-primary" aria-label="Cargando el carnet" />
+          </div>
+        )
+      ) : (
+        <AthleteIdCard data={data} publicUrl={publicUrl} face="front" />
+      )}
+
+      {data.status === 'active' && <DatosDelDeportista filas={filasDatosDeportista(data)} className="max-w-sm" />}
 
       {data.status === 'active' && (
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <Button variant="ghost" onClick={() => setFace((f) => (f === 'front' ? 'back' : 'front'))} className="gap-2">
-            <RotateCw className="h-4 w-4" />
-            {face === 'front' ? 'Ver reverso' : 'Ver frente'}
-          </Button>
           <Button
             onClick={handleDownload}
             disabled={downloading}
@@ -182,6 +220,13 @@ export default function AthleteCardPublicPage() {
       {data.status === 'active' && data.fee_status === 'overdue' && (
         <div className="max-w-sm bg-red-50 border border-red-200 rounded-lg p-3 text-center text-sm text-red-700">
           <strong>Cuota vencida.</strong> Realiza tu próximo pago para mantener el carnet vigente.
+        </div>
+      )}
+
+      {/* Habilitación (F5): en vivo, solo con sesión; nunca en el carnet ni en sus exportaciones (D7). */}
+      {data.qr_token && data.viewer && data.viewer !== 'public' && (
+        <div className="w-full max-w-sm">
+          <EstadoHabilitacionPanel qrToken={data.qr_token} />
         </div>
       )}
 
@@ -255,6 +300,8 @@ export default function AthleteCardPublicPage() {
           </div>
         ) : null
       )}
+
+      <EnlaceVerificarPorCodigo />
     </div>
   );
 }

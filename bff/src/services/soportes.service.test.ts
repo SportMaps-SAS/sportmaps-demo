@@ -344,3 +344,55 @@ describe('verificarSujetoDeFamilia (la familia titular, con service role)', () =
         expect(await S.verificarSujetoDeFamilia(ESC, { tipo: 'child', id: HIJO })).toEqual({ ok: false, status: 404, error: 'deportista_no_encontrado' });
     });
 });
+describe('documentos con vigencia (carnet 3D F5)', () => {
+    const HOY = '2026-11-26';
+    const EVENTO = '11111111-2222-4333-8444-555555555555';
+
+    it('validarVigencia: seguro y certificado exigen fecha real y no pasada', () => {
+        expect(S.validarVigencia('sports_insurance', null, null, HOY)).toEqual({ ok: false, error: 'vence_el_requerido' });
+        expect(S.validarVigencia('medical_certificate', '2026-02-30', null, HOY)).toEqual({ ok: false, error: 'vence_el_invalido' });
+        expect(S.validarVigencia('medical_certificate', '26/12/2026', null, HOY)).toEqual({ ok: false, error: 'vence_el_invalido' });
+        expect(S.validarVigencia('sports_insurance', '2026-11-25', null, HOY)).toEqual({ ok: false, error: 'vence_el_pasado' });
+        expect(S.validarVigencia('sports_insurance', HOY, EVENTO, HOY)).toEqual({ ok: true, validUntil: HOY, eventId: null });
+    });
+
+    it('validarVigencia: la autorización exige el evento; la fecha es opcional', () => {
+        expect(S.validarVigencia('event_authorization', null, null, HOY)).toEqual({ ok: false, error: 'evento_requerido' });
+        expect(S.validarVigencia('event_authorization', null, EVENTO, HOY)).toEqual({ ok: true, validUntil: null, eventId: EVENTO });
+    });
+
+    it('los tipos de siempre no llevan fecha ni evento', () => {
+        expect(S.validarVigencia('eps_certificate', '2027-01-01', EVENTO, HOY)).toEqual({ ok: true, validUntil: null, eventId: null });
+    });
+
+    it('no son soportes obligatorios (el bot no los ofrece), pero el archivo se acepta', () => {
+        expect(S.esTipoSoporte('sports_insurance')).toBe(false);
+        expect(S.esTipoConVigencia('sports_insurance')).toBe(true);
+        expect(S.validarArchivoSoporte('medical_certificate', PDF)).toMatchObject({ ok: true, ext: 'pdf' });
+    });
+
+    it('hoyBogota usa UTC-5', () => {
+        expect(S.hoyBogota(new Date('2026-11-27T03:00:00Z'))).toBe('2026-11-26');
+        expect(S.hoyBogota(new Date('2026-11-27T06:00:00Z'))).toBe('2026-11-27');
+    });
+
+    it('guardarSoporte: sin «Vence el» → 400 y no sube nada', async () => {
+        h.tablas.unregistered_athletes = [{ id: FICHA }];
+        const r = await S.guardarSoporte({ schoolId: ESC, sujeto: { tipo: 'unregistered', id: FICHA }, tipo: 'sports_insurance', archivo: { buffer: PDF, nombre: 's.pdf' } });
+        expect(r).toEqual({ ok: false, status: 400, error: 'vence_el_requerido' });
+        expect(h.uploads).toHaveLength(0);
+    });
+
+    it('guardarSoporte: guarda valid_until y event_id en la fila', async () => {
+        h.tablas.unregistered_athletes = [{ id: FICHA }];
+        h.serviceRpc = { data: [], error: null };
+        const r = await S.guardarSoporte({
+            schoolId: ESC, sujeto: { tipo: 'unregistered', id: FICHA }, tipo: 'event_authorization',
+            archivo: { buffer: PDF, nombre: 'a.pdf' }, vigencia: { venceEl: '2099-01-31', eventId: EVENTO },
+        });
+        expect(r).toMatchObject({ ok: true, tipo: 'event_authorization' });
+        expect(h.inserts[0]).toMatchObject({ tabla: 'athlete_documents', v: {
+            document_type: 'event_authorization', valid_until: '2099-01-31', event_id: EVENTO,
+        } });
+    });
+});
