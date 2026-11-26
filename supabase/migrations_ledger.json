@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 978,
-  "head": "20261126140304",
+  "count": 979,
+  "head": "20261126141501",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -981,6 +981,7 @@
     {"v":"20261126122010","file":"20261126122010_monster_convocatorias_direccion_ecci.sql","sha256":"91191d09b045ed73189f414f78b84ebae1bffea5a541c1b8caa9a8c7b04e3aab","added":"2026-11-26","by":"Brayan Steven Lopez"},
     {"v":"20261126101055","file":"20261126101055_mapi_rpc_por_actor_existentes.sql","sha256":"d5d5eef0c1cf821e21543c1c80b13327ff4d14d1cb9958b4d3b4881f83848343","added":"2026-11-26","by":"Brayan Steven Lopez"},
     {"v":"20261126101150","file":"20261126101150_mapi_plata_por_actor.sql","sha256":"0615cbd918e9c0fa756b8bd42f7318ca24143f92fdf61bb1c66229819d1be271","added":"2026-11-26","by":"Brayan Steven Lopez"},
-    {"v":"20261126140304","file":"20261126140304_monster_sin_clase_de_prueba_desde_hoy.sql","sha256":"b59f1a6dd90df8428fa7d3e177f4b258e31bcc4e6cd21df9a591c9d3873f2b16","added":"2026-11-26","by":"Brayan Steven Lopez"}
+    {"v":"20261126140304","file":"20261126140304_monster_sin_clase_de_prueba_desde_hoy.sql","sha256":"b59f1a6dd90df8428fa7d3e177f4b258e31bcc4e6cd21df9a591c9d3873f2b16","added":"2026-11-26","by":"Brayan Steven Lopez"},
+    {"v":"20261126141501","file":"20261126141501_convocatorias_inscripciones_separadas_de_clase_de_prueba.sql","sha256":"cfd87d38040fb9beb27eb45d2655c4825ea10bc63d5776cd0dbfd03c3274c7eb","added":"2026-11-26","by":"Brayan Steven Lopez"}
   ]
 }

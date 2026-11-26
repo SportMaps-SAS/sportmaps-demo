@@ -14,7 +14,7 @@ import {
     filaDeFranja, textosPorDefecto, botonDePlantilla, franjasOfrecibles, comoPagar, mensajeDeBienvenida,
     estadoParaRecordatorio, leadCompletoDeEmbudo, leadDeDatos, lineasDeSedes, cupoSimulado,
     tituloDeGrupo, grupoDeRango, pideMatricula, textoDeMatricula, detalleDeMatricula, preguntaDonde, textoDonde,
-    estadoDeSalientes, pideCambioDeHorario,
+    estadoDeSalientes, pideCambioDeHorario, convocatoriaDeEmbudo,
     type CtxEmbudo, type EstadoEmbudo, type FranjaEmbudo, type RangoEmbudo, type CuentaDePagoEmbudo, type LugarDeClase,
 } from './whatsapp-embudo-prospecto';
 import { BOTON_PUERTA } from './whatsapp-puerta-desconocido';
@@ -1079,6 +1079,23 @@ describe('embudo sin clase de prueba (bot-ofertas)', () => {
     });
 });
 
+// (2026-11-26) Inscripción a convocatoria: lo que el embudo sabe va a `source_detail.convocatoria`.
+describe('convocatoriaDeEmbudo', () => {
+    it('título solo si se le mostró UNA; sede sin emojis, género y año', () => {
+        const d = { nombre: 'Juan', sedeTitulo: '📍 Sede Suba', genero: 'm' as const, anio: 2005 };
+        expect(convocatoriaDeEmbudo(d, ['Superliga'])).toEqual({ titulo: 'Superliga', sede: 'Sede Suba', genero: 'masculino', anio: 2005 });
+        expect(convocatoriaDeEmbudo(d, ['A', 'B']).titulo).toBeNull();
+        expect(convocatoriaDeEmbudo({ nombre: 'X' })).toEqual({ titulo: null, sede: null, genero: null, anio: null });
+    });
+
+    it('leadCompletoDeEmbudo la pasa tal cual (y sin ella no agrega la clave)', () => {
+        const conv = { titulo: 'Superliga', sede: null, genero: 'femenino', anio: 2010 };
+        expect(leadCompletoDeEmbudo({ ...leadDeDatos({ nombre: 'X' }, null), quiere: 'convocatoria', convocatoria: conv }))
+            .toMatchObject({ quiere: 'convocatoria', convocatoria: conv });
+        expect(leadCompletoDeEmbudo(leadDeDatos({ nombre: 'X' }, null))).not.toHaveProperty('convocatoria');
+    });
+});
+
 // ─── Sin clase de prueba: SOLO la convocatoria que le aplica (Monster 2026-11-25, 2.ª vuelta) ──
 //
 // Las tres convocatorias de Monster con sus criterios reales (20261125134852): mayores =
@@ -1237,6 +1254,8 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
             + `Le ofrecí: «${T_SUBA}» y «${T_NORTE}». Sede: Sede Norte.`);
         expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({
             quiere: 'convocatoria', respuestas: expect.objectContaining({ oferta_elegida: 'La del sábado 5 a las 9' }),
+            // Se le mostraron dos: sin título (la escuela lo ve en «oferta_elegida»); sede, género y año sí.
+            convocatoria: { titulo: null, sede: 'Sede Norte', genero: 'femenino', anio: 2014 },
         }));
     });
 

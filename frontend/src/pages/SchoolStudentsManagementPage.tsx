@@ -47,8 +47,10 @@ import { EpsCombobox } from '@/components/common/EpsCombobox';
 import { TSHIRT_SIZES, BLOOD_TYPES } from '@/lib/athlete-options';
 import { CreateChildModal } from '@/components/students/CreateChildModal';
 import { ClasePruebaPanel } from '@/components/students/ClasePruebaPanel';
+import { ConvocatoriasPanel } from '@/components/students/ConvocatoriasPanel';
 import { TrialClassSettingsModal } from '@/components/school/TrialClassSettingsModal';
 import { useProspectosClasePrueba, type ProspectoClasePrueba } from '@/hooks/useClasePrueba';
+import { useInscripcionesConvocatoria } from '@/hooks/useInscripcionesConvocatoria';
 import { SiblingFamilySection } from '@/components/students/siblings';
 import { EnrollmentFeesSection, NO_FEES_MARKED, cobrarInscripcionSeguro, type FeesMarked } from '@/components/students/EnrollmentFeesSection';
 import { ZkPinField } from '@/components/students/ZkPinField';
@@ -316,7 +318,10 @@ export default function SchoolStudentsManagementPage() {
   // ?q= precarga la búsqueda (p. ej. "Cambiar plan" desde Ascensos, F-F).
   const [searchQuery, setSearchQuery] = useState(() => new URLSearchParams(window.location.search).get('q') ?? '');
   // ?tab=prueba abre directo la pestaña «Clase de prueba» (desde el modal de Pagos → «Completar datos»).
-  const [activeTab, setActiveTab] = useState(() => (new URLSearchParams(window.location.search).get('tab') === 'prueba' ? 'prueba' : 'active'));
+  const [activeTab, setActiveTab] = useState(() => {
+    const tab = new URLSearchParams(window.location.search).get('tab');
+    return tab === 'prueba' || tab === 'convocatorias' ? tab : 'active';
+  });
   // Pestaña «Clase de prueba»: prospecto que se está pasando a deportista por el alta normal.
   const [prospectoEnAlta, setProspectoEnAlta] = useState<ProspectoClasePrueba | null>(null);
   const [configPruebaOpen, setConfigPruebaOpen] = useState(false);
@@ -361,6 +366,10 @@ export default function SchoolStudentsManagementPage() {
 
   const { schoolId, schoolName, teams, branches, activeBranchId, activeBranchName, totalBranches, defaultMonthlyFee, schoolSettings, loading: schoolLoading } = useSchoolContext();
   const { prospectos: prospectosPrueba, cerrar: cerrarProspecto } = useProspectosClasePrueba(schoolId);
+  // Convocatorias (Monster's): pestaña aparte de «Clase de prueba». Sin
+  // inscripciones (o sin la RPC en la base) la pestaña no se muestra.
+  const { inscripciones: inscripcionesConvocatoria } = useInscripcionesConvocatoria(schoolId);
+  const convocatoriasActivas = inscripcionesConvocatoria.filter((i) => i.estado_inscripcion !== 'descartada').length;
   // Soportes (solo se ven si la escuela los tiene activos): insignia X/7 y filtro «Faltan soportes».
   const soportes = useSoportesEstado(schoolId, canManageCharges(schoolRole));
   const [soloFaltanSoportes, setSoloFaltanSoportes] = useState(false);
@@ -1714,13 +1723,16 @@ export default function SchoolStudentsManagementPage() {
       {schoolId && canManageCharges(schoolRole) && pauseEnabled && <BandejaSolicitudesPlan schoolId={schoolId} />}
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="mb-4">
+        <TabsList className="mb-4 h-auto flex-wrap justify-start">
           <TabsTrigger value="active">Activos</TabsTrigger>
           <TabsTrigger value="inactive">Inactivos</TabsTrigger>
           <TabsTrigger value="todos">Todos</TabsTrigger>
           <TabsTrigger value="prueba">
             Clase de prueba{prospectosPrueba.length > 0 ? ` (${prospectosPrueba.length})` : ''}
           </TabsTrigger>
+          {(inscripcionesConvocatoria.length > 0 || activeTab === 'convocatorias') && (
+            <TabsTrigger value="convocatorias">Convocatorias ({convocatoriasActivas})</TabsTrigger>
+          )}
         </TabsList>
       </Tabs>
 
@@ -1736,7 +1748,9 @@ export default function SchoolStudentsManagementPage() {
         />
       )}
 
-      {activeTab !== 'prueba' && <Card>
+      {activeTab === 'convocatorias' && schoolId && <ConvocatoriasPanel schoolId={schoolId} />}
+
+      {activeTab !== 'prueba' && activeTab !== 'convocatorias' && <Card>
         <CardHeader className="pb-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />

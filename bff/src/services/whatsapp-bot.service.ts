@@ -2713,6 +2713,7 @@ function ctxPuerta(integration: WhatsAppIntegration, conversationId: string, con
                 completo: {
                     deportista: l.deportista, acudiente: l.acudiente, fechaNacimiento: l.fechaNacimiento,
                     edad: l.edad, categoriaSugerida: l.grupoSugerido, quiere: l.quiere,
+                    ...(l.convocatoria ? { convocatoria: l.convocatoria } : {}),
                 },
             });
         },
