@@ -38,6 +38,11 @@ import {
     esAdjuntoDeComprobante, bajarAdjuntoDePrueba, comprobanteSimulado, plantillaSimulada, textoListaPlantillas,
     avanzarSimulado, trabajoDeAvanzar, TEXTO_AYUDA_AVANZAR, type EscenarioPrueba,
 } from './plataforma-wa-pruebas-simular.service';
+import type { ComoAdmin } from './mapi-agente/canal-whatsapp';
+
+/** El motor de Mapi se carga solo en `/como admin` (pesa: agente + 38 herramientas). */
+const motorMapi = () => import('./mapi-agente/canal-whatsapp');
+const agenteApagadoGlobal = () => process.env.MAPI_AGENT_ENABLED === 'false';
 
 // ─── Comandos (puros) ────────────────────────────────────────────────────────
 
@@ -45,6 +50,7 @@ export type ComandoPrueba =
     | { cmd: 'escuela'; arg: string }
     | { cmd: 'como_papa'; arg: string }
     | { cmd: 'como_prospecto' }
+    | { cmd: 'como_admin'; arg: string }
     | { cmd: 'reiniciar' }
     | { cmd: 'estado' }
     | { cmd: 'salir' }
@@ -69,6 +75,8 @@ export function parsearComandoPrueba(texto: string | null | undefined): ComandoP
             return a ? { cmd: 'como_papa', arg: a } : { cmd: 'ayuda' };
         }
         if (q === 'prospecto') return { cmd: 'como_prospecto' };
+        // Mapi agente de administración (plan mapi-admin-por-whatsapp §12.8.3). Sin escuela: la de la sesión.
+        if (q === 'admin' || q === 'administrador' || q === 'dueno' || q === 'duena') return { cmd: 'como_admin', arg: mas.join(' ').trim() };
         return { cmd: 'ayuda' };
     }
     if (c === 'reiniciar') return { cmd: 'reiniciar' };
@@ -88,6 +96,7 @@ export const TEXTO_AYUDA_PRUEBAS = [
     '/escuela <slug o nombre> — elegir escuela',
     '/como papa <id o nombre de atleta de prueba>',
     '/como prospecto',
+    '/como admin [escuela] — hablar con Mapi agente como la administración (lee datos reales; no escribe nada)',
     '/reiniciar — borrar la memoria de la conversación',
     '/estado — escuela, rol y lo que se bloqueó',
     '/salir',
@@ -116,6 +125,12 @@ export interface EstadoSimulado {
     conversationId?: string;
     tablas?: Record<string, Fila[]>;
     bloqueadas?: string[];
+    /**
+     * `/como admin`: el tester habla con Mapi agente como la administración. Va en
+     * `estado` (jsonb) y no en `rol`, que tiene un CHECK ('papa','prospecto').
+     * Las propuestas (`mapi_action_drafts`) quedan en `tablas`.
+     */
+    comoAdmin?: ComoAdmin;
 }
 
 export interface SesionPrueba {
@@ -388,6 +403,23 @@ export async function atenderPrueba(canal: CanalPlataforma, msg: ParsedInboundMe
             await decir(canal, numero, `${TEXTO_AYUDA_PRUEBAS}\n\nPrimero elige una escuela: /escuela <slug>`, 'prueba_ayuda');
             return;
         }
+        // `/como admin`: todo lo que no es comando va al Mapi agente real, con el
+        // cortafuegos (lee datos reales, no escribe; las propuestas en memoria).
+        if (sesion.estado.comoAdmin) {
+            const { atenderMapiPrueba } = await motorMapi();
+            const r = await atenderMapiPrueba({
+                canal, numero, msg, schoolId: sesion.school_id, comoAdmin: sesion.estado.comoAdmin,
+                memoria: sesion.estado.tablas ?? {}, ahora,
+            });
+            sesion.estado = { ...sesion.estado, tablas: { ...(sesion.estado.tablas ?? {}), ...r.memoria }, bloqueadas: r.bloqueadas.slice(0, 50) };
+            await guardarSesion(sesion);
+            // llm_usage se bloquea en cada turno: no es noticia.
+            const escrituras = r.bloqueadas.filter((b) => !/ llm_usage$/.test(b));
+            if (escrituras.length) {
+                await decir(canal, numero, `🧪 El cortafuegos bloqueó: ${[...new Set(escrituras)].slice(0, 8).join(', ')}`, 'prueba_bloqueado');
+            }
+            return;
+        }
         // B7: foto o PDF → la lectura y la decisión de la cola de comprobantes,
         // sin escribir (plataforma-wa-pruebas-simular). El archivo se baja con el
         // token del canal de SportMaps, que es a donde lo mandó el tester.
@@ -436,6 +468,9 @@ async function ejecutarComando(
             return;
         case 'plantillas':
             await decir(canal, numero, textoListaPlantillas(), 'prueba_plantillas');
+            return;
+        case 'como_admin':
+            await entrarComoAdmin(canal, numero, sesion, c.arg, ahora);
             return;
         case 'salir':
             await supabase.from('platform_wa_sesiones_prueba').delete().eq('contact_wa_id', numero);
@@ -498,7 +533,8 @@ async function ejecutarComando(
         return;
     }
     if (c.cmd === 'reiniciar') {
-        await guardarSesion({ ...s, estado: {} });
+        // En `/como admin` se queda en ese modo, con historial y propuestas desde cero.
+        await guardarSesion({ ...s, estado: s.estado.comoAdmin ? { comoAdmin: { ...s.estado.comoAdmin, desde: ahora } } : {} });
         await decir(canal, numero, '🧪 Memoria de la conversación borrada.', 'prueba_reiniciar');
         return;
     }
@@ -510,8 +546,10 @@ async function ejecutarComando(
         for (const b of bloqueadas) resumen.set(b, (resumen.get(b) ?? 0) + 1);
         await decir(canal, numero, [
             `🧪 Escuela: ${(escuela as any)?.name ?? s.school_id} (${(escuela as any)?.slug ?? '—'})`,
-            `Rol: ${s.rol}${s.child_id ? ` (atleta ${s.child_id})` : ''}${s.rol === 'papa' && !s.parent_id ? ' — sin cuenta de acudiente' : ''}`,
-            `Mensajes en memoria: ${mensajes}`,
+            `Rol: ${s.estado.comoAdmin ? 'administración (Mapi agente)' : s.rol}${s.child_id ? ` (atleta ${s.child_id})` : ''}${s.rol === 'papa' && !s.parent_id ? ' — sin cuenta de acudiente' : ''}`,
+            s.estado.comoAdmin
+                ? `Propuestas de Mapi en memoria: ${(s.estado.tablas?.mapi_action_drafts ?? []).length}`
+                : `Mensajes en memoria: ${mensajes}`,
             bloqueadas.length
                 ? `Bloqueado en el último turno:\n${[...resumen].map(([k, n]) => `• ${k}${n > 1 ? ` ×${n}` : ''}`).join('\n')}`
                 : 'Nada bloqueado en el último turno.',
@@ -536,4 +574,58 @@ async function ejecutarComando(
     const h = deprueba[0];
     await guardarSesion({ ...s, rol: 'papa', child_id: h.id, parent_id: h.parent_id ?? null, estado: {} });
     await decir(canal, numero, `🧪 Ahora eres el acudiente de *${h.full_name}*${h.parent_id ? '' : ' (sin cuenta: el bot te verá como familia sin registrar)'}. Memoria reiniciada.`, 'prueba_rol');
+}
+
+/** Dueño de la escuela, o la primera administración activa: el perfil con que corre `/como admin`. */
+async function perfilDeAdministracion(schoolId: string): Promise<string | null> {
+    const { data: escuela } = await supabase.from('schools').select('owner_id').eq('id', schoolId).maybeSingle();
+    if ((escuela as any)?.owner_id) return String((escuela as any).owner_id);
+    const { data } = await supabase.from('school_members').select('profile_id')
+        .eq('school_id', schoolId).eq('status', 'active').in('role', ['owner', 'admin', 'school_admin']).limit(1);
+    return ((data ?? []) as any[])[0]?.profile_id ?? null;
+}
+
+/**
+ * `/como admin [escuela]` (plan mapi-admin-por-whatsapp §12.8.3): desde aquí el
+ * tester habla con Mapi agente como la administración de esa escuela.
+ */
+async function entrarComoAdmin(
+    canal: CanalPlataforma, numero: string, sesion: SesionPrueba | null, arg: string, ahora: number,
+): Promise<void> {
+    let escuela: { id: string; name: string; slug: string } | null = null;
+    if (arg) {
+        const { unica, opciones } = await buscarEscuela(arg);
+        if (!unica) {
+            await decir(canal, numero, opciones.length
+                ? `🧪 Hay varias. Usa el slug:\n${opciones.slice(0, 5).map((o) => `• ${o.name} — /como admin ${o.slug}`).join('\n')}`
+                : `🧪 No encontré «${arg}».`, 'prueba_escuela');
+            return;
+        }
+        escuela = unica;
+    } else if (sesion?.school_id) {
+        const { data } = await supabase.from('schools').select('id, name, slug').eq('id', sesion.school_id).maybeSingle();
+        escuela = (data as any) ?? null;
+    }
+    if (!escuela) {
+        await decir(canal, numero, '🧪 Dime la escuela: /como admin <slug>', 'prueba_ayuda');
+        return;
+    }
+    if (agenteApagadoGlobal()) {
+        await decir(canal, numero, '🧪 Mapi agente está apagado para todos (MAPI_AGENT_ENABLED=false).', 'prueba_rol');
+        return;
+    }
+    const userId = await perfilDeAdministracion(escuela.id);
+    if (!userId) {
+        await decir(canal, numero, '🧪 Esa escuela no tiene dueño ni administración activa: no hay con quién correr a Mapi.', 'prueba_rol');
+        return;
+    }
+    const { data: ajustes } = await supabase.from('school_settings').select('mapi_agent_enabled').eq('school_id', escuela.id).maybeSingle();
+    const comoAdmin: ComoAdmin = { userId, desde: ahora };
+    await guardarSesion({ contact_wa_id: numero, school_id: escuela.id, rol: 'prospecto', child_id: null, parent_id: null, estado: { comoAdmin } });
+    await decir(canal, numero, [
+        `🧪 Ahora hablas con *Mapi agente* como la administración de *${escuela.name}* (${escuela.slug}).`,
+        'Lee datos reales y no escribe nada: las propuestas quedan en la memoria de esta prueba y, si confirmas, el cortafuegos bloquea la escritura y te dice qué habría tocado.',
+        (ajustes as any)?.mapi_agent_enabled === true ? '' : '(Esta escuela tiene mapi_agent_enabled apagado: en producción todavía no le respondería.)',
+        '/reiniciar · /estado · /como prospecto · /salir',
+    ].filter(Boolean).join('\n'), 'prueba_rol');
 }

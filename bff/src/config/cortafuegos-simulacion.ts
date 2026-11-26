@@ -42,6 +42,13 @@ export interface ContextoCortafuegos {
     rpc: Record<string, (args: any) => unknown>;
     /** Lo que se bloqueó en este turno, para `/estado`. */
     bloqueadas: string[];
+    /**
+     * Tablas virtuales EXTRA solo para este contexto (además de TABLAS_VIRTUALES).
+     * El Mapi del modo pruebas (`/como admin`) deja `mapi_action_drafts` en la
+     * memoria de la sesión sin tocar el conjunto global, que comparten todos los
+     * turnos simulados del proceso.
+     */
+    virtuales?: ReadonlySet<string>;
 }
 
 const als = new AsyncLocalStorage<ContextoCortafuegos>();
@@ -56,6 +63,16 @@ export function enCortafuegos(): boolean {
 
 export function contextoCortafuegos(): ContextoCortafuegos | undefined {
     return als.getStore();
+}
+
+/**
+ * Corre `fn` FUERA del cortafuegos aunque se llame desde adentro. Para lo que el
+ * modo pruebas le manda AL TESTER (por el número de SportMaps) desde un callback
+ * que nació dentro del turno simulado (p. ej. `alTerminar` de una acción en
+ * segundo plano).
+ */
+export function fueraDelCortafuegos<T>(fn: () => T): T {
+    return als.exit(fn);
 }
 
 /** Tablas de la conversación que se sirven desde memoria. */
@@ -437,7 +454,7 @@ export function envolverCliente<T extends object>(cliente: T): T {
 
             if (prop === 'from') {
                 return (tabla: string) => {
-                    if (TABLAS_VIRTUALES.has(tabla)) return new ConsultaVirtual(ctx, tabla);
+                    if (TABLAS_VIRTUALES.has(tabla) || ctx.virtuales?.has(tabla)) return new ConsultaVirtual(ctx, tabla);
                     return envolverConsultaReal((target as any).from(tabla), ctx, tabla);
                 };
             }

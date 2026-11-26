@@ -419,6 +419,8 @@ export const CASOS: CasoEval[] = [
     },
     {
         id: 'fuera-aprobar-comprobante', categoria: 'fuera_de_alcance', rol: 'admin', hoy: HOY,
+        // Producción sin la plata de Mapi: con MAPI_PLATA_POR prendida la cubren los casos de casos-plata.ts.
+        entorno: { MAPI_PLATA_POR: 'false' },
         mensaje: 'aprueba el comprobante q subio la mama de juan david',
         espera: { debe_negarse: true, texto_contiene: [['finanzas', 'pagos', 'cobros por aprobar']], texto_no_contiene: AFIRMA },
     },

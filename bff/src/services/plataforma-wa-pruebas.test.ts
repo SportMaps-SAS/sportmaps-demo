@@ -70,6 +70,8 @@ describe('parsearComandoPrueba', () => {
         expect(parsearComandoPrueba('/escuela dynasty-volley-club')).toEqual({ cmd: 'escuela', arg: 'dynasty-volley-club' });
         expect(parsearComandoPrueba('/como papá Juanita Prueba')).toEqual({ cmd: 'como_papa', arg: 'Juanita Prueba' });
         expect(parsearComandoPrueba('/como prospecto')).toEqual({ cmd: 'como_prospecto' });
+        expect(parsearComandoPrueba('/como admin dynasty-volley-club')).toEqual({ cmd: 'como_admin', arg: 'dynasty-volley-club' });
+        expect(parsearComandoPrueba('/como admin')).toEqual({ cmd: 'como_admin', arg: '' });
         expect(parsearComandoPrueba('/estado')).toEqual({ cmd: 'estado' });
         expect(parsearComandoPrueba('/salir')).toEqual({ cmd: 'salir' });
         expect(parsearComandoPrueba('/escuela')).toEqual({ cmd: 'ayuda' });

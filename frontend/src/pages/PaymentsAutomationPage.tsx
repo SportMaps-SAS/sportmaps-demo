@@ -452,6 +452,10 @@ interface PaymentTransaction {
   ocr_destination?: string | null;
   ocr_destination_name?: string | null;
   receipt_verdict_reasons?: unknown[] | null;
+  /** Quién selló la lectura; solo 'server_verified' entra a «Aprobar todos los verdes». */
+  receipt_image_sha256_source?: string | null;
+  /** 'cliente' = monto elegido por el navegador (D8): fuera del lote. */
+  amount_source?: string | null;
   reconciliation_status?: string | null;
   /** Cuándo entró el comprobante (receipt_submitted_at; si falta, receipt_verdict_at). */
   submitted_at?: string | null;
@@ -893,7 +897,7 @@ export default function PaymentsAutomationPage() {
           provider_transaction_id, qr_id, reference,
           ocr_amount, ocr_currency, ocr_date, ocr_bank, ocr_reference, ocr_provider,
           receipt_verdict, ocr_destination, ocr_destination_name, receipt_verdict_reasons, reconciliation_status,
-          receipt_verdict_at,
+          receipt_verdict_at, receipt_image_sha256_source, amount_source,
           requires_review, last_failure_at, last_failure_reason,
           parent:profiles!payments_parent_id_fkey(full_name, email),
           user:profiles!payments_user_id_fkey(full_name, email),
@@ -1057,6 +1061,9 @@ export default function PaymentsAutomationPage() {
         ocr_destination: p.ocr_destination ?? null,
         ocr_destination_name: p.ocr_destination_name ?? null,
         receipt_verdict_reasons: p.receipt_verdict_reasons ?? null,
+        // Regla del lote (Paso 4): greenExclusion solo deja entrar verdes sellados por el servidor y sin monto del navegador.
+        receipt_image_sha256_source: p.receipt_image_sha256_source ?? null,
+        amount_source: p.amount_source ?? null,
         reconciliation_status: p.reconciliation_status ?? null,
         submitted_at: submittedAt.get(p.id) ?? p.receipt_verdict_at ?? null,
         requires_review: p.requires_review ?? null,

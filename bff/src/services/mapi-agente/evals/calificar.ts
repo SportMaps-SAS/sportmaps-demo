@@ -51,9 +51,10 @@ export const mostrarPatron = (p: PatronTexto | ValorEsperado): string =>
 
 /**
  * Pregunta para desambiguar: «?» o la petición directa («Dime cuál», «necesito
- * que me confirmes cuál»), que también es preguntar (mt-ambiguo-maria-sigue-ambiguo, N=3 del 11-24).
+ * que me confirmes cuál», «Dime de cuál hablas»), que también es preguntar
+ * (mt-ambiguo-maria-sigue-ambiguo N=3 del 11-24; plata-aprobar-ambiguo 11-26).
  */
-export const PREGUNTA = /[?¿]|(^|[^\p{L}])(dime|ind[ií]came|conf[ií]rmame|me (confirmas|dices|indicas)|necesito que me (confirmes|digas|indiques)) (cu[aá]l|qu[eé]|si|a qui[eé]n|el|la)(?!\p{L})/iu;
+export const PREGUNTA = /[?¿]|(^|[^\p{L}])(dime|ind[ií]came|conf[ií]rmame|me (confirmas|dices|indicas)|necesito que me (confirmes|digas|indiques)) (?:(?:de|a|por|con|en) )?(cu[aá]l|qu[eé]|si|a qui[eé]n|el|la)(?!\p{L})/iu;
 export const NEGATIVA = /(^|[^\p{L}])((?:no|ni|tampoco) (?:(?:te|le|les) )?(puedo|puedes|podr[ií]a|tengo|tienes|cuento con|(lo|la|los|las) (hago|manejo|veo|tengo|puedes)|me es posible|es posible|es algo que|est[aá] (a mi alcance|dentro|disponible|permitid[oa]|habilitad[oa]|en tus equipos|entre)|se puede|lo puedo|la puedo|los puedo|las puedo|encontr[eé]|encuentro|aparece|aparecen|veo|manejo|hago|me corresponde|alcanzo|figura|est[aá]n? en)|(?<!ya )no existe|no hay (forma|manera|opci[oó]n|nadie)|solo puedo (consultar|ver|revisar|trabajar)|solo (la )?administraci[oó]n|solo (el|un|los) administrador|solo (lo|la|los|las) puede|lo (hace|puede hacer|maneja) (la|el) (administraci|administrador|due)|fuera de (mi|lo que)|sin acceso|desde (la pantalla|el men[uú])|se hace (en|desde))/iu;
 
 // ─── Argumentos ─────────────────────────────────────────────────────────────

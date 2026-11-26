@@ -45,6 +45,8 @@ vi.mock('../../config/supabase', async () => {
     const { crearSupabaseFalso } = await import('./supabase-falso.test-helper');
     const falso = crearSupabaseFalso((c) => (c.op === 'select' ? { data: aplicar(h.db[c.tabla] ?? [], c.filtros) } : { data: [] }));
     (globalThis as any).__consultas = falso.consultas;
+    // Clases de prueba y agendar van por su _por con service_role (rpc-por.ts).
+    (falso.supabase as any).rpc = (nombre: string, params: unknown) => h.rpc(nombre, params);
     return {
         supabase: falso.supabase, supabaseUrl: 'http://supabase.local', supabaseServiceKey: 'clave-de-prueba',
         SUPABASE_URL: 'http://supabase.local', SUPABASE_ANON_KEY: 'anon',
@@ -148,12 +150,12 @@ describe('catálogo del módulo', () => {
         }
     });
 
-    it('al coach no se le ofrece nada de torneos ni agendar; las de sesión piden el header', () => {
+    it('al coach no se le ofrece nada de torneos ni agendar; clases y agendar ya no piden el header (van por su _por)', () => {
         const c = conSesion(coach);
         for (const x of [torneos, convocarATorneo, inscribirATorneo, agendarClaseDePrueba]) expect(disponible(x, c)).toBe(false);
         expect(disponible(clasesDePrueba, c)).toBe(true);
-        expect(disponible(clasesDePrueba, coach)).toBe(false);
-        expect(disponible(agendarClaseDePrueba, admin)).toBe(false);
+        expect(disponible(clasesDePrueba, coach)).toBe(true);
+        expect(disponible(agendarClaseDePrueba, admin)).toBe(true);
         expect(disponible(agendarClaseDePrueba, conSesion(admin))).toBe(true);
     });
 });
@@ -544,11 +546,11 @@ const clase = (extra: Record<string, unknown> = {}) => ({
 });
 
 describe('clases_de_prueba', () => {
-    it('coach: la RPC de la pantalla como la persona, sin plata y sin prospectos', async () => {
+    it('coach: la _por de la RPC de la pantalla a nombre del coach, sin plata y sin prospectos', async () => {
         h.rpc.mockResolvedValue({ data: [clase({ pago: { estado: 'paid' } })], error: null });
         const r: any = await clasesDePrueba.ejecutar(conSesion(coach), { fecha: null });
         expect(h.rpc).toHaveBeenCalledTimes(1);
-        expect(h.rpc).toHaveBeenCalledWith('clases_prueba_semana', { p_school_id: ESCUELA, p_desde: '2026-11-24', p_hasta: '2026-11-30' });
+        expect(h.rpc).toHaveBeenCalledWith('clases_prueba_semana_por', { p_actor: coach.userId, p_school_id: ESCUELA, p_desde: '2026-11-24', p_hasta: '2026-11-30' });
         expect(r.clases[0]).toEqual({
             prospecto: LEAD, nombre: 'Juana Prueba', fecha: '2026-11-25', hora: '4:00 p. m. a 5:30 p. m.', grupo: 'Tiburones',
             lugar: 'Cancha 1', estado: 'agendada', asistencia: null,
@@ -558,7 +560,7 @@ describe('clases_de_prueba', () => {
     });
 
     it('admin: suma los prospectos pendientes sin teléfono, correo ni notas', async () => {
-        h.rpc.mockImplementation(async (fn: string) => fn === 'clases_prueba_semana'
+        h.rpc.mockImplementation(async (fn: string) => fn === 'clases_prueba_semana_por'
             ? { data: [clase()], error: null }
             : {
                 data: [
@@ -568,11 +570,23 @@ describe('clases_de_prueba', () => {
                 error: null,
             });
         const r: any = await clasesDePrueba.ejecutar(conSesion(admin), { fecha: '2026-11-25' });
-        expect(h.rpc).toHaveBeenCalledWith('listar_clase_prueba', { p_school_id: ESCUELA });
+        expect(h.rpc).toHaveBeenCalledWith('listar_clase_prueba_por', { p_actor: admin.userId, p_school_id: ESCUELA });
         expect(r.clases[0].pago).toBe('pagada · $15.000');
         expect(r.prospectos).toMatchObject({ pendientes: 2, sin_clase_agendada: 1 });
         expect(r.prospectos.recientes_sin_clase[0]).toEqual({ prospecto: 'l1', nombre: 'Nuevo Uno', acudiente: 'Mamá Uno', canal: 'WhatsApp', desde: '2026-11-20', grupo: null });
         expect(JSON.stringify(r)).not.toMatch(/300\d{7}|@x\.co|alérgico/);
+    });
+
+    it('sin JWT (WhatsApp) se ofrece y llama la _por con el actor del alcance', async () => {
+        expect(disponible(clasesDePrueba, coach)).toBe(true);
+        h.rpc.mockResolvedValue({ data: [], error: null });
+        await clasesDePrueba.ejecutar(coach, { fecha: null });
+        expect(h.rpc).toHaveBeenCalledWith('clases_prueba_semana_por', expect.objectContaining({ p_actor: coach.userId }));
+    });
+
+    it('sin la migración (PGRST202): «todavía no está disponible»', async () => {
+        h.rpc.mockResolvedValue({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.clases_prueba_semana_por' } });
+        await expect(clasesDePrueba.ejecutar(coach, { fecha: null })).rejects.toThrow(/todavía no está disponible/);
     });
 
     it('sin permiso en la RPC: rechazo explicado; fecha mal escrita: rechazo', async () => {
@@ -596,8 +610,9 @@ describe('agendar_clase_de_prueba', () => {
         h.db.school_trial_slots = [cupo(CUPO)];
     });
 
-    it('solo administración, con sesión', () => {
+    it('solo administración, con o sin JWT', () => {
         expect(agendarClaseDePrueba.roles).toEqual(['admin']);
+        expect(disponible(agendarClaseDePrueba, admin)).toBe(true);
     });
 
     it('vista previa del único cupo libre ese día, sin escribir', async () => {
@@ -613,12 +628,14 @@ describe('agendar_clase_de_prueba', () => {
         expect(eq(de('school_signup_leads')[0], 'school_id')).toBe(ESCUELA);
     });
 
-    it('ejecutar: la RPC del buzón como la persona y sin pago', async () => {
+    it('ejecutar: la _por del buzón a nombre del admin, sin parámetros de plata', async () => {
         h.rpc.mockResolvedValue({ data: { ok: true, lead_id: LEAD, slot_id: CUPO }, error: null });
         const r = await agendarClaseDePrueba.ejecutar(a, { ...args, hora: '16:00' });
-        expect(h.rpc).toHaveBeenCalledWith('agendar_clase_prueba_desde_chat', expect.objectContaining({
-            p_conversation_id: CONV, p_slot_id: CUPO, p_nombre: 'Juana Prueba', p_monto: null, p_metodo: null,
+        expect(h.rpc).toHaveBeenCalledWith('agendar_clase_prueba_desde_chat_por', expect.objectContaining({
+            p_actor: admin.userId, p_conversation_id: CONV, p_slot_id: CUPO, p_nombre: 'Juana Prueba',
         }));
+        const params = h.rpc.mock.calls[0][1];
+        for (const k of ['p_monto', 'p_metodo', 'p_referencia']) expect(params).not.toHaveProperty(k);
         expect(r.estado).toBe('executed');
         expect(agendarClaseDePrueba.mensajeResultado(r, args)).toMatch(/^Quedó agendada la clase de prueba de Juana Prueba el miércoles 25 de noviembre de 2026, 4:00 p\. m\. a 5:30 p\. m\. \(Tiburones\)\./);
     });

@@ -7,6 +7,8 @@
  *
  *   tester (PLATFORM_WA_TESTERS) con «/…» o con sesión → modo pruebas (F2)
  *   PLATFORM_WA_ENABLED + ACTIVAR / DESACTIVAR / AYUDA  → suscripción (F1)
+ *   MAPI_WHATSAPP + suscripción activa + escuela con
+ *     mapi_agent_enabled (o botón `mapi:*`)             → Mapi agente (mapi-agente/canal-whatsapp)
  *   número con suscripción activa                       → ayuda corta, 1 vez/24 h
  *   resto                                               → silencio (D12), o una
  *       respuesta comercial cada 30 días con PLATFORM_WA_RESPUESTA_COMERCIAL=true
@@ -24,6 +26,8 @@ import {
 } from './plataforma-wa.service';
 import { atenderPrueba, haySesionDePrueba } from './plataforma-wa-pruebas.service';
 import { atenderLeadPlataforma, debeAtenderLead, leadsMapiActivo, type ResultadoLead } from './plataforma-wa-leads.service';
+import { escuelasConMapi, esRespuestaBotonMapi, mapiWhatsAppActivo } from './mapi-agente/canal-whatsapp-entrada';
+import type { ResultadoMapiWa } from './mapi-agente/canal-whatsapp';
 
 // ─── Comandos (puros) ────────────────────────────────────────────────────────
 
@@ -90,7 +94,7 @@ export const TEXTO_COMERCIAL =
 export type ResultadoEntrante =
     | 'sin_canal' | 'duplicado' | 'prueba' | 'apagado' | 'activada' | 'activar_sin_escuela' | 'codigo_invalido'
     | 'codigo_de_otro_numero' | 'desactivada' | 'ayuda' | 'silencio' | 'comercial' | 'no_texto'
-    | ResultadoLead;
+    | ResultadoLead | ResultadoMapiWa;
 
 async function suscripcionesDelNumero(numero: string): Promise<Suscripcion[]> {
     const { data, error } = await supabase.from('platform_wa_suscripciones')
@@ -142,6 +146,18 @@ export async function atenderEntrantePlataforma(
     }
 
     if (!habilitado) return 'apagado';
+
+    // Mapi agente por WhatsApp (plan mapi-admin-por-whatsapp §12.2), detrás de
+    // MAPI_WHATSAPP: los botones `mapi:*` y los suscriptores activos de una escuela
+    // con mapi_agent_enabled van al agente ANTES de la ayuda corta. Los comandos
+    // de suscripción (ACTIVAR / PAUSAR / AYUDA) siguen primero. Sin la variable,
+    // todo sigue igual.
+    if (!comando && mapiWhatsAppActivo() && suscripciones.some((s) => s.estado === 'activa')
+        && (esRespuestaBotonMapi(msg) || (await escuelasConMapi(numero, suscripciones)).length > 0)) {
+        // El motor (agente + 38 herramientas) se carga solo cuando hace falta.
+        const { atenderMapiPorWhatsApp } = await import('./mapi-agente/canal-whatsapp');
+        return atenderMapiPorWhatsApp({ canal, numero, msg, suscripciones, ahora });
+    }
 
     if (comando?.tipo === 'activar') return activar(canal, numero, comando.codigo, msg.waMessageId, ahora);
     if (comando?.tipo === 'desactivar') return desactivar(canal, numero, suscripciones);

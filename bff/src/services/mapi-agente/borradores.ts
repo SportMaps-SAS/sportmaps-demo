@@ -100,6 +100,9 @@ export async function crearBorrador(p: {
         args: prep.args,
         preview: prep.vista,
         content_hash: hashDe(h.nombre, prep.huella, prep.vista),
+        // Igual al DEFAULT de la columna; explícito para la memoria del modo pruebas
+        // del canal (cortafuegos: una tabla virtual no tiene DEFAULT).
+        status: 'draft',
         expires_at: new Date(Date.now() + VIGENCIA_MIN * 60_000).toISOString(),
     }).select('*').single();
     if (error || !data) throw new Error(`no se pudo guardar el borrador: ${error?.message}`);
@@ -143,6 +146,25 @@ export async function pendientesDelTicket(userId: string, ticketId: string): Pro
     return (await tarjetasDelTicket(userId, ticketId))
         .filter((t) => t.estado === 'draft' && Date.parse(t.expiraEn) > ahora)
         .slice(-5);
+}
+
+/** Ventana de las propuestas de WhatsApp que el modelo ve como pendientes (§12.10). */
+export const VENTANA_CANAL_MIN = 30;
+
+/**
+ * Propuestas vivas de un canal SIN hilo (WhatsApp: ticket_id null), de este
+ * usuario en ESTA escuela y de los últimos 30 min, las 5 más nuevas en orden.
+ * Las de la app (con ticket) no se mezclan.
+ */
+export async function pendientesDelCanal(userId: string, schoolId: string, ahora = Date.now()): Promise<TarjetaAccion[]> {
+    await vencerPendientes(userId).catch(() => {});
+    const { data, error } = await supabase.from('mapi_action_drafts').select('*')
+        .eq('user_id', userId).eq('school_id', schoolId).is('ticket_id', null).eq('status', 'draft')
+        .gt('expires_at', new Date(ahora).toISOString())
+        .gte('created_at', new Date(ahora - VENTANA_CANAL_MIN * 60_000).toISOString())
+        .order('created_at', { ascending: false }).limit(5);
+    if (error) return [];
+    return ((data as FilaBorrador[]) ?? []).reverse().map(aTarjeta);
 }
 
 export async function asociarMensaje(ids: string[], messageId: string): Promise<void> {

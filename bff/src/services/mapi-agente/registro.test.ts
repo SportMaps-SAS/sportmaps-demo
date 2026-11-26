@@ -40,9 +40,12 @@ describe('CATALOGO', () => {
         process.env.MAPI_AGENT_STRICT = 'true';
         try {
             const defs = definicionesApi(CATALOGO);
+            const acciones = CATALOGO.filter((x) => x.tipo === 'accion').map((x) => x.nombre);
             for (const d of defs) {
                 const h = CATALOGO.find((x) => x.nombre === d.name)!;
-                expect(Boolean(d.strict), d.name).toBe(h.tipo === 'accion');
+                // strict solo en acciones: las primeras MAX_STRICT del catálogo.
+                if (h.tipo !== 'accion') expect(Boolean(d.strict), d.name).toBe(false);
+                else expect(Boolean(d.strict), d.name).toBe(acciones.indexOf(d.name) < MAX_STRICT);
             }
             // La API responde 400 «Too many strict tools» por encima de 20.
             expect(defs.filter((d) => d.strict).length).toBeLessThanOrEqual(MAX_STRICT);
@@ -70,6 +73,16 @@ describe('CATALOGO', () => {
             const props = Object.keys(h.esquema.properties);
             expect(h.esquema.required.filter((r) => !props.includes(r)), h.nombre).toEqual([]);
         }
+    });
+
+    it('las acciones que mueven plata llevan la marca (WhatsApp: vence a 10 min y tope por hora)', () => {
+        const conMarca = CATALOGO.filter((h) => h.tipo === 'accion' && h.plata).map((h) => h.nombre).sort();
+        expect(conMarca).toEqual([
+            'ajustar_stock', 'aprobar_pago', 'aprobar_verdes', 'cambiar_plan', 'cancelar_reserva',
+            'crear_cobro_unico', 'inscribir_a_torneo', 'registrar_pago_efectivo',
+        ]);
+        // Nada de consulta con la marca: no tendría efecto y confundiría.
+        expect(CATALOGO.filter((h) => h.tipo === 'consulta' && (h as any).plata)).toEqual([]);
     });
 
     it('ninguna herramienta recibe la escuela del modelo', () => {

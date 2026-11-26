@@ -112,10 +112,17 @@ export const MAX_STRICT = 20;
 
 export function definicionesApi(hs: Herramienta[]): any[] {
     const strict = process.env.MAPI_AGENT_STRICT === 'true';
-    return hs.map((h) => ({
-        name: h.nombre,
-        description: h.descripcion,
-        input_schema: normalizarEsquema(h.esquema),
-        ...(strict && h.tipo === 'accion' ? { strict: true } : {}),
-    }));
+    // Con el flag, strict solo en las primeras MAX_STRICT acciones del catálogo: el
+    // catálogo ya tiene más de 20 acciones (plata de Mapi, 2026-11-26) y la API
+    // rechaza la request entera por encima del tope. Las demás siguen validadas por zod.
+    let restantes = MAX_STRICT;
+    return hs.map((h) => {
+        const esStrict = strict && h.tipo === 'accion' && restantes-- > 0;
+        return {
+            name: h.nombre,
+            description: h.descripcion,
+            input_schema: normalizarEsquema(h.esquema),
+            ...(esStrict ? { strict: true } : {}),
+        };
+    });
 }

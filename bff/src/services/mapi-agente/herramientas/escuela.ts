@@ -12,23 +12,22 @@
  *                            «Inscribir en el plan»), con previewPlanChange del banco de horas
  *   crear_cobro_unico      → previewChargeBatch / createChargeBatch (modal «Cobros y pagos»)
  *
- * LA SESIÓN DE LA PERSONA. Las tres RPC de pausa y baja autorizan con
- * `auth.uid()`: llamadas con service_role, la de baja y la vista previa de la
- * pausa responden «No autorizado» y las otras pasan de largo SIN dejar quién lo
- * hizo (docs/gotchas-tecnicos.md, «Llamar una RPC desde el BFF le apaga su
- * propia autorización»). Por eso se llaman con el JWT de quien confirma, igual
- * que la pantalla, y su gate es el gate real. El alcance tiene que traer
- * `authorization` (el header de la request); sin él la herramienta no se ofrece.
+ * EL ACTOR. Las RPC de pausa y baja autorizan con `auth.uid()`: llamadas con
+ * service_role pelado, la de baja responde «No autorizado» y las de pausa pasan
+ * de largo SIN dejar quién lo hizo (docs/gotchas-tecnicos.md). Por eso se llaman
+ * por su `<rpc>_por` (rpc-por.ts, plan mapi-rpc-por-actor): service_role con
+ * `p_actor = alcance.userId`; la base valida que el actor sea administración de
+ * la escuela de la inscripción, lo fija en la transacción y llama a la RPC de la
+ * pantalla, cuyo gate sigue siendo el real. Funciona con o sin JWT (WhatsApp).
  *
  * Plata: el modelo nunca la ve calculada por él. Los montos de la tarjeta salen
  * de la base o de la RPC; el coach no tiene ninguna de estas herramientas.
  */
 
 import { createHash } from 'node:crypto';
-import type { Request } from 'express';
 import { z } from 'zod';
 import { supabase } from '../../../config/supabase';
-import { userClient } from '../../../utils/userClient';
+import { motivoDeLaPor, rpcPor, type RpcPor } from '../rpc-por';
 import { saldoDelCobro } from '../../../utils/saldo-cobro';
 import { crearInscripcion, type DatosInscripcion } from '../../../routes/enrollments';
 import { nivelFinanzasEnEscuela } from '../../../middlewares/assertSchoolFinanceAdmin';
@@ -54,22 +53,13 @@ function soloAdmin(a: Alcance): void {
     if (a.rol !== 'admin') throw new RechazoHerramienta('Esto lo hace solo la administración de la escuela.');
 }
 
-/** El alcance con la sesión de la persona (lo pone el integrador desde la request). */
-export type AlcanceConSesion = Alcance & { authorization?: string | null };
-
-export function tieneSesion(a: Alcance): boolean {
-    return /^Bearer\s+\S+/i.test(String((a as AlcanceConSesion).authorization ?? ''));
-}
-
-const SIN_SESION = 'Esta acción necesita tu sesión y no llegó. Hazla desde Alumnos.';
-
-/** Llama la RPC con el JWT de la persona, como la pantalla. Errores de la RPC → texto para la persona. */
-async function rpcDeLaPersona(a: Alcance, nombre: string, args: Record<string, unknown>):
+/** Llama la `_por` de la RPC de la pantalla a nombre del actor. Errores → texto para la persona. */
+async function rpcDelActor(a: Alcance, nombre: RpcPor, args: Record<string, unknown>):
     Promise<{ ok: true; data: any } | { ok: false; motivo: string }> {
-    if (!tieneSesion(a)) return { ok: false, motivo: SIN_SESION };
-    const cliente = userClient({ headers: { authorization: (a as AlcanceConSesion).authorization } } as unknown as Request);
-    const { data, error } = await cliente.rpc(nombre, args);
+    const { data, error } = await rpcPor(a, nombre, args);
     if (error) {
+        const propio = motivoDeLaPor(error, nombre);
+        if (propio) return { ok: false, motivo: propio };
         const m = mapearErrorRpc(error as any);
         if (m.status === 500) {
             console.error('[mapi-agente] RPC falló', { nombre, code: (error as any).code, msg: (error as any).message });
@@ -206,7 +196,6 @@ export const pausarInscripcion: HerramientaAccion<ArgsPausar> = {
         additionalProperties: false,
     },
     roles: ['admin'],
-    habilitada: tieneSesion,
     validar: (args) => {
         const r = validarCon(z.object({
             deportista: z.string().min(5).max(80), desde: z.string().trim(), hasta: z.string().trim(),
@@ -223,7 +212,7 @@ export const pausarInscripcion: HerramientaAccion<ArgsPausar> = {
         const insc = inscripcionPrincipal(await inscripcionesAbiertas(a, d), d.nombre);
         if (insc.paused_reason) return { ok: false, motivo: `${d.nombre} ya está en pausa. Para cambiar las fechas, reactívalo primero.` };
 
-        const pv = await rpcDeLaPersona(a, 'preview_enrollment_pause', {
+        const pv = await rpcDelActor(a, 'preview_enrollment_pause', {
             p_enrollment_id: insc.id, p_month_from: `${args.desde}-01`, p_month_to: `${args.hasta}-01`,
         });
         if (!pv.ok) return { ok: false, motivo: pv.motivo };
@@ -256,7 +245,7 @@ export const pausarInscripcion: HerramientaAccion<ArgsPausar> = {
         soloAdmin(a);
         const d = await resolverDeportista(a, args.deportista);
         const insc = inscripcionPrincipal(await inscripcionesAbiertas(a, d), d.nombre);
-        const r = await rpcDeLaPersona(a, 'pause_enrollment_directly', {
+        const r = await rpcDelActor(a, 'pause_enrollment_directly', {
             p_enrollment_id: insc.id, p_reason: MOTIVO_RPC[args.motivo],
             p_month_from: `${args.desde}-01`, p_month_to: `${args.hasta}-01`, p_note: args.nota,
         });
@@ -300,7 +289,6 @@ export const reactivarInscripcion: HerramientaAccion<ArgsReactivar> = {
         additionalProperties: false,
     },
     roles: ['admin'],
-    habilitada: tieneSesion,
     validar: (args) => {
         const r = validarCon(z.object({ deportista: z.string().min(5).max(80), nota: z.string().max(300).nullable().optional() }),
             'Falta el deportista que vuelve de la pausa.')(args);
@@ -350,7 +338,7 @@ export const reactivarInscripcion: HerramientaAccion<ArgsReactivar> = {
         const d = await resolverDeportista(a, args.deportista);
         const insc = (await inscripcionesAbiertas(a, d)).find((f) => f.status === 'active' && f.paused_reason);
         if (!insc) return { estado: 'failed', resultado: { motivo: `${d.nombre} ya no estaba en pausa.` } };
-        const r = await rpcDeLaPersona(a, 'resume_enrollment', { p_enrollment_id: insc.id, p_note: args.nota });
+        const r = await rpcDelActor(a, 'resume_enrollment', { p_enrollment_id: insc.id, p_note: args.nota });
         if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
         return {
             estado: 'executed',
@@ -415,7 +403,6 @@ export const darDeBaja: HerramientaAccion<ArgsBaja> = {
         additionalProperties: false,
     },
     roles: ['admin'],
-    habilitada: tieneSesion,
     validar: validarCon(z.object({ deportista: z.string().min(5).max(80), motivo: z.string().trim().min(3).max(200) }),
         'Faltan datos: el deportista y el motivo de la baja.'),
     async preparar(a, args) {
@@ -463,7 +450,7 @@ export const darDeBaja: HerramientaAccion<ArgsBaja> = {
     async ejecutar(a, args) {
         soloAdmin(a);
         const d = await resolverDeportista(a, args.deportista);
-        const r = await rpcDeLaPersona(a, 'set_school_athlete_status', {
+        const r = await rpcDelActor(a, 'set_school_athlete_status', {
             // La escuela de la SESIÓN, nunca la del modelo: la RPC autoriza contra ella.
             p_school_id: a.schoolId, p_athlete_type: d.tipo, p_athlete_id: d.id, p_active: false,
         });
@@ -589,6 +576,7 @@ const conPrecio = (p: { nombre: string; precio: number | null }) => (p.precio !=
 export const cambiarPlan: HerramientaAccion<ArgsCambiarPlan> = {
     tipo: 'accion',
     nombre: 'cambiar_plan',
+    plata: true,
     descripcion: 'PREPARA el cambio de plan de un deportista que ya tiene plan activo, con las mismas reglas que «Inscribir en el plan»: anula lo pendiente del plan anterior y emite la mensualidad del nuevo. No lo ejecuta, la persona confirma. Solo administración.',
     esquema: {
         type: 'object',
@@ -815,6 +803,7 @@ export function idDeOperacion(schoolId: string, userId: string, previewHash: str
 export const crearCobroUnico: HerramientaAccion<ArgsCobroUnico> = {
     tipo: 'accion',
     nombre: 'crear_cobro_unico',
+    plata: true,
     descripcion: 'PREPARA un cobro único (torneo, uniforme, viaje…) para un equipo o una lista de deportistas, con el mismo motor de «Cobros y pagos». No registra pagos. No lo ejecuta: la persona confirma. Solo administración.',
     esquema: {
         type: 'object',

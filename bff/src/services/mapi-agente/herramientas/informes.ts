@@ -45,6 +45,7 @@ import { z } from 'zod';
 import type { Request } from 'express';
 import { supabase } from '../../../config/supabase';
 import { userClient } from '../../../utils/userClient';
+import { motivoDeLaPor, rpcPor, type RpcPor } from '../rpc-por';
 import { historialDeAsistencia } from '../../../routes/attendance';
 import { ocupacionYCrecimiento } from '../../../routes/reports';
 import { inscribirAtletaDesdeLaEscuela } from '../../../routes/events.route';
@@ -86,8 +87,9 @@ const rangoHoras = (ini: unknown, fin: unknown) => [horaCorta(ini), horaCorta(fi
 
 /**
  * El integrador suma al Alcance el header Authorization de la request (el del
- * turno y el del Confirmar), igual que en herramientas/entrenador.ts. Nunca se
- * guarda en el borrador ni va al modelo.
+ * turno y el del Confirmar). Nunca se guarda en el borrador ni va al modelo.
+ * Hoy solo lo usa inscribir_a_torneo (la ruta del torneo, sin `_por`). Las
+ * clases de prueba y agendar van por su `_por` (rpc-por.ts), con o sin JWT.
  */
 export type AlcanceConSesion = Alcance & { authorization?: string | null };
 
@@ -863,6 +865,7 @@ function motivoInscripcion(r: { status: number; body: any }): string {
 export const inscribirATorneo: HerramientaAccion<ArgsInscribir> = {
     tipo: 'accion',
     nombre: 'inscribir_a_torneo',
+    plata: true,
     descripcion: 'PREPARA INSCRIBIR deportistas (o un equipo de la escuela completo) en una categoría de un torneo INTERNO que organiza la escuela. La inscripción queda aprobada, avisa a la familia y, si el torneo cobra, crea un cobro a cada familia: la vista previa dice cuánto. Para «convocar» o armar la nómina usa convocar_a_torneo. Los torneos EXTERNOS (de otro organizador) no se inscriben desde aquí: se hacen por delegaciones en la pantalla del torneo. La persona confirma en la tarjeta. Solo administración.',
     esquema: {
         type: 'object',
@@ -982,8 +985,11 @@ const ESTADO_PAGO_CLASE: Record<string, string> = {
 const CANAL: Record<string, string> = { presencial: 'en la escuela', whatsapp: 'WhatsApp', formulario: 'formulario' };
 const asistenciaLegible = (v: unknown) => (v === 'asistio' ? 'asistió' : v === 'no_vino' ? 'no vino' : null);
 
-function errorDeRpc(error: { code?: string; message?: string }, nombre: string): never {
+function errorDeRpc(error: { code?: string; message?: string }, nombre: RpcPor): never {
     if (error.code === '42501') throw new RechazoHerramienta('No tienes acceso a esa información en esta escuela.');
+    // Sin la `_por` (migración sin aplicar) o mal llamada: lo dice rpc-por.
+    const propio = motivoDeLaPor(error, nombre);
+    if (propio) throw new RechazoHerramienta(propio);
     if (error.code === 'PGRST202' || error.code === '42883') throw new RechazoHerramienta('La agenda de clases de prueba no está activa en esta escuela.');
     throw new Error(`${nombre}: ${error.message}`);
 }
@@ -999,19 +1005,17 @@ export const clasesDePrueba: HerramientaConsulta<{ fecha: string | null }> = {
         additionalProperties: false,
     },
     roles: ['admin', 'coach'],
-    // Las RPC de la pantalla autorizan con auth.uid(): sin la sesión de la persona no hay cómo.
-    habilitada: (a) => sesionDe(a) !== null,
+    // Las RPC de la pantalla autorizan con auth.uid(): van por su _por, a nombre del actor.
     validar(args) {
         const r = z.object({ fecha: z.string().trim().nullish() }).safeParse(args ?? {});
         if (!r.success || (r.data.fecha && !esFechaIso(r.data.fecha))) throw new RechazoHerramienta('La fecha tiene que venir como AAAA-MM-DD.');
         return { fecha: r.data.fecha || null };
     },
     async ejecutar(a, { fecha }) {
-        const cli = comoLaPersona(a);
         const desde = fecha ?? a.hoy;
         const hasta = fecha ?? sumarDias(a.hoy, 6);
         // La RPC ya recorta al coach a sus equipos y le esconde los montos.
-        const { data, error } = await cli.rpc('clases_prueba_semana', { p_school_id: a.schoolId, p_desde: desde, p_hasta: hasta });
+        const { data, error } = await rpcPor(a, 'clases_prueba_semana', { p_school_id: a.schoolId, p_desde: desde, p_hasta: hasta });
         if (error) errorDeRpc(error, 'clases_prueba_semana');
         const filas = Array.isArray(data) ? (data as any[]) : [];
         const salida: Record<string, unknown> = {
@@ -1035,7 +1039,7 @@ export const clasesDePrueba: HerramientaConsulta<{ fecha: string | null }> = {
         };
 
         if (a.rol === 'admin') {
-            const { data: p, error: e2 } = await cli.rpc('listar_clase_prueba', { p_school_id: a.schoolId });
+            const { data: p, error: e2 } = await rpcPor(a, 'listar_clase_prueba', { p_school_id: a.schoolId });
             if (e2) errorDeRpc(e2, 'listar_clase_prueba');
             const prospectos = Array.isArray(p) ? (p as any[]) : [];
             const sinClase = prospectos.filter((x) => !x.estado_cupo && !x.fecha_clase);
@@ -1073,7 +1077,6 @@ interface AgendaArmada {
 }
 
 async function armarAgenda(a: Alcance, args: ArgsAgendar): Promise<{ ok: true; x: AgendaArmada } | { ok: false; motivo: string }> {
-    if (!sesionDe(a)) throw new RechazoHerramienta('Agendar necesita tu sesión de la app. Hazlo desde el buzón de WhatsApp.');
     if (!esFechaIso(args.fecha)) return { ok: false, motivo: 'La fecha tiene que venir como AAAA-MM-DD.' };
     if (args.fecha < a.hoy) return { ok: false, motivo: 'Esa fecha ya pasó.' };
     if (!UUID.test(args.prospecto)) throw new RechazoHerramienta('Ese prospecto no es válido. Búscalo con clases_de_prueba.');
@@ -1160,7 +1163,6 @@ export const agendarClaseDePrueba: HerramientaAccion<ArgsAgendar> = {
         additionalProperties: false,
     },
     roles: ['admin'],
-    habilitada: (a) => sesionDe(a) !== null,
     validar(args) {
         const r = z.object({
             prospecto: z.string().trim().min(10).max(60),
@@ -1198,7 +1200,8 @@ export const agendarClaseDePrueba: HerramientaAccion<ArgsAgendar> = {
         const r = await armarAgenda(a, args);
         if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
         const { x } = r;
-        const { data, error } = await comoLaPersona(a).rpc('agendar_clase_prueba_desde_chat', {
+        // La _por no recibe plata: registrar el pago de la clase no es de Mapi.
+        const { data, error } = await rpcPor(a, 'agendar_clase_prueba_desde_chat', {
             p_conversation_id: x.conversacion,
             p_slot_id: x.cupo.id,
             // El nombre que ya tiene el prospecto: la RPC lo reescribe con este.
@@ -1206,16 +1209,13 @@ export const agendarClaseDePrueba: HerramientaAccion<ArgsAgendar> = {
             p_fecha_nacimiento: null,
             p_genero: null,
             p_acudiente: null,
-            // Sin pago: registrar plata no es de Mapi.
-            p_monto: null,
-            p_metodo: null,
-            p_referencia: null,
         });
         if (error) {
             const k = Object.keys(MENSAJE_RPC_AGENDA).find((c) => String(error.message ?? '').includes(c));
+            const propio = motivoDeLaPor(error, 'agendar_clase_prueba_desde_chat');
             return {
                 estado: 'failed',
-                resultado: { nombre: x.nombre, motivo: k ? MENSAJE_RPC_AGENDA[k] : error.code === '42501' ? 'No tienes permiso para agendar en esta escuela.' : 'No se pudo agendar.' },
+                resultado: { nombre: x.nombre, motivo: k ? MENSAJE_RPC_AGENDA[k] : propio ?? (error.code === '42501' ? 'No tienes permiso para agendar en esta escuela.' : 'No se pudo agendar.') },
             };
         }
         return {

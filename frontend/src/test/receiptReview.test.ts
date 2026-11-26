@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   sortReviewQueue, waitingLabel, greenExclusion, bulkGreenSelection, rejectReasonError, rejectErrorMessage,
   REJECT_REASONS, type QueueItem, receiptGroups, keepReceiptGroupsTogether, orderReceiptGroup, joinSpanish, compareReceipt,
-  LOTE_VERDES_PAUSADO,
+  LOTE_VERDES_PAUSADO, MOTIVO_LECTURA_NO_SERVIDOR, MOTIVO_MONTO_NAVEGADOR,
 } from '@/lib/receiptReview';
 
 // Las reglas del lote se prueban con el lote ACTIVO; la pausa por defecto (Paso 0) tiene su caso.
@@ -12,7 +12,9 @@ afterEach(() => { vi.unstubAllEnvs(); });
 const base = (o: Partial<QueueItem> & { id: string }): QueueItem => ({
   status: 'awaiting_approval', amount: 180000, amount_paid: null, receipt_verdict: 'verde', ocr_amount: 180000,
   // Un archivo por cobro: el mismo receipt_url en dos cobros es UN comprobante de varios.
-  receipt_url: `r/${o.id}.jpg`, created_at: '2026-10-01T00:00:00Z', submitted_at: '2026-10-08T10:00:00Z', ...o,
+  receipt_url: `r/${o.id}.jpg`, created_at: '2026-10-01T00:00:00Z', submitted_at: '2026-10-08T10:00:00Z',
+  // Paso 4: solo lo sellado por el servidor y con monto del servidor entra al lote.
+  receipt_image_sha256_source: 'server_verified', amount_source: 'servidor', ...o,
 });
 
 describe('orden de la cola', () => {
@@ -61,6 +63,32 @@ describe('aprobar todos los verdes', () => {
     expect(greenExclusion(base({ id: 'x', status: 'partial' }))).toBe('no está por validar');
     // Tolerancia de 0,5 % (la misma de la hoja de aprobación).
     expect(greenExclusion(base({ id: 'x', ocr_amount: 180500 }))).toBeNull();
+  });
+
+  it('Paso 4: un verde que no selló el servidor no entra (lo pudo escribir la familia)', () => {
+    expect(greenExclusion(base({ id: 'x', receipt_image_sha256_source: 'client_original' }))).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+    expect(greenExclusion(base({ id: 'x', receipt_image_sha256_source: null }))).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+    expect(greenExclusion(base({ id: 'x', receipt_image_sha256_source: undefined }))).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+    expect(MOTIVO_LECTURA_NO_SERVIDOR).toBe('la lectura no la hizo el servidor');
+  });
+
+  it('D8: un verde con el monto elegido por el navegador no entra', () => {
+    expect(greenExclusion(base({ id: 'x', amount_source: 'cliente' }))).toBe(MOTIVO_MONTO_NAVEGADOR);
+    expect(MOTIVO_MONTO_NAVEGADOR).toBe('el monto lo eligió el navegador');
+    // Sin el dato (fila vieja) no se asume «cliente»: la columna es NOT NULL DEFAULT 'servidor'.
+    expect(greenExclusion(base({ id: 'x', amount_source: null }))).toBeNull();
+  });
+
+  it('el lote lista los verdes no sellados como excluidos, con su motivo', () => {
+    const sel = bulkGreenSelection([
+      base({ id: 'sellado' }),
+      base({ id: 'forjado', receipt_image_sha256_source: 'client_original' }),
+      base({ id: 'monto-cliente', amount_source: 'cliente' }),
+    ]);
+    expect(sel.eligible.map((p) => p.id)).toEqual(['sellado']);
+    expect(sel.excludedGreens.map((e) => [e.item.id, e.reason])).toEqual([
+      ['forjado', MOTIVO_LECTURA_NO_SERVIDOR], ['monto-cliente', MOTIVO_MONTO_NAVEGADOR],
+    ]);
   });
 
   it('cuenta y total; los verdes excluidos se listan con el motivo', () => {

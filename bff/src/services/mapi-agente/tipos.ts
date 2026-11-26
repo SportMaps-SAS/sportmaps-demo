@@ -37,6 +37,11 @@ export interface Alcance {
      * nunca va al modelo ni al borrador. Sin él, esas herramientas no se ofrecen.
      */
     authorization?: string | null;
+    /**
+     * Por dónde llega el turno. 'whatsapp' lo pone solo el adaptador del canal;
+     * la auditoría de plata (pago_operaciones.canal) lo distingue de la app.
+     */
+    canal?: 'app' | 'whatsapp';
 }
 
 /** Rechazo que se le explica a la persona (y al modelo) tal cual. */
@@ -115,6 +120,11 @@ export interface HerramientaAccion<A = any> extends HerramientaBase<A> {
      * proceso muere a mitad, el borrador pasa a «interrumpido» a los 10 min.
      */
     segundoPlano?: boolean;
+    /**
+     * Mueve plata (aprueba, registra, cobra, cambia tarifa, reembolsa…). En
+     * WhatsApp el botón vence a los 10 min y cuenta para el tope por hora (§12.10.1).
+     */
+    plata?: boolean;
     preparar: (a: Alcance, args: A) => Promise<Preparado<A>>;
     ejecutar: (a: Alcance, args: A) => Promise<ResultadoAccion>;
     /** Mensaje fijo después del Confirmar, armado con el resultado (§10.3). */

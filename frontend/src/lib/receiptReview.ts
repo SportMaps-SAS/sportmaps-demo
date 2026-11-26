@@ -63,6 +63,10 @@ export interface QueueItem {
   receipt_url?: string | null;
   requires_review?: boolean | null;
   period_already_settled?: boolean | null;
+  /** payments.receipt_image_sha256_source: solo 'server_verified' entra al lote (Paso 4). */
+  receipt_image_sha256_source?: string | null;
+  /** payments.amount_source: 'cliente' = monto elegido por el navegador (D8), fuera del lote. */
+  amount_source?: string | null;
   /** Cuándo entró el comprobante (ISO). */
   submitted_at?: string | null;
   created_at: string;
@@ -178,6 +182,10 @@ export function compareReceipt(
  * VITE_LOTE_VERDES_ACTIVO=true. Espejo de exclusionVerde del BFF.
  */
 export const LOTE_VERDES_PAUSADO = 'aprobación en lote pausada: revisa cada comprobante desde su fila';
+/** Paso 4: el verde solo vale si lo selló el servidor (receipt_image_sha256_source='server_verified'). */
+export const MOTIVO_LECTURA_NO_SERVIDOR = 'la lectura no la hizo el servidor';
+/** D8: amount_source='cliente', igual que auto_approve_payment. */
+export const MOTIVO_MONTO_NAVEGADOR = 'el monto lo eligió el navegador';
 const loteVerdesActivo = () => import.meta.env.VITE_LOTE_VERDES_ACTIVO === 'true';
 
 export function greenExclusion(p: QueueItem): string | null {
@@ -191,6 +199,10 @@ export function greenExclusion(p: QueueItem): string | null {
   const remaining = remainingOf(p);
   if (p.ocr_amount == null || remaining <= 0) return 'sin monto leído';
   if (Math.abs(Number(p.ocr_amount) - remaining) / remaining > 0.005) return 'el monto leído no coincide';
+  // Paso 4 (seguridad del veredicto): al final, para que un cobro con otro
+  // motivo concreto lo muestre; las dos se exigen siempre. Espejo de exclusionVerde.
+  if (p.receipt_image_sha256_source !== 'server_verified') return MOTIVO_LECTURA_NO_SERVIDOR;
+  if (p.amount_source === 'cliente') return MOTIVO_MONTO_NAVEGADOR;
   return null;
 }
 

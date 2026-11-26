@@ -29,7 +29,7 @@ vi.mock('../services/avisos-correo.service', async (orig) => {
 import {
     runPagosPorValidar, armarResumen, exclusionVerde, lineaVerdes, textosDelAviso, debeAvisar, escuelaElegible,
     pagosPorValidarActivo, tramoPorHora, saldo, claveAviso, ETIQUETA_TIPO, ORDEN_TIPOS, tipoDeCobro, URL_PANEL,
-    LOTE_VERDES_PAUSADO, type PagoPorValidar,
+    LOTE_VERDES_PAUSADO, MOTIVO_LECTURA_NO_SERVIDOR, MOTIVO_MONTO_NAVEGADOR, type PagoPorValidar,
 } from './pagos-por-validar.job';
 
 const MONSTER = 'eb3ebc77-4ea4-4992-96c8-3c8ec574578c';
@@ -45,7 +45,8 @@ function pagoBase(o: Partial<PagoPorValidar> & Record<string, any>): Record<stri
         status: 'awaiting_approval', amount: 145000, amount_paid: 0, early_payment_discount_applied: null,
         concept: 'Mensualidad noviembre 2026', payment_category: 'mensualidad', receipt_verdict: 'verde',
         ocr_amount: 145000, requires_review: false, child_id: null, period_year: null, period_month: null,
-        receipt_verdict_at: null, created_at: hace(100 * HORA), ...o,
+        receipt_verdict_at: null, created_at: hace(100 * HORA),
+        receipt_image_sha256_source: 'server_verified', amount_source: 'servidor', ...o,
     };
 }
 
@@ -221,7 +222,8 @@ describe('reglas puras', () => {
     const p = (o: Partial<PagoPorValidar>): PagoPorValidar => ({
         id: 'x', school_id: 's', amount: 145000, amount_paid: 0, early_payment_discount_applied: 0, concept: 'Mensualidad',
         payment_category: null, receipt_verdict: 'verde', receipt_url: 'r/x', ocr_amount: 145000, requires_review: false,
-        child_id: null, period_year: null, period_month: null, enviado_en: hace(HORA), ...o,
+        child_id: null, period_year: null, period_month: null, enviado_en: hace(HORA),
+        receipt_image_sha256_source: 'server_verified', amount_source: 'servidor', ...o,
     });
     const ctx = { compartidos: new Set<string>(), periodosPagados: new Set<string>() };
 
@@ -230,6 +232,30 @@ describe('reglas puras', () => {
         expect(saldo(pronto)).toBe(137750);
         expect(exclusionVerde(pronto, ctx)).toBeNull();
         expect(exclusionVerde(p({ ocr_amount: 137750 }), ctx)).toBe('el monto leído no coincide');
+    });
+
+    it('Paso 4: solo entra el verde que selló el servidor y con monto del servidor (D8)', () => {
+        expect(exclusionVerde(p({}), ctx)).toBeNull();
+        expect(exclusionVerde(p({ receipt_image_sha256_source: 'client_original' }), ctx)).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+        expect(exclusionVerde(p({ receipt_image_sha256_source: null }), ctx)).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+        expect(exclusionVerde(p({ receipt_image_sha256_source: undefined }), ctx)).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+        expect(exclusionVerde(p({ amount_source: 'cliente' }), ctx)).toBe(MOTIVO_MONTO_NAVEGADOR);
+        expect(exclusionVerde(p({ amount_source: null }), ctx)).toBeNull();
+        expect(MOTIVO_LECTURA_NO_SERVIDOR).toBe('la lectura no la hizo el servidor');
+        expect(MOTIVO_MONTO_NAVEGADOR).toBe('el monto lo eligió el navegador');
+        // El resumen cuenta el verde forjado como verde, pero no de un clic.
+        const r = armarResumen('s', [p({ id: 'a' }), p({ id: 'b', receipt_url: 'r/b', receipt_image_sha256_source: 'client_original' })], AHORA);
+        expect(r.verdes).toBe(2);
+        expect(r.verdesUnClic).toBe(1);
+        expect(r.verdesExcluidos).toEqual({ [MOTIVO_LECTURA_NO_SERVIDOR]: 1 });
+    });
+
+    it('leerPendientes trae la fuente de la huella y del monto (sin ellas nada entraría al lote)', async () => {
+        base.tablas.payments.push(pagoBase({ id: 'p8', school_id: OTRA, receipt_url: 'r/p8.jpg', receipt_submitted_at: hace(HORA), receipt_image_sha256_source: 'client_original', amount_source: 'cliente' }));
+        const { leerPendientes } = await import('./pagos-por-validar.job');
+        const filas = await leerPendientes(OTRA);
+        expect(filas.find((f) => f.id === 'p4')).toMatchObject({ receipt_image_sha256_source: 'server_verified', amount_source: 'servidor' });
+        expect(filas.find((f) => f.id === 'p8')).toMatchObject({ receipt_image_sha256_source: 'client_original', amount_source: 'cliente' });
     });
 
     it('líneas de verdes: con aprobación automática nunca «Aprobar todos los verdes»', () => {
@@ -266,6 +292,27 @@ describe('reglas puras', () => {
         expect(r.masDe24h).toBe(1);
         expect(r.desglose.map((l) => `${l.etiqueta} ${l.cantidad}`)).toEqual(['Torneo 2', 'Mensualidad 1']);
         expect(textosDelAviso(r, 'Club', 'manana', true).mensaje).toContain('Por tipo: Torneo 2 · Mensualidad 1.');
+    });
+});
+
+describe('contrato con greenExclusion (frontend/src/lib/receiptReview.ts): mismas reglas del lote', () => {
+    const front = readFileSync(resolve(__dirname, '../../../frontend/src/lib/receiptReview.ts'), 'utf8');
+    const constante = (nombre: string) => new RegExp(`export const ${nombre}\\s*=\\s*'([^']*)'`).exec(front)?.[1];
+
+    it('mismos motivos de la pausa y del Paso 4', () => {
+        expect(constante('LOTE_VERDES_PAUSADO')).toBe(LOTE_VERDES_PAUSADO);
+        expect(constante('MOTIVO_LECTURA_NO_SERVIDOR')).toBe(MOTIVO_LECTURA_NO_SERVIDOR);
+        expect(constante('MOTIVO_MONTO_NAVEGADOR')).toBe(MOTIVO_MONTO_NAVEGADOR);
+    });
+
+    it('el frontend aplica las mismas dos condiciones nuevas', () => {
+        const cuerpo = /export function greenExclusion[\s\S]*?\r?\n\}/.exec(front)![0];
+        expect(cuerpo).toContain("p.receipt_image_sha256_source !== 'server_verified'");
+        expect(cuerpo).toContain("p.amount_source === 'cliente'");
+        const job = readFileSync(resolve(__dirname, './pagos-por-validar.job.ts'), 'utf8');
+        const nuestro = /export function exclusionVerde[\s\S]*?\r?\n\}/.exec(job)![0];
+        expect(nuestro).toContain("p.receipt_image_sha256_source !== 'server_verified'");
+        expect(nuestro).toContain("p.amount_source === 'cliente'");
     });
 });
 
