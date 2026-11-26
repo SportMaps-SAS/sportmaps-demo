@@ -49,6 +49,18 @@ export const REGLAS = {
         regla: 'Colores por token (hsl(var(--…))): un hex fijo rompe dark mode y la marca de la escuela',
         re: /\b(?:bg|text|border(?:-[trblxy])?|from|via|to|ring|fill|stroke|outline|decoration|shadow|divide|placeholder|accent|caret)-\[#[0-9a-fA-F]{3,8}\]/g,
     },
+    'transition-all': {
+        regla: 'Nombrar las propiedades que se animan, nunca transition-all (Vercel Web Interface Guidelines; Emil Kowalski)',
+        re: /\btransition-all\b|transition:\s*all\b/g,
+    },
+    'hover-oculto': {
+        regla: 'Acción visible solo con hover: en el celular no existe. Usar md:opacity-0 md:group-hover:opacity-100',
+        re: /(?<![\w:-])opacity-0\b(?=[^"'`]*(?<![\w-])group-hover:opacity-100)|(?<![\w:-])group-hover:opacity-100\b(?=[^"'`]*(?<![\w:-])opacity-0\b)/g,
+    },
+    'tres-puntos': {
+        regla: 'Puntos suspensivos «…», no «...» (Cargando…, placeholders)',
+        re: /(?:Cargando|Guardando|Enviando|Procesando|Buscando|Subiendo|Generando|Actualizando|Verificando|Conectando)\.\.\.|placeholder="[^"]*\.\.\."/g,
+    },
     seguro: {
         regla: 'Deshacer en vez de «¿Seguro?» (useAccionConDeshacer, 8 s)',
         re: /¿\s*(?:Seguro|Segura|Est[áa]s?\s+segur[oa]|Realmente)\b|\bwindow\.confirm\s*\(/g,
@@ -133,7 +145,7 @@ const tResto = totales(porArchivo, (f) => !esV2(f));
 const lines = [];
 lines.push('Regla         │ V2 (*/v2/) │ resto de la app');
 lines.push('──────────────┼────────────┼────────────────');
-for (const k of Object.keys(REGLAS)) lines.push(`${k.padEnd(13)} │ ${String(tV2[k]).padStart(10)} │ ${String(tResto[k]).padStart(15)}`);
+for (const k of Object.keys(REGLAS)) lines.push(`${k.padEnd(14)} │ ${String(tV2[k]).padStart(10)} │ ${String(tResto[k]).padStart(15)}`);
 console.log(lines.join('\n'));
 
 // Trinquete

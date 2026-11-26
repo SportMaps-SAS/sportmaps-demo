@@ -167,10 +167,30 @@ reinstala encima). Íconos: **lucide-react**.
 
 ## 7. Movimiento
 
-- Transiciones `transition-smooth` (300ms) y `transition-spring` (350ms). Entrada `animate-fade-in`.
-- `prefers-reduced-motion` está respetado globalmente en `index.css`: no saltárselo con estilos inline.
+Reglas tomadas de Emil Kowalski (autor de Sonner) y de las Web Interface Guidelines de Vercel, adaptadas
+a una app operativa que se usa cientos de veces al día desde un Android de gama media.
+
+- **Nombrar lo que se anima**, nunca `transition-all` (compuerta: regla `transition-all`). Solo
+  `transform` y `opacity`; nada de animar `width`, `height`, `margin` o `top`.
+- **Duraciones:** presionar 100–160 ms (el `Button` ya usa 100 ms y `active:scale-[0.97]`), menús
+  150–250 ms, sheets y modales hasta 300 ms. Salir más rápido que entrar. Curva de salida (`ease-out`),
+  nunca `ease-in` en UI. Nada empieza en `scale(0)`: desde 0.95 con opacidad.
+- **Frecuencia:** lo que se ve 100+ veces al día (marcar asistencia, cambiar de pestaña) no se anima.
+  Los datos (tablas, montos, gráficas) no se re-animan al montar. Sin pulsos ni brillos infinitos.
+- **`prefers-reduced-motion`** está respetado globalmente en `index.css`: sin movimiento, pero los
+  cambios de opacidad y color pueden quedarse.
+- **Interrumpible:** lo que se dispara rápido o con gestos usa transiciones, no `@keyframes`.
+- **Gestos** (cerrar un sheet deslizando): sigue al dedo 1:1, se cierra pasado ~40–50 % del recorrido
+  o con un movimiento rápido, y siempre hay botón alternativo.
+- **Toasts (Sonner):** un solo `<Toaster />`; en el celular va **encima de la barra inferior**
+  (`mobileOffset` en `App.tsx`); el de Deshacer dura 8 s con `id` estable; deslizarlo para cerrarlo
+  **no** deshace.
+- **Hover:** en el celular no existe. Una acción que solo aparece con `group-hover` es invisible al
+  tocar: usar `md:opacity-0 md:group-hover:opacity-100` (compuerta: regla `hover-oculto`).
 - Nada que se mueva solo en pantallas operativas. Carruseles automáticos solo en marketing y
   **con pausa** (al pasar el mouse, al enfocar y con reduced-motion).
+- Los tokens `transition-smooth`/`transition-spring` de `index.css` son `all` y **no generan clase**
+  (los usan dos variantes de `Button` sin efecto): no usarlos; quedan para limpiar.
 
 ## 8. Contenido y honestidad
 
@@ -186,6 +206,13 @@ reinstala encima). Íconos: **lucide-react**.
 - Un `h1` por página; jerarquía de encabezados sin saltos.
 - Objetivos táctiles ≥ 44×44px en móvil.
 - Formularios: `Label` asociado, error en texto debajo del campo.
+- **El zoom no se bloquea** (`index.html` sin `maximum-scale` ni `user-scalable=no`).
+- Foco visible global para lo interactivo que no trae el suyo (`:focus-visible` en `index.css`).
+- `color-scheme` claro/oscuro para que los selectores nativos de fecha y hora sigan el tema.
+- Lo que se hace con clic en un `div`/`span` va en `<button>` (o con `role` y teclado).
+- Avisos que cambian solos (sin señal, pendientes) con `role="status"`.
+- «…» y no «...» en textos de carga y placeholders (compuerta: regla `tres-puntos`).
+- En español, mayúscula solo al inicio en títulos y botones (no el *Title Case* de las guías en inglés).
 
 ## 10. QA visual y compuertas
 

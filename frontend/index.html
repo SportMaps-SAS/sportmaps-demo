@@ -3,7 +3,14 @@
 
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <!-- Sin maximum-scale ni user-scalable=no: bloquear el zoom deja sin poder ampliar
+       a quien ve poco (WCAG 1.4.4; Android lo respeta, iOS ya lo ignora). El zoom
+       automático de iOS al enfocar se evita con campos de 16px (token text-input),
+       y la pizarra/alineación ya tienen touch-none propio para sus gestos. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- Color de la barra del navegador (sin instalar la PWA), claro y oscuro -->
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#091608" />
   <link rel="icon" type="image/png" href="/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
 

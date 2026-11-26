@@ -238,27 +238,32 @@ export function ConvocatoriaPartido({ schoolId, teamId, partido, todos, etiqueta
             ) : (
               <div className="rounded-xl border-2 border-dashed p-2">
                 <div className="relative">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Search aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  {/* autoFocus justificado: aparece solo tras tocar «Convocar de otra categoría» */}
                   <Input
                     autoFocus
-                    placeholder="Buscar por nombre en toda la escuela..."
+                    type="search"
+                    aria-label="Buscar deportista en toda la escuela"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Buscar por nombre en toda la escuela…"
                     value={busqueda}
                     onChange={(e) => setBusqueda(e.target.value)}
-                    className="h-9 pl-8 pr-8 text-sm"
+                    className="h-touch pl-8 pr-touch text-input"
                   />
                   <button
                     type="button"
                     aria-label="Cerrar búsqueda"
                     onClick={() => { setBuscando(false); setBusqueda(''); }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute right-0 top-1/2 flex h-touch w-touch -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-4 w-4" aria-hidden />
                   </button>
                 </div>
                 {textoBuscado.trim().length >= 2 && (
                   <div className="mt-1.5 max-h-48 overflow-y-auto">
                     {resultadosBusqueda.isLoading ? (
-                      <p className="px-1 py-2 text-xs text-muted-foreground">Buscando...</p>
+                      <p className="px-1 py-2 text-xs text-muted-foreground">Buscando…</p>
                     ) : sugerencias.length === 0 ? (
                       <p className="px-1 py-2 text-xs italic text-muted-foreground">Sin resultados en la escuela.</p>
                     ) : (

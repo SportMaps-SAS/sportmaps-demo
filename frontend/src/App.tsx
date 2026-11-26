@@ -349,7 +349,10 @@ const App = () => (
             <ErrorBoundary>
               <CartProvider>
                 <Toaster />
-                <Sonner />
+                {/* En el celular el toast va SOBRE la barra inferior (64px + safe area): por
+                    defecto Sonner lo pone a 16px del borde y el «Deshacer» de la V2 (8 s)
+                    tapaba la navegación. --bottom-nav-h vale 0 desde md. */}
+                <Sonner mobileOffset={{ bottom: 'calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px) + 0.75rem)' }} />
                 <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
                 <EnvironmentBanner />
                 <UpdateBanner />

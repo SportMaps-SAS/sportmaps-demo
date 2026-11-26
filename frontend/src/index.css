@@ -137,6 +137,7 @@
 
   /* Dark Theme - Verde muy oscuro/negro */
   .dark {
+    color-scheme: dark;
     --background: 119 45% 6%;
     --foreground: 0 0% 98%;
 
@@ -188,7 +189,18 @@
     }
   }
 
+  /* Foco visible para TODO lo interactivo que no dibuja el suyo (botones nativos de la
+     V2, enlaces). Los componentes shadcn ponen outline-none + ring propio y lo pisan.
+     Solo con teclado (:focus-visible), no al tocar. */
+  :where(a, button, [role="button"], [role="tab"], [role="link"], summary, [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
   html {
+    /* Controles nativos (fecha, hora, scrollbars, select) acordes al tema: sin esto,
+       en oscuro el selector de hora de la V2 salía blanco. */
+    color-scheme: light;
     /* Evita que iOS agrande el texto al rotar a horizontal. */
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
