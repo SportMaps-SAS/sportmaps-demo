@@ -64,9 +64,10 @@ describe('resolverIdentidad', () => {
     branding_settings: { primary_color: '#1E3A8A', secondary_color: '#FFFFFF', accent_color: '#FDE047' },
   };
 
-  it('sin complemento → diseño base SportMaps aunque haya colores guardados', () => {
+  it('sin complemento → igual salen los colores y el escudo del club (gratis desde 2026-11-26)', () => {
     const id = resolverIdentidad(escuela, false);
-    expect(id).toEqual({ nombre: escuela.name, ...SPORTMAPS_BASE, escudoUrl: null, conMarca: false });
+    expect(id).toMatchObject({ primario: '#1E3A8A', secundario: '#FFFFFF', acento: '#FDE047', conMarca: true });
+    expect(id.escudoUrl).toBe(escuela.logo_url);
   });
 
   it('con complemento → colores y escudo del club', () => {

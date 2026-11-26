@@ -24,6 +24,7 @@ import { StatFilterBar } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
 import { estadoEscuela, etiquetaTipo, fraseFaltantes } from '@/lib/constancias';
 import { cn } from '@/lib/utils';
+import { VolverCarnetsV2 } from '@/components/school/carnets-v2/VolverCarnetsV2';
 
 type Row = {
   id: string;
@@ -300,6 +301,7 @@ export default function SchoolCertificatesAdminPage() {
 
   return (
     <div className="container mx-auto p-4 md:p-6 space-y-6">
+      <VolverCarnetsV2 />
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">

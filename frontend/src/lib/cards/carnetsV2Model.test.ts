@@ -160,7 +160,7 @@ describe('deportistaDeEjemplo', () => {
   it('usa la identidad resuelta y no trae token real', () => {
     const id = resolverIdentidad({ name: 'Club Besser' }, false);
     const d = deportistaDeEjemplo(id, new Date('2026-05-01T00:00:00Z'));
-    expect(d.identidad.conMarca).toBe(false);
+    expect(d.identidad.conMarca).toBe(true);
     expect(d.qrToken).toBeNull();
     expect(d.codigo).toBe('SM-2026-00001');
   });

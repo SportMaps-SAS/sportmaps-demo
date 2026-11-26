@@ -49,9 +49,12 @@ export interface ClubIdentidad {
 }
 
 /**
- * Resuelve la identidad que se pinta. Sin complemento → base SportMaps aunque
- * la escuela tenga colores guardados (D3). `forzarMarca` sirve para la vista
- * previa del admin sin complemento («así quedaría con tu identidad»).
+ * Resuelve la identidad que se pinta en el carnet.
+ * Decisión del 2026-11-26 (reemplaza D3): los colores y el escudo del club en el
+ * carnet son GRATIS para todas las escuelas; Marca propia queda solo para la app
+ * con la marca de la escuela. `tieneComplemento` y `forzarMarca` se conservan por
+ * compatibilidad y ya no apagan la identidad.
+ * Sin colores guardados → base SportMaps; sin escudo → escudoPorDefecto().
  */
 export function resolverIdentidad(
   school: { name: string; logo_url?: string | null; branding_settings?: BrandingSettingsCarnet | null },
@@ -59,10 +62,7 @@ export function resolverIdentidad(
   opciones?: { forzarMarca?: boolean },
 ): ClubIdentidad {
   const b = school.branding_settings ?? {};
-  const conMarca = tieneComplemento || !!opciones?.forzarMarca;
-  if (!conMarca) {
-    return { nombre: school.name, ...SPORTMAPS_BASE, escudoUrl: null, conMarca: false };
-  }
+  void tieneComplemento; void opciones;
   const primario = esHex(b.primary_color) ? b.primary_color : SPORTMAPS_BASE.primario;
   const secundario = esHex(b.secondary_color) ? b.secondary_color : SPORTMAPS_BASE.secundario;
   const acento = esHex(b.accent_color) ? b.accent_color : secundario;

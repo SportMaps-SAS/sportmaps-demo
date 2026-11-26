@@ -56,9 +56,9 @@ describe('mapearCarnet3D', () => {
     expect(d.identidad).toMatchObject({ nombre: 'Club Deportivo Besser', primario: '#0A2A66', acento: '#E11D48', escudoUrl: 'https://x/escudo.png', conMarca: true });
   });
 
-  it('sin complemento (D3): diseño base SportMaps aunque haya colores guardados', () => {
+  it('sin complemento: igual salen colores y escudo del club (gratis desde 2026-11-26)', () => {
     const d = mapearCarnet3D(verify, back, false)!;
-    expect(d.identidad).toMatchObject({ ...SPORTMAPS_BASE, escudoUrl: null, conMarca: false });
+    expect(d.identidad.conMarca).toBe(true);
   });
 
   it('número y posición caen a la zona de juego si verify no los trae (número como texto también)', () => {
@@ -119,34 +119,13 @@ describe('resolverConMarca', () => {
     getSession.mockReset();
   });
 
-  it('con slug: pregunta a get_school_by_slug (pública) y exige que sea la misma escuela', async () => {
-    rpc.mockResolvedValueOnce({ data: { ok: true, school: { id: 'esc-1' } }, error: null });
+  it('identidad del club gratis: siempre true con escuela, sin consultar planes', async () => {
     await expect(resolverConMarca({ id: 'esc-1', slug: 'besser' })).resolves.toBe(true);
-    expect(rpc).toHaveBeenCalledWith('get_school_by_slug', { p_slug: 'besser' });
-
-    rpc.mockResolvedValueOnce({ data: { ok: true, school: { id: 'otra' } }, error: null });
-    await expect(resolverConMarca({ id: 'esc-1', slug: 'besser' })).resolves.toBe(false);
-
-    rpc.mockResolvedValueOnce({ data: { ok: false, error: 'not_found' }, error: null });
-    await expect(resolverConMarca({ id: 'esc-1', slug: 'besser' })).resolves.toBe(false);
-  });
-
-  it('sin slug y sin sesión: base SportMaps sin llamar school_shows_own_brand', async () => {
-    getSession.mockResolvedValue({ data: { session: null } });
-    await expect(resolverConMarca({ id: 'esc-1', slug: null })).resolves.toBe(false);
+    await expect(resolverConMarca({ id: 'esc-1' })).resolves.toBe(true);
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it('sin slug con sesión: school_shows_own_brand', async () => {
-    getSession.mockResolvedValue({ data: { session: { access_token: 't' } } });
-    rpc.mockResolvedValueOnce({ data: true, error: null });
-    await expect(resolverConMarca({ id: 'esc-1' })).resolves.toBe(true);
-    expect(rpc).toHaveBeenCalledWith('school_shows_own_brand', { p_school_id: 'esc-1' });
-  });
-
-  it('cualquier error → sin marca', async () => {
-    rpc.mockRejectedValueOnce(new Error('red'));
-    await expect(resolverConMarca({ id: 'esc-1', slug: 'besser' })).resolves.toBe(false);
+  it('sin escuela → false', async () => {
     await expect(resolverConMarca(null)).resolves.toBe(false);
   });
 });

@@ -96,7 +96,7 @@ export function ReglasParaEntrar({ schoolId }: ReglasParaEntrarProps) {
         </p>
       </header>
 
-      <ul className="divide-y rounded-xl border bg-white">
+      <ul className="divide-y rounded-xl border bg-card">
         {CRITERIOS.map((c) => (
           <li key={c.clave} className="flex items-center justify-between gap-4 p-3">
             <div className="min-w-0">
@@ -112,7 +112,7 @@ export function ReglasParaEntrar({ schoolId }: ReglasParaEntrarProps) {
         ))}
       </ul>
 
-      <div className="flex items-center justify-between gap-4 rounded-xl border bg-white p-3">
+      <div className="flex items-center justify-between gap-4 rounded-xl border bg-card p-3">
         <div className="min-w-0">
           <Label htmlFor="regla-dias" className="font-medium">Avisar con</Label>
           <p className="text-xs text-muted-foreground">Días antes de que algo venza para mostrar amarillo (0 a 60).</p>
