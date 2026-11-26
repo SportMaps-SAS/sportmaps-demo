@@ -138,3 +138,32 @@ Se heredan los «Hecho cuando» del spec V2 y se suman estos:
 - Decidir **si la V2 del dueño se construye desde cero o continúa lo que tenía la otra sesión** (no encontré su trabajo en el repo).
 - Decidir **si se mide lo que se mira** (analítica de pantallas) antes de fundir Reportes, Panel y Finanzas.
 - Elegir **la escuela real** para la primera prueba (no propongo Dynasty primero).
+
+## E. Onboarding ya construido: reutilizarlo, no reescribirlo (nota del 26-nov-2026)
+
+Antes de diseñar el inicio o el arranque de la V2 del dueño, que este trabajo existe y está en `main` y `develop`. Análisis y propuesta: `docs/onboarding/registros-19-22-nov-2026-y-tutorial-guiado.md` (sección 2.7 manda sobre el resto). Diseño pendiente de la Etapa 4: `docs/onboarding/etapa-4-recordatorios-whatsapp-diseno.md`.
+
+**Qué reutilizar tal cual**
+
+| Pieza | Dónde | Qué hace |
+|---|---|---|
+| Pasos del checklist por rol | `frontend/src/lib/onboarding/onboardingChecklists.ts` | Academia (6 pasos), Club / Canchas (4) y acudiente (3). Cada paso se marca por lo que existe en la base, no por clics. Sin React ni íconos. |
+| Reglas del asistente | `frontend/src/lib/onboarding/schoolOnboardingRules.ts` | Solo el deporte bloquea la entrada al panel (y solo si falta); el resto se salta. |
+| Componente del checklist | `frontend/src/components/dashboard/DashboardChecklist.tsx` | Se colapsa a una píldora «2/6» y se reabre. Genérico: sirve para cualquier rol si se le pasan los pasos. |
+| Datos del avance | RPC `get_onboarding_status` y `get_onboarding_checklist_extras` | Fuente única de «qué existe ya». |
+| Medición | RPC `track_onboarding_event` y los triggers de hitos (`first_*`) | Embudo en `docs/onboarding/embudo-*.sql`. |
+| Solicitudes de unión | `submit_school_join_request` y el job `solicitudes-union-avisos.job.ts` | Aprobación automática con coincidencia sin ambigüedad; aviso y recordatorio de 24 h. |
+
+**Qué NO hacer**
+
+- No crear otro asistente largo. La decisión de producto del 22-nov es que lo único obligatorio para entrar es el nombre y el deporte; «escuela nueva en 3 pasos» debe unificarse con `SchoolOnboardingWizard`, no sumarse a él.
+- No volver a marcar pasos por clic. Siempre desde la base (por eso el paso se ve hecho si la escuela cargó deportistas por QR, foto o importación).
+- No ocultar el checklist en `onboarding_status = completed`: sigue hasta el primer cobro.
+
+**Qué se rompe si se mueven pantallas**
+
+Los pasos apuntan a rutas (`/offerings`, `/students`, `/payments-automation`, `/staff`, `/teams`, `/branches`, `/children`, `/my-payments`, `/unirse`, `/venue/*`) y el aviso de WhatsApp de solicitudes a `/students?bandeja=por-asignar`. La prueba `frontend/src/lib/onboarding/checklistRutas.test.ts` falla si alguno deja de existir en `App.tsx`: si el menú de 44 a 10 renombra o fusiona rutas, ese es el aviso. Un cambio de ruta se resuelve en `onboardingChecklists.ts` (un solo archivo), no en cada pantalla.
+
+**Dónde se monta hoy** (lo que habría que re-montar si cambia el inicio): `DashboardPage` (academia), `VenueDashboardPage` (club), el inicio V2 del acudiente y `MyChildrenPage` / `MyChildrenPageClassic` (tarjeta de solicitudes). La casilla de consentimiento de WhatsApp y las descripciones de rol viven en `RegisterPage`; si el alta pasa a «¿Eres Carolina?», hay que llevarse la casilla, porque el trigger de la base (`profiles.whatsapp_consent_at`) solo la lee del metadata del registro.
+
+**Pendiente de la Etapa 4** (sin código): recordatorios automáticos por WhatsApp con tope de 3 en la primera semana, que respetan el «no». El único universo alcanzable son los registros posteriores a la casilla de consentimiento; las escuelas anteriores no tienen consentimiento.
