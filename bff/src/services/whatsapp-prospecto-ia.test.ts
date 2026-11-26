@@ -263,6 +263,7 @@ import { armarEstado, type FilasCrudas } from './bot-ofertas.service';
 import {
     MARCA_INSCRIPCION, extraerInscripcion, fechaIsoDeNacimiento, permitidosDeOfertas, interesDeOfertas,
 } from './whatsapp-prospecto-ia.service';
+import { verificarSalida } from './whatsapp-verificador-montos';
 
 const CTA = 'Para inscribirte escríbenos el nombre completo del deportista, su fecha de nacimiento y la convocatoria (día y hora) a la que quiere ir.';
 const FILAS_MONSTER: FilasCrudas = {
@@ -444,5 +445,28 @@ describe('piezas puras de la inscripción a una oferta', () => {
         expect(permitidosDeOfertas(null).montos.size).toBe(0);
         expect(interesDeOfertas(con)).toBe('convocatoria');
         expect(interesDeOfertas({ ofertas: [...con.ofertas, { ...con.ofertas[0], tipo: 'clinica' }] })).toBe('oferta');
+    });
+
+    it('permitidosDeOfertas con la promo de la escuela (10 %, 25–27 nov): el valor con descuento solo dentro de la ventana', () => {
+        const filas: FilasCrudas = {
+            ...FILAS_MONSTER,
+            ofertas: [{ ...FILAS_MONSTER.ofertas[0], requiere_pago: true, valor: 145000 }],
+            promo: { texto: 'Por nuestro *BLACK FRIDAY* 10% de descuento', desde: '2026-11-25', hasta: '2026-11-27' },
+            descuento: { pct: 10, desde: '2026-11-25T00:00:00-05:00', hasta: '2026-11-27T23:59:59-05:00' },
+        };
+        const NOV_26 = Date.parse('2026-11-26T15:00:00Z');
+        const est = armarEstado('m', filas, NOV_26);
+        const respuesta = 'La convocatoria vale $145.000, pero con el 10 % de Black Friday te queda en $130.500 '
+            + 'pagando hasta el viernes 27 de noviembre.';
+        const dentro = permitidosDeOfertas(est, NOV_26);
+        expect(dentro.montos.has(130500)).toBe(true);
+        expect(verificarSalida(respuesta, dentro, { hoy: '2026-11-26' })).toEqual({ ok: true });
+        // 28-nov: la promo ya terminó → el $130.500 no pasa.
+        const fuera = permitidosDeOfertas(est, Date.parse('2026-11-28T05:00:00Z'));
+        expect(fuera.montos.has(130500)).toBe(false);
+        expect(verificarSalida('Te queda en $130.500.', fuera, { hoy: '2026-11-28' }).ok).toBe(false);
+        // Sin descuento configurado: igual que antes.
+        const sin = permitidosDeOfertas(armarEstado('m', { ...filas, descuento: null }, NOV_26), NOV_26);
+        expect([...sin.montos]).toEqual([145000]);
     });
 });

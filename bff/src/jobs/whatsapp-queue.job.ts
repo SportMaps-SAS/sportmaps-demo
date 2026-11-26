@@ -117,6 +117,9 @@ import {
     conceptosEsperadosDe, elegirEsperado, consumirEsperado, type ConceptoEsperado,
 } from '../services/wa-concepto-esperado.service';
 import { esAfiliado } from '../services/wa-afiliado.service';
+import {
+    estadoDeOfertas, ofertasPorMonto, momentoDelComprobante, frasePromo, type OfertaPorMonto,
+} from '../services/bot-ofertas.service';
 import { MOTIVOS_DE_SERVICIO } from '../services/motivos-de-cobro';
 import { MARCA_VENTA } from '../services/whatsapp-venta-contexto';
 import { contextoDeVenta } from '../services/whatsapp-venta-contexto.db';
@@ -1981,6 +1984,59 @@ async function prospectoSinConcepto(
 }
 
 /**
+ * Ofertas del bot (convocatorias con valor, bot-ofertas) cuyo precio es el del comprobante: el de
+ * lista, o el del descuento de la promoción si la FECHA DEL COMPROBANTE (OCR; sin fecha, la del
+ * mensaje) cae en la ventana de pago (Monster's Black Friday 2026-11-25: $145.000 → $130.500).
+ * Fuera de la ventana el valor con descuento NO cuadra. Nunca lanza ([] si no puede leer).
+ */
+async function ofertasDelComprobante(
+    fila: FilaCola, ocr: ArgsProspecto['ocr'], monto: number | null,
+): Promise<OfertaPorMonto[]> {
+    if (monto === null) return [];
+    try {
+        const estado = await estadoDeOfertas(fila.school_id);
+        return ofertasPorMonto(estado, monto, momentoDelComprobante(ocr.date, ocr.time ?? null, fila.created_at ?? null))
+            .map((x) => ({ ...x, frase: estado.descuentoPromo ? frasePromo(estado.descuentoPromo) : null }));
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * El comprobante de un prospecto coincide con el valor de una convocatoria (o con su valor con
+ * la promo, dentro de la ventana): se le dice que llegó y para qué, y va a la escuela con esa
+ * propuesta. NUNCA se aplica ni se aprueba solo (la oferta no es un cobro): solo deja de
+ * tratarse como «el monto no corresponde a un precio de la escuela».
+ */
+async function prospectoDeOferta(
+    p: ArgsProspecto, a: ArgsB4, lead: { id: string; nombre: string | null },
+    coincide: (OfertaPorMonto & { frase?: string | null })[],
+): Promise<void> {
+    const monto = montoDelOcr(p.ocr);
+    const titulos = [...new Set(coincide.map((c) => c.oferta.titulo))];
+    const promo = coincide.find((c) => c.conPromo);
+    const conPromo = promo ? ` (${promo.frase ?? `con el ${promo.pct} % de descuento de la promoción`})` : '';
+    await p.responder(
+        `Recibí tu comprobante${monto ? ` de *${pesos(monto)}*` : ''} para *${titulos.join('* o *')}*${conPromo} 📄 `
+        + 'La escuela lo revisa y te confirma el cupo por aquí.',
+        'comprobante_a_la_escuela');
+    const detalle = coincide.map((c) => (c.conPromo
+        ? `${c.oferta.titulo}: ${pesos(c.valor)} con la promo del ${c.pct} %`
+        : `${c.oferta.titulo}: ${pesos(c.valor)}`)).join('; ');
+    await cerrar(p.fila.id, 'ignored', {
+        result_type: 'escalated',
+        error_message: motivoConPropuesta(
+            `venta_oferta_prospecto: ${lead.nombre ?? 'prospecto'} mandó ${monto ? pesos(monto) : 'un comprobante'}`
+            + ` a ${p.ocr.destination ?? 'un destino sin leer'}${p.ocr.date ? ` (pago del ${p.ocr.date}${p.ocr.time ? ` ${p.ocr.time}` : ''})` : ''}`
+            + `; coincide con ${detalle}`,
+            `Propuesta → pagó: ${p.ocr.originName ?? 'no se leyó'} · confirmar la inscripción${titulos.length > 1 ? ' (ver a cuál)' : ''}, `
+            + 'registrar el cobro del prospecto y aplicar este comprobante'),
+        pregunta_ocr: huellasConLectura({ sha: a.sha, ocr: p.ocr, storagePath: p.storagePath, parentId: null }),
+    });
+    await pasarAPersona(p, 'comprobante_prospecto_oferta');
+}
+
+/**
  * B4 para un número sin ficha (prospecto). Con motivo esperado manda la regla
  * de `decidirConEsperado` (monto y destino exacto, o a una persona); sin
  * esperado, el lead por teléfono y el motivo por el monto, solo con destino
@@ -2040,6 +2096,13 @@ async function atenderProspecto(p: ArgsProspecto, b4: ContextoB4): Promise<boole
     if (destino !== 'exacta') return false;
     const m = motivoPorMonto(monto, precios);
     if (m.tipo !== 'uno' && m.tipo !== 'varios') {
+        // (2026-11-25) Ningún precio de la escuela: ¿es el valor de una convocatoria (o el de su promo, si el
+        // comprobante es de la ventana de pago)? Entonces no es «un monto que no corresponde»: a la escuela con eso.
+        const deOferta = m.tipo === 'con_cantidad' ? [] : await ofertasDelComprobante(fila, ocr, monto);
+        if (deOferta.length) {
+            await prospectoDeOferta(p, a, lead, deOferta);
+            return true;
+        }
         await prospectoSinConcepto(p, a, lead, m.tipo === 'con_cantidad' ? m : undefined);
         return true;
     }

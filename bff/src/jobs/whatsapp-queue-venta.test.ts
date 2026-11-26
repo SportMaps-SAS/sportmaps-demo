@@ -344,6 +344,7 @@ const { _olvidarModoDiscretoEfectivo } = await import('../services/whatsapp-ajus
 const cobro = await import('../services/wa-cobro-desde-comprobante.service');
 const ficha = await import('../services/whatsapp-comprobante-de-ficha.service');
 const job = await import('./whatsapp-queue.job');
+const { invalidarCacheOfertas } = await import('../services/bot-ofertas.service');
 
 // ─── Datos (forma de Monster) ────────────────────────────────────────────────
 
@@ -826,6 +827,78 @@ describe('(g) número SIN venta activa → el comportamiento de hoy, intacto', (
         expect(crearLlamadas()).toEqual([expect.objectContaining({ p_fuente: 'trial_price', p_signup_lead_id: 'lead-cp', p_concepto_esperado_id: 'e-cp' })]);
         expect(textosEnviados()[0]).toContain('para la clase de prueba');
         expect(salientes()[0].payload?.venta_servicio_id).toBeUndefined();
+    });
+});
+
+// ─── Convocatorias con la promo de la escuela (Monster's Black Friday, 2026-11-25) ───
+//
+// 10 % sobre las convocatorias con valor para pagos con comprobante del 25-nov 00:00 al 27-nov 23:59:59
+// (Bogotá): Suba $145.000 → $130.500, Norte $200.000 → $180.000. El comprobante de un prospecto por el valor
+// con descuento, DENTRO de la ventana (fecha del comprobante), no es «un monto que no corresponde»: se le dice
+// para qué es y va a la escuela. Nunca se crea ni se aprueba nada solo. Fuera de la ventana: lo de siempre.
+
+describe('convocatorias con descuento de la promo: comprobante de un prospecto', () => {
+    const TEL_LEAD = '3017517726';
+    function escuelaConConvocatorias(o: { descuento?: boolean } = {}) {
+        h.db.school_tournament_items = [];                   // sin venta de servicio activa
+        h.tabla('school_signup_leads').push({
+            id: 'lead-conv', school_id: ESCUELA, phone: TEL_LEAD, status: 'contacted', full_name: 'Sara Gómez', source_detail: {},
+        });
+        h.tabla('bot_ofertas').push(
+            { id: 'of-suba', school_id: ESCUELA, tipo: 'convocatoria', titulo: 'Convocatorias Sede Suba', estado: 'activa',
+                vigente_desde: '2026-11-25', vigente_hasta: '2026-12-13', prioridad: 10, requiere_pago: true, valor: 145000 },
+            { id: 'of-norte', school_id: ESCUELA, tipo: 'convocatoria', titulo: 'Convocatorias Sede Norte', estado: 'activa',
+                vigente_desde: '2026-11-25', vigente_hasta: '2026-12-12', prioridad: 30, requiere_pago: true, valor: 200000 },
+        );
+        h.tabla('bot_ofertas_ajustes').push({
+            school_id: ESCUELA, promo_texto: 'Por nuestro *BLACK FRIDAY*, 10% de descuento en la inscripción.',
+            promo_desde: '2026-11-25', promo_hasta: '2026-11-27',
+            ...(o.descuento === false ? {} : {
+                promo_descuento_pct: 10, promo_pago_desde: '2026-11-25T05:00:00+00:00', promo_pago_hasta: '2026-11-28T04:59:59+00:00',
+            }),
+        });
+        invalidarCacheOfertas();
+    }
+
+    it('$130.500 con comprobante del 27-nov 23:59 (dentro): se reconoce la convocatoria con la promo y va a la escuela, sin crear nada', async () => {
+        escuelaConConvocatorias();
+        enHora('2026-11-28T08:00:00-05:00');                 // se procesa al otro día: manda la FECHA DEL COMPROBANTE
+        await procesar(foto('f1', 'bf1', '2026-11-28T07:59:00-05:00'),
+            comprobante(130500, { date: '2026-11-27', time: '23:59', reference: 'BF1' }), 'bf1');
+        expect(textosEnviados()).toEqual(['Recibí tu comprobante de *$130.500* para *Convocatorias Sede Suba* '
+            + '(con el 10 % de Black Friday) 📄 La escuela lo revisa y te confirma el cupo por aquí.']);
+        expect(fila('f1')).toMatchObject({ status: 'ignored', result_type: 'escalated' });
+        expect(fila('f1').error_message).toMatch(/^venta_oferta_prospecto: Sara Gómez mandó \$130\.500 .*coincide con Convocatorias Sede Suba: \$145\.000 con la promo del 10 %/);
+        expect(fila('f1').error_message).not.toContain('no corresponde a un precio');
+        expect(crearLlamadas()).toHaveLength(0);
+        expect(pagos()).toHaveLength(0);
+    });
+
+    it('$180.000 (Norte) sin fecha en el OCR: manda la hora del mensaje (26-nov, dentro)', async () => {
+        escuelaConConvocatorias();
+        enHora('2026-11-26T10:00:00-05:00');
+        await procesar(foto('f1', 'bf2', '2026-11-26T09:59:00-05:00'), comprobante(180000, { date: null, time: null, reference: 'BF2' }), 'bf2');
+        expect(textosEnviados()[0]).toContain('para *Convocatorias Sede Norte* (con el 10 % de Black Friday)');
+        expect(crearLlamadas()).toHaveLength(0);
+    });
+
+    it('$130.500 con comprobante del 28-nov 00:00 (fuera): NO cuadra; lo de siempre (¿para qué es?, a la escuela)', async () => {
+        escuelaConConvocatorias();
+        enHora('2026-11-28T08:00:00-05:00');
+        await procesar(foto('f1', 'bf3', '2026-11-28T07:59:00-05:00'),
+            comprobante(130500, { date: '2026-11-28', time: '00:00', reference: 'BF3' }), 'bf3');
+        expect(textosEnviados()[0]).toContain('¿Me cuentas para qué es?');
+        expect(fila('f1').error_message).toMatch(/^prospecto_sin_concepto: /);
+        expect(crearLlamadas()).toHaveLength(0);
+    });
+
+    it('sin descuento configurado: $130.500 dentro de las mismas fechas sigue siendo «¿para qué es?», como antes', async () => {
+        escuelaConConvocatorias({ descuento: false });
+        enHora('2026-11-26T10:00:00-05:00');
+        await procesar(foto('f1', 'bf4', '2026-11-26T09:59:00-05:00'),
+            comprobante(130500, { date: '2026-11-26', time: '09:58', reference: 'BF4' }), 'bf4');
+        expect(textosEnviados()[0]).toContain('¿Me cuentas para qué es?');
+        expect(fila('f1').error_message).toMatch(/^prospecto_sin_concepto: /);
     });
 });
 

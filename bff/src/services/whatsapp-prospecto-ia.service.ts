@@ -64,7 +64,8 @@ import {
     type Permitidos, type Violacion,
 } from './whatsapp-verificador-montos';
 import {
-    estadoDeOfertas, reglasDeOfertasParaIa, textoOfertasParaIa, type EstadoOfertas, type TipoOferta,
+    estadoDeOfertas, reglasDeOfertasParaIa, textoOfertasParaIa, precioConPromo, hoyBogota as hoyDeOfertas,
+    type EstadoOfertas, type TipoOferta,
 } from './bot-ofertas.service';
 import { enCortafuegos } from '../config/cortafuegos-simulacion';
 
@@ -625,11 +626,23 @@ export async function catalogoParaProspecto(
  * texto (descripción, «cómo inscribirse»), y sus fechas como días de evento (una sesión
  * no es una fecha de precio). Pura.
  */
-export function permitidosDeOfertas(estado: EstadoOfertas | null | undefined): Permitidos {
+export function permitidosDeOfertas(estado: EstadoOfertas | null | undefined, ahora: Date | number = Date.now()): Permitidos {
     const out = permitidosDeTexto(...(estado?.ofertas ?? []).flatMap((o) => [o.descripcion, o.cta, o.mensajeSinCupos]));
+    let conPromo = false;
     for (const o of estado?.ofertas ?? []) {
-        if (o.valor != null && o.valor > 0) out.montos.add(Math.round(o.valor));
+        if (o.valor != null && o.valor > 0) {
+            out.montos.add(Math.round(o.valor));
+            // Promo de la escuela en su ventana de pago (bot-ofertas): el valor con el descuento también se puede decir.
+            const p = o.requierePago ? precioConPromo(o.valor, estado, ahora) : null;
+            if (p?.conDescuento != null) { out.montos.add(p.conDescuento); conPromo = true; }
+        }
         for (const s of o.sesiones) out.diasDeEvento.add(s.fecha.slice(5, 10));
+    }
+    // «pagando hasta el viernes 27 de noviembre»: el inicio y el fin de la ventana no son fechas de precio inventadas.
+    if (conPromo && estado?.descuentoPromo) {
+        for (const iso of [estado.descuentoPromo.desde, estado.descuentoPromo.hasta]) {
+            out.diasDeEvento.add(hoyDeOfertas(Date.parse(iso)).slice(5, 10));
+        }
     }
     return out;
 }

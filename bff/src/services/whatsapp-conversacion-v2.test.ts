@@ -186,6 +186,8 @@ describe('puerta única: motor', () => {
         perfil?: string | null; edadPrevia?: number | null; enlace?: string | null; precios?: string | null;
         /** Qué se puede ofrecer hoy (bot-ofertas). Sin la clave, el contexto no lo trae (se lee de la base falsa). */
         ofertas?: EstadoOfertas;
+        /** «Ahora» del contexto (por defecto, 24-oct-2026 12:00 Bogotá). */
+        ahora?: Date;
     } = {}) {
         const salidas: Salida[] = [];
         const avisos: { motivo: string; detalle: string | null }[] = [];
@@ -209,7 +211,7 @@ describe('puerta única: motor', () => {
             cortesia: async (datos, encabezado) => { cortesias.push({ datos, encabezado }); },
             ...(op.ofertas ? { ofertas: async () => op.ofertas! } : {}),
             leerEstado: async () => estado,
-            ahora: () => new Date('2026-10-24T12:00:00-05:00'),
+            ahora: () => op.ahora ?? new Date('2026-10-24T12:00:00-05:00'),
         };
         const turno = (texto: string, botonId: string | null = null) => atenderTurnoPuerta(ctx, texto, botonId);
         return { ctx, salidas, avisos, leads, cortesias, turno, ultimo: () => salidas[salidas.length - 1] };
@@ -643,6 +645,52 @@ describe('puerta única: motor', () => {
         expect(fin.texto).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
         expect(f.avisos[0].detalle).toContain('Trayectoria: sí (Club X y torneo departamental, opuesto).');
         expect(f.avisos[0].detalle).toContain('Valor: $50.000');
+    });
+
+    // ── Descuento de la promoción (Monster's Black Friday, 2026-11-25): 10 % para pagos del 25-nov 00:00 al 27-nov 23:59:59 ──
+    const GUIADA_PROMO = armarEstado('s1', {
+        ...FILAS_GUIADA,
+        promo: { texto: 'Por nuestro *BLACK FRIDAY*, 10% de descuento en las convocatorias.', desde: '2026-11-25', hasta: '2026-11-27' },
+        descuento: { pct: 10, desde: '2026-11-25T00:00:00-05:00', hasta: '2026-11-27T23:59:59-05:00' },
+    }, DIC_3);
+    async function inscribirMayores(f: ReturnType<typeof falso>) {
+        await iniciarConvocatoria(f.ctx, {});
+        await f.turno('Masculino', 'of_g_masculino');
+        await f.turno('2008 o antes', 'of_a_x_2008');
+        await f.turno('Sí', 'of_t_si');
+        await f.turno('Club X y torneo departamental, opuesto');
+        await f.turno('Quiero inscribirme', 'of_inscribirme');
+        await f.turno('Juan Pérez');
+        await f.turno('', 'of_f_m2');
+        return f.ultimo();
+    }
+
+    it('promo: confirmando DENTRO de la ventana (27-nov 23:59) la confirmación y el aviso llevan el valor con descuento', async () => {
+        const f = falso({ ofertas: GUIADA_PROMO, ahora: new Date('2026-11-27T23:59:00-05:00') });
+        const fin = await inscribirMayores(f);
+        expect(fin.step).toBe('puerta_info_listo');
+        expect(fin.texto).toContain('Valor: ~$50.000~ → *$45.000* con el 10 % de Black Friday '
+            + '(pagando hasta el viernes 27 de noviembre, 11:59 p. m.). La escuela te indica cómo pagar.');
+        expect(f.avisos[0].detalle).toContain('Valor: $50.000. Promo aplicada: 10 % → $45.000 (si paga hasta el viernes 27 de noviembre, 11:59 p. m.; indicarle cómo pagar).');
+        // La lista de ofertas que vio también trae el descuento (mismo «ahora»).
+        expect(textosDesde(f, 0)).toContain('Valor: ~$50.000~ → *$45.000*');
+    });
+
+    it('promo: confirmando FUERA de la ventana (28-nov 00:00) todo como siempre', async () => {
+        const f = falso({ ofertas: GUIADA_PROMO, ahora: new Date('2026-11-28T00:00:00-05:00') });
+        const fin = await inscribirMayores(f);
+        expect(fin.texto).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
+        expect(fin.texto).not.toContain('45.000');
+        expect(f.avisos[0].detalle).toContain('Valor: $50.000 (indicarle cómo pagar).');
+        expect(f.avisos[0].detalle).not.toContain('Promo aplicada');
+        expect(textosDesde(f, 0)).not.toContain('45.000');
+    });
+
+    it('sin descuento configurado, dentro de las mismas fechas: como siempre', async () => {
+        const f = falso({ ofertas: GUIADA, ahora: new Date('2026-11-26T10:00:00-05:00') });
+        const fin = await inscribirMayores(f);
+        expect(fin.texto).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
+        expect(f.avisos[0].detalle).not.toContain('Promo aplicada');
     });
 
     it('respuestas escritas en vez de tocar: «femenino», «2014», «suba», «quiero inscribirme»', async () => {

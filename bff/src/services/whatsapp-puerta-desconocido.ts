@@ -48,7 +48,7 @@ import { leerEdad, nombreValido, normalizar } from './whatsapp-clase-cortesia.se
 import {
     estadoDeOfertas, textoOfertasParaPersona, textoDeOfertas, filtrarPorGenero,
     introDeOfertas, siguientePreguntaOferta, aplicarRespuestaOferta, opcionesDeFechas, fechaLegible, rangoLegible,
-    ID_OFERTA, DATOS_OFERTA_VACIOS,
+    ID_OFERTA, DATOS_OFERTA_VACIOS, precioConPromo, lineaDeValor, finDePromoLegible,
     type EstadoOfertas, type TipoOferta, type OfertaBot, type DatosOferta, type PasoOferta, type OpcionOferta,
 } from './bot-ofertas.service';
 import { etiquetaDeOfertas } from './whatsapp-bienvenida';
@@ -756,14 +756,16 @@ async function siguientePaso(
 
 /** Las ofertas en mensajes: todas en uno si caben; si no, una por mensaje. Pura. */
 export function mensajesDeOfertas(
-    ofertas: OfertaBot[], estado: Pick<EstadoOfertas, 'hoy' | 'notaOfertas'>, encabezado = '',
+    ofertas: OfertaBot[], estado: Pick<EstadoOfertas, 'hoy' | 'notaOfertas' | 'descuentoPromo'>, encabezado = '',
     largoMax = LARGO_MAX_MENSAJE_OFERTAS,
+    /** El momento para la promo de la escuela (por defecto, ahora). */
+    ahora?: Date | number,
 ): string[] {
     const junta = (...xs: (string | null | undefined)[]) => xs.map((x) => (x ?? '').trim()).filter(Boolean).join('\n\n');
     if (!ofertas.length) return [];
-    const todo = junta(encabezado, textoDeOfertas(ofertas, estado));
+    const todo = junta(encabezado, textoDeOfertas(ofertas, estado, { ahora }));
     if (todo.length <= largoMax) return [todo];
-    return ofertas.map((o, i) => junta(i === 0 ? encabezado : '', textoDeOfertas([o], estado)).slice(0, largoMax));
+    return ofertas.map((o, i) => junta(i === 0 ? encabezado : '', textoDeOfertas([o], estado, { ahora })).slice(0, largoMax));
 }
 
 /** Botones del final: inscribirse, la evaluación (si la escuela tiene la nota) y una persona. */
@@ -796,7 +798,7 @@ async function mostrarElegidas(
     }
     // Con el género elegido, una nota de sesión que solo reparte por género («Una cancha femenino y otra masculino») sobra.
     if (datos.oferta?.genero) lista = lista.map((o) => ({ ...o, sesiones: o.sesiones.map((x) => (notaDeGenero(x.notas) ? { ...x, notas: null } : x)) }));
-    const mensajes = mensajesDeOfertas(lista, ofertas, encabezado);
+    const mensajes = mensajesDeOfertas(lista, ofertas, encabezado, undefined, ctx.ahora?.());
     for (let i = 0; i < mensajes.length; i++) {
         await ctx.enviar(mensajes[i], i === 0 && op.step ? op.step : PASO_PUERTA_OFERTA_LISTA, null, undefined, undefined,
             i === 0 ? op.contexto : undefined);
@@ -1039,6 +1041,11 @@ function fechaDeSesion(s: OfertaBot['sesiones'][number], hoy: string): string {
 /**
  * Cierre: la inscripción queda pendiente de la escuela (ella confirma el cupo y,
  * si la oferta tiene valor, cómo pagar). La escuela recibe TODO lo que contó.
+ *
+ * Descuento de la promoción (bot_ofertas_ajustes.promo_descuento_pct, Monster's Black
+ * Friday 2026-11-25): si «ahora» está en la ventana de pago, el valor va con el descuento
+ * calculado por el bot (nadie hace la cuenta a mano) y el aviso dice «Promo aplicada».
+ * Fuera de la ventana o sin promo, igual que siempre.
  */
 async function confirmarInscripcion(
     ctx: CtxPuerta, ofertas: OfertasDePuerta, d: DatosPuerta, oferta: OfertaBot | null,
@@ -1047,10 +1054,16 @@ async function confirmarInscripcion(
     const nombre = d.oferta?.nombre ?? d.deportista ?? null;
     const cuando = sesion ? fechaDeSesion(sesion, ofertas.hoy) : fechaEscrita ? `«${fechaEscrita}»` : null;
     const valor = oferta?.requierePago && oferta.valor != null ? `$${oferta.valor.toLocaleString('es-CO')}` : null;
+    const ahora = ctx.ahora?.() ?? new Date();
+    const promo = oferta?.requierePago && oferta.valor != null ? precioConPromo(oferta.valor, ofertas, ahora) : null;
+    const conDescuento = promo?.conDescuento != null && ofertas.descuentoPromo ? promo.conDescuento : null;
+    const lineaValor = conDescuento != null
+        ? `${lineaDeValor(oferta!.valor!, ofertas, ahora)}. La escuela te indica cómo pagar.`
+        : valor ? `Valor: *${valor}*. La escuela te indica cómo pagar.` : '';
     const texto = [
         `¡Listo! ✅ Le pasé a la escuela tu inscripción${nombre ? ` de *${nombre}*` : ''}`
             + `${oferta ? ` a *${oferta.titulo}*` : ''}${cuando ? `: ${cuando}` : ''}.`,
-        valor ? `Valor: *${valor}*. La escuela te indica cómo pagar.` : '',
+        lineaValor,
         'La escuela te confirma el cupo por aquí 🙌',
     ].filter(Boolean).join('\n\n');
     await ctx.enviar(texto, 'puerta_info_listo', null, undefined, undefined, {
@@ -1067,7 +1080,10 @@ async function confirmarInscripcion(
             + ` ${oferta?.titulo ?? 'sin oferta elegida'}${cuando ? ` — ${cuando}` : ''}.`,
         nombre ? `Deportista: ${nombre}.` : 'Sin nombre del deportista.',
         resumenDeConvocatoria(d),
-        valor ? `Valor: ${valor} (indicarle cómo pagar).` : '',
+        conDescuento != null
+            ? `Valor: ${valor}. Promo aplicada: ${promo!.pct} % → $${conDescuento.toLocaleString('es-CO')}`
+                + ` (si paga hasta el ${finDePromoLegible(ofertas.descuentoPromo!, ofertas.hoy)}; indicarle cómo pagar).`
+            : valor ? `Valor: ${valor} (indicarle cómo pagar).` : '',
     ].filter(Boolean).join(' '));
     return true;
 }
