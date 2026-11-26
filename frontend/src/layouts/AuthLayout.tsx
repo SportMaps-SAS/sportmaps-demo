@@ -22,6 +22,7 @@ import { pestanasDeRol } from "@/lib/acudienteTabs";
 import { useRolActivo } from "@/hooks/useRolActivo";
 import { CoachListasSync } from "@/components/coach/v2/CoachListasSync";
 import { BandaPendientes } from "@/components/coach/v2/BandaPendientes";
+import { BandejaFamiliaSync } from "@/components/offline/BandejaFamiliaSync";
 import { useFabSoporteOculto } from "@/lib/supportFab";
 import { inicialesPersona } from "@/lib/iniciales";
 import { clasesCascaronV2 } from "@/layouts/cascaronV2";
@@ -189,6 +190,8 @@ export default function AuthLayout() {
           listas en cola, no se pueden quedar sin subir. Con la cola vacía no hace nada. */}
       {(currentUserRole ?? profile?.role) === 'coach' && <CoachListasSync />}
       {(currentUserRole ?? profile?.role) === 'coach' && <BandaPendientes />}
+      {/* Deportista y acudiente: la autoevaluación post-entreno contestada sin señal sube sola. */}
+      {['athlete', 'parent'].includes(currentUserRole ?? profile?.role ?? '') && (<><BandejaFamiliaSync /><BandaPendientes /></>)}
       <PushPermissionBanner />
       <SupportChatButton />
     </SidebarProvider>

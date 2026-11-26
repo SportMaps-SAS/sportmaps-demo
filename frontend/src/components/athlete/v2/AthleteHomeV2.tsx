@@ -35,6 +35,7 @@ import { useDeportista } from './useDeportista';
 import { useAthleteCheckout } from './useAthleteCheckout';
 import { SEGUNDOS_DESHACER, useEnvioConDeshacer } from './useEnvioConDeshacer';
 import { useAhora } from './useAhora';
+import { faltoLaSenal, guardarAutoeval } from '@/lib/offline/autoevalOffline';
 import { HoyJuegaCard } from '@/components/tournaments/live/HoyJuegaCard';
 
 export interface AthleteHomeV2Props {
@@ -346,7 +347,17 @@ function PreguntaRpe({ pend, userId, ahora }: { pend: AutoevalPendiente; userId:
     envio.programar(() => {
       enviarRpeRapido(pend.sessionId, userId, valor, pend.fichaId)
         .then(() => queryClient.invalidateQueries({ queryKey: autoevalKey(userId) }))
-        .catch((e: unknown) => {
+        .catch(async (e: unknown) => {
+          // Sin señal (o se cayó al enviar): queda en el teléfono y sube sola. La RPC es idempotente.
+          if (faltoLaSenal(e) && await guardarAutoeval(
+            userId,
+            { sessionId: pend.sessionId, sujeto: pend.fichaId ? { tipo: 'unregistered', id: pend.fichaId } : { tipo: 'profile', id: userId }, answers: { rpe_borg: valor } },
+            `¿Qué tan duro fue? · ${pend.equipo ?? 'Entreno'} · ${fechaCorta(pend.sessionDate)}`,
+            { fusionar: true },
+          )) {
+            toast.success('Guardado en el teléfono. Se envía solo cuando haya señal.', { id: `autoeval-${pend.sessionId}` });
+            return;
+          }
           console.error('[deportista-v2] submit_post_training_self_eval', e);
           setElegido(null);
           toast.error('No pudimos guardar tu respuesta', { description: mensajeErrorRpe(e) });

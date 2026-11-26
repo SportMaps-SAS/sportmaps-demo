@@ -512,7 +512,7 @@ const App = () => (
                       } />
                       {/* Pendientes por enviar (modo offline): listas y evaluaciones guardadas sin señal. */}
                       <Route path="pendientes" element={
-                        <ProtectedRoute allowedRoles={['coach']}>
+                        <ProtectedRoute allowedRoles={['coach', 'athlete', 'parent']}>
                           <PendientesPage />
                         </ProtectedRoute>
                       } />
