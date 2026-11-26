@@ -8,16 +8,22 @@
  * exportCardPng y el enlace público /c/:qr_token.
  *
  * Deportista en dos escuelas (D8): selector de escuela encima del carnet.
+ *
+ * Carnet 3D (spec carnet-3d-club.md §4): el vigente se ve en 3D (tocar gira,
+ * el QR está atrás) y «Descargar imagen» lo exporta plano. «Mostrar código
+ * QR» sigue abriendo el QR a pantalla completa para el lector.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { AlertTriangle, CheckCircle2, Download, IdCard, Loader2, RefreshCw, Share2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, IdCard, Loader2, QrCode, RefreshCw, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
-import { exportCardPng } from '@/lib/cards/cardExport';
+import { exportCardPng, exportCarnet3DPng } from '@/lib/cards/cardExport';
+import { AthleteCard3D } from '@/components/cards/AthleteCard3D';
+import { useCarnet3D } from '@/hooks/useCarnet3D';
 import { pickCurrentCards, slugifyFileName } from '@/lib/cards/cardLayout';
 import type { CardData } from '@/components/cards/AthleteIdCard';
 import { estadoCarnet, venceCarnet } from '@/components/cards/myCardsModel';
@@ -68,6 +74,8 @@ export function AthleteCardV2() {
   const url = carnet ? `${origin}/c/${carnet.qr_token}` : '';
   const estado = carnet ? estadoCarnet(carnet) : null;
   const vigente = estado?.label === 'Vigente';
+  const { datos: datos3d, listo: listo3d, estado: estado3d } = useCarnet3D(vigente ? carnet?.qr_token : null);
+  const archivo = carnet ? `carnet-${slugifyFileName(carnet.athlete_name, carnet.qr_token.slice(0, 8))}` : 'carnet';
 
   useEffect(() => {
     if (!grande) return;
@@ -80,10 +88,14 @@ export function AthleteCardV2() {
     if (!carnet) return;
     setGuardando(true);
     try {
+      if (datos3d) {
+        await exportCarnet3DPng(datos3d, archivo);
+        return;
+      }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await supabase.rpc('verify_athlete_id_card_public' as any, { p_qr_token: carnet.qr_token });
       if (error || !data) throw error ?? new Error('sin datos');
-      await exportCardPng({ data: data as CardData, publicUrl: url }, `carnet-${slugifyFileName(carnet.athlete_name, carnet.qr_token.slice(0, 8))}`);
+      await exportCardPng({ data: data as CardData, publicUrl: url }, archivo);
     } catch {
       toast.error('No se pudo guardar el carnet', { description: 'Inténtalo de nuevo en un momento.' });
     } finally {
@@ -155,6 +167,21 @@ export function AthleteCardV2() {
             </div>
           )}
 
+          {vigente && (estado3d === 'cargando' || (datos3d && !listo3d)) && (
+            <Skeleton className="mx-auto rounded-2xl" style={{ width: 296, height: Math.round(296 * 540 / 340) }} aria-label="Cargando tu carnet" />
+          )}
+
+          {vigente && datos3d && listo3d && (
+            <div className="flex flex-col items-center gap-2">
+              <AthleteCard3D datos={datos3d} ancho={296} />
+              <p className="text-xs text-muted-foreground">Toca el carnet para girarlo.</p>
+              <Button variant="outline" className="min-h-touch gap-2 rounded-2xl" onClick={() => setGrande(true)}>
+                <QrCode className="h-4 w-4" aria-hidden /> Mostrar código QR
+              </Button>
+            </div>
+          )}
+
+          {(!vigente || estado3d === 'error' || (estado3d === 'listo' && !datos3d)) && (
           <article className="overflow-hidden rounded-3xl border bg-card shadow-sm md:mx-auto md:max-w-md">
             <div className="flex items-center gap-3 bg-primary px-4 py-3 text-primary-foreground">
               {carnet.school_logo ? (
@@ -189,6 +216,7 @@ export function AthleteCardV2() {
               {vigente && <span className="text-xs text-neutral-600">Toca el código para agrandarlo</span>}
             </button>
           </article>
+          )}
 
           {estado && (
             <div className={cn('flex items-start gap-3 rounded-2xl p-4', vigente ? 'bg-primary/10' : 'bg-destructive/10')}>
@@ -207,7 +235,7 @@ export function AthleteCardV2() {
           <div className="grid grid-cols-2 gap-2 md:mx-auto md:max-w-md">
             <Button className="h-12 min-h-touch rounded-2xl text-base font-semibold" onClick={() => { void guardar(); }} disabled={!vigente || guardando}>
               {guardando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : <Download className="mr-2 h-4 w-4" aria-hidden />}
-              Guardar imagen
+              Descargar imagen
             </Button>
             <Button variant="outline" className="h-12 min-h-touch rounded-2xl text-base font-semibold" onClick={() => { void compartir(); }} disabled={!vigente}>
               <Share2 className="mr-2 h-4 w-4" aria-hidden /> Compartir

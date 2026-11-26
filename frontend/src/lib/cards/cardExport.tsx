@@ -24,6 +24,9 @@
  */
 import { createRoot } from 'react-dom/client';
 import { AthleteIdCard, type CardData } from '@/components/cards/AthleteIdCard';
+import { AthleteCard3D } from '@/components/cards/AthleteCard3D';
+import type { Carnet3DDatos } from './contratos';
+import { escudoPorDefecto } from './clubIdentity';
 import {
   CARD_CSS_H,
   CARD_CSS_W,
@@ -304,4 +307,73 @@ export async function exportCardsPdf(items: CardExportItem[], opts: PdfExportOpt
 
   pdf.save(opts.fileName);
   return items.length;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Carnet 3D: «Descargar imagen» PLANA (spec §7: sin efectos y sin estado de
+// habilitación). Frente y reverso lado a lado, a resolución de impresión,
+// con la misma captura (html2canvas) y la misma rasterización de imágenes
+// que el carnet clásico. Impresión y PDF por equipo siguen con las
+// plantillas clásicas (spec §11.1).
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Copia de los datos del carnet 3D con foto y escudo ya rasterizados (PNG). */
+export async function inlineCarnet3DImages(datos: Carnet3DDatos): Promise<Carnet3DDatos> {
+  const escudo = datos.identidad.escudoUrl || escudoPorDefecto(datos.identidad);
+  const [foto, escudoPng] = await Promise.all([
+    cachedRaster(datos.fotoUrl, 512, 512, 'cover'),
+    // El escudo por defecto es un data URI SVG: html2canvas no lo rasteriza
+    // bien dentro de un <img>, así que pasa por canvas igual que los remotos.
+    escudo.startsWith('data:image/svg')
+      ? loadImage(escudo, false).then((img) => drawFitted(img, 400, 480, 'contain')).catch(() => null)
+      : cachedRaster(escudo, 400, 480, 'contain'),
+  ]);
+  return {
+    ...datos,
+    fotoUrl: foto,
+    identidad: { ...datos.identidad, escudoUrl: escudoPng ?? datos.identidad.escudoUrl },
+  };
+}
+
+export async function exportCarnet3DPng(datos: Carnet3DDatos, fileBase: string): Promise<void> {
+  ensureHtml2canvasTextFix();
+  const listos = await inlineCarnet3DImages(datos);
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;pointer-events:none;z-index:-1;';
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    root.render(
+      <div style={{ display: 'flex', gap: 16 }}>
+        <AthleteCard3D datos={listos} modo="plano" />
+        <AthleteCard3D datos={listos} modo="plano" reversoInicial />
+      </div>,
+    );
+    await nextFrame();
+    if (document.fonts?.ready) await document.fonts.ready;
+    await waitForImages(host);
+    await nextFrame();
+    const frenteNodo = host.querySelector<HTMLElement>('[data-carnet3d-cara="frente"]');
+    const reversoNodo = host.querySelector<HTMLElement>('[data-carnet3d-cara="reverso"]');
+    if (!frenteNodo || !reversoNodo) throw new Error('No se pudo preparar el carnet');
+    // Esquinas redondeadas: fondo transparente en las caras, blanco en el lienzo final.
+    const front = await capture(frenteNodo, PNG_CAPTURE_SCALE, null);
+    const back = await capture(reversoNodo, PNG_CAPTURE_SCALE, null);
+    const gap = Math.round(24 * PNG_CAPTURE_SCALE);
+    const out = document.createElement('canvas');
+    out.width = front.width + gap + back.width;
+    out.height = Math.max(front.height, back.height);
+    const ctx = out.getContext('2d')!;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(front, 0, 0);
+    ctx.drawImage(back, front.width + gap, 0);
+    const blob = await new Promise<Blob | null>((r) => out.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('No se pudo generar la imagen');
+    downloadBlob(blob, `${fileBase}.png`);
+  } finally {
+    root.unmount();
+    host.remove();
+  }
 }

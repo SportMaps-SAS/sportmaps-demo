@@ -17,6 +17,9 @@ import { AthleteIdCard, type CardData } from '@/components/cards/AthleteIdCard';
 import { exportCardPng, exportCardsPdf } from '@/lib/cards/cardExport';
 import { slugifyFileName, type PdfLayoutMode } from '@/lib/cards/cardLayout';
 import { CardTemplatesManager } from '@/components/cards/CardTemplatesManager';
+import { AthleteCard3D, datosDeEjemplo } from '@/components/cards/AthleteCard3D';
+import { resolverIdentidad, type BrandingSettingsCarnet } from '@/lib/cards/clubIdentity';
+import { useEntitlements } from '@/hooks/useEntitlements';
 import { StatFilterBar } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
 
@@ -949,7 +952,8 @@ export default function SchoolCardsAdminPage() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="templates">
+        <TabsContent value="templates" className="space-y-6">
+          <VistaPreviaCarnet3D schoolId={schoolId} />
           <CardTemplatesManager schoolId={schoolId} />
         </TabsContent>
       </Tabs>
@@ -1146,5 +1150,69 @@ function Pager({ offset, pageCount, total, busy, onChange }: {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Vista previa del carnet 3D con un deportista de ejemplo (spec carnet-3d-club.md
+ * §4, §11.1). En la app la familia y la verificación ven este carnet; la
+ * impresión y el PDF por equipo siguen con las plantillas de abajo.
+ * Sin complemento de marca (D3) se muestra cómo quedaría con la identidad del
+ * club, avisando que la familia hoy lo ve con el diseño de SportMaps.
+ */
+function VistaPreviaCarnet3D({ schoolId }: { schoolId: string | null | undefined }) {
+  const { marcaPropia, isLoading } = useEntitlements();
+  const [school, setSchool] = useState<{ name: string; logo_url: string | null; branding_settings: BrandingSettingsCarnet | null } | null>(null);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    let cancelado = false;
+    void supabase
+      .from('schools')
+      .select('name, logo_url, branding_settings')
+      .eq('id', schoolId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelado && data) setSchool(data as unknown as { name: string; logo_url: string | null; branding_settings: BrandingSettingsCarnet | null });
+      });
+    return () => { cancelado = true; };
+  }, [schoolId]);
+
+  const datos = useMemo(
+    () => (school ? datosDeEjemplo(resolverIdentidad(school, marcaPropia, { forzarMarca: true })) : null),
+    [school, marcaPropia],
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg">Así se ve el carnet en la app</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col items-center gap-6 md:flex-row md:items-start">
+        {datos ? (
+          <AthleteCard3D datos={datos} ancho={260} />
+        ) : (
+          <div className="flex items-center justify-center rounded-2xl bg-muted" style={{ width: 260, height: Math.round(260 * 540 / 340) }}>
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-label="Cargando la vista previa" />
+          </div>
+        )}
+        <div className="space-y-3 text-sm text-muted-foreground">
+          <p>
+            Las familias y los deportistas ven su carnet así: se inclina con el movimiento del celular y, al tocarlo,
+            gira y muestra el código QR y su resumen en el club. Este es un deportista de ejemplo.
+          </p>
+          <p>
+            Para imprimir y para el PDF por equipo se siguen usando las plantillas de abajo.
+          </p>
+          {!isLoading && !marcaPropia && (
+            <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800">
+              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              Así quedaría con los colores y el escudo de tu club. Hoy las familias lo ven con el diseño de SportMaps:
+              activa el complemento de marca para que lo vean con tu identidad.
+            </p>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

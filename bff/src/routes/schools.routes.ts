@@ -23,6 +23,7 @@ import { validateLogoUrl } from '../utils/logoValidator';
 import { invalidateBrandingCache } from '../utils/schoolBrandingResolver';
 import { generarIconosPwa } from '../services/pwaIcons.service';
 import { invalidatePwaManifestCache } from './pwa.routes';
+import { clienteConJwtDelUsuario, STATUS_POR_ERROR_BRANDING } from './branding-escudo';
 
 const router = Router();
 
@@ -57,6 +58,9 @@ const brandingUpdateSchema = z.object({
     logo_url:         z.string().url().max(1024).nullable().optional(),
     primary_color:    HEX_COLOR.optional(),
     secondary_color:  HEX_COLOR.optional(),
+    accent_color:     HEX_COLOR.optional(),
+    // «Restablecer»: vuelve al diseño base SportMaps (borra los tres colores).
+    reset_colores:    z.boolean().optional(),
     show_watermark:   z.boolean().optional(),
 }).refine(
     (data) => Object.keys(data).length > 0,
@@ -70,7 +74,8 @@ const brandingUpdateSchema = z.object({
 // Solo accesible para admins de la escuela en tier Pro+ (gate hecho por RPC).
 //
 // Body (todos opcionales, al menos uno requerido):
-//   { logo_url?, primary_color?, secondary_color?, show_watermark? }
+//   { logo_url?, primary_color?, secondary_color?, accent_color?,
+//     reset_colores?, show_watermark? }
 //
 // Respuestas:
 //   200 { ok: true, school_id, logo_url, branding_settings }
@@ -111,7 +116,7 @@ router.put(
                 details: parsed.error.flatten(),
             });
         }
-        const { logo_url, primary_color, secondary_color, show_watermark } = parsed.data;
+        const { logo_url, primary_color, secondary_color, accent_color, reset_colores, show_watermark } = parsed.data;
 
         // Forensics: IP real considerando proxy (Render setea x-forwarded-for)
         const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || null;
@@ -158,7 +163,10 @@ router.put(
         }
 
         try {
-            const { data, error } = await supabase.rpc('update_school_branding', {
+            // Con el JWT del usuario: la RPC valida auth.uid() (con el cliente
+            // service role auth.uid() es NULL y respondía siempre auth_required).
+            const userClient = clienteConJwtDelUsuario(req.headers.authorization);
+            const { data, error } = await userClient.rpc('update_school_branding', {
                 p_school_id:        schoolIdParam,
                 p_logo_url:         logo_url ?? null,
                 p_primary_color:    primary_color ?? null,
@@ -166,6 +174,8 @@ router.put(
                 p_show_watermark:   show_watermark ?? null,
                 p_ip_address:       ip,
                 p_user_agent:       userAgent,
+                p_accent_color:     accent_color ?? null,
+                p_reset_colores:    reset_colores ?? null,
             });
 
             if (error) {
@@ -176,18 +186,8 @@ router.put(
             if (!data?.ok) {
                 // Mapear errores conocidos del RPC a status HTTP apropiados
                 const errCode = data?.error || 'unknown';
-                const statusByCode: Record<string, number> = {
-                    auth_required:          401,
-                    school_id_required:     400,
-                    forbidden:              403,
-                    feature_not_available:  403,
-                    rate_limited:           429,
-                    invalid_primary_color:  400,
-                    invalid_secondary_color:400,
-                    invalid_logo_url:       400,
-                    school_not_found:       404,
-                };
-                return res.status(statusByCode[errCode] ?? 400).json(data);
+                // Mapa compartido con POST /branding/escudo (incluye invalid_accent_color).
+                return res.status(STATUS_POR_ERROR_BRANDING[errCode] ?? 400).json(data);
             }
 
             // Audit cruzado en security_audit_log (corre en background, no

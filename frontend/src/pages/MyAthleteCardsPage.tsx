@@ -3,11 +3,15 @@
  * una frase, la lista de carnets vigentes (uno por deportista y escuela) y,
  * al tocar uno, el carnet en grande para mostrarlo o descargarlo.
  *
+ * Carnet 3D (spec carnet-3d-club.md §4, §11.1): el vigente se ve en 3D con su
+ * reverso; «Descargar imagen» lo exporta plano. La versión para imprimir
+ * sigue con la plantilla clásica. Revocado/vencido: vista clásica de estado.
+ *
  * Carga, vacío y error son distintos: un error al cargar NUNCA se ve como
  * «no tienes carnets».
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, IdCard, Download, ExternalLink, RotateCw, AlertTriangle, RefreshCw, ChevronRight } from 'lucide-react';
+import { Loader2, IdCard, Download, ExternalLink, AlertTriangle, RefreshCw, ChevronRight, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -15,7 +19,9 @@ import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import { AthleteIdCard, type CardData } from '@/components/cards/AthleteIdCard';
-import { exportCardPng } from '@/lib/cards/cardExport';
+import { exportCardPng, exportCarnet3DPng } from '@/lib/cards/cardExport';
+import { AthleteCard3D, DatosDelDeportista } from '@/components/cards/AthleteCard3D';
+import { filasDatosDeportista, useCarnet3DDesdeVerify } from '@/hooks/useCarnet3D';
 import { pickCurrentCards, slugifyFileName } from '@/lib/cards/cardLayout';
 import { ChipEstado } from '@/components/common/ChipEstado';
 import { estadoCarnet, venceCarnet, fraseCarnets } from '@/components/cards/myCardsModel';
@@ -53,8 +59,9 @@ export default function MyAthleteCardsPage() {
   const [previewData, setPreviewData] = useState<CardData | null>(null);
   const [previewError, setPreviewError] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewFace, setPreviewFace] = useState<'front' | 'back'>('front');
-  const [downloading, setDownloading] = useState(false);
+  const [downloading, setDownloading] = useState<'imagen' | 'imprimir' | null>(null);
+  const { datos: datos3d, listo: listo3d } = useCarnet3DDesdeVerify(previewData);
+  const filas = useMemo(() => filasDatosDeportista(previewData), [previewData]);
 
   const publicCardOrigin = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -101,7 +108,6 @@ export default function MyAthleteCardsPage() {
     setPreviewToken(qrToken);
     setPreviewData(null);
     setPreviewError(false);
-    setPreviewFace('front');
     setPreviewOpen(true);
     const { data, error } = await supabase.rpc('verify_athlete_id_card_public' as any, {
       p_qr_token: qrToken,
@@ -113,18 +119,33 @@ export default function MyAthleteCardsPage() {
     setPreviewData(data as CardData);
   }
 
+  const nombreArchivo = () =>
+    `carnet-${slugifyFileName(previewData?.athlete?.full_name, (previewToken ?? '').slice(0, 8))}`;
+
+  async function downloadImagen() {
+    if (!datos3d) return;
+    setDownloading('imagen');
+    try {
+      await exportCarnet3DPng(datos3d, nombreArchivo());
+    } catch {
+      toast({ title: 'No se pudo descargar la imagen', description: 'Inténtalo de nuevo en un momento.', variant: 'destructive' });
+    } finally {
+      setDownloading(null);
+    }
+  }
+
   async function downloadPreview() {
     if (!previewData || !previewToken) return;
-    setDownloading(true);
+    setDownloading('imprimir');
     try {
       await exportCardPng(
         { data: previewData, publicUrl: `${publicCardOrigin}/${previewToken}` },
-        `carnet-${slugifyFileName(previewData.athlete?.full_name, previewToken.slice(0, 8))}`,
+        `${nombreArchivo()}-para-imprimir`,
       );
     } catch {
       toast({ title: 'No se pudo descargar el carnet', description: 'Inténtalo de nuevo en un momento.', variant: 'destructive' });
     } finally {
-      setDownloading(false);
+      setDownloading(null);
     }
   }
 
@@ -218,7 +239,9 @@ export default function MyAthleteCardsPage() {
         <DialogContent className="max-h-[95vh] max-w-md overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Carnet deportivo</DialogTitle>
-            <DialogDescription>Muestra el código QR en la entrada de la escuela.</DialogDescription>
+            <DialogDescription>
+              {datos3d ? 'Toca el carnet para girarlo: el código QR está atrás.' : 'Muestra el código QR en la entrada de la escuela.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center gap-3">
             {previewError ? (
@@ -228,34 +251,36 @@ export default function MyAthleteCardsPage() {
                   Reintentar
                 </Button>
               </div>
-            ) : !previewData ? (
+            ) : !previewData || (previewData.status === 'active' && !listo3d) ? (
               <Loader2 className="h-6 w-6 animate-spin" aria-label="Cargando el carnet" />
+            ) : datos3d ? (
+              <AthleteCard3D datos={datos3d} ancho={280} />
             ) : (
               <AthleteIdCard
                 data={previewData}
-                face={previewFace}
+                face="front"
                 publicUrl={`${publicCardOrigin}/${previewToken}`}
               />
             )}
-            {previewData?.status === 'active' && (
-              <Button
-                variant="ghost"
-                onClick={() => setPreviewFace((f) => (f === 'front' ? 'back' : 'front'))}
-                className="min-h-touch gap-1"
-              >
-                <RotateCw className="h-4 w-4" aria-hidden="true" />
-                {previewFace === 'front' ? 'Ver el reverso' : 'Ver el frente'}
-              </Button>
-            )}
+            {datos3d && <DatosDelDeportista filas={filas} />}
           </div>
           <DialogFooter className="flex-col gap-2 sm:flex-col">
             <Button
-              onClick={downloadPreview}
-              disabled={downloading || previewData?.status !== 'active'}
+              onClick={downloadImagen}
+              disabled={downloading !== null || !datos3d}
               className="h-12 w-full gap-2 rounded-xl text-base font-semibold"
             >
-              {downloading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
-              Descargar el carnet
+              {downloading === 'imagen' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+              Descargar imagen
+            </Button>
+            <Button
+              variant="outline"
+              onClick={downloadPreview}
+              disabled={downloading !== null || previewData?.status !== 'active'}
+              className="min-h-touch w-full gap-2 rounded-xl"
+            >
+              {downloading === 'imprimir' ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Printer className="h-4 w-4" aria-hidden="true" />}
+              Versión para imprimir
             </Button>
             <Button
               variant="ghost"

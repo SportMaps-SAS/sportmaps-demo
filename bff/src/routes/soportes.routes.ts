@@ -27,7 +27,7 @@ import { z } from 'zod';
 import { requireAuth, type AuthenticatedRequest } from '../middlewares/authMiddleware';
 import { administraEstaEscuela } from './whatsapp-admin.routes';
 import {
-    esFamiliaDelSujeto, esTipoSoporte, esTipoSujeto, esUuid, estadoDeEscuela, guardarSoporte, MAX_BYTES_SOPORTE,
+    esFamiliaDelSujeto, esTipoConVigencia, esTipoSoporte, esTipoSujeto, esUuid, estadoDeEscuela, guardarSoporte, MAX_BYTES_SOPORTE,
     verificarSujeto, verificarSujetoDeFamilia, type Sujeto, type TipoSujeto,
 } from '../services/soportes.service';
 
@@ -36,6 +36,9 @@ const router = Router();
 const SubirSchema = z.object({
     archivoBase64: z.string().min(100),
     nombre: z.string().max(200).optional(),
+    /** F5: «Vence el» (YYYY-MM-DD) de seguro / certificado / autorización, y el evento de la autorización. */
+    vence_el: z.string().max(10).nullish(),
+    event_id: z.string().max(40).nullish(),
 });
 
 const HTTP_DE_ERROR: Record<string, string> = {
@@ -46,6 +49,10 @@ const HTTP_DE_ERROR: Record<string, string> = {
     solo_imagen: 'Este soporte debe ser una foto, no un PDF.',
     sujeto_invalido: 'Deportista inválido.',
     deportista_no_encontrado: 'No encontramos a ese deportista en esta escuela.',
+    vence_el_requerido: 'Falta la fecha de vencimiento («Vence el»).',
+    vence_el_invalido: 'La fecha de vencimiento no es válida.',
+    vence_el_pasado: 'Esa fecha ya pasó: el documento está vencido.',
+    evento_requerido: 'Elige el evento de la autorización.',
 };
 
 function leerIds(req: AuthenticatedRequest, res: Response): { schoolId: string; sujeto?: Sujeto } | null {
@@ -98,7 +105,7 @@ router.post('/:schoolId/deportistas/:tipoSujeto/:sujetoId/:tipoDocumento', requi
     const ids = leerIds(req, res);
     if (!ids?.sujeto) return;
     const tipoDocumento = String((req.params as { tipoDocumento: string }).tipoDocumento);
-    if (!esTipoSoporte(tipoDocumento)) return res.status(400).json({ error: HTTP_DE_ERROR.tipo_invalido, codigo: 'tipo_invalido' });
+    if (!esTipoSoporte(tipoDocumento) && !esTipoConVigencia(tipoDocumento)) return res.status(400).json({ error: HTTP_DE_ERROR.tipo_invalido, codigo: 'tipo_invalido' });
 
     const parsed = SubirSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: HTTP_DE_ERROR.formato_no_permitido, codigo: 'formato_no_permitido' });
@@ -115,6 +122,7 @@ router.post('/:schoolId/deportistas/:tipoSujeto/:sujetoId/:tipoDocumento', requi
         const r = await guardarSoporte({
             schoolId: ids.schoolId, sujeto: ids.sujeto, tipo: tipoDocumento,
             archivo: { buffer, nombre: parsed.data.nombre ?? null }, subidoPor: userId,
+            vigencia: { venceEl: parsed.data.vence_el ?? null, eventId: parsed.data.event_id ?? null },
         });
         if (!r.ok) return res.status(r.status).json({ error: HTTP_DE_ERROR[r.error] ?? r.error, codigo: r.error });
         req.log?.info({ schoolId: ids.schoolId, sujeto: ids.sujeto, tipo: tipoDocumento }, '[soportes] guardado');

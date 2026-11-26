@@ -1,6 +1,6 @@
 # Carnet 3D por club — spec (F0)
 
-**Estado:** aprobada (puntos 1–6 de §11 el 2026-11-26; 7–8 pendientes) · **F1 APLICADA** (`20261126095105`, 2026-11-26) · **Fecha:** 2026-11-24 · **Autor:** Brayan Steven Lopez (con Claude)
+**Estado:** aprobada (puntos 1–8 de §11, 2026-11-26) · **F1 y F5 APLICADAS** (`20261126095105`, `20261126103934`) · F2–F5 y pantalla V2 construidas el 2026-11-26 (sin desplegar) · **Fecha:** 2026-11-24 · **Autor:** Brayan Steven Lopez (con Claude)
 **Fuente de verdad** de las fases F1–F5. Cada fase va con revisión antes de la siguiente; ninguna migración se escribe antes de aprobar esta spec.
 
 ---
@@ -162,7 +162,7 @@ Hoy `staff` incluye coaches y admins por igual: se separan en `coach` y `admin`.
 
 ## 11. Pendiente de confirmar en la revisión de esta spec
 
-**1–6 aprobados como se proponen (2026-11-26).** Siguen abiertos 7 y 8.
+**1–8 aprobados como se proponen (2026-11-26).** La pantalla V2 vive en `/carnets-constancias`.
 
 1. **3D y plantillas clásicas:** propuesta: en la app (familia, admin, verificación) se ve el **carnet 3D**; la **impresión y el PDF por equipo** siguen con las plantillas clásicas (el papel no es 3D).
 2. **Código por emisión:** cada reemisión lleva **código nuevo** (el viejo queda «no válido»). Alternativa: un código fijo por jugador.

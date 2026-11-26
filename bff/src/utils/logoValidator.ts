@@ -62,7 +62,7 @@ function magicMatches(buf: Buffer, magic: number[], offset = 0): boolean {
     return true;
 }
 
-function detectMimeFromMagicBytes(buf: Buffer): MimeType | null {
+export function detectMimeFromMagicBytes(buf: Buffer): MimeType | null {
     // PNG: 89 50 4E 47 0D 0A 1A 0A
     if (magicMatches(buf, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
         return 'image/png';
@@ -79,13 +79,13 @@ function detectMimeFromMagicBytes(buf: Buffer): MimeType | null {
     return null;
 }
 
-function looksLikeSvg(buf: Buffer): boolean {
+export function looksLikeSvg(buf: Buffer): boolean {
     // Skip BOM si esta
     const start = buf.toString('utf8', 0, 256).trimStart();
     return start.startsWith('<?xml') || start.toLowerCase().startsWith('<svg');
 }
 
-function svgIsSafe(content: string): { safe: boolean; reason?: string } {
+export function svgIsSafe(content: string): { safe: boolean; reason?: string } {
     const lower = content.toLowerCase();
     // <script>...</script>
     if (/<script[\s>]/i.test(content)) {

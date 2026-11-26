@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 973,
+  "count": 974,
   "head": "20261126111320",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
@@ -976,6 +976,7 @@
     {"v":"20261125170908","file":"20261125170908_bot_ofertas_descuento_promo_y_norte_valor.sql","sha256":"51d694011be87783da23a6e0e6ccb7ae87c8e6df8f62edb6e0b53ae74b28c48b","added":"2026-11-25","by":"Brayan Steven Lopez"},
     {"v":"20261125162425","file":"20261125162425_paz_y_salvo_exige_estar_al_dia.sql","sha256":"7f7cb9171d2dbd23b3256c032d1b14fde57e49bf3233ce10ac0468751a850784","added":"2026-11-25","by":"Brayan Steven Lopez"},
     {"v":"20261126111320","file":"20261126111320_campana_filtro_por_anuncio.sql","sha256":"d7acc824429fe435927c1cc05ad574c3f9022604082dcbfe7f4d0ef52935605b","added":"2026-11-26","by":"Brayan Steven Lopez"},
-    {"v":"20261126095105","file":"20261126095105_carnet_3d_f1_codigo_identidad_reverso.sql","sha256":"e037915a67bef33a744634c93d485390ca3c5b1334253790b254d21df828dd5f","added":"2026-11-26","by":"Brayan Steven Lopez"}
+    {"v":"20261126095105","file":"20261126095105_carnet_3d_f1_codigo_identidad_reverso.sql","sha256":"e037915a67bef33a744634c93d485390ca3c5b1334253790b254d21df828dd5f","added":"2026-11-26","by":"Brayan Steven Lopez"},
+    {"v":"20261126103934","file":"20261126103934_carnet_3d_f5_habilitacion_y_reverso_futbol.sql","sha256":"024fa3989ca96c042a3e4cd7ba1a988171163a6a22bf42d6083c64dd1edbb512","added":"2026-11-26","by":"Brayan Steven Lopez"}
   ]
 }

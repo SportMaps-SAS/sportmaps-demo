@@ -73,6 +73,57 @@ export const esUuid = (s: unknown): s is string => typeof s === 'string' && UUID
 export const esTipoSoporte = (s: unknown): s is TipoSoporte => typeof s === 'string' && (TIPOS_SOPORTE as readonly string[]).includes(s);
 export const esTipoSujeto = (s: unknown): s is TipoSujeto => typeof s === 'string' && (TIPOS_SUJETO as string[]).includes(s);
 
+// ─── Documentos con vigencia (carnet 3D F5, migración 20261126103934) ─────────
+// Solo vigente / vencido, NUNCA diagnósticos. No son «soportes obligatorios»: no entran en TIPOS_SOPORTE, así que
+// el bot de WhatsApp no los ofrece ni los guarda (no sabría pedir la fecha). Se suben por la misma ruta POST.
+
+export const TIPOS_CON_VIGENCIA = ['sports_insurance', 'medical_certificate', 'event_authorization'] as const;
+export type TipoConVigencia = typeof TIPOS_CON_VIGENCIA[number];
+export const esTipoConVigencia = (s: unknown): s is TipoConVigencia =>
+    typeof s === 'string' && (TIPOS_CON_VIGENCIA as readonly string[]).includes(s);
+
+export const ETIQUETAS_VIGENCIA: Record<TipoConVigencia, string> = {
+    sports_insurance: 'Seguro deportivo',
+    medical_certificate: 'Certificado médico',
+    event_authorization: 'Autorización del acudiente para un evento',
+};
+
+export type ValidacionVigencia =
+    | { ok: true; validUntil: string | null; eventId: string | null }
+    | { ok: false; error: 'vence_el_requerido' | 'vence_el_invalido' | 'vence_el_pasado' | 'evento_requerido' };
+
+const FECHA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+const esFechaReal = (v: string) => {
+    if (!FECHA_ISO.test(v)) return false;
+    const d = new Date(`${v}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+};
+
+/** Hoy en Bogotá (UTC-5, sin horario de verano) como 'YYYY-MM-DD'. */
+export function hoyBogota(ahora: Date = new Date()): string {
+    return new Date(ahora.getTime() - 5 * 3600 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * «Vence el» y evento según el tipo. Seguro y certificado exigen fecha (la base también: CHECK
+ * athlete_documents_vigencia_requerida); la autorización exige el evento y la fecha es opcional. Una fecha ya
+ * pasada no se acepta (subir algo vencido no habilita a nadie). Los demás tipos no llevan ni fecha ni evento.
+ */
+export function validarVigencia(
+    tipo: string, venceEl: string | null | undefined, eventId: string | null | undefined, hoy: string,
+): ValidacionVigencia {
+    if (!esTipoConVigencia(tipo)) return { ok: true, validUntil: null, eventId: null };
+    const v = venceEl ? String(venceEl) : null;
+    if (v !== null && !esFechaReal(v)) return { ok: false, error: 'vence_el_invalido' };
+    if (tipo !== 'event_authorization' && v === null) return { ok: false, error: 'vence_el_requerido' };
+    if (v !== null && v < hoy) return { ok: false, error: 'vence_el_pasado' };
+    if (tipo === 'event_authorization') {
+        if (!esUuid(eventId)) return { ok: false, error: 'evento_requerido' };
+        return { ok: true, validUntil: v, eventId };
+    }
+    return { ok: true, validUntil: v, eventId: null };
+}
+
 // ─── Lo puro ─────────────────────────────────────────────────────────────────
 
 /** Qué tipos de `requeridos` no están en `presentes`, en el orden de `requeridos`. Espejo del cálculo SQL. */
@@ -112,7 +163,7 @@ export function mimeDeFirma(buf: Buffer): (typeof MIMES_SOPORTE)[number] | null 
 export type ValidacionArchivo = { ok: true; mime: (typeof MIMES_SOPORTE)[number]; ext: string } | { ok: false; error: string };
 
 export function validarArchivoSoporte(tipo: string, buffer: Buffer): ValidacionArchivo {
-    if (!esTipoSoporte(tipo)) return { ok: false, error: 'tipo_invalido' };
+    if (!esTipoSoporte(tipo) && !esTipoConVigencia(tipo)) return { ok: false, error: 'tipo_invalido' };
     if (buffer.length === 0) return { ok: false, error: 'archivo_vacio' };
     if (buffer.length > MAX_BYTES_SOPORTE) return { ok: false, error: 'archivo_muy_grande' };
     const mime = mimeDeFirma(buffer);
@@ -327,10 +378,12 @@ export interface GuardarSoporteParams {
     archivo: ArchivoSoporte;
     /** Quién sube (perfil). Null cuando lo sube el bot en nombre de la familia identificada. */
     subidoPor?: string | null;
+    /** Solo para los tipos con vigencia (F5): «Vence el» (YYYY-MM-DD) y, en la autorización, el evento. */
+    vigencia?: { venceEl?: string | null; eventId?: string | null };
 }
 
 export type GuardarSoporteResultado = Resultado<{
-    id: string; storagePath: string; tipo: TipoSoporte;
+    id: string; storagePath: string; tipo: TipoSoporte | TipoConVigencia;
     /** Lo que sigue faltando tras guardar (vacío si el flag está apagado o ya está completo). */
     faltan: string[]; completo: boolean; activo: boolean;
 }>;
@@ -373,7 +426,9 @@ export async function guardarSoporte(p: GuardarSoporteParams): Promise<GuardarSo
     }
     const v = validarArchivoSoporte(p.tipo, p.archivo.buffer);
     if (!v.ok) return { ok: false, status: v.error === 'archivo_muy_grande' ? 413 : 400, error: v.error };
-    const tipo = p.tipo as TipoSoporte;
+    const tipo = p.tipo as TipoSoporte | TipoConVigencia;
+    const vig = validarVigencia(tipo, p.vigencia?.venceEl, p.vigencia?.eventId, hoyBogota());
+    if (!vig.ok) return { ok: false, status: 400, error: vig.error };
 
     const pertenece = await sujetoDeLaEscuela(p.schoolId, p.sujeto);
     if (!pertenece.ok) return { ok: false, status: 404, error: 'deportista_no_encontrado' };
@@ -395,6 +450,8 @@ export async function guardarSoporte(p: GuardarSoporteParams): Promise<GuardarSo
         child_id: p.sujeto.tipo === 'child' ? p.sujeto.id : null,
         user_id: p.sujeto.tipo === 'profile' ? p.sujeto.id : null,
         unregistered_athlete_id: p.sujeto.tipo === 'unregistered' ? p.sujeto.id : null,
+        // F5: vigencia solo en los tipos que la llevan (las filas de siempre no cambian).
+        ...(esTipoConVigencia(tipo) ? { valid_until: vig.validUntil, event_id: vig.eventId } : {}),
     };
     const ins = await supabase.from('athlete_documents').insert(fila).select('id').single();
     if (ins.error || !ins.data) {
