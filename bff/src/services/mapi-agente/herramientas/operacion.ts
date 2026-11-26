@@ -611,6 +611,7 @@ const esquemaAjuste = z.object({
 export const ajustarStock: HerramientaAccion<ArgsAjustarStock> = {
     tipo: 'accion',
     nombre: 'ajustar_stock',
+    plata: true,
     descripcion: 'PREPARA un ajuste de stock de un producto de la tienda, o de una talla o color (no lo ejecuta: la persona confirma en la tarjeta). «sumar» suma o resta unidades (negativo para restar); «fijar» deja el stock en esa cantidad. Queda en el kardex. Solo administración.',
     esquema: {
         type: 'object',
@@ -741,6 +742,7 @@ function noCancelable(f: any): string | null {
 export const cancelarReserva: HerramientaAccion<ArgsCancelarReserva> = {
     tipo: 'accion',
     nombre: 'cancelar_reserva',
+    plata: true,
     descripcion: 'PREPARA la cancelación de una reserva de instalación (no la ejecuta: la persona confirma en la tarjeta). La vista previa dice si hay devolución. Usa el id que devolvió la herramienta reservas. Solo administración.',
     esquema: {
         type: 'object',

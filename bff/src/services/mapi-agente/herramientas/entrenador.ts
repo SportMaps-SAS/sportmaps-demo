@@ -18,10 +18,11 @@
  *     lista cerrada y solo el entrenador asignado (team_coaches).
  *   · felicitar → RPC `give_kudos` (FelicitarSheet): una por deportista al día.
  *
- * Las dos RPC autorizan con `auth.uid()`: con la service key del BFF darían
- * 42501. Se llaman COMO LA PERSONA (utils/userClient.ts) con el header
- * Authorization de la request, que el integrador suma al Alcance como
- * `authorization`. Sin él, esas dos herramientas no se ofrecen.
+ * Las dos RPC autorizan con `auth.uid()`: con la service key pelada darían
+ * 42501. Se llaman por su `<rpc>_por` (rpc-por.ts, plan mapi-rpc-por-actor):
+ * service_role con `p_actor = alcance.userId`; la base valida que el actor
+ * trabaje en la escuela, lo fija en la transacción y llama a la RPC original,
+ * que sigue exigiendo el coach del equipo. Funciona con o sin JWT (WhatsApp).
  *
  * Consultas: equipos_y_horarios, asistencia_de_sesion y semana_del_equipo
  * (semana-equipo.service: horario base + cancelada / movida / extra).
@@ -32,8 +33,8 @@
  */
 
 import { z } from 'zod';
-import { createClient } from '@supabase/supabase-js';
-import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../../../config/supabase';
+import { supabase } from '../../../config/supabase';
+import { motivoDeLaPor, rpcPor } from '../rpc-por';
 import { guardarSesionAsistencia, resolverFechaDeTrabajo, type RegistroAsistencia } from '../../attendance-register.service';
 import { findTeamSessionOfDay, pausedEnrollmentIds, toCreditEnrollment, tieneSaldo, PLAN_JOIN, type CreditOutcome } from '../../attendance-credits';
 import {
@@ -58,29 +59,6 @@ const texto = (v: unknown) => String(v ?? '').trim() || null;
 
 /** Lista de ids/nombres que manda el modelo. `null` vale como lista vacía. */
 const listaDeNombres = z.array(z.string().trim().min(2).max(80)).max(80).nullish().transform((v) => v ?? []);
-
-// ─── Sesión de la persona (RPC que autorizan con auth.uid()) ────────────────
-
-/**
- * El integrador suma al Alcance el header Authorization de la request (el del
- * turno y el del Confirmar). Nunca se guarda en el borrador ni va al modelo.
- */
-export type AlcanceConSesion = Alcance & { authorization?: string | null };
-
-export function sesionDe(a: Alcance): string | null {
-    const t = (a as AlcanceConSesion).authorization;
-    return typeof t === 'string' && /^Bearer\s+\S+$/.test(t.trim()) ? t.trim() : null;
-}
-
-/** Cliente que actúa COMO la persona (mismo patrón que utils/userClient.ts). */
-function comoLaPersona(a: Alcance) {
-    const auth = sesionDe(a);
-    if (!auth) throw new RechazoHerramienta('Esta acción necesita tu sesión de la app. Hazla desde la pantalla.');
-    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        global: { headers: { Authorization: auth } },
-        auth: { autoRefreshToken: false, persistSession: false },
-    });
-}
 
 // ─── Equipos ────────────────────────────────────────────────────────────────
 
@@ -1037,8 +1015,6 @@ export const evaluarEntreno: HerramientaAccion<ArgsEvaluar> = {
         additionalProperties: false,
     },
     roles: ['admin', 'coach'],
-    // La RPC autoriza con auth.uid(): sin la sesión de la persona no se ofrece.
-    habilitada: (a) => !!sesionDe(a),
     validar(args) {
         const r = esquemaEvaluar.safeParse(args ?? {});
         if (!r.success) throw new RechazoHerramienta('Faltan datos para evaluar: equipo, fecha (o null para hoy), bien, le_costo y qué hacer con los demás.');
@@ -1064,12 +1040,12 @@ export const evaluarEntreno: HerramientaAccion<ArgsEvaluar> = {
         const r = await armarEvaluacion(a, args);
         if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
         const { x } = r;
-        const { data, error } = await comoLaPersona(a).rpc('submit_post_training_coach_rating', {
+        const { data, error } = await rpcPor(a, 'submit_post_training_coach_rating', {
             p_session_id: x.sesionId,
             p_ratings: x.envios.map((v) => ({ ...(v.e.tipo === 'child' ? { child_id: v.e.id } : { user_id: v.e.id }), effort_pct: EFFORT[v.como] })),
             p_coach_notes: x.args.nota ?? null,
         });
-        if (error) return { estado: 'failed', resultado: { motivo: `No se guardó: ${motivoEvaluar(error)}` } };
+        if (error) return { estado: 'failed', resultado: { motivo: motivoDeLaPor(error, 'submit_post_training_coach_rating') ?? `No se guardó: ${motivoEvaluar(error)}` } };
         return {
             estado: 'executed',
             resultado: {
@@ -1128,8 +1104,6 @@ export const felicitar: HerramientaAccion<ArgsFelicitar> = {
         additionalProperties: false,
     },
     roles: ['admin', 'coach'],
-    // give_kudos autoriza con auth.uid(): sin la sesión de la persona no se ofrece.
-    habilitada: (a) => !!sesionDe(a),
     validar(args) {
         const r = z.object({ deportista: z.string().min(5).max(80), mensaje: z.string().trim().min(1).max(200) }).safeParse(args ?? {});
         if (!r.success) throw new RechazoHerramienta('Falta el deportista o el mensaje (entre 1 y 200 caracteres).');
@@ -1161,14 +1135,14 @@ export const felicitar: HerramientaAccion<ArgsFelicitar> = {
     },
     async ejecutar(a, args) {
         const d = await resolverDeportista(a, args.deportista);
-        const { data, error } = await comoLaPersona(a).rpc('give_kudos', {
+        const { data, error } = await rpcPor(a, 'give_kudos', {
             p_school_id: a.schoolId,
             p_child_id: d.tipo === 'child' ? d.id : null,
             p_athlete_user_id: d.tipo === 'adult' ? d.id : null,
             p_unregistered_athlete_id: d.tipo === 'unregistered' ? d.id : null,
             p_message: args.mensaje,
         });
-        if (error) return { estado: 'failed', resultado: { motivo: motivoKudos(error, d.nombre) } };
+        if (error) return { estado: 'failed', resultado: { motivo: motivoDeLaPor(error, 'give_kudos') ?? motivoKudos(error, d.nombre) } };
         return { estado: 'executed', resultado: { nombre: d.nombre, kudos_id: data ?? null } };
     },
     mensajeResultado(r) {

@@ -22,7 +22,7 @@ import { cacheControlClaude } from '../llm.service';
 import { conContextoLlm, registrarUsoLlm, tokensDeRespuesta } from '../llm-usage.service';
 import { appMapParaRol } from '../../data/app-map';
 import { herramientasPara, buscarHerramienta, definicionesApi } from './registro';
-import { crearBorrador, pendientesDelTicket, cancelarBorrador } from './borradores';
+import { crearBorrador, pendientesDelTicket, pendientesDelCanal, cancelarBorrador } from './borradores';
 import { RechazoHerramienta, type Alcance, type VistaPrevia } from './tipos';
 import { contextoDelTurno, type PantallaValidada } from './pantalla';
 
@@ -168,6 +168,38 @@ export interface ParamsTurno {
     crearMensaje?: CrearMensaje;
     /** Con qué `feature` queda el consumo en llm_usage (los evals usan 'mapi_evals', §14.3). */
     feature?: 'mapi_agente' | 'mapi_evals';
+    /**
+     * Por dónde habla la persona (plan WhatsApp §12.2.5). 'app' (por defecto) es
+     * lo de siempre. 'whatsapp': sin pantalla ni hilo (ticketId null), formato de
+     * WhatsApp en el contexto del turno, y las propuestas pendientes se leen por
+     * usuario y escuela de los últimos 30 min.
+     */
+    canal?: CanalTurno;
+    /** conversation_id de llm_usage (uuid). WhatsApp usa uno derivado del número, nunca el número. */
+    conversacionLlm?: string | null;
+}
+
+export type CanalTurno = 'app' | 'whatsapp';
+
+/**
+ * Reglas del canal WhatsApp. Van DENTRO del contexto del turno (después del
+ * corte de caché): las reglas fijas y las herramientas quedan iguales a las de
+ * la app y la caché se comparte.
+ */
+export const LINEAS_CANAL_WHATSAPP = [
+    'Canal: WhatsApp (no la app). NO hay pantalla abierta ni tarjetas dentro de un chat de la app: describe en palabras.',
+    'Formato de WhatsApp: negrita con UN solo asterisco (*así*), nunca con dos. Sin tablas, sin títulos con #, sin rutas (/algo) ni enlaces. Listas cortas con «•».',
+    'Para lo que solo se hace en la app, di el menú y la pantalla con sus nombres, en palabras.',
+    'Cada propuesta le llega en un mensaje aparte con los botones Confirmar y Cancelar. Un «sí» escrito no confirma nada.',
+];
+
+/** Mete líneas dentro del bloque <contexto_del_turno> (antes del cierre). Pura. */
+export function conLineasDeContexto(contexto: string, lineas: string[]): string {
+    if (!lineas.length) return contexto;
+    const cierre = '\n</contexto_del_turno>';
+    const extra = `\n${lineas.join('\n')}`;
+    const i = contexto.lastIndexOf(cierre);
+    return i < 0 ? `${contexto}${extra}` : `${contexto.slice(0, i)}${extra}${contexto.slice(i)}`;
 }
 
 /** Palabras que afirman que algo ya se hizo: prohibidas en un turno que dejó borrador (§10.3). */
@@ -266,7 +298,10 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
     const crear = p.crearMensaje ?? crearMensajeReal;
     const a = p.alcance;
     const disponibles = herramientasPara(a);
-    const tools: any[] = [...definicionesApi(disponibles), ...(p.ticketId ? [DEF_DESCARTAR] : []), DEF_ESCALAR];
+    const porWhatsApp = p.canal === 'whatsapp';
+    // En WhatsApp no hay hilo, pero sí propuestas pendientes (por usuario y escuela).
+    const conDescartar = Boolean(p.ticketId) || porWhatsApp;
+    const tools: any[] = [...definicionesApi(disponibles), ...(conDescartar ? [DEF_DESCARTAR] : []), DEF_ESCALAR];
     tools[tools.length - 1] = { ...tools[tools.length - 1], cache_control: cacheControlClaude() };
 
     const consulta = p.historial.filter((m) => m.role === 'user').slice(-2).map((m) => m.content).join(' ');
@@ -276,12 +311,14 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
 
     // Las propuestas vivas del chat van en el contexto del turno: sin esto el modelo
     // solo veía su propio texto anterior y rehacía o desmentía las tarjetas (evals 11-25).
-    const pendientes: PendienteDelTurno[] = p.ticketId
-        ? (await pendientesDelTicket(a.userId, p.ticketId).catch(() => [])).map((t, i) => ({
-            ref: `p${i + 1}`, id: t.id, titulo: t.vista?.titulo ?? t.herramienta, linea: t.vista?.lineas?.[0] ?? null,
-        }))
-        : [];
-    const contexto = (await contextoDelTurno(a, p.pantalla ?? null, p.nombreUsuario ?? null)) + bloquePendientes(pendientes);
+    const vivas = porWhatsApp
+        ? await pendientesDelCanal(a.userId, a.schoolId).catch(() => [])
+        : p.ticketId ? await pendientesDelTicket(a.userId, p.ticketId).catch(() => []) : [];
+    const pendientes: PendienteDelTurno[] = vivas.map((t, i) => ({
+        ref: `p${i + 1}`, id: t.id, titulo: t.vista?.titulo ?? t.herramienta, linea: t.vista?.lineas?.[0] ?? null,
+    }));
+    const base = await contextoDelTurno(a, porWhatsApp ? null : (p.pantalla ?? null), p.nombreUsuario ?? null);
+    const contexto = conLineasDeContexto(base, porWhatsApp ? LINEAS_CANAL_WHATSAPP : []) + bloquePendientes(pendientes);
     const messages = historialParaApi(p.historial, contexto);
     if (!messages.length) return { tipo: 'sin_agente', motivo: 'sin_mensaje_del_usuario' };
 
@@ -289,7 +326,7 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
     const usadas: string[] = [];
     let texto = '';
 
-    return conContextoLlm({ schoolId: a.schoolId, feature: p.feature ?? 'mapi_agente' }, async () => {
+    return conContextoLlm({ schoolId: a.schoolId, feature: p.feature ?? 'mapi_agente', conversationId: p.conversacionLlm ?? undefined }, async () => {
         for (let ronda = 1; ronda <= MAX_RONDAS; ronda++) {
             const ultima = ronda === MAX_RONDAS;
             const body: any = {
@@ -344,7 +381,7 @@ export async function turnoAgente(p: ParamsTurno): Promise<ResultadoTurno> {
                     const contenido = await descartarPendientes(a.userId, pendientes, b.input);
                     return { type: 'tool_result', tool_use_id: b.id, content: contenido };
                 }
-                const r = await ejecutarLlamada(a, p.ticketId, b.name, b.input);
+                const r = await ejecutarLlamada(a, porWhatsApp ? null : p.ticketId, b.name, b.input);
                 if (r.borradorId) borradores.push(r.borradorId);
                 return { type: 'tool_result', tool_use_id: b.id, content: r.contenido, ...(r.error ? { is_error: true } : {}) };
             }));

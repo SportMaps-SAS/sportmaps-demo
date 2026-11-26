@@ -110,7 +110,9 @@ prueba.
 | 11-25 | Diseño A (núcleo) para la plata | §3.1, §6 |
 | 11-25 | El tope va en `school_settings.mapi_tope_aprobacion` (integer, default 400000, > 0). Lo cambia la administración desde la app, nunca Mapi. Cuenta lo que dice el comprobante. El BFF solo lo baja | §3.4, §6.1 |
 | 11-25 | `registrar_pago_efectivo` entra al piloto: solo admin, un cobro, sin pasar el saldo, con el tope de la escuela y auditoría de actor y canal | §6.5, §8.2 |
-| 11-25 | Nivel 2 para un abono: queda la definición de la rev. 1, **pendiente de confirmar por el usuario** | §3.5, §12 #1 |
+| 11-25 → 11-26 | Nivel 2 para un abono: la definición de la rev. 1, **confirmada por el usuario el 2026-11-26** | §3.5 |
+| 11-26 | El tope lo cambia la administración de la escuela (desde la app) | §3.4 |
+| 11-26 | El arreglo del veredicto (prerrequisito de M2) ya está vivo: `20261125140410` | §7 |
 | 11-25 | El hueco «la familia escribe `receipt_verdict` y `ocr_*`» se arregla aparte, en su propia migración. **M2 se aplica después** | §7, §2.3 #4 |
 
 ## 2. Lo que dicen las definiciones vivas (2026-11-25)
@@ -454,6 +456,7 @@ nivel 2, o NULL si lo es.
 **Condiciones comunes:**
 
 - estado `awaiting_approval`, con `receipt_url`;
+- lectura y veredicto sellados por el servidor (`receipt_image_sha256_source = 'server_verified'`, regla del Paso 4, migración `20261125140410`);
 - monto que **no** eligió el navegador (`amount_source <> 'cliente'`);
 - sin `requires_review` y sin abonos previos;
 - sin `POSIBLE_MANIPULACION`;
@@ -467,7 +470,7 @@ nivel 2, o NULL si lo es.
 - `ocr_amount` igual al saldo, con ±0,5 % (`TOLERANCIA_MONTO` del job de pagos por
   validar).
 
-**Abono (pendiente de confirmar por el usuario):**
+**Abono (confirmado por el usuario el 2026-11-26):**
 
 - el comprobante es **amarillo solo por `MONTO_DIFIERE`**;
 - el monto leído es menor que el saldo;
@@ -966,7 +969,7 @@ COMMENT ON TABLE public.pago_operaciones IS
 
 -- ── 4. Nivel 2 (§21 del plan de Mapi) recalculado en la base: PISO ───────────
 -- Devuelve el motivo por el que NO es nivel 2, o NULL si lo es. La definición del
--- abono está PENDIENTE DE CONFIRMAR por el usuario (plan §3.5, §12 #1).
+-- abono la confirmó el usuario el 2026-11-26 (plan §3.5).
 CREATE OR REPLACE FUNCTION public._comprobante_nivel2_falta(p_payment_id uuid, p_abono numeric)
 RETURNS text
 LANGUAGE plpgsql
@@ -983,6 +986,8 @@ BEGIN
   IF NOT FOUND THEN RETURN 'cobro_no_encontrado'; END IF;
   IF v.status <> 'awaiting_approval' THEN RETURN 'no_esta_por_validar'; END IF;
   IF v.receipt_url IS NULL THEN RETURN 'sin_comprobante'; END IF;
+  -- Paso 4 (20261125140410): la lectura y el veredicto valen solo si los selló el servidor.
+  IF COALESCE(v.receipt_image_sha256_source, '') <> 'server_verified' THEN RETURN 'lectura_no_sellada_por_el_servidor'; END IF;
   -- Monto elegido por el navegador: lo aprueba una persona en la pantalla (como auto_approve_payment).
   IF COALESCE(v.amount_source, 'servidor') = 'cliente' THEN RETURN 'monto_elegido_por_quien_paga'; END IF;
   IF COALESCE(v.requires_review, false) THEN RETURN 'intento_de_pasarela_en_revision'; END IF;
@@ -1006,7 +1011,7 @@ BEGIN
     IF abs(v.ocr_amount - v_rem) / v_rem > 0.005 THEN RETURN 'monto_leido_no_coincide'; END IF;
   ELSE
     -- Abono (§20.4 regla 6): se aprueba lo que dice el comprobante y lo ÚNICO que no
-    -- cuadra es el monto (amarillo solo por MONTO_DIFIERE). PENDIENTE DE CONFIRMAR.
+    -- cuadra es el monto (amarillo solo por MONTO_DIFIERE). Confirmada por el usuario el 2026-11-26.
     IF round(v.ocr_amount) <> round(p_abono) THEN RETURN 'abono_distinto_del_comprobante'; END IF;
     IF v.receipt_verdict IS DISTINCT FROM 'amarillo'
        OR EXISTS (SELECT 1 FROM unnest(v_codigos) AS c WHERE c IS DISTINCT FROM 'MONTO_DIFIERE') THEN
@@ -1817,7 +1822,7 @@ Los errores de la original o del núcleo siguen yendo por sus traductores de hoy
    - hace dos lecturas con proveedores distintos y aplica `buildVerdictContext` y
      `evaluarEvidenciaAutoAprobacion`;
    - para un abono acepta una sola falta, `monto_no_exacto`, y solo si el monto leído es
-     igual al abono (pendiente de confirmar, §3.5).
+     igual al abono (§3.5, confirmado el 2026-11-26).
 3. Si es nivel 3: «Este comprobante es dudoso (…). Apruébalo en la pantalla Aprobar, con la
    foto al lado».
 4. Tope: lee `school_settings.mapi_tope_aprobacion`. Si se pasa: «Supera el tope de $X de
@@ -2060,7 +2065,7 @@ Después corren G1–G7.
 
 ## 12. Decisiones abiertas
 
-1. **Nivel 2 para un abono: pendiente de confirmar por el usuario.** La definición en el
+1. **Nivel 2 para un abono: CERRADA (confirmada el 2026-11-26).** La definición en el
    plan (§3.5 y `_comprobante_nivel2_falta`) es:
    - el comprobante es amarillo **solo** por `MONTO_DIFIERE`;
    - el monto leído es menor que el saldo;

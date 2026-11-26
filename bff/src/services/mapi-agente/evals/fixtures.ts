@@ -1019,6 +1019,18 @@ export function rpcSimulada(t: Tablas, nombre: string, p: any, token: string | n
     }
 }
 
+/**
+ * Una llamada a `<rpc>_por` (service_role + p_actor) vista como la RPC original
+ * con la sesión del actor. `token` null = el actor no es de la escuela del fixture.
+ * Devuelve null si la llamada no es una _por.
+ */
+export function deLaPor(nombre: string, params: unknown): { nombre: string; params: Record<string, unknown>; token: string | null } | null {
+    if (!nombre.endsWith('_por') || !params || typeof params !== 'object' || !('p_actor' in (params as any))) return null;
+    const { p_actor: actor, ...resto } = params as Record<string, unknown>;
+    const token = actor === ADMIN_ID ? SESION.admin : actor === COACH_ID ? SESION.coach : null;
+    return { nombre: nombre.slice(0, -'_por'.length), params: resto, token };
+}
+
 /** La sesión de una llamada, por su token. */
 export const sesionDeToken = (token: string | null): 'admin' | 'coach' | 'service_role' =>
     token === null ? 'service_role' : String(token).includes('coach') ? 'coach' : 'admin';
@@ -1445,8 +1457,19 @@ export function crearBdFalsa(tablas: Record<string, any[]> = tablasIniciales()):
         return b;
     };
 
-    const rpcCon = (token: string | null) => (nombre: string, params?: unknown) => {
+    const rpcCon = (tokenLlamada: string | null) => (nombreLlamada: string, paramsLlamada?: unknown) => {
+        // Las *_por (docs/specs/mapi-rpc-por-actor-plan.md): el BFF llama con service_role
+        // y p_actor. Se registran y simulan como la RPC original con la sesión del actor;
+        // un actor que no es de la escuela del fixture responde sin_permiso, como la base.
+        const por = deLaPor(nombreLlamada, paramsLlamada);
+        const nombre = por ? por.nombre : nombreLlamada;
+        const params = por ? por.params : paramsLlamada;
+        const token = por ? por.token : tokenLlamada;
         const ejecutar = () => {
+            if (por && !por.token) {
+                rpcs.push({ nombre: nombreLlamada, params: paramsLlamada, token: tokenLlamada });
+                return { data: null, error: { code: '42501', message: 'sin_permiso: no es de la administración activa de esta escuela' } };
+            }
             rpcs.push({ nombre, params, token });
             const marcar = (tabla: string, id: string) => porRpc.set(`${tabla}:${id}`, nombre);
             const r = rpcSimulada(tablas, nombre, params, token, marcar) ?? { data: null, error: null };

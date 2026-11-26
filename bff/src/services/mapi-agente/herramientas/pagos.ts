@@ -29,11 +29,12 @@
  * que venga de la base (nombres, conceptos, pies de foto, mensajes) es DATO.
  */
 
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { supabase } from '../../../config/supabase';
 import {
     ORDEN_TIPOS, armarResumen, comprobantesCompartidos, cop, destinatariosEnLote, etiquetaDeDesglose, exclusionVerde,
-    leerPendientes, periodosYaPagados, saldo, tipoDeCobro, type ClaveTipo, type ContextoVerdes, type PagoPorValidar,
+    clavePeriodo, leerPendientes, periodosYaPagados, saldo, tipoDeCobro, type ClaveTipo, type ContextoVerdes, type PagoPorValidar,
 } from '../../../jobs/pagos-por-validar.job';
 import { formatoEspera } from '../../../jobs/receipt-review-alerts.job';
 import { notasDeComprobantes } from '../../../routes/whatsapp-admin.routes';
@@ -48,7 +49,8 @@ import {
     resumirSeguimiento, seguimientoDeConversaciones, sinResponder, type FilaSeguimiento,
 } from '../../whatsapp-seguimiento-conversaciones.service';
 import { catalogoServicios } from '../../ventas-servicios.service';
-import { normalizar } from '../deportistas';
+import { columnaDe, normalizar, resolverDeportista, type Deportista } from '../deportistas';
+import { motivoDeLaPor, rpcPor } from '../rpc-por';
 import { fechaCorta, fechaLarga, sumarDias } from '../fechas';
 import { RechazoHerramienta, type Alcance, type Herramienta, type HerramientaAccion, type HerramientaConsulta } from '../tipos';
 
@@ -141,7 +143,9 @@ const trozos = <T,>(a: T[], n = 150) => Array.from({ length: Math.ceil(a.length 
 const COLS_DETALLE = 'id, status, amount, amount_paid, early_payment_discount_applied, concept, payment_category, '
     + 'child_id, user_id, parent_id, unregistered_athlete_id, due_date, period_year, period_month, '
     + 'receipt_url, receipt_verdict, receipt_verdict_reasons, ocr_amount, ocr_date, ocr_destination, '
-    + 'requires_review, approved_by, approved_at, branch_id';
+    + 'requires_review, approved_by, approved_at, branch_id, '
+    // Paso 4 (exclusionVerde): el verde vale solo sellado por el servidor y sin monto del navegador.
+    + 'receipt_image_sha256_source, amount_source';
 
 /** Lo que no trae `leerPendientes`: sujeto, motivos y destino. Por id, en trozos, siempre de esta escuela. */
 async function detalleDeCobros(schoolId: string, ids: string[]): Promise<Map<string, any>> {
@@ -173,6 +177,8 @@ function aPorValidar(f: any): PagoPorValidar {
         receipt_url: f.receipt_url ?? null, ocr_amount: f.ocr_amount == null ? null : Number(f.ocr_amount),
         requires_review: f.requires_review === true, child_id: f.child_id ?? null,
         period_year: f.period_year ?? null, period_month: f.period_month ?? null, enviado_en: '', branch_id: f.branch_id ?? null,
+        receipt_image_sha256_source: f.receipt_image_sha256_source ?? null,
+        amount_source: f.amount_source ?? null,
     };
 }
 
@@ -974,6 +980,422 @@ export const pedirAclaracion: HerramientaAccion<ArgsAclaracion> = {
     },
 };
 
+// ═══ Plata desde Mapi: aprobar y registrar (plan mapi-rpc-por-actor §8.2) ════
+//
+// Sobre las `_por` de la migración 20261126101150 (rpc-por.ts): service_role con
+// p_actor = alcance.userId. La base vuelve a exigir todo: administración de la
+// escuela, nivel 2 (con el sello del servidor del Paso 4), el tope de la escuela
+// (school_settings.mapi_tope_aprobacion; también cuenta lo que dice el
+// comprobante), FOR UPDATE, la llave de idempotencia y que el cobro no haya
+// cambiado (p_pagado_antes). Aquí se calcula lo mismo ANTES, para que la tarjeta
+// diga la verdad y un dudoso ni se proponga.
+//
+// Nacen APAGADAS (MAPI_PLATA_POR=true): se prenden con el piloto y SOLO después
+// de aplicar la migración; sin ella cada llamada responde «todavía no está disponible».
+
+const plural = (n: number, uno: string, varios: string) => `${n} ${n === 1 ? uno : varios}`;
+
+export const plataPrendida = (a: Alcance): boolean => a.rol === 'admin' && process.env.MAPI_PLATA_POR === 'true';
+
+/** El default de school_settings.mapi_tope_aprobacion (la escuela sin fila de ajustes). */
+export const TOPE_MAPI_POR_DEFECTO = 400_000;
+/** «Aprobar los verdes» desde el chat: máximo por tarjeta. */
+export const MAX_VERDES = 20;
+
+/** El tope de Mapi de la escuela: lo cambia solo la administración desde la app. */
+async function topeDeLaEscuela(schoolId: string): Promise<number> {
+    const { data } = await supabase.from('school_settings').select('mapi_tope_aprobacion').eq('school_id', schoolId).maybeSingle();
+    const t = Number((data as any)?.mapi_tope_aprobacion);
+    return Number.isFinite(t) && t > 0 ? t : TOPE_MAPI_POR_DEFECTO;
+}
+
+/**
+ * Por dónde se confirmó, para pago_operaciones.canal. El adaptador de WhatsApp
+ * marca el Alcance con `canal: 'whatsapp'` (campo que se suma en tipos.ts).
+ */
+const canalDe = (a: Alcance): 'mapi_app' | 'mapi_whatsapp' => (a.canal === 'whatsapp' ? 'mapi_whatsapp' : 'mapi_app');
+
+/**
+ * Llave de idempotencia: la misma operación sobre el mismo estado del cobro da la
+ * misma llave (un doble clic o un reintento no aplican dos veces); un abono
+ * nuevo sobre el cobro ya abonado da otra. Pura.
+ */
+export function llaveDePlata(a: Pick<Alcance, 'schoolId' | 'userId'>, tipo: string, pago: string, monto: number, pagadoAntes: number): string {
+    const h = createHash('sha256').update(`${a.schoolId}|${a.userId}|${tipo}|${pago}|${monto}|${pagadoAntes}`).digest('hex');
+    // Formato UUID v4 (pago_operaciones.idempotency_key es uuid), como idDeOperacion de escuela.ts.
+    const variante = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variante}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
+
+/**
+ * ¿Es nivel 2 para aprobar `abono`? Mismo criterio que _comprobante_nivel2_falta
+ * en la base. Pago completo: la regla de «Aprobar todos los verdes»
+ * (exclusionVerde, con el sello del servidor). Abono (definición confirmada por el
+ * usuario el 2026-11-26): amarillo SOLO por MONTO_DIFIERE y se aprueba
+ * exactamente lo que dice el comprobante. Devuelve el motivo, o null. Pura.
+ */
+export function faltaNivel2(p: PagoPorValidar, motivos: MotivoGuardado[], abono: number, ctx: ContextoVerdes): string | null {
+    const restante = saldo(p);
+    if (abono >= restante) return exclusionVerde(p, ctx);
+    if (!p.receipt_url) return 'sin comprobante';
+    if (p.receipt_image_sha256_source !== 'server_verified') return 'la lectura no la hizo el servidor';
+    if (p.amount_source === 'cliente') return 'el monto lo eligió quien paga';
+    if (p.requires_review) return 'tiene un intento de pasarela en revisión';
+    if ((Number(p.amount_paid) || 0) > 0) return 'tiene abonos previos';
+    if (ctx.compartidos.has(p.receipt_url)) return 'el comprobante cubre varios cobros';
+    if (p.child_id && p.period_year && p.period_month
+        && ctx.periodosPagados.has(clavePeriodo(p.child_id, p.period_year, p.period_month))) return 'ese mes ya estaba pagado';
+    if (p.ocr_amount == null) return 'sin monto leído';
+    if (Math.round(Number(p.ocr_amount)) !== Math.round(abono)) return 'el abono no es lo que dice el comprobante';
+    const codigos = new Set(motivos.map((m) => String(m?.code ?? '')));
+    if (p.receipt_verdict !== 'amarillo' || [...codigos].some((c) => c !== 'MONTO_DIFIERE')) return 'el comprobante tiene otras dudas además del monto';
+    return null;
+}
+
+/** Errores de las _por de plata en palabras (los del gate los traduce rpc-por). */
+function motivoDePlata(error: { code?: string; message?: string } | null, nombre: 'aprobar_comprobante' | 'register_manual_payments'): string {
+    const propio = motivoDeLaPor(error, nombre);
+    if (propio) return propio;
+    const m = String(error?.message ?? '');
+    if (/^nivel_3/.test(m)) return 'El comprobante ya no es de los que se aprueban desde el chat. Apruébalo en la pantalla Aprobar, con la foto al lado.';
+    if (/^supera_tope/.test(m)) return 'Pasa el tope de Mapi de la escuela. Hazlo en la pantalla.';
+    if (/^cobro_cambio/.test(m)) return 'El cobro cambió mientras tanto (otro abono o un ajuste). Pídemelo otra vez para ver el saldo nuevo.';
+    if (/^cobro_no_abierto/.test(m)) return 'Ya no está por validar: alguien lo aprobó o lo rechazó mientras tanto.';
+    if (/^monto_mayor_que_saldo/.test(m)) return 'El monto pasa el saldo del cobro. La plata de más se registra en la pantalla (saldo a favor).';
+    if (/^escuela_no_operativa/.test(m)) return 'La cuenta de la escuela está bloqueada para registrar pagos.';
+    console.error('[mapi-agente] plata falló', { nombre, code: error?.code, msg: m });
+    return 'No se pudo completar. Hazlo desde la pantalla.';
+}
+
+// ─── aprobar_pago ───────────────────────────────────────────────────────────
+
+export interface ArgsAprobarPago { pago: string; monto: number | null }
+
+interface Aprobacion { f: any; p: PagoPorValidar; restante: number; abono: number; esAbono: boolean; nombre: string }
+
+/** Lee el cobro y revisa todo lo que la base va a revisar (sin escribir). */
+async function armarAprobacion(a: Alcance, args: ArgsAprobarPago): Promise<{ ok: true; x: Aprobacion } | { ok: false; motivo: string }> {
+    soloAdmin(a);
+    const f = await leerCobro(a, args.pago);
+    if (f.status !== 'awaiting_approval') {
+        return { ok: false, motivo: `Ese pago no está por validar (está ${ESTADO_LEGIBLE[f.status] ?? f.status}).` };
+    }
+    const p = aPorValidar(f);
+    const restante = saldo(p);
+    const abono = args.monto ?? restante;
+    if (abono > restante) return { ok: false, motivo: `El monto pasa el saldo del cobro (${cop(restante)}). Si pagaron de más, apruébalo en la pantalla: la diferencia queda como saldo a favor.` };
+    const [{ data: mismos }, periodos] = await Promise.all([
+        supabase.from('payments').select('id').eq('school_id', a.schoolId).eq('receipt_url', f.receipt_url ?? NINGUNO)
+            .in('status', ['awaiting_approval', 'partial', 'pending']).limit(5),
+        periodosYaPagados([p]),
+    ]);
+    const compartidos = ((mismos as any[]) ?? []).length > 1 && f.receipt_url ? new Set([String(f.receipt_url)]) : new Set<string>();
+    const falta = faltaNivel2(p, motivosDe(f), abono, { compartidos, periodosPagados: periodos });
+    if (falta) return { ok: false, motivo: `Este comprobante no se aprueba desde el chat: ${falta}. Apruébalo en la pantalla Aprobar, con la foto al lado.` };
+    const tope = await topeDeLaEscuela(a.schoolId);
+    const mayor = Math.max(abono, Number(p.ocr_amount) || 0);
+    if (mayor > tope) return { ok: false, motivo: `Son ${cop(mayor)} y el tope de Mapi de la escuela es ${cop(tope)}: apruébalo en la pantalla.` };
+    const nombre = (await nombresDeCobros([f])).get(String(f.id)) ?? 'Sin ficha';
+    return { ok: true, x: { f, p, restante, abono, esAbono: abono < restante, nombre } };
+}
+
+export const aprobarPago: HerramientaAccion<ArgsAprobarPago> = {
+    tipo: 'accion',
+    nombre: 'aprobar_pago',
+    plata: true,
+    descripcion: 'PREPARA aprobar UN comprobante por validar que coincide con su cobro (nivel 2): completo, o como abono si el comprobante dice menos. No lo ejecuta: la persona confirma y queda a su nombre; a la familia le llega el aviso. Un comprobante dudoso o por encima del tope de la escuela no se aprueba desde aquí. Solo administración.',
+    esquema: {
+        type: 'object',
+        properties: {
+            pago: { type: 'string', description: 'id del pago (de pagos_por_validar)' },
+            monto: { type: ['integer', 'null'], description: 'Solo para un abono: lo que dice el comprobante. null = el saldo completo' },
+        },
+        required: ['pago', 'monto'],
+        additionalProperties: false,
+    },
+    roles: ['admin'],
+    habilitada: plataPrendida,
+    validar(args) {
+        const r = validarCon(z.object({ pago: z.string().trim().min(10).max(60), monto: z.number().int().positive().max(50_000_000).nullish() }))(args);
+        return { pago: r.pago, monto: r.monto ?? null };
+    },
+    async preparar(a, args) {
+        const r = await armarAprobacion(a, args);
+        if (!r.ok) return r;
+        const { f, p, restante, abono, esAbono, nombre } = r.x;
+        return {
+            ok: true,
+            args: { pago: String(f.id), monto: esAbono ? abono : null },
+            targetKey: `aprobar:${f.id}`,
+            vista: {
+                titulo: `Aprobar el pago de ${nombre}`,
+                lineas: [
+                    `${textoSeguro(f.concept || 'Cobro', 80)} · comprobante ${cop(Number(p.ocr_amount) || 0)}`,
+                    esAbono
+                        ? `Se aprueba como abono de ${cop(abono)}: queda un saldo de ${cop(restante - abono)}.`
+                        : `Se aprueba el pago completo: ${cop(abono)}.`,
+                    'Queda aprobado a tu nombre.',
+                    'A la familia le llega el aviso en la app.',
+                ],
+                aviso: 'Si hay que deshacerlo, se hace en Gestión de pagos.',
+                botonConfirmar: esAbono ? 'Aprobar abono' : 'Aprobar',
+            },
+            huella: { pago: String(f.id), estado: f.status, pagado: Number(f.amount_paid) || 0, abono, comprobante: p.ocr_amount, saldo: restante },
+        };
+    },
+    async ejecutar(a, args) {
+        const r = await armarAprobacion(a, args);
+        if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
+        const { f, abono, esAbono, nombre } = r.x;
+        const pagadoAntes = Number(f.amount_paid) || 0;
+        const { data, error } = await rpcPor<any>(a, 'aprobar_comprobante', {
+            p_payment_id: String(f.id),
+            p_abono: esAbono ? abono : null,
+            p_pagado_antes: pagadoAntes,
+            p_idempotency_key: llaveDePlata(a, 'aprobar', String(f.id), abono, pagadoAntes),
+            p_canal: canalDe(a),
+            p_tope: null,
+        });
+        if (error) return { estado: 'failed', resultado: { nombre, motivo: motivoDePlata(error, 'aprobar_comprobante') } };
+        return {
+            estado: 'executed',
+            resultado: {
+                nombre, concepto: textoSeguro(f.concept || 'Cobro', 80),
+                es_abono: data?.es_abono === true, abono: Number(data?.abono ?? abono), saldo: Number(data?.saldo_pendiente ?? 0),
+                ya_aplicada: data?.ya_aplicada === true,
+            },
+        };
+    },
+    mensajeResultado(r) {
+        const x = r.resultado as any;
+        if (r.estado !== 'executed') return `No se aprobó${x.nombre ? ` el pago de ${x.nombre}` : ''}. ${x.motivo || ''}`.trim();
+        if (x.ya_aplicada) return `El pago de ${x.nombre} ya estaba aprobado (misma operación): no se repitió.`;
+        return x.es_abono
+            ? `Quedó aprobado el abono de ${cop(x.abono)} de ${x.nombre} (${x.concepto}). Saldo pendiente: ${cop(x.saldo)}. A la familia le llegó el aviso.`
+            : `Quedó aprobado el pago de ${x.nombre} (${x.concepto}) por ${cop(x.abono)}. A la familia le llegó el aviso.`;
+    },
+};
+
+// ─── aprobar_verdes ─────────────────────────────────────────────────────────
+
+export interface ArgsAprobarVerdes { sede: string | null }
+
+interface Verde { id: string; nombre: string; concepto: string; monto: number; pagado: number }
+
+async function armarVerdes(a: Alcance, args: ArgsAprobarVerdes): Promise<{ ok: true; x: { verdes: Verde[]; tope: number; fuera: number; sede: string | null } } | { ok: false; motivo: string }> {
+    soloAdmin(a);
+    const sede = args.sede ? await resolverSede(a.schoolId, args.sede) : null;
+    const todos = await leerPendientes(a.schoolId);
+    const periodos = await periodosYaPagados(todos);
+    const ctx: ContextoVerdes = { compartidos: comprobantesCompartidos(todos), periodosPagados: periodos };
+    const tope = await topeDeLaEscuela(a.schoolId);
+    const candidatos = todos
+        .filter((p) => !sede || !p.branch_id || p.branch_id === sede.id)
+        .filter((p) => exclusionVerde(p, ctx) === null);
+    // El tope es por pago (cuenta también lo que dice el comprobante).
+    const dentro = candidatos.filter((p) => Math.max(saldo(p), Number(p.ocr_amount) || 0) <= tope)
+        .sort((x, y) => String(x.id).localeCompare(String(y.id)));
+    if (!dentro.length) {
+        return { ok: false, motivo: candidatos.length
+            ? `Hay ${candidatos.length} en verde, pero todos pasan el tope de Mapi de la escuela (${cop(tope)}): apruébalos en la pantalla.`
+            : 'No hay comprobantes de nivel 2 para aprobar de un clic. Los demás se revisan en la pantalla Aprobar.' };
+    }
+    const lote = dentro.slice(0, MAX_VERDES);
+    const nombres = await nombresDeCobros(lote.map((p) => ({ id: p.id, child_id: p.child_id, concept: p.concept })));
+    return {
+        ok: true,
+        x: {
+            verdes: lote.map((p) => ({ id: p.id, nombre: nombres.get(p.id) ?? 'Sin ficha', concepto: textoSeguro(p.concept || 'Cobro', 60), monto: saldo(p), pagado: Number(p.amount_paid) || 0 })),
+            tope, fuera: candidatos.length - lote.length, sede: sede?.nombre ?? null,
+        },
+    };
+}
+
+export const aprobarVerdes: HerramientaAccion<ArgsAprobarVerdes> = {
+    tipo: 'accion',
+    nombre: 'aprobar_verdes',
+    plata: true,
+    descripcion: `PREPARA aprobar de un clic los comprobantes de nivel 2 (en verde, sin excepciones y dentro del tope de la escuela), como «Aprobar todos los verdes» de la pantalla; máximo ${MAX_VERDES} por tarjeta. No lo ejecuta: la persona confirma. Solo administración.`,
+    esquema: {
+        type: 'object',
+        properties: { sede: { type: ['string', 'null'], description: 'Nombre o id de la sede; null = todas' } },
+        required: ['sede'],
+        additionalProperties: false,
+    },
+    roles: ['admin'],
+    habilitada: plataPrendida,
+    segundoPlano: true,
+    validar(args) {
+        const r = validarCon(z.object({ sede: z.string().trim().max(80).nullish() }))(args);
+        return { sede: r.sede || null };
+    },
+    async preparar(a, args) {
+        const r = await armarVerdes(a, args);
+        if (!r.ok) return r;
+        const { verdes, fuera, sede } = r.x;
+        const total = verdes.reduce((s, v) => s + v.monto, 0);
+        return {
+            ok: true,
+            args,
+            targetKey: `aprobar-verdes:${sede ?? 'todas'}`,
+            vista: {
+                titulo: `Aprobar ${plural(verdes.length, 'pago en verde', 'pagos en verde')}${sede ? ` · ${sede}` : ''}`,
+                lineas: [
+                    `Suman ${cop(total)}. Cada comprobante coincide con su cobro y la lectura la hizo el servidor.`,
+                    'Quedan aprobados a tu nombre y a cada familia le llega el aviso.',
+                    ...(fuera ? [`Quedan ${fuera} más para otra tarjeta.`] : []),
+                ],
+                aviso: 'Si alguno cambió mientras tanto, no se aprueba y te digo cuál.',
+                detalle: { etiqueta: `Ver los ${verdes.length}`, items: verdes.map((v) => `${v.nombre} · ${v.concepto} · ${cop(v.monto)}`) },
+                botonConfirmar: `Aprobar ${verdes.length}`,
+            },
+            huella: verdes.map((v) => [v.id, v.monto, v.pagado]),
+        };
+    },
+    async ejecutar(a, args) {
+        const r = await armarVerdes(a, args);
+        if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
+        const aprobados: string[] = [];
+        const fallidos: { nombre: string; motivo: string }[] = [];
+        // Uno por uno, cada uno con su llave: la base revisa nivel 2, tope y candado en cada pago.
+        for (const v of r.x.verdes) {
+            const { data, error } = await rpcPor<any>(a, 'aprobar_comprobante', {
+                p_payment_id: v.id, p_abono: null, p_pagado_antes: v.pagado,
+                p_idempotency_key: llaveDePlata(a, 'aprobar', v.id, v.monto, v.pagado),
+                p_canal: canalDe(a), p_tope: null,
+            });
+            if (error || !data) fallidos.push({ nombre: v.nombre, motivo: motivoDePlata(error, 'aprobar_comprobante') });
+            else aprobados.push(v.nombre);
+        }
+        return {
+            estado: !aprobados.length ? 'failed' : fallidos.length ? 'partial' : 'executed',
+            resultado: { aprobados: aprobados.length, fallidos, suman: r.x.verdes.filter((v) => aprobados.includes(v.nombre)).reduce((s, v) => s + v.monto, 0) },
+        };
+    },
+    mensajeResultado(r) {
+        const x = r.resultado as any;
+        if (x.motivo) return `No se aprobó ninguno. ${x.motivo}`;
+        const fallas = (x.fallidos ?? []).map((f: any) => `${f.nombre}: ${f.motivo}`);
+        if (!x.aprobados) return `No se aprobó ninguno. ${fallas.slice(0, 3).join(' · ')}`.trim();
+        return [
+            `Quedaron aprobados ${plural(x.aprobados, 'pago', 'pagos')} por ${cop(x.suman)}. A cada familia le llegó el aviso.`,
+            fallas.length ? `No se aprobaron ${fallas.length}: ${fallas.slice(0, 3).join(' · ')}.` : '',
+        ].filter(Boolean).join(' ');
+    },
+};
+
+// ─── registrar_pago_efectivo ────────────────────────────────────────────────
+
+export interface ArgsEfectivo { deportista: string; cobro: string | null; monto: number }
+
+const ESTADOS_EFECTIVO = ['pending', 'overdue', 'partial'];
+
+async function armarEfectivo(a: Alcance, args: ArgsEfectivo): Promise<{ ok: true; x: { d: Deportista; f: any; saldo: number; tope: number } } | { ok: false; motivo: string }> {
+    soloAdmin(a);
+    const d = await resolverDeportista(a, args.deportista);
+    const { data, error } = await supabase.from('payments').select(COLS_DETALLE)
+        .eq('school_id', a.schoolId).eq(columnaDe(d.tipo), d.id).in('status', ESTADOS_EFECTIVO)
+        .order('due_date', { ascending: true }).limit(30);
+    if (error) throw new Error(`payments: ${error.message}`);
+    const abiertos = ((data as any[]) ?? []).filter((f) => saldo(aPorValidar(f)) > 0);
+    if (!abiertos.length) return { ok: false, motivo: `${d.nombre} no tiene cobros pendientes en esta escuela.` };
+    let f: any;
+    if (args.cobro) {
+        f = abiertos.find((x) => String(x.id) === args.cobro!.toLowerCase());
+        if (!f) return { ok: false, motivo: `Ese cobro no está pendiente para ${d.nombre}.` };
+    } else if (abiertos.length === 1) {
+        f = abiertos[0];
+    } else {
+        const lista = abiertos.slice(0, 6).map((x) => `${textoSeguro(x.concept || 'Cobro', 50)} (${cop(saldo(aPorValidar(x)))}, id ${x.id})`);
+        return { ok: false, motivo: `${d.nombre} tiene ${abiertos.length} cobros pendientes: ${lista.join('; ')}. ¿A cuál va el pago?` };
+    }
+    const s = saldo(aPorValidar(f));
+    if (args.monto > s) return { ok: false, motivo: `El saldo de ese cobro es ${cop(s)}: no se registra más. Si pagó de más, hazlo en la pantalla (queda saldo a favor).` };
+    const tope = await topeDeLaEscuela(a.schoolId);
+    if (args.monto > tope) return { ok: false, motivo: `Son ${cop(args.monto)} y el tope de Mapi de la escuela es ${cop(tope)}: regístralo en la pantalla.` };
+    return { ok: true, x: { d, f, saldo: s, tope } };
+}
+
+export const registrarPagoEfectivo: HerramientaAccion<ArgsEfectivo> = {
+    tipo: 'accion',
+    nombre: 'registrar_pago_efectivo',
+    plata: true,
+    descripcion: 'PREPARA registrar un pago EN EFECTIVO a UN cobro pendiente de un deportista: completo o como abono, nunca más que el saldo y dentro del tope de la escuela. No lo ejecuta: la persona confirma y queda a su nombre; a la familia le llega el aviso. Solo administración.',
+    esquema: {
+        type: 'object',
+        properties: {
+            deportista: { type: 'string', description: 'id del deportista (ej. "child:…")' },
+            cobro: { type: ['string', 'null'], description: 'id del cobro si tiene varios pendientes; null si tiene uno' },
+            monto: { type: 'integer', description: 'Pesos recibidos en efectivo' },
+        },
+        required: ['deportista', 'cobro', 'monto'],
+        additionalProperties: false,
+    },
+    roles: ['admin'],
+    habilitada: plataPrendida,
+    validar(args) {
+        const r = validarCon(z.object({
+            deportista: z.string().min(5).max(80), cobro: z.string().trim().regex(UUID).nullish(), monto: z.number().int().positive().max(50_000_000),
+        }))(args);
+        return { deportista: r.deportista, cobro: r.cobro ?? null, monto: r.monto };
+    },
+    async preparar(a, args) {
+        const r = await armarEfectivo(a, args);
+        if (!r.ok) return r;
+        const { d, f, saldo: s } = r.x;
+        const esAbono = args.monto < s;
+        return {
+            ok: true,
+            args: { deportista: d.clave, cobro: String(f.id), monto: args.monto },
+            targetKey: `efectivo:${f.id}`,
+            vista: {
+                titulo: `Registrar ${cop(args.monto)} en efectivo de ${d.nombre}`,
+                lineas: [
+                    `${textoSeguro(f.concept || 'Cobro', 80)} · saldo ${cop(s)}`,
+                    esAbono ? `Queda como abono: el saldo baja a ${cop(s - args.monto)}.` : 'Salda el cobro.',
+                    `Fecha del pago: ${fechaLarga(a.hoy)}. Queda registrado a tu nombre.`,
+                    'A la familia le llega el aviso en la app.',
+                ],
+                aviso: 'Si hay que deshacerlo, se hace en Gestión de pagos.',
+                botonConfirmar: 'Registrar',
+            },
+            huella: { cobro: String(f.id), estado: f.status, pagado: Number(f.amount_paid) || 0, saldo: s, monto: args.monto },
+        };
+    },
+    async ejecutar(a, args) {
+        const r = await armarEfectivo(a, args);
+        if (!r.ok) return { estado: 'failed', resultado: { motivo: r.motivo } };
+        const { d, f } = r.x;
+        const pagadoAntes = Number(f.amount_paid) || 0;
+        const { data, error } = await rpcPor<any>(a, 'register_manual_payments', {
+            p_school_id: a.schoolId,
+            p_payment_id: String(f.id),
+            p_monto: args.monto,
+            p_pagado_antes: pagadoAntes,
+            p_idempotency_key: llaveDePlata(a, 'efectivo', String(f.id), args.monto, pagadoAntes),
+            p_fecha: a.hoy,
+            p_canal: canalDe(a),
+            p_tope: null,
+        });
+        if (error) return { estado: 'failed', resultado: { nombre: d.nombre, motivo: motivoDePlata(error, 'register_manual_payments') } };
+        return {
+            estado: 'executed',
+            resultado: {
+                nombre: d.nombre, concepto: textoSeguro(f.concept || 'Cobro', 80), monto: args.monto,
+                es_abono: data?.es_abono === true, saldo: Number(data?.saldo_pendiente ?? 0), ya_aplicada: data?.ya_aplicada === true,
+            },
+        };
+    },
+    mensajeResultado(r) {
+        const x = r.resultado as any;
+        if (r.estado !== 'executed') return `No se registró el pago${x.nombre ? ` de ${x.nombre}` : ''}. ${x.motivo || ''}`.trim();
+        if (x.ya_aplicada) return `El pago de ${x.nombre} ya estaba registrado (misma operación): no se repitió.`;
+        return x.es_abono
+            ? `Quedó registrado el abono en efectivo de ${cop(x.monto)} de ${x.nombre} (${x.concepto}). Saldo pendiente: ${cop(x.saldo)}.`
+            : `Quedó registrado el pago en efectivo de ${cop(x.monto)} de ${x.nombre} (${x.concepto}): el cobro quedó saldado.`;
+    },
+};
+
 // ─── Catálogo del módulo ────────────────────────────────────────────────────
 
 export const HERRAMIENTAS_PAGOS: Herramienta[] = [
@@ -984,4 +1406,7 @@ export const HERRAMIENTAS_PAGOS: Herramienta[] = [
     estadoAprobacionAutomatica,
     ventasDeServicio,
     pedirAclaracion,
+    aprobarPago,
+    aprobarVerdes,
+    registrarPagoEfectivo,
 ];

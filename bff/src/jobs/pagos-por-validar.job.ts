@@ -208,6 +208,14 @@ export interface PagoPorValidar {
     enviado_en: string;
     /** Sede del cobro (payments.branch_id). NULL = «Sin sede». Lo usa Mapi para filtrar por sede. */
     branch_id?: string | null;
+    /**
+     * Quién calculó la huella y la lectura (payments.receipt_image_sha256_source).
+     * Solo 'server_verified' entra al lote (Paso 4): desde 20261125140410 solo la
+     * escriben el servidor o la administración. Sin el dato, no entra.
+     */
+    receipt_image_sha256_source?: string | null;
+    /** payments.amount_source: 'cliente' = el monto lo eligió el navegador (D8), no entra al lote. */
+    amount_source?: string | null;
 }
 
 /** Lo que falta por cubrir del cobro: amount − abonos − pronto pago (utils/saldo-cobro). Pura. */
@@ -243,6 +251,10 @@ export function comprobantesCompartidos(pagos: readonly Pick<PagoPorValidar, 're
  * reactiva con LOTE_VERDES_ACTIVO=true. Espejo de greenExclusion del frontend.
  */
 export const LOTE_VERDES_PAUSADO = 'aprobación en lote pausada: revisa cada comprobante desde su fila';
+/** Paso 4: el verde solo vale si lo selló el servidor (receipt_image_sha256_source='server_verified'). */
+export const MOTIVO_LECTURA_NO_SERVIDOR = 'la lectura no la hizo el servidor';
+/** D8: amount_source='cliente', igual que auto_approve_payment. */
+export const MOTIVO_MONTO_NAVEGADOR = 'el monto lo eligió el navegador';
 const loteVerdesActivo = () => process.env.LOTE_VERDES_ACTIVO === 'true';
 
 export function exclusionVerde(p: PagoPorValidar, ctx: ContextoVerdes): string | null {
@@ -257,6 +269,10 @@ export function exclusionVerde(p: PagoPorValidar, ctx: ContextoVerdes): string |
     const restante = saldo(p);
     if (p.ocr_amount == null || restante <= 0) return 'sin monto leído';
     if (Math.abs(Number(p.ocr_amount) - restante) / restante > TOLERANCIA_MONTO) return 'el monto leído no coincide';
+    // Paso 4 (seguridad del veredicto): al final, para que un cobro con otro
+    // motivo concreto lo muestre; las dos se exigen siempre.
+    if (p.receipt_image_sha256_source !== 'server_verified') return MOTIVO_LECTURA_NO_SERVIDOR;
+    if (p.amount_source === 'cliente') return MOTIVO_MONTO_NAVEGADOR;
     return null;
 }
 
@@ -442,7 +458,8 @@ export function textosDelAviso(r: ResumenPagos, escuela: string, tramo: Tramo, a
 // ─── I/O ─────────────────────────────────────────────────────────────────────
 
 const SELECT_PAGOS = 'id, school_id, amount, amount_paid, early_payment_discount_applied, concept, payment_category, receipt_verdict, receipt_url, '
-    + 'ocr_amount, requires_review, child_id, period_year, period_month, receipt_submitted_at, receipt_verdict_at, created_at, branch_id';
+    + 'ocr_amount, requires_review, child_id, period_year, period_month, receipt_submitted_at, receipt_verdict_at, created_at, branch_id, '
+    + 'receipt_image_sha256_source, amount_source';
 
 function aPago(f: any): PagoPorValidar {
     return {
@@ -462,6 +479,8 @@ function aPago(f: any): PagoPorValidar {
         period_month: f.period_month ?? null,
         enviado_en: f.receipt_submitted_at ?? f.receipt_verdict_at ?? f.created_at,
         branch_id: f.branch_id ?? null,
+        receipt_image_sha256_source: f.receipt_image_sha256_source ?? null,
+        amount_source: f.amount_source ?? null,
     };
 }
 

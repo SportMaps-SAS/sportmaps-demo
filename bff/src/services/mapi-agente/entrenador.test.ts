@@ -14,19 +14,19 @@ const h = vi.hoisted(() => ({
     responder: (_c: any): any => undefined,
     guardar: vi.fn(),
     rpcUsuario: vi.fn(),
-    createClient: vi.fn(),
 }));
 
 vi.mock('../../config/supabase', async () => {
     const { crearSupabaseFalso } = await import('./supabase-falso.test-helper');
     const falso = crearSupabaseFalso((c) => h.responder(c));
+    // Las RPC «como la persona» van por su _por con service_role (rpc-por.ts).
+    (falso.supabase as any).rpc = (nombre: string, params: unknown) => h.rpcUsuario(nombre, params);
     (globalThis as any).__consultas = falso.consultas;
     return {
         supabase: falso.supabase, supabaseUrl: 'http://supabase.local', supabaseServiceKey: 'clave-de-prueba',
         SUPABASE_URL: 'http://supabase.local', SUPABASE_ANON_KEY: 'anon-de-prueba',
     };
 });
-vi.mock('@supabase/supabase-js', () => ({ createClient: h.createClient }));
 vi.mock('../attendance-register.service', async (orig) => ({ ...(await orig() as any), guardarSesionAsistencia: h.guardar }));
 
 import {
@@ -130,7 +130,6 @@ beforeEach(() => {
     base();
     h.guardar.mockReset().mockResolvedValue({ ok: true, sessionId: SESION, date: '2026-11-24', creditOutcomes: {}, sesionCreada: true });
     h.rpcUsuario.mockReset().mockResolvedValue({ data: null, error: null });
-    h.createClient.mockReset().mockImplementation(() => ({ rpc: h.rpcUsuario }));
     h.responder = (c) => {
         if (c.op === 'insert' || c.op === 'update') return { data: null };
         return { data: filtrar(db[c.tabla] ?? [], c) };
@@ -377,10 +376,8 @@ describe('evaluar_entreno', () => {
         equipo: SUB12, fecha: null, bien: ['mariana'], le_costo: [], los_demas: 'normal', nota: null, ...x,
     });
 
-    it('sin la sesión de la persona no se ofrece (la RPC autoriza con auth.uid())', () => {
-        expect(evaluarEntreno.habilitada!(coach)).toBe(false);
-        expect(evaluarEntreno.habilitada!(conSesion(coach))).toBe(true);
-        expect(evaluarEntreno.habilitada!({ ...coach, authorization: 'token-sin-bearer' } as any)).toBe(false);
+    it('se ofrece con o sin JWT (WhatsApp): va por su _por a nombre del actor', () => {
+        expect(evaluarEntreno.habilitada).toBeUndefined();
     });
 
     it('solo el entrenador asignado al equipo (team_coaches), igual que la RPC', async () => {
@@ -415,15 +412,14 @@ describe('evaluar_entreno', () => {
             .toMatchObject({ ok: false, motivo: expect.stringMatching(/Juan Pérez ya tiene publicado el informe de noviembre de 2026/) });
     });
 
-    it('ejecutar: la RPC de la pantalla, como la persona, solo con los cambios', async () => {
+    it('ejecutar: la _por de la RPC de la pantalla, a nombre del coach, solo con los cambios', async () => {
         cerrada();
         const p = await evaluarEntreno.preparar(conSesion(coach), args({ nota: 'Buen entreno' }));
         if (!p.ok) throw new Error('debía preparar');
         h.rpcUsuario.mockResolvedValueOnce({ data: { saved: 1, pending: 0 }, error: null });
         const r = await evaluarEntreno.ejecutar(conSesion(coach), p.args);
-        expect(h.createClient).toHaveBeenCalledWith('http://supabase.local', 'anon-de-prueba', expect.objectContaining({ global: { headers: { Authorization: TOKEN } } }));
-        expect(h.rpcUsuario).toHaveBeenCalledWith('submit_post_training_coach_rating', {
-            p_session_id: SESION, p_ratings: [{ child_id: MARIANA, effort_pct: 90 }], p_coach_notes: 'Buen entreno',
+        expect(h.rpcUsuario).toHaveBeenCalledWith('submit_post_training_coach_rating_por', {
+            p_actor: 'u-coach', p_session_id: SESION, p_ratings: [{ child_id: MARIANA, effort_pct: 90 }], p_coach_notes: 'Buen entreno',
         });
         expect(evaluarEntreno.mensajeResultado(r, p.args)).toBe(
             'Quedó guardada la evaluación del entreno de Sub-12 del martes 24 de noviembre de 2026 (1 deportista, con la nota para las familias).');
@@ -451,9 +447,8 @@ describe('evaluar_entreno', () => {
 describe('felicitar', () => {
     const args = (x: Record<string, unknown> = {}) => felicitar.validar({ deportista: `child:${MARIANA}`, mensaje: 'Gran actitud hoy en el entreno.', ...x });
 
-    it('sin la sesión de la persona no se ofrece; el mensaje tiene tope de 200', () => {
-        expect(felicitar.habilitada!(admin)).toBe(false);
-        expect(felicitar.habilitada!(conSesion(admin))).toBe(true);
+    it('se ofrece con o sin JWT; el mensaje tiene tope de 200', () => {
+        expect(felicitar.habilitada).toBeUndefined();
         expect(() => felicitar.validar({ deportista: `child:${MARIANA}`, mensaje: 'x'.repeat(201) })).toThrow(RechazoHerramienta);
         expect(() => felicitar.validar({ deportista: `child:${MARIANA}`, mensaje: '   ' })).toThrow(RechazoHerramienta);
     });
@@ -471,11 +466,11 @@ describe('felicitar', () => {
         expect(await felicitar.preparar(conSesion(coach), args())).toMatchObject({ ok: false, motivo: expect.stringMatching(/ya recibió una felicitación hoy/) });
     });
 
-    it('ejecutar: give_kudos como la persona; el tope diario se explica', async () => {
+    it('ejecutar: give_kudos_por a nombre del coach; el tope diario se explica', async () => {
         h.rpcUsuario.mockResolvedValueOnce({ data: 'k-nuevo', error: null });
         const r = await felicitar.ejecutar(conSesion(coach), args());
-        expect(h.rpcUsuario).toHaveBeenCalledWith('give_kudos', {
-            p_school_id: ESCUELA, p_child_id: MARIANA, p_athlete_user_id: null, p_unregistered_athlete_id: null, p_message: 'Gran actitud hoy en el entreno.',
+        expect(h.rpcUsuario).toHaveBeenCalledWith('give_kudos_por', {
+            p_actor: 'u-coach', p_school_id: ESCUELA, p_child_id: MARIANA, p_athlete_user_id: null, p_unregistered_athlete_id: null, p_message: 'Gran actitud hoy en el entreno.',
         });
         expect(felicitar.mensajeResultado(r, args())).toBe('Se envió la felicitación a Mariana López.');
 
@@ -485,9 +480,17 @@ describe('felicitar', () => {
         expect(felicitar.mensajeResultado(r2, args())).toBe('No se envió la felicitación. Mariana López ya recibió una felicitación hoy. Mañana se puede otra vez.');
     });
 
-    it('sin sesión, ejecutar no llama nada', async () => {
-        await expect(felicitar.ejecutar(admin, args())).rejects.toThrow(/necesita tu sesión/);
-        expect(h.rpcUsuario).not.toHaveBeenCalled();
+    it('sin JWT (WhatsApp) igual llama la _por con el actor del alcance', async () => {
+        h.rpcUsuario.mockResolvedValueOnce({ data: 'k-2', error: null });
+        const r = await felicitar.ejecutar(coach, args());
+        expect(r.estado).toBe('executed');
+        expect(h.rpcUsuario).toHaveBeenCalledWith('give_kudos_por', expect.objectContaining({ p_actor: 'u-coach' }));
+    });
+
+    it('un actor sin rol en la escuela: lo dice la _por, en palabras', async () => {
+        h.rpcUsuario.mockResolvedValueOnce({ data: null, error: { code: '42501', message: 'sin_permiso: no trabaja en esta escuela' } });
+        const r = await felicitar.ejecutar(coach, args());
+        expect(felicitar.mensajeResultado(r, args())).toMatch(/tu rol aquí no lo permite/);
     });
 });
 

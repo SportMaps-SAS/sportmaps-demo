@@ -96,7 +96,8 @@ describe('approvePayment con pronto pago', () => {
 describe('«Aprobar todos los verdes» con pronto pago', () => {
   const item = (o: Record<string, unknown> = {}) => ({
     id: 'v1', status: 'awaiting_approval', amount: 145000, amount_paid: null, early_payment_discount_applied: 7250,
-    receipt_verdict: 'verde', ocr_amount: 137750, receipt_url: 'r/v1.jpg', created_at: '2026-11-01T00:00:00Z', ...o,
+    receipt_verdict: 'verde', ocr_amount: 137750, receipt_url: 'r/v1.jpg', created_at: '2026-11-01T00:00:00Z',
+    receipt_image_sha256_source: 'server_verified', amount_source: 'servidor', ...o,
   });
 
   it('saldo = amount − amount_paid − pronto pago', () => {

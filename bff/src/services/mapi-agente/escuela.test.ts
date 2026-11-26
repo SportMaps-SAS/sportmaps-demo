@@ -7,7 +7,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const h = vi.hoisted(() => ({
     responder: (_c: any): any => undefined,
     rpc: vi.fn(),
-    userClient: vi.fn(),
     crear: vi.fn(),
     pvPlan: vi.fn(),
     nivel: vi.fn(),
@@ -21,10 +20,11 @@ const h = vi.hoisted(() => ({
 vi.mock('../../config/supabase', async () => {
     const { crearSupabaseFalso } = await import('./supabase-falso.test-helper');
     const falso = crearSupabaseFalso((c) => h.responder(c));
+    // Las RPC van por su _por con service_role (rpc-por.ts): se ven en h.rpc.
+    (falso.supabase as any).rpc = (nombre: string, params: unknown) => h.rpc(nombre, params);
     (globalThis as any).__consultas = falso.consultas;
     return { supabase: falso.supabase, supabaseUrl: 'http://supabase.local', supabaseServiceKey: 'clave', supabaseAnonKey: 'anon', SUPABASE_URL: 'http://supabase.local', SUPABASE_ANON_KEY: 'anon' };
 });
-vi.mock('../../utils/userClient', () => ({ userClient: h.userClient }));
 vi.mock('../../routes/enrollments', () => ({ crearInscripcion: h.crear }));
 vi.mock('../planChange.service', () => ({ previewPlanChange: h.pvPlan }));
 vi.mock('../../middlewares/assertSchoolFinanceAdmin', () => ({ nivelFinanzasEnEscuela: h.nivel }));
@@ -39,7 +39,7 @@ vi.mock('../cobro-duplicado-reciente', async (original) => ({
 
 import {
     HERRAMIENTAS_ESCUELA, pausarInscripcion, reactivarInscripcion, darDeBaja, cambiarPlan, crearCobroUnico,
-    errorDeMeses, idDeOperacion, resumenDeVistaPrevia, type AlcanceConSesion,
+    errorDeMeses, idDeOperacion, resumenDeVistaPrevia,
 } from './herramientas/escuela';
 import { CobrosError } from '../charge-batches.service';
 import type { Alcance, Herramienta } from './tipos';
@@ -53,13 +53,14 @@ const EQUIPO = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const P1 = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 const P2 = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 
-const admin: AlcanceConSesion = {
+const admin: Alcance = {
     schoolId: ESCUELA, userId: 'u-admin', rol: 'admin', teamIds: [],
     ajustes: { coachMapiAttendance: true, coachMapiNotices: true, coachHideFinancialInfo: false },
     hoy: '2026-11-24', authorization: 'Bearer jwt-de-la-persona',
 };
-const coach: AlcanceConSesion = { ...admin, rol: 'coach', userId: 'u-coach', teamIds: [EQUIPO] };
-const sinSesion: Alcance = { ...admin, authorization: undefined } as AlcanceConSesion;
+const coach: Alcance = { ...admin, rol: 'coach', userId: 'u-coach', teamIds: [EQUIPO] };
+/** Por WhatsApp no hay JWT: el alcance llega sin authorization. */
+const sinSesion: Alcance = { ...admin, authorization: null };
 
 const fila = { id: NINA, full_name: 'Mariana López', athlete_type: 'child', team_id: EQUIPO, enrolled_team_id: EQUIPO, team_name: 'Tiburones', is_active: true, parent_id: 'p1', user_id: null };
 const consultas = () => (globalThis as any).__consultas as any[];
@@ -81,8 +82,7 @@ beforeEach(() => {
         planes: [{ id: P1, name: 'Básico', price: 100000 }, { id: P2, name: 'Pro', price: 150000 }],
         equipos: [{ id: EQUIPO, name: 'Tiburones' }],
     };
-    h.rpc.mockReset();
-    h.userClient.mockReset().mockImplementation(() => ({ rpc: h.rpc }));
+    h.rpc.mockReset().mockResolvedValue({ data: null, error: null });
     h.crear.mockReset();
     h.pvPlan.mockReset().mockResolvedValue({ applies: false, needs_choice: false });
     h.nivel.mockReset().mockResolvedValue('admin');
@@ -127,8 +127,8 @@ describe('permisos y esquemas', () => {
         }
     });
 
-    it('pausa, reactivación y baja se ofrecen solo con la sesión de la persona (sus RPC autorizan con auth.uid())', () => {
-        for (const t of [pausarInscripcion, reactivarInscripcion, darDeBaja]) expect(ofrecida(t, sinSesion)).toBe(false);
+    it('pausa, reactivación y baja se ofrecen también sin JWT (WhatsApp): van por su _por a nombre del actor', () => {
+        for (const t of [pausarInscripcion, reactivarInscripcion, darDeBaja]) expect(ofrecida(t, sinSesion)).toBe(true);
     });
 
     it('cambiar_plan y crear_cobro_unico nacen apagadas', () => {
@@ -181,13 +181,12 @@ describe('pausar_inscripcion', () => {
         expect(h.rpc).not.toHaveBeenCalled();
     });
 
-    it('la vista previa sale de preview_enrollment_pause con la sesión de la persona y no escribe nada', async () => {
+    it('la vista previa sale de preview_enrollment_pause_por a nombre del actor y no escribe nada', async () => {
         h.rpc.mockResolvedValue({ data: { meses: ['12/2026', '01/2027'], payments_a_anular: 2, payments_ambiguos: 1 }, error: null });
         const p = await pausarInscripcion.preparar(admin, args);
         expect(p.ok).toBe(true);
         if (!p.ok) return;
-        expect(h.userClient.mock.calls[0][0]).toMatchObject({ headers: { authorization: 'Bearer jwt-de-la-persona' } });
-        expect(h.rpc).toHaveBeenCalledWith('preview_enrollment_pause', { p_enrollment_id: 'e1', p_month_from: '2026-12-01', p_month_to: '2027-01-01' });
+        expect(h.rpc).toHaveBeenCalledWith('preview_enrollment_pause_por', { p_actor: 'u-admin', p_enrollment_id: 'e1', p_month_from: '2026-12-01', p_month_to: '2027-01-01' });
         expect(p.vista.titulo).toBe('Pausar a Mariana López');
         expect(p.vista.lineas[0]).toBe('Diciembre de 2026 a enero de 2027 · 2 meses sin cobro');
         expect(p.vista.lineas.join(' ')).toContain('Se anulan 2 cobros pendientes');
@@ -201,11 +200,11 @@ describe('pausar_inscripcion', () => {
         expect(await pausarInscripcion.preparar(admin, args)).toMatchObject({ ok: false, motivo: expect.stringMatching(/ya está en pausa/) });
     });
 
-    it('ejecutar llama pause_enrollment_directly como el botón del admin', async () => {
+    it('ejecutar llama pause_enrollment_directly_por a nombre del admin', async () => {
         h.rpc.mockResolvedValue({ data: { meses_pausados: 2, payments_cancelled: 2, payments_ambiguos: 0 }, error: null });
         const r = await pausarInscripcion.ejecutar(admin, { ...args, nota: 'viaje a la costa' });
-        expect(h.rpc).toHaveBeenCalledWith('pause_enrollment_directly', {
-            p_enrollment_id: 'e1', p_reason: 'vacation', p_month_from: '2026-12-01', p_month_to: '2027-01-01', p_note: 'viaje a la costa',
+        expect(h.rpc).toHaveBeenCalledWith('pause_enrollment_directly_por', {
+            p_actor: 'u-admin', p_enrollment_id: 'e1', p_reason: 'vacation', p_month_from: '2026-12-01', p_month_to: '2027-01-01', p_note: 'viaje a la costa',
         });
         expect(r.estado).toBe('executed');
         expect(pausarInscripcion.mensajeResultado(r, args)).toBe(
@@ -238,11 +237,11 @@ describe('reactivar_inscripcion', () => {
         expect(h.rpc).not.toHaveBeenCalled();
     });
 
-    it('ejecutar llama resume_enrollment', async () => {
+    it('ejecutar llama resume_enrollment_por', async () => {
         est.inscripciones[0] = { ...est.inscripciones[0], paused_reason: 'vacation', pause_request_id: 'pr1' };
         h.rpc.mockResolvedValue({ data: { days_extended: 5, mes_en_curso_sin_cobro: true }, error: null });
         const r = await reactivarInscripcion.ejecutar(admin, args);
-        expect(h.rpc).toHaveBeenCalledWith('resume_enrollment', { p_enrollment_id: 'e1', p_note: null });
+        expect(h.rpc).toHaveBeenCalledWith('resume_enrollment_por', { p_actor: 'u-admin', p_enrollment_id: 'e1', p_note: null });
         expect(reactivarInscripcion.mensajeResultado(r, args)).toBe(
             'Mariana López volvió de la pausa: aparece en la lista de asistencia desde hoy. Se le corrió la vigencia 5 días. El mes en curso sigue sin cobro; si hay que cobrarlo, se registra a mano.');
     });
@@ -281,18 +280,29 @@ describe('dar_de_baja', () => {
         expect(await darDeBaja.preparar(admin, args)).toMatchObject({ ok: false, motivo: 'Mariana López ya está inactivo.' });
     });
 
-    it('ejecutar llama set_school_athlete_status con la escuela de la sesión', async () => {
+    it('ejecutar llama set_school_athlete_status_por con la escuela de la sesión y el actor', async () => {
         h.rpc.mockResolvedValue({ data: { enrollments_cancelled: 1, payments_cancelled: 2, invitations_cancelled: 1 }, error: null });
         const r = await darDeBaja.ejecutar(admin, args);
-        expect(h.rpc).toHaveBeenCalledWith('set_school_athlete_status', { p_school_id: ESCUELA, p_athlete_type: 'child', p_athlete_id: NINA, p_active: false });
+        expect(h.rpc).toHaveBeenCalledWith('set_school_athlete_status_por', { p_actor: 'u-admin', p_school_id: ESCUELA, p_athlete_type: 'child', p_athlete_id: NINA, p_active: false });
         expect(darDeBaja.mensajeResultado(r, args)).toBe(
             'Mariana López quedó inactivo: se canceló su plan y se anularon 2 cobros pendientes. Se canceló la invitación pendiente al acudiente. Para volver a activarlo: Alumnos > Inactivos.');
     });
 
-    it('sin la sesión de la persona no se llama la RPC', async () => {
+    it('sin JWT (WhatsApp) igual se llama la _por con el actor del alcance', async () => {
+        h.rpc.mockResolvedValue({ data: { enrollments_cancelled: 1, payments_cancelled: 0, invitations_cancelled: 0 }, error: null });
         const r = await darDeBaja.ejecutar(sinSesion, args);
-        expect(r).toMatchObject({ estado: 'failed', resultado: { motivo: expect.stringMatching(/sesión/) } });
-        expect(h.rpc).not.toHaveBeenCalled();
+        expect(r.estado).toBe('executed');
+        expect(h.rpc).toHaveBeenCalledWith('set_school_athlete_status_por', expect.objectContaining({ p_actor: 'u-admin', p_school_id: ESCUELA }));
+    });
+
+    it('la base dice que el actor no administra esa escuela: lo dice en palabras', async () => {
+        h.rpc.mockResolvedValue({ data: null, error: { code: '42501', message: 'sin_permiso: no es de la administración activa de esta escuela' } });
+        expect(await darDeBaja.ejecutar(admin, args)).toMatchObject({ estado: 'failed', resultado: { motivo: expect.stringMatching(/tu rol aquí no lo permite/) } });
+    });
+
+    it('sin la migración (PGRST202) dice que todavía no está disponible', async () => {
+        h.rpc.mockResolvedValue({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.set_school_athlete_status_por' } });
+        expect(await darDeBaja.ejecutar(admin, args)).toMatchObject({ estado: 'failed', resultado: { motivo: expect.stringMatching(/todavía no está disponible/) } });
     });
 
     it('la RPC dice «No autorizado» y no se hace nada', async () => {
