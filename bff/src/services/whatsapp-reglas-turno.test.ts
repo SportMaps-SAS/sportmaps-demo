@@ -172,3 +172,25 @@ describe('estado reciente', () => {
         expect(pasoEnVentana([si], 'opt_in_registrado', 10_000, AHORA)).toBeNull();
     });
 });
+
+describe('humanoReciente: eco de la escuela marcado automático por repetirse (Monster 2026-11-26, …8431)', () => {
+    const AHORA = Date.parse('2026-11-26T17:52:10Z');
+    const at = (s: number) => new Date(AHORA - s * 1000).toISOString();
+    const eco = (hace: number, extra: Record<string, unknown> = {}): FilaReciente => ({
+        direction: 'outbound', type: 'text', text_body: '¡Queremos conocerte y conocer tu experiencia en el voleibol!',
+        ai_generated: false, wa_timestamp: at(hace), payload: { to: '573142608431', automatico: true, ...extra },
+    });
+    const entrante = (hace: number): FilaReciente => ({ direction: 'inbound', type: 'text', text_body: 'hola', ai_generated: false, wa_timestamp: at(hace) });
+
+    it('lo que la escuela pega a mano (eco automático 6 min después del entrante) calla al bot', () => {
+        expect(humanoReciente([entrante(400), eco(13), entrante(7)], 15, AHORA)).toBe(true);
+    });
+    it('el saludo / ausencia de la app (eco automático segundos después del entrante) no calla', () => {
+        expect(humanoReciente([entrante(16), eco(13), entrante(7)], 15, AHORA)).toBe(false);
+    });
+    it('un job (step / campaña / plantilla, sin destinatario de Meta) no calla', () => {
+        expect(humanoReciente([entrante(400), eco(13, { step: 'clase_prueba_cupo_por_vencer' })], 15, AHORA)).toBe(false);
+        expect(humanoReciente([entrante(400), { ...eco(13), payload: { automatico: true, campana_id: 'c1' } }], 15, AHORA)).toBe(false);
+        expect(humanoReciente([entrante(400), { ...eco(13), payload: { automatico: true } }], 15, AHORA)).toBe(false);
+    });
+});

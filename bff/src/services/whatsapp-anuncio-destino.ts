@@ -17,6 +17,11 @@
  *          «clínica», «vacacional», «campamento», «torneo» → el servicio ACTIVO que calce
  *          palabra de evento sin servicio activo → una persona (nunca el embudo equivocado)
  *          sin palabra de evento → el embudo de siempre
+ *     (Monster 2026-11-26) con CONVOCATORIAS guiadas vigentes (bot-ofertas con preguntas), lo que iba a una
+ *     persona por falta de servicio, al embudo con la clase de prueba cerrada, o un anuncio que habla de
+ *     convocatorias sin mapeo a un servicio vigente → la convocatoria guiada. Mapeo `convocatoria` → siempre ahí
+ *     (sin ofertas vigentes: una línea neutra y la escuela). «Quiero hablar con alguien» → persona y
+ *     «ya pagué» → el camino de comprobantes de siempre, con cualquier anuncio (también el del vacacional).
  *   sin `referral`: «info / precio de la clínica», «quiero inscribirme a la clínica»
  *     → el servicio ACTIVO que calce; si no hay, sigue el bot de siempre.
  *
@@ -123,8 +128,8 @@ export function atribucionDe(r: ReferralAnuncio | null): Record<string, unknown>
 
 // ─── El mapeo de la escuela (whatsapp_anuncio_destino) ──────────────────────
 
-export type DestinoAnuncio = 'clase_prueba' | 'servicio' | 'persona';
-const DESTINOS: readonly DestinoAnuncio[] = ['clase_prueba', 'servicio', 'persona'];
+export type DestinoAnuncio = 'clase_prueba' | 'servicio' | 'persona' | 'convocatoria';
+const DESTINOS: readonly DestinoAnuncio[] = ['clase_prueba', 'servicio', 'persona', 'convocatoria'];
 
 export interface MapeoAnuncio { destino: DestinoAnuncio; servicioId: string | null }
 
@@ -574,11 +579,33 @@ export type DecisionAnuncio =
     | { destino: 'varios'; items: ItemConFicha[]; origen: 'anuncio' | 'texto' }
     | {
         destino: 'persona';
-        motivo: 'mapeo' | 'servicio_no_disponible' | 'evento_sin_servicio' | 'sin_precio';
+        motivo: 'mapeo' | 'servicio_no_disponible' | 'evento_sin_servicio' | 'sin_precio' | 'pide_persona' | 'ya_pago' | 'sin_convocatoria';
         evento?: ClaveEvento;
         item?: ItemConFicha;
     }
-    | { destino: 'clase_prueba'; origen: 'mapeo' | 'anuncio' };
+    | { destino: 'clase_prueba'; origen: 'mapeo' | 'anuncio' }
+    /** La convocatoria guiada de la escuela (bot-ofertas con preguntas): la arranca quien llama. */
+    | { destino: 'convocatoria'; origen: 'mapeo' | 'anuncio' };
+
+/** Lo que la escuela ofrece HOY en vez de / además de la clase de prueba (bot-ofertas). */
+export interface ConvocatoriasDeHoy {
+    /** Tiene convocatorias vigentes con preguntas (el flujo guiado de la puerta). */
+    guiada: boolean;
+    /** La clase de prueba se ofrece hoy (sin bloqueo por fecha ni apagada). */
+    claseDisponible: boolean;
+}
+
+/**
+ * Lo que el mensaje pide aparte del anuncio y que el anuncio nunca contesta: `persona` («quiero hablar con
+ * alguien»), `pago` («ya pagué» sin archivo: se le pide el comprobante) y `comprobante` («te envío el
+ * comprobante», o ya hay un archivo en la ráfaga / la cola: lo contesta la cola, el anuncio calla).
+ */
+export type IntencionAparte = 'persona' | 'pago' | 'comprobante' | null;
+
+/** ¿El título / texto del anuncio habla de convocatorias (pruebas para entrar a un equipo)? Pura. */
+export function anuncioDeConvocatoria(r: Pick<ReferralAnuncio, 'headline' | 'body'> | null | undefined): boolean {
+    return !!r && /\bconvocatorias?\b/.test(normalizarFrase(`${r.headline ?? ''} \n ${r.body ?? ''}`));
+}
 
 /** ¿Hay que leer el catálogo para decidir? (barato primero: sin evento ni mapeo a servicio, no se lee). Pura. */
 export function necesitaCatalogo(p: {
@@ -586,7 +613,7 @@ export function necesitaCatalogo(p: {
 }): boolean {
     if (p.eleccion?.length) return true;
     if (p.referral) {
-        if (p.mapeo?.destino === 'persona' || p.mapeo?.destino === 'clase_prueba') return false;
+        if (p.mapeo?.destino === 'persona' || p.mapeo?.destino === 'clase_prueba' || p.mapeo?.destino === 'convocatoria') return false;
         if (p.mapeo?.destino === 'servicio') return true;
         return eventosNombrados([p.referral.headline, p.referral.body, p.texto]).length > 0;
     }
@@ -604,40 +631,82 @@ export function decidirDestino(p: {
     texto: string;
     items: ItemConFicha[];
     eleccion?: string[] | null;
+    /** (2026-11-26) Convocatorias guiadas y clase de prueba de hoy. Sin esto, como antes. */
+    convocatorias?: ConvocatoriasDeHoy | null;
+    /** (2026-11-26) Pide una persona o dice que ya pagó: el anuncio no lo contesta. */
+    intencion?: IntencionAparte;
 }): DecisionAnuncio | null {
+    const { referral } = p;
+    if (referral) {
+        // (Monster 2026-11-26) «Quiero hablar con alguien» → una persona; «ya pagué» → que envíe el comprobante (y la
+        // escuela lo ve); el archivo que ya viene lo contesta la cola (null: sigue el bot). Antes contestaban la ficha
+        // del vacacional o «no tengo los datos del torneo».
+        if (p.intencion === 'comprobante') return null;
+        if (p.intencion === 'pago') return { destino: 'persona', motivo: 'ya_pago' };
+        if (p.intencion === 'persona') return { destino: 'persona', motivo: 'pide_persona' };
+        const d = decidirPorAnuncio({ ...p, referral });
+        const conv = p.convocatorias;
+        if (d.destino === 'convocatoria') return conv?.guiada ? d : { destino: 'persona', motivo: 'sin_convocatoria' };
+        if (!conv?.guiada) return d;
+        // El anuncio está mapeado a un servicio VIGENTE (el vacacional): su ficha, como siempre.
+        if (d.destino === 'servicio' && d.origen === 'mapeo') return d;
+        // Lo que iba a una persona por falta de servicio («no tengo los datos del torneo»): la convocatoria.
+        if (d.destino === 'persona' && (d.motivo === 'evento_sin_servicio' || d.motivo === 'servicio_no_disponible')) {
+            return { destino: 'convocatoria', origen: 'anuncio' };
+        }
+        // El embudo de la clase de prueba con la clase cerrada hoy: la convocatoria.
+        if (d.destino === 'clase_prueba' && !conv.claseDisponible) return { destino: 'convocatoria', origen: d.origen };
+        // Un anuncio de convocatorias sin mapeo: la convocatoria, aunque una palabra suelta calce con otro servicio.
+        if ((d.destino === 'servicio' || d.destino === 'varios' || d.destino === 'clase_prueba') && anuncioDeConvocatoria(referral)) {
+            return { destino: 'convocatoria', origen: 'anuncio' };
+        }
+        return d;
+    }
+    return decidirSinAnuncio(p);
+}
+
+/** El destino de un mensaje que vino de un anuncio, sin las convocatorias ni lo que pide aparte. Pura. */
+function decidirPorAnuncio(p: {
+    referral: ReferralAnuncio; mapeo: MapeoAnuncio | null; texto: string; items: ItemConFicha[];
+}): DecisionAnuncio {
     const { referral, mapeo, texto: msg, items } = p;
+    if (mapeo?.destino === 'persona') return { destino: 'persona', motivo: 'mapeo' };
+    if (mapeo?.destino === 'convocatoria') return { destino: 'convocatoria', origen: 'mapeo' };
+    if (mapeo?.destino === 'clase_prueba') return { destino: 'clase_prueba', origen: 'mapeo' };
+    if (mapeo?.destino === 'servicio' && mapeo.servicioId) {
+        const it = items.find((x) => x.id === mapeo.servicioId);
+        return it ? { destino: 'servicio', item: it, origen: 'mapeo' } : { destino: 'persona', motivo: 'servicio_no_disponible' };
+    }
+    const inf = inferirServicio([referral.headline, referral.body, msg], items);
+    if (inf.tipo === 'uno') return { destino: 'servicio', item: inf.item, origen: 'anuncio' };
+    if (inf.tipo === 'varios') return { destino: 'varios', items: inf.items, origen: 'anuncio' };
+    // El anuncio habla de una clínica / un vacacional que ya no está activo: nunca el embudo de la clase.
+    if (inf.tipo === 'evento_sin_servicio') return { destino: 'persona', motivo: 'evento_sin_servicio', evento: inf.evento };
+    // Mapeado a «servicio» sin decir cuál y el anuncio no lo nombra: si la escuela tiene uno solo, ese.
+    if (mapeo?.destino === 'servicio') {
+        return items.length === 1
+            ? { destino: 'servicio', item: items[0], origen: 'mapeo' }
+            : { destino: 'persona', motivo: 'servicio_no_disponible' };
+    }
+    return { destino: 'clase_prueba', origen: 'anuncio' };
+}
+
+/** Sin anuncio: la lista de la vez pasada o un servicio nombrado. Pura. */
+function decidirSinAnuncio(p: {
+    texto: string; items: ItemConFicha[]; eleccion?: string[] | null;
+}): DecisionAnuncio | null {
+    const { texto: msg, items } = p;
     // Una empresa que quiere patrocinar («quiero patrocinar la clínica», «mi marca») no es un participante: sin ficha ni precio.
-    if (!referral && esConsultaDePatrocinio(msg)) return null;
+    if (esConsultaDePatrocinio(msg)) return null;
 
     // Contesta la lista de la vez pasada («2», «la de armadores»).
-    if (!referral && p.eleccion?.length) {
+    if (p.eleccion?.length) {
         const ofrecidos = p.eleccion.map((id) => items.find((it) => it.id === id)).filter((x): x is ItemConFicha => !!x);
         const n = numeroElegido(msg, ofrecidos.length);
         if (n) return { destino: 'servicio', item: ofrecidos[n - 1], origen: 'eleccion' };
         const palabras = new Set(normalizarFrase(msg).split(' '));
         const porNombre = ofrecidos.filter((it) => tokensDistintivos(it.name).some((k) => palabras.has(k)));
         if (porNombre.length === 1) return { destino: 'servicio', item: porNombre[0], origen: 'eleccion' };
-    }
-
-    if (referral) {
-        if (mapeo?.destino === 'persona') return { destino: 'persona', motivo: 'mapeo' };
-        if (mapeo?.destino === 'clase_prueba') return { destino: 'clase_prueba', origen: 'mapeo' };
-        if (mapeo?.destino === 'servicio' && mapeo.servicioId) {
-            const it = items.find((x) => x.id === mapeo.servicioId);
-            return it ? { destino: 'servicio', item: it, origen: 'mapeo' } : { destino: 'persona', motivo: 'servicio_no_disponible' };
-        }
-        const inf = inferirServicio([referral.headline, referral.body, msg], items);
-        if (inf.tipo === 'uno') return { destino: 'servicio', item: inf.item, origen: 'anuncio' };
-        if (inf.tipo === 'varios') return { destino: 'varios', items: inf.items, origen: 'anuncio' };
-        // El anuncio habla de una clínica / un vacacional que ya no está activo: nunca el embudo de la clase.
-        if (inf.tipo === 'evento_sin_servicio') return { destino: 'persona', motivo: 'evento_sin_servicio', evento: inf.evento };
-        // Mapeado a «servicio» sin decir cuál y el anuncio no lo nombra: si la escuela tiene uno solo, ese.
-        if (mapeo?.destino === 'servicio') {
-            return items.length === 1
-                ? { destino: 'servicio', item: items[0], origen: 'mapeo' }
-                : { destino: 'persona', motivo: 'servicio_no_disponible' };
-        }
-        return { destino: 'clase_prueba', origen: 'anuncio' };
     }
 
     if (!consultaDeServicio(msg)) return null;
@@ -825,6 +894,11 @@ export function textoVariosServicios(items: { item: ItemConFicha; precio: Precio
 /** A una persona, con la razón dicha con claridad (nunca silencio). Pura. */
 export function textoAPersona(d: Extract<DecisionAnuncio, { destino: 'persona' }>): string {
     const cierre = 'Ya le pasé tu mensaje a la escuela y alguien te responde por aquí 🙌';
+    if (d.motivo === 'pide_persona') return 'Claro 🙌 Ya le pasé tu mensaje a la escuela para que te llamen o te escriban por aquí.';
+    if (d.motivo === 'ya_pago') {
+        return '¡Gracias por avisar! Envíame por aquí la foto del comprobante con el nombre completo del deportista y la escuela te lo confirma 🙌';
+    }
+    if (d.motivo === 'sin_convocatoria') return '¡Gracias por escribirnos! La escuela te responde por aquí 🙌';
     if (d.motivo === 'evento_sin_servicio' && d.evento) {
         const nombre = EVENTOS.find((e) => e.clave === d.evento)?.nombre ?? 'eso';
         const deEso = nombre.startsWith('el ') ? `del ${nombre.slice(3)}` : `de ${nombre}`;
@@ -875,6 +949,13 @@ export interface CtxAnuncio {
     avisarEscuela: (detalle: string) => Promise<void>;
     /** El embudo de la clase de prueba (false = la escuela no lo tiene). */
     iniciarEmbudo: () => Promise<boolean>;
+    /**
+     * (2026-11-26) Las convocatorias guiadas de la escuela: `hoy` dice si las hay y si la clase de prueba se ofrece
+     * hoy (solo se pregunta con anuncio); `iniciar` arranca el flujo guiado (false = no salió). Sin esto, como antes.
+     */
+    convocatorias?: { hoy: () => Promise<ConvocatoriasDeHoy>; iniciar: () => Promise<boolean> };
+    /** (2026-11-26) Lo que el mensaje pide aparte del anuncio («hablar con alguien», «ya pagué»). */
+    intencion?: IntencionAparte;
     /**
      * Fase F-a (whatsapp-formulario-servicio): después de la ficha, el formulario de
      * inscripción si la escuela lo tiene PUBLICADO, prendido y sano. true = salió (o
@@ -928,7 +1009,9 @@ export async function atenderDestinoDeAnuncio(
 
     const mapeo = referral?.sourceId ? await ctx.mapeo(referral.sourceId) : null;
     const items = necesitaCatalogo({ referral, mapeo, texto: msg, eleccion }) ? await ctx.servicios() : [];
-    const decision = decidirDestino({ referral, mapeo, texto: msg, items, eleccion });
+    const convocatorias = referral && ctx.convocatorias && !ctx.intencion
+        ? await ctx.convocatorias.hoy().catch(() => null) : null;
+    const decision = decidirDestino({ referral, mapeo, texto: msg, items, eleccion, convocatorias, intencion: ctx.intencion ?? null });
     if (!decision) return null;
     const anuncio = atribucionDe(referral);
     const base = {
@@ -946,18 +1029,32 @@ export async function atenderDestinoDeAnuncio(
         return 'anuncio_embudo';
     }
 
+    // La convocatoria guiada (una pregunta a la vez con botones; la escuela confirma el cupo). Si no sale, una
+    // persona con una línea neutra: nunca el embudo de la clase ni «no tengo los datos».
+    let aPersona: Extract<DecisionAnuncio, { destino: 'persona' }> | null = decision.destino === 'persona' ? decision : null;
+    if (decision.destino === 'convocatoria') {
+        if (ctx.convocatorias && await ctx.convocatorias.iniciar().catch(() => false)) return 'anuncio_convocatoria';
+        aPersona = { destino: 'persona', motivo: 'sin_convocatoria' };
+    }
+
     const hoy = hoyBogota((ctx.ahora ?? (() => new Date()))().getTime());
 
-    if (decision.destino === 'persona') {
+    if (aPersona) {
         await ctx.guardarLead({ estado: 'nuevo', servicio: null, anuncio });
         const saludo = await ctx.saludo();
-        await ctx.enviar(`${saludo ? `${saludo}\n\n` : ''}${textoAPersona(decision)}`, { ...base, motivo_destino: decision.motivo });
+        await ctx.enviar(`${saludo ? `${saludo}\n\n` : ''}${textoAPersona(aPersona)}`,
+            { ...base, [MARCA_DESTINO]: 'persona', motivo_destino: aPersona.motivo });
         await ctx.avisarEscuela(detalleParaLaEscuela(referral, msg,
-            decision.motivo === 'evento_sin_servicio' ? 'nombra un servicio que no está activo en el catálogo'
-                : decision.motivo === 'servicio_no_disponible' ? 'el servicio del anuncio ya no está activo'
-                    : 'la escuela pidió atender este anuncio en persona'));
+            aPersona.motivo === 'evento_sin_servicio' ? 'nombra un servicio que no está activo en el catálogo'
+                : aPersona.motivo === 'servicio_no_disponible' ? 'el servicio del anuncio ya no está activo'
+                    : aPersona.motivo === 'pide_persona' ? 'pide hablar con una persona'
+                        : aPersona.motivo === 'ya_pago' ? 'dice que ya pagó: se le pidió el comprobante'
+                        : aPersona.motivo === 'sin_convocatoria' ? 'el anuncio es de convocatorias y hoy no hay convocatorias vigentes en el bot'
+                            : 'la escuela pidió atender este anuncio en persona'));
         return 'anuncio_persona';
     }
+    // (Ya atendidos arriba: persona siempre, convocatoria siempre deja `aPersona` o sale.)
+    if (decision.destino === 'persona' || decision.destino === 'convocatoria') return null;
 
     // La misma ficha no se repite en 24 h: lo que pregunte después lo atiende el seguimiento.
     // Si pregunta un detalle (edad, nivel, fecha, lugar) se le contesta con el pedazo del texto

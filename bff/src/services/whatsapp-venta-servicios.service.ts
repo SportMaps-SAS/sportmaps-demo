@@ -36,6 +36,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { SPORT_CATALOG } from '../lib/sportCatalog';
 import { supabase } from '../config/supabase';
 import type { BotonInteractivo } from './whatsapp.service';
 import { normalizarFrase, anunciaComprobante } from './whatsapp-reglas-turno';
@@ -234,9 +235,66 @@ const VACIAS = new Set([
     'cursos', 'plan', 'sub', 'categoria', 'escuela', 'club',
 ]);
 
-/** Palabras de un nombre que sirven para reconocerlo en el chat (≥ 4 letras, sin vacías). Pura. */
+/**
+ * (2026-11-26, Monster) Palabras GENÉRICAS: aparecen en el nombre de un ítem pero también en cualquier charla del
+ * club, así que no lo identifican. «Vacacional de voleibol — Sede Suba» dejaba «voleibol» (y «suba») como
+ * distintivas: «Jugué voleibol en el colegio», el texto de convocatorias de la escuela («…tu experiencia en el
+ * voleibol») o un flyer de torneo reenviado terminaban en la venta del Vacacional. Para reconocer un ítem por
+ * nombre hace falta una palabra suya de verdad («vacacional», «armadores», «Fénix»).
+ *  · los deportes del catálogo único (`SPORT_CATALOG`, nombres y sinónimos);
+ *  · el club y su gente: escuela, club, academia, sede, grupo, equipo, categoría, entrenamiento, nivel, género…;
+ *  · lugares: puntos cardinales, ciudades y barrios donde hay sedes (lo que va tras «Sede» se quita aparte);
+ *  · meses, días y números sueltos (años, categorías «2014»).
+ */
+const GENERICAS = new Set([
+    'escuela', 'escuelas', 'club', 'clubes', 'academia', 'academias', 'sede', 'sedes', 'grupo', 'grupos', 'equipo',
+    'equipos', 'categoria', 'categorias', 'entrenamiento', 'entrenamientos', 'entreno', 'entrenos', 'formacion',
+    'nivel', 'niveles', 'deporte', 'deportes', 'deportivo', 'deportiva', 'deportivos', 'deportivas', 'ninos', 'ninas',
+    'jovenes', 'adultos', 'infantil', 'juvenil', 'femenino', 'femenina', 'masculino', 'masculina', 'mixto', 'mixta',
+    'volley', 'parque', 'cancha', 'canchas', 'coliseo',
+    'norte', 'centro', 'oriente', 'occidente', 'bogota', 'medellin', 'cali', 'barranquilla', 'bucaramanga',
+    'suba', 'usaquen', 'chapinero', 'kennedy', 'engativa', 'fontibon', 'bosa', 'teusaquillo', 'cedritos', 'salitre',
+    'modelia', 'colina', 'pinar', 'chia', 'cajica', 'soacha', 'envigado', 'sabaneta', 'bello', 'itagui',
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre',
+    'diciembre', 'lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado', 'sabados', 'domingo', 'domingos',
+]);
+
+/** Cada palabra de los nombres y sinónimos del catálogo de deportes («voleibol», «volley», «futbol», «baloncesto»…). */
+const DEPORTES = new Set(SPORT_CATALOG.flatMap((d) => [d.label, ...d.aliases])
+    .flatMap((n) => normalizarFrase(n).split(' '))
+    .filter((w) => w.length >= 4 && !VACIAS.has(w)));
+// Los sinónimos de varias palabras traen palabras que no son deportes por sí solas: esas sí identifican.
+for (const w of ['playa', 'arena', 'mesa', 'silla', 'ruedas', 'campo', 'sala', 'salon', 'linea', 'carreras', 'velocidad',
+    'sobre', 'hielo', 'cesped', 'hierba', 'artistica', 'ritmica', 'olimpica', 'aerobica', 'libre', 'personal', 'entrenador',
+    'acondicionamiento', 'fisico', 'preparacion', 'montana', 'bicicleta', 'nautico', 'acuaticos', 'subacuaticas',
+    'actividades', 'moderno', 'mural', 'pelota', 'paleta', 'mano', 'varios', 'electronicos', 'sentado', 'touch', 'union',
+    'seven', 'sevens', 'brazilian', 'american', 'once', 'siete', 'cinco', 'funcional', 'fisica', 'potencia',
+    'levantamiento', 'arco', 'acuatico', 'star', 'stars', 'bandera']) {
+    if (!GENERICAS.has(w)) DEPORTES.delete(w);
+}
+
+function esGenerica(w: string): boolean {
+    if (VACIAS.has(w) || GENERICAS.has(w) || DEPORTES.has(w) || /^\d+$/.test(w)) return true;
+    // Plurales: «voleibolistas» no, pero «torneos de futbolES» → «futbol».
+    const singular = w.endsWith('es') ? [w.slice(0, -1), w.slice(0, -2)] : w.endsWith('s') ? [w.slice(0, -1)] : [];
+    return singular.some((s) => GENERICAS.has(s) || DEPORTES.has(s));
+}
+
+/** Separadores de un nombre: lo que va tras «—», «(», «·», «,»… es un tramo aparte («— Sede Suba»). */
+const TRAMOS_DEL_NOMBRE = /\s*[—–(),:;·|/]\s*|\s+-\s+/;
+
+/**
+ * Palabras de un nombre que sirven para reconocerlo en el chat (≥ 4 letras, sin vacías ni genéricas). En cada
+ * tramo del nombre, lo que va desde «Sede» es el lugar («— Sede Suba», «Sede Parque Pinar de Suba»): no cuenta.
+ * Pura.
+ */
 export function tokensDistintivos(nombre: string): string[] {
-    return normalizarFrase(nombre).split(' ').filter((w) => w.length >= 4 && !VACIAS.has(w));
+    const palabras = String(nombre ?? '').split(TRAMOS_DEL_NOMBRE).flatMap((tramo) => {
+        const w = normalizarFrase(tramo).split(' ').filter(Boolean);
+        const sede = w.findIndex((x) => x === 'sede' || x === 'sedes');
+        return sede >= 0 ? w.slice(0, sede) : w;
+    });
+    return palabras.filter((w) => w.length >= 4 && !esGenerica(w));
 }
 
 /**

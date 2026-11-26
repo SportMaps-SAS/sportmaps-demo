@@ -9,7 +9,7 @@
 
 // ─── Lo que devuelve el BFF ──────────────────────────────────────────────────
 
-export type Destino = 'clase_prueba' | 'servicio' | 'persona';
+export type Destino = 'clase_prueba' | 'servicio' | 'persona' | 'convocatoria';
 
 export interface MotivoDePago {
     motivo: string;
@@ -125,6 +125,7 @@ export function enlaceSeguro(url: string | null | undefined): string | null {
 
 const MOTIVOS: Record<string, string> = {
     clase_prueba: 'Clase de prueba',
+    convocatoria: 'Convocatorias',
     clase_extra: 'Clínica / clase extra',
     vacacional: 'Vacacional',
     inscripcion: 'Matrícula',
@@ -158,7 +159,7 @@ export function valorDelSelector(m: MapeoDestino | null | undefined): string {
 
 /** Del selector al cuerpo del PUT; null = quitar el mapeo (DELETE). Puro. */
 export function mapeoDeValor(valor: string): { destino: Destino; servicio_id: string | null } | null {
-    if (valor === 'clase_prueba' || valor === 'persona') return { destino: valor, servicio_id: null };
+    if (valor === 'clase_prueba' || valor === 'persona' || valor === 'convocatoria') return { destino: valor, servicio_id: null };
     if (valor.startsWith('servicio:') && valor.length > 'servicio:'.length) {
         return { destino: 'servicio', servicio_id: valor.slice('servicio:'.length) };
     }
@@ -170,6 +171,7 @@ export function opcionesDeDestino(servicios: ServicioDelCatalogo[], actual?: Map
     { valor: string; texto: string; grupo: 'fijo' | 'servicio' }[] {
     const fijas = [
         { valor: SIN_DESTINO, texto: 'Sin definir (el asistente decide por el texto)', grupo: 'fijo' as const },
+        { valor: 'convocatoria', texto: 'Convocatorias (preguntas y la convocatoria que le aplica)', grupo: 'fijo' as const },
         { valor: 'clase_prueba', texto: 'Clase de prueba', grupo: 'fijo' as const },
         { valor: 'persona', texto: 'Una persona (buzón)', grupo: 'fijo' as const },
     ];

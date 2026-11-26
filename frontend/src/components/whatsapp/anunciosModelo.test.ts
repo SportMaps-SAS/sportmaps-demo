@@ -81,14 +81,14 @@ describe('selector «este anuncio va a…»', () => {
         expect(mapeoDeValor('servicio:')).toBeNull();
     });
 
-    it('opciones: las tres fijas + servicios activos (y el mapeado aunque esté inactivo)', () => {
+    it('opciones: las fijas (con Convocatorias) + servicios activos (y el mapeado aunque esté inactivo)', () => {
         const servicios = [
             { id: 'S1', nombre: 'Clínica', tipo: 'clase_extra', activo: true },
             { id: 'S2', nombre: 'Vacacional 2025', tipo: 'vacacional', activo: false },
             { id: 'S3', nombre: 'Uniforme viejo', tipo: 'otro', activo: false },
         ];
         const sin = opcionesDeDestino(servicios);
-        expect(sin.map((o) => o.valor)).toEqual([SIN_DESTINO, 'clase_prueba', 'persona', 'servicio:S1']);
+        expect(sin.map((o) => o.valor)).toEqual([SIN_DESTINO, 'convocatoria', 'clase_prueba', 'persona', 'servicio:S1']);
         const con = opcionesDeDestino(servicios, mapeo({ destino: 'servicio', servicio_id: 'S2' }));
         expect(con.map((o) => o.texto)).toContain('Vacacional 2025 (inactivo)');
         expect(con.map((o) => o.valor)).not.toContain('servicio:S3');

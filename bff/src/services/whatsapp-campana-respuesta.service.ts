@@ -343,10 +343,15 @@ async function atenderBoton(
     // ¿La campaña es la venta de un servicio vigente (la clínica, un torneo)? Entonces
     // la respuesta lleva la marca de la venta y lo que escriba después lo atiende la
     // venta (frente A, Monster 2026-11-08).
-    const item = await servicioDeLaCampana(integration.school_id, campana);
+    // (2026-11-26, auditoría Monster) La retoma de convocatorias (`filtro.destino = 'convocatorias'`) NO es la venta de
+    // un servicio: no se busca ninguno por su texto. Su «Sí» («…tu experiencia en el voleibol…») calzaba con el
+    // «Vacacional de voleibol» y salía como esa venta (o como su venta cerrada / su oferta terminada) en lugar de la
+    // convocatoria guiada.
+    const deConvocatorias = esCampanaDeConvocatorias(campana);
+    const item = deConvocatorias ? null : await servicioDeLaCampana(integration.school_id, campana);
     // (2026-11-20) La campaña es la de un servicio cuya VENTA ya cerró: un mensaje fijo (sin ficha, botones ni
     // cotización) y a la escuela. Quien ya abonó sigue con su saldo y sus comprobantes por el camino de siempre.
-    if (!item) {
+    if (!item && !deConvocatorias) {
         const cerrado = await servicioCerradoDeLaCampana(integration.school_id, campana);
         if (cerrado) {
             await enviarDirecto({
@@ -370,7 +375,10 @@ async function atenderBoton(
     // (2026-11-25) La oferta de la campaña ya terminó (su servicio ya no está vigente, o sus fechas pasaron): NO sale
     // su respuesta al «Sí» (era la venta de algo que ya no existe), ni botones, ni lead, ni esperado. Una línea
     // neutra, la conversación abierta para la escuela y el aviso a la administración, como en la venta cerrada.
-    const terminada = await ofertaTerminadaDeLaCampana(integration.school_id, campana, item);
+    // Convocatorias: solo cuenta que la campaña misma haya terminado o vencido (sin mirar servicios).
+    const terminada = deConvocatorias
+        ? (campanaYaNoVigente(campana) ? { razon: 'vencida' as const, item: null } : null)
+        : await ofertaTerminadaDeLaCampana(integration.school_id, campana, item);
     if (terminada) {
         await enviarDirecto({
             integration, conversationId, contactWaId: msg.contactWaId, texto: TEXTO_CAMPANA_TERMINADA,

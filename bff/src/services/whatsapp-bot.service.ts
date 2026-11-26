@@ -163,7 +163,7 @@ import {
 import {
     atenderDestinoDeAnuncio, mapeoDeAnuncio, serviciosDeAnuncio, servicioDeAnuncioPorId, servicioVigente, motivoDeServicio,
     ventaCerradaDeItem, textoVentaCerrada,
-    MARCA_DESTINO, type CtxAnuncio, type ResultadoAnuncio, type ItemConFicha,
+    MARCA_DESTINO, type CtxAnuncio, type ResultadoAnuncio, type ItemConFicha, type IntencionAparte,
 } from './whatsapp-anuncio-destino';
 import type { Motivo } from './motivos-de-cobro';
 import { esAfiliado } from './wa-afiliado.service';
@@ -189,7 +189,7 @@ import {
 } from './whatsapp-venta-contexto';
 import {
     atenderBotonDelClubEnVenta, atenderVentaDeServicio, crearCobroPrevioDelTurno, deLaDelServicio, fichaDeVentaEnviada, posibleVentaEnRecientes,
-    ventaCedeAlEmbudo, ventaDeFamilia, textoClubAparteDeLaVenta, textoDePagoDeServicio, tienePrecioDeAfiliado, PASO_VENTA,
+    ventaCedeAlEmbudo, ventaCedeALaConvocatoria, ventaDeFamilia, textoClubAparteDeLaVenta, textoDePagoDeServicio, tienePrecioDeAfiliado, PASO_VENTA,
     atenderBotonDeVenta, parsearBotonDeVenta, TEXTO_SERVICIO_NO_VIGENTE,
     type CtxVentaServicio, type ResultadoVenta,
 } from './whatsapp-venta-servicio';
@@ -1841,6 +1841,8 @@ async function atenderVentaEnBot(
     try {
         const a = ajustes ?? await ajustesDeLaEscuela(integration.school_id);
         if (!a.ventasHabilitadas) return false;
+        // Pide una convocatoria y la escuela las tiene guiadas: ni se inicia ni se continúa la venta (auditoría 11-26).
+        if (!botonId && await ventaCedeALaConvocatoriaEnBot(integration.school_id, null, text)) return false;
         return await atenderTurnoVenta({
             conversationId,
             schoolId: integration.school_id,
@@ -1871,6 +1873,26 @@ async function atenderVentaEnBot(
     } catch (e: any) {
         // Una falla de la venta no deja a la familia sin respuesta: sigue el bot.
         console.warn('[whatsapp-bot] flujo de venta falló', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
+/**
+ * (2026-11-26, auditoría Monster …5131 / …8713) ¿La venta abierta (o la que se iba a iniciar) cede el turno a la
+ * convocatoria? Sí cuando lo que escribe AHORA pide una convocatoria, no nombra el servicio de la venta y la escuela
+ * tiene convocatorias guiadas vigentes (`preguntasOfertas` + ofertas): la intención actual manda sobre un estado viejo.
+ * Sin pedir convocatoria no lee nada. Nunca lanza (ante un error, la venta sigue como siempre).
+ */
+async function ventaCedeALaConvocatoriaEnBot(
+    schoolId: string, item: ItemConFicha | null, ...textos: (string | null | undefined)[]
+): Promise<boolean> {
+    if (!textos.some((t) => preguntaPorConvocatoria(t ?? ''))) return false;
+    try {
+        const of = await ofertasDeLaEscuela(schoolId);
+        return ventaCedeALaConvocatoria(textos, item, {
+            pideConvocatoria: preguntaPorConvocatoria, hayConvocatoriasGuiadas: Boolean(of.preguntasOfertas && of.ofertas.length),
+        });
+    } catch {
         return false;
     }
 }
@@ -3208,23 +3230,42 @@ async function atenderAnuncioEnBot(
         const recientes = cache.recientes ??= await mensajesRecientes(conversationId);
         // Si una persona de la escuela está escribiendo, la conversación es suya.
         if (humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return null;
+        // (Monster 2026-11-26) Lo que el mensaje pide aparte del anuncio: «quiero hablar con alguien» → una persona;
+        // «ya pagué» / «te envío el comprobante» → el camino de comprobantes de siempre. Nunca la ficha ni la convocatoria.
+        const diceQuePago = yaPagoYReclama(text) || esDisputaDePago(text);
+        const intencion: IntencionAparte = pideLlamada(text) ? 'persona'
+            : anunciaComprobante(text) ? 'comprobante'
+                : !diceQuePago ? null
+                    : (adjuntoEnLaRafaga(recientes) || await comprobanteEnColaDe(integration, contactWaId)) ? 'comprobante' : 'pago';
+        // La convocatoria guiada de la escuela (bot-ofertas con preguntas). false = no tiene o no salió.
+        const iniciarConvocatoriaGuiada = async (): Promise<boolean> => {
+            const of = await ofertasDeLaEscuela(integration.school_id);
+            if (!of.preguntasOfertas || !of.ofertas.length) return false;
+            const saludo = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
+            if (!(await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
+                ofertas: of, encabezado: saludo, step: PASO_DESCONOCIDO_ESCOLAR, texto: text,
+                contexto: { intencion: 'ofertas_preguntas', desde: 'anuncio' },
+            }))) return false;
+            await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+            return true;
+        };
         // (Monster 2026-11-26, …0983) «Quiero inscribirme a la convocatoria de Suba» desde un anuncio que nombra la
         // Superliga («torneo»): el destino por anuncio buscaba un servicio de torneo, no lo había y contestaba «no
         // tengo los datos del torneo». Quien pide una convocatoria va a la convocatoria guiada de la escuela.
-        if (preguntaPorConvocatoria(text)) {
-            const of = await ofertasDeLaEscuela(integration.school_id);
-            if (of.preguntasOfertas && of.ofertas.length) {
-                const saludo = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
-                if (await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
-                    ofertas: of, encabezado: saludo, step: PASO_DESCONOCIDO_ESCOLAR, texto: text,
-                    contexto: { intencion: 'ofertas_preguntas', desde: 'anuncio' },
-                })) {
-                    await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
-                    return 'anuncio_convocatoria';
-                }
-            }
-        }
-        return await atenderDestinoDeAnuncio(ctxAnuncio(integration, conversationId, contactWaId, recientes), text, fase);
+        if (!intencion && preguntaPorConvocatoria(text) && await iniciarConvocatoriaGuiada()) return 'anuncio_convocatoria';
+        // Con anuncio, el destino sabe si hay convocatorias guiadas hoy y si la clase de prueba está abierta: lo que
+        // iba a «no tengo los datos del torneo» o al embudo con la clase cerrada va a la convocatoria guiada.
+        return await atenderDestinoDeAnuncio({
+            ...ctxAnuncio(integration, conversationId, contactWaId, recientes),
+            intencion,
+            convocatorias: {
+                hoy: async () => {
+                    const of = await ofertasDeLaEscuela(integration.school_id);
+                    return { guiada: Boolean(of.preguntasOfertas && of.ofertas.length), claseDisponible: of.claseDePrueba?.disponible !== false };
+                },
+                iniciar: iniciarConvocatoriaGuiada,
+            },
+        }, text, fase);
     } catch (e: any) {
         console.warn('[whatsapp-bot] destino por anuncio falló', { conversationId, err: e?.message });
         return null;
@@ -3649,6 +3690,11 @@ async function atenderVentaDelDesconocido(
             await marcarAbiertaSinAviso(conversationId);
             return 'escuela_atendiendo';
         }
+        // (2026-11-26) Pide una convocatoria con la venta abierta (…5131, …8713): sigue el camino de la convocatoria.
+        if (await ventaCedeALaConvocatoriaEnBot(integration.school_id, v.venta.item, text, rafaga)) {
+            console.info('[whatsapp-bot] la venta cede a la convocatoria', { conversationId, servicio: v.venta.item.id });
+            return null;
+        }
         // El embudo del club en curso (la persona lo abrió y tiene una pregunta pendiente):
         // la venta solo contesta lo suyo; «Mariana Gómez Ruiz», una fecha o un botón se los
         // ofrece primero al embudo. Si el embudo no lo toma, sigue la venta (nunca un
@@ -3703,6 +3749,8 @@ async function atenderVentaDeFamilia(t: {
         // que salió es de ella, o si nombra el servicio ahora (`ventaDeFamilia`).
         const venta = ventaDeFamilia(recientes, items, text, rafaga);
         if (!venta) return false;
+        // (2026-11-26) Pide una convocatoria con la venta abierta: la intención actual manda.
+        if (await ventaCedeALaConvocatoriaEnBot(integration.school_id, venta.item, text, rafaga)) return false;
         // (2026-11-20) Servicio con la venta cerrada: ni cotizar ni pago. Mensaje fijo y a la escuela, salvo que ya tenga cobro.
         if (ventaCerradaDeItem(venta.item)) {
             if (await atenderVentaCerradaEnBot(integration, conversationId, contactWaId, text, botonId, rafaga)) return true;

@@ -550,3 +550,42 @@ describe('el lead del anuncio', () => {
         expect(detalleDeAnuncio({}, null, ahora)).toEqual({});
     });
 });
+
+// ─── Convocatorias guiadas (Monster 2026-11-26) ─────────────────────────────
+
+describe('decidirDestino con convocatorias guiadas (Monster 2026-11-26)', () => {
+    const TORNEO: ReferralAnuncio = { sourceId: '120251602660860783', sourceType: 'ad', sourceUrl: null, headline: 'Convocatoria abierta equipos competencia',
+        body: '🏆 Superliga\n🏆 Torneo Nacional\n🏆 Torneo Distrital\n📅 Convocatorias: del 1 al 13 de diciembre', mediaType: null, ctwaClid: null } as ReferralAnuncio;
+    const SUPERLIGA = { ...TORNEO, sourceId: '120251602548730783', headline: 'Convocatoria Superliga abierta',
+        body: '¿Juegas competitivo? La Superliga no se mira desde la tribuna. Convocatorias Monsters Volley 2027' } as ReferralAnuncio;
+    const VAC: ItemConFicha = { id: 'vac', name: 'Vacacional de voleibol — Sede Suba', kind: 'vacacional', price: 100000, active: true,
+        event_id: null, starts_at: null, ends_at: null } as ItemConFicha;
+    const HOY = { guiada: true, claseDisponible: false };
+
+    it('torneo sin servicio → convocatoria (antes: persona «no tengo los datos del torneo»)', () => {
+        expect(decidirDestino({ referral: TORNEO, mapeo: null, texto: 'hola', items: [VAC] })).toMatchObject({ destino: 'persona', motivo: 'evento_sin_servicio' });
+        expect(decidirDestino({ referral: TORNEO, mapeo: null, texto: 'hola', items: [VAC], convocatorias: HOY })).toEqual({ destino: 'convocatoria', origen: 'anuncio' });
+    });
+    it('anuncio sin evento con la clase cerrada → convocatoria (antes: el embudo de la clase)', () => {
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo: null, texto: 'hola', items: [], convocatorias: HOY })).toEqual({ destino: 'convocatoria', origen: 'anuncio' });
+        // Sin convocatorias guiadas, como antes.
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo: null, texto: 'hola', items: [], convocatorias: { guiada: false, claseDisponible: false } }))
+            .toEqual({ destino: 'clase_prueba', origen: 'anuncio' });
+    });
+    it('mapeado a un servicio vigente → la ficha, salvo «hablar con alguien» y «ya pagué»', () => {
+        const mapeo = { destino: 'servicio' as const, servicioId: 'vac' };
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'hola', items: [VAC], convocatorias: HOY })).toMatchObject({ destino: 'servicio', origen: 'mapeo' });
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'x', items: [VAC], convocatorias: HOY, intencion: 'persona' })).toEqual({ destino: 'persona', motivo: 'pide_persona' });
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'x', items: [VAC], convocatorias: HOY, intencion: 'pago' })).toEqual({ destino: 'persona', motivo: 'ya_pago' });
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'x', items: [VAC], convocatorias: HOY, intencion: 'comprobante' })).toBeNull();
+    });
+    it('mapeo «convocatoria»: con ofertas → convocatoria; sin ofertas → persona neutra, nunca la clase', () => {
+        expect(mapeoDesdeFila({ destino: 'convocatoria', servicio_id: null })).toEqual({ destino: 'convocatoria', servicioId: null });
+        const mapeo = { destino: 'convocatoria' as const, servicioId: null };
+        expect(necesitaCatalogo({ referral: SUPERLIGA, mapeo, texto: 'hola', eleccion: null })).toBe(false);
+        expect(decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'hola', items: [], convocatorias: HOY })).toEqual({ destino: 'convocatoria', origen: 'mapeo' });
+        const sin = decidirDestino({ referral: SUPERLIGA, mapeo, texto: 'hola', items: [], convocatorias: { guiada: false, claseDisponible: true } });
+        expect(sin).toEqual({ destino: 'persona', motivo: 'sin_convocatoria' });
+        expect(textoAPersona(sin as any)).toMatch(/La escuela te responde por aquí/);
+    });
+});
