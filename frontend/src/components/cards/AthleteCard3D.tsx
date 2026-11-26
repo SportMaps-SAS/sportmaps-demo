@@ -175,7 +175,7 @@ function Frente({ datos }: { datos: Carnet3DDatos }) {
           </p>
         )}
         <p style={{ margin: 'auto 0 0', fontSize: 13, fontWeight: 700, letterSpacing: 1.2, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
-          {datos.codigo ?? 'SM-····-·····'}
+          {datos.codigo ?? 'SM-····-·····-····'}
         </p>
       </div>
     </div>
@@ -224,7 +224,7 @@ function Reverso({ datos }: { datos: Carnet3DDatos }) {
           )}
         </div>
         <p style={{ margin: 0, fontSize: 13, fontWeight: 700, letterSpacing: 1.2, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace' }}>
-          {datos.codigo ?? 'SM-····-·····'}
+          {datos.codigo ?? 'SM-····-·····-····'}
         </p>
         <p style={{ margin: 0, fontSize: 11, opacity: 0.85 }}>Escanea el código para verificar el carnet</p>
       </div>
@@ -375,7 +375,7 @@ export function datosDeEjemplo(identidad: Carnet3DDatos['identidad']): Carnet3DD
     numero: 10,
     posicion: 'Volante',
     categoria: 'Sub-12',
-    codigo: `SM-${new Date().getFullYear()}-00001`,
+    codigo: `SM-${new Date().getFullYear()}-00001-K7QP`,
     qrToken: null,
     identidad,
     reverso: {

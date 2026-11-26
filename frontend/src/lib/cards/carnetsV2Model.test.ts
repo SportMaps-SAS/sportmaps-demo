@@ -162,7 +162,7 @@ describe('deportistaDeEjemplo', () => {
     const d = deportistaDeEjemplo(id, new Date('2026-05-01T00:00:00Z'));
     expect(d.identidad.conMarca).toBe(true);
     expect(d.qrToken).toBeNull();
-    expect(d.codigo).toBe('SM-2026-00001');
+    expect(d.codigo).toBe('SM-2026-00001-K7QP');
   });
 });
 

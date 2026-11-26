@@ -6,6 +6,11 @@ import { normalizarCodigo, veredictoCodigo } from './VerificarPorCodigo';
 
 describe('normalizarCodigo', () => {
   it.each([
+    ['SM-2026-00123-K7QP', 'SM-2026-00123-K7QP'],
+    ['sm 2026 123 k7qp', 'SM-2026-00123-K7QP'],
+    ['SM20260012327QP', 'SM-2026-00123-27QP'],
+    ['2026-12-HJKM', 'SM-2026-00012-HJKM'],
+    // sin sufijo: formato viejo, la RPC responde «formato»
     ['SM-2026-00123', 'SM-2026-00123'],
     ['sm-2026-00123', 'SM-2026-00123'],
     [' sm 2026 00123 ', 'SM-2026-00123'],
@@ -15,7 +20,7 @@ describe('normalizarCodigo', () => {
     expect(normalizarCodigo(entrada)).toBe(esperado);
   });
 
-  it.each(['', 'SM-26-00123', 'SM-2026-001234', 'abc', 'SM-2026-'])('«%s» no es un código', (entrada) => {
+  it.each(['', 'SM-26-00123', 'SM-2026-001234', 'abc', 'SM-2026-', 'SM-2026-00123-K0QP', 'SM-2026-00123-K7Q'])('«%s» no es un código', (entrada) => {
     expect(normalizarCodigo(entrada)).toBeNull();
   });
 });

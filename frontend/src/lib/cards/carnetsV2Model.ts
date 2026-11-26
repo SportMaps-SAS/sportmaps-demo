@@ -224,7 +224,7 @@ export function deportistaDeEjemplo(identidad: ClubIdentidad, hoy: Date = new Da
     numero: 10,
     posicion: 'Delantera',
     categoria: 'Sub-12',
-    codigo: `SM-${hoy.getFullYear()}-00001`,
+    codigo: `SM-${hoy.getFullYear()}-00001-K7QP`,
     qrToken: null,
     identidad,
     reverso: null,
