@@ -22,17 +22,22 @@ const h = vi.hoisted(() => {
         /** Una entrada por cada `supabase.from(tabla)`. */
         consultas: [] as string[],
         filtros: [] as { tabla: string; col: string; val: any }[],
+        /** Columnas pedidas en cada `select` (en orden). */
+        selects: [] as { tabla: string; cols: string }[],
+        /** Error según las columnas pedidas (p. ej. 42703 si piden una columna que la base no tiene). */
+        errorPorColumnas: {} as Record<string, (cols: string) => any>,
     };
     function builder(tabla: string) {
         st.consultas.push(tabla);
         const filtros: ((f: any) => boolean)[] = [];
+        let cols = '';
         const resultado = () => {
-            const error = st.errores[tabla];
+            const error = st.errores[tabla] ?? st.errorPorColumnas[tabla]?.(cols) ?? null;
             if (error) return { data: null, error };
             return { data: (st.tablas[tabla] ?? []).filter((f) => filtros.every((p) => p(f))), error: null };
         };
         const api: any = {
-            select: () => api,
+            select: (c?: string) => { cols = c ?? ''; st.selects.push({ tabla, cols }); return api; },
             eq: (col: string, val: any) => {
                 st.filtros.push({ tabla, col, val });
                 filtros.push((f) => f[col] === val);
@@ -56,6 +61,7 @@ import {
     textoOfertasParaPersona, textoOfertasParaIa, reglasDeOfertasParaIa, estadoCerrado,
     estadoDeOfertas, claseDePruebaDisponible, invalidarCacheOfertas,
     type FilasCrudas, type EstadoOfertas, type OfertaBot,
+    precioConPromo, promoAplicaEn, lineaDeValor, ofertasPorMonto, momentoDelComprobante, nombreDePromo, descuentoDeFilas,
 } from './bot-ofertas.service';
 
 // ─── Fixture: Monster's Volley, diciembre 2026 ──────────────────────────────
@@ -619,7 +625,7 @@ describe('estadoCerrado', () => {
         expect(e).toEqual({
             schoolId: ESCUELA, hoy: '2026-11-26', ofertas: [], bloqueos: [],
             claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null },
-            mensajeSinOfertas: null, preguntasOfertas: null, notaOfertas: null, promoOfertas: null,
+            mensajeSinOfertas: null, preguntasOfertas: null, notaOfertas: null, promoOfertas: null, descuentoPromo: null,
         });
     });
 });
@@ -697,6 +703,8 @@ describe('estadoDeOfertas (lectura, caché de 60 s y falla cerrado)', () => {
         vi.useFakeTimers({ toFake: ['Date'], now: AHORA });
         invalidarCacheOfertas();
         h.st.errores = {};
+        h.st.errorPorColumnas = {};
+        h.st.selects = [];
         h.st.consultas = [];
         h.st.filtros = [];
         cargarTablas();
@@ -836,5 +844,174 @@ describe('estadoDeOfertas (lectura, caché de 60 s y falla cerrado)', () => {
         const e = await estadoDeOfertas(ESCUELA, bogota('2026-12-02T10:00'));
         expect(e.claseDePrueba.disponible).toBe(false);
         expect(e.claseDePrueba.motivo).toBe('error');
+    });
+});
+
+// ─── Descuento de la promoción (Monster's Black Friday, 2026-11-25) ─────────
+//
+// 10 % sobre TODAS las ofertas con valor para pagos con comprobante entre el 25-nov 00:00 y el
+// 27-nov 23:59:59 (Bogotá). Mayores/Suba $145.000 → $130.500; Norte $200.000 → $180.000.
+
+const TEXTO_PROMO_MONSTER = '¡Este *viernes 27 de noviembre* tenemos una oportunidad especial para ti!\n\n'
+    + 'Por nuestro *BLACK FRIDAY*, todos los deportistas que realicen su inscripción a las convocatorias durante este día '
+    + 'recibirán un *10% de descuento* en el valor de inscripción.';
+const DESCUENTO_MONSTER = { pct: 10, desde: '2026-11-25T00:00:00-05:00', hasta: '2026-11-27T23:59:59-05:00' };
+
+/** Monster con valores: Norte $200.000, Mayores y Suba $145.000, y la promo. */
+function filasConPromo(over: Partial<FilasCrudas> = {}): FilasCrudas {
+    const f = filasMonster();
+    const valores: Record<string, number> = { 'of-norte': 200000, 'of-mayores': 145000, 'of-suba': 145000 };
+    return {
+        ...f,
+        ofertas: f.ofertas.map((o) => (valores[o.id] ? { ...o, requiere_pago: true, valor: valores[o.id] } : o)),
+        promo: { texto: TEXTO_PROMO_MONSTER, desde: '2026-11-25', hasta: '2026-11-27' },
+        descuento: DESCUENTO_MONSTER,
+        ...over,
+    };
+}
+
+describe('descuento de la promoción: helpers puros', () => {
+    const e = armarEstado(ESCUELA, filasConPromo(), bogota('2026-11-26T10:00'));
+    const sinPromo = armarEstado(ESCUELA, filasConPromo({ descuento: null }), bogota('2026-11-26T10:00'));
+
+    it('armarEstado expone el descuento (ISO) con el nombre sacado del texto de la promo', () => {
+        expect(e.descuentoPromo).toEqual({
+            pct: 10, desde: '2026-11-25T05:00:00.000Z', hasta: '2026-11-28T04:59:59.000Z', nombre: 'Black Friday',
+        });
+        expect(sinPromo.descuentoPromo).toBeNull();
+        expect(estadoEn('2026-11-26T10:00').descuentoPromo).toBeNull();     // filas sin las columnas = como antes
+    });
+
+    it('descuentoDeFilas: incompleto o inválido = sin descuento', () => {
+        const { desde, hasta } = DESCUENTO_MONSTER;
+        expect(descuentoDeFilas({ descuento: { pct: null, desde, hasta } })).toBeNull();
+        expect(descuentoDeFilas({ descuento: { pct: 10, desde: null, hasta } })).toBeNull();
+        expect(descuentoDeFilas({ descuento: { pct: 10, desde: hasta, hasta: desde } })).toBeNull();
+        expect(descuentoDeFilas({ descuento: { pct: 0, desde, hasta } })).toBeNull();
+        expect(descuentoDeFilas({ descuento: { pct: '10', desde, hasta } })?.pct).toBe(10);
+    });
+
+    it('nombreDePromo: evento conocido, negrilla tras «por nuestro», o null', () => {
+        expect(nombreDePromo(TEXTO_PROMO_MONSTER)).toBe('Black Friday');
+        expect(nombreDePromo('Por nuestro *ANIVERSARIO 10 AÑOS* tienes descuento')).toBe('Aniversario 10 Años');
+        expect(nombreDePromo('Por la *Semana del Voley* hay descuento')).toBe('Semana del Voley');
+        expect(nombreDePromo('Descuento especial para nuevos deportistas')).toBeNull();
+        expect(nombreDePromo(null)).toBeNull();
+    });
+
+    it('precioConPromo: 10 % redondeado a pesos; fuera de la ventana o sin promo, sin descuento', () => {
+        expect(precioConPromo(145000, e, bogota('2026-11-26T10:00'))).toEqual({ valor: 145000, conDescuento: 130500, pct: 10 });
+        expect(precioConPromo(200000, e, bogota('2026-11-26T10:00')).conDescuento).toBe(180000);
+        expect(precioConPromo(117755, e, bogota('2026-11-26T10:00')).conDescuento).toBe(105980);   // 105.979,5 → 105.980
+        expect(precioConPromo(145000, e, bogota('2026-11-28T00:00'))).toEqual({ valor: 145000, conDescuento: null, pct: null });
+        expect(precioConPromo(145000, sinPromo, bogota('2026-11-26T10:00')).conDescuento).toBeNull();
+        expect(precioConPromo(145000, null, bogota('2026-11-26T10:00')).conDescuento).toBeNull();
+    });
+
+    it('promoAplicaEn: bordes en hora de Bogotá (25-nov 00:00 dentro, 27-nov 23:59 dentro, 28-nov 00:00 fuera)', () => {
+        expect(promoAplicaEn(e, bogota('2026-11-24T23:59'))).toBe(false);
+        expect(promoAplicaEn(e, bogota('2026-11-25T00:00'))).toBe(true);
+        expect(promoAplicaEn(e, bogota('2026-11-27T23:59'))).toBe(true);
+        expect(promoAplicaEn(e, Date.parse('2026-11-27T23:59:59.500-05:00'))).toBe(true);
+        expect(promoAplicaEn(e, bogota('2026-11-28T00:00'))).toBe(false);
+        expect(promoAplicaEn(e, new Date('2026-11-28T04:59:00Z'))).toBe(true);   // 27-nov 23:59 en Bogotá, ya 28 en UTC
+        expect(promoAplicaEn(sinPromo, bogota('2026-11-26T10:00'))).toBe(false);
+    });
+
+    it('lineaDeValor: con la promo tachado → descuento; fuera, la línea de siempre; sin nombre, genérica', () => {
+        expect(lineaDeValor(145000, e, bogota('2026-11-26T10:00'))).toBe(
+            'Valor: ~$145.000~ → *$130.500* con el 10 % de Black Friday (pagando hasta el viernes 27 de noviembre, 11:59 p. m.)');
+        expect(lineaDeValor(145000, e, bogota('2026-11-28T00:00'))).toBe('Valor: $145.000');
+        const anonima = armarEstado(ESCUELA, filasConPromo({ promo: null }), bogota('2026-11-26T10:00'));
+        expect(lineaDeValor(200000, anonima, bogota('2026-11-26T10:00'))).toBe(
+            'Valor: ~$200.000~ → *$180.000* con el 10 % de descuento de la promoción (pagando hasta el viernes 27 de noviembre, 11:59 p. m.)');
+    });
+
+    it('textoDeOferta: dentro de la ventana la línea con descuento va aunque el texto ya diga el valor; fuera, como antes', () => {
+        const mayores = { ...oferta(e, 'of-mayores'), descripcion: 'Convocatoria de mayores. Inscripción: $145.000.' };
+        const dentro = textoDeOferta(mayores, e.hoy, { descuentoPromo: e.descuentoPromo, ahora: bogota('2026-11-26T10:00') });
+        expect(dentro).toContain('Valor: ~$145.000~ → *$130.500* con el 10 % de Black Friday');
+        const fuera = textoDeOferta(mayores, e.hoy, { descuentoPromo: e.descuentoPromo, ahora: bogota('2026-11-28T00:00') });
+        expect(fuera).not.toContain('Valor:');                         // el texto ya trae el valor: no se repite
+        expect(textoDeOferta(oferta(e, 'of-norte'), e.hoy, { descuentoPromo: null })).toContain('Valor: $200.000');
+        expect(textoDeOferta(oferta(e, 'of-norte'), e.hoy)).toBe(textoDeOferta(oferta(sinPromo, 'of-norte'), e.hoy));
+    });
+
+    it('textoOfertasParaIa: dentro de la ventana el valor con descuento ya calculado; fuera, solo el de lista', () => {
+        const dentro = textoOfertasParaIa(e, bogota('2026-11-26T10:00'));
+        expect(dentro).toContain('Valor: $145.000; con el 10 % de Black Friday queda en $130.500 pagando hasta el viernes 27 de noviembre, 11:59 p. m.');
+        expect(dentro).toContain('queda en $180.000');
+        const fuera = textoOfertasParaIa(e, bogota('2026-11-28T00:00'));
+        expect(fuera).toContain('Valor: $145.000');
+        expect(fuera).not.toContain('130.500');
+    });
+
+    it('ofertasPorMonto: el de lista siempre; el con descuento solo dentro de la ventana', () => {
+        const dentro = bogota('2026-11-27T23:59');
+        const fuera = bogota('2026-11-28T00:00');
+        expect(ofertasPorMonto(e, 130500, dentro).map((x) => [x.oferta.id, x.conPromo])).toEqual([['of-mayores', true], ['of-suba', true]]);
+        expect(ofertasPorMonto(e, 180000, dentro).map((x) => [x.oferta.id, x.conPromo, x.pct, x.valor])).toEqual([['of-norte', true, 10, 200000]]);
+        expect(ofertasPorMonto(e, 130500, fuera)).toEqual([]);
+        expect(ofertasPorMonto(e, 180000, fuera)).toEqual([]);
+        expect(ofertasPorMonto(e, 200000, fuera).map((x) => [x.oferta.id, x.conPromo])).toEqual([['of-norte', false]]);
+        expect(ofertasPorMonto(e, 200001, dentro).map((x) => x.oferta.id)).toEqual(['of-norte']);   // ±$1
+        expect(ofertasPorMonto(sinPromo, 130500, dentro)).toEqual([]);
+        expect(ofertasPorMonto(e, null, dentro)).toEqual([]);
+        expect(ofertasPorMonto(e, 15000, dentro)).toEqual([]);
+    });
+
+    it('momentoDelComprobante: fecha + hora del OCR en Bogotá; solo fecha = mediodía; sin fecha = la del mensaje', () => {
+        expect(momentoDelComprobante('2026-11-27', '23:59')).toBe(bogota('2026-11-27T23:59'));
+        expect(momentoDelComprobante('2026-11-28', '00:00')).toBe(bogota('2026-11-28T00:00'));
+        expect(momentoDelComprobante('2026-11-27', '9:05')).toBe(bogota('2026-11-27T09:05'));
+        expect(momentoDelComprobante('2026-11-27', null)).toBe(bogota('2026-11-27T12:00'));
+        expect(momentoDelComprobante(null, null, '2026-11-26T15:00:00.000Z')).toBe(bogota('2026-11-26T10:00'));
+        expect(momentoDelComprobante('27/11/2026', '10:00', '2026-11-26T15:00:00.000Z')).toBe(bogota('2026-11-26T10:00'));
+    });
+});
+
+describe('descuento de la promoción: lectura de las columnas', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'], now: bogota('2026-11-26T10:00') });
+        invalidarCacheOfertas();
+        h.st.errores = {};
+        h.st.errorPorColumnas = {};
+        h.st.selects = [];
+        h.st.consultas = [];
+        h.st.filtros = [];
+        const f = filasConPromo();
+        h.st.tablas = {
+            bot_ofertas: f.ofertas, bot_oferta_sesiones: f.sesiones, bot_oferta_bloqueos: f.bloqueos,
+            school_trial_class_settings: [],
+            bot_ofertas_ajustes: [{
+                school_id: ESCUELA, promo_texto: TEXTO_PROMO_MONSTER, promo_desde: '2026-11-25', promo_hasta: '2026-11-27',
+                promo_descuento_pct: 10, promo_pago_desde: '2026-11-25T05:00:00+00:00', promo_pago_hasta: '2026-11-28T04:59:59+00:00',
+            }],
+        };
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it('lee promo_descuento_pct y la ventana de pago en bot_ofertas_ajustes', async () => {
+        const e = await estadoDeOfertas(ESCUELA);
+        expect(h.st.selects.find((s) => s.tabla === 'bot_ofertas_ajustes')?.cols)
+            .toBe('mensaje_sin_ofertas, preguntas_ofertas, nota_ofertas, promo_texto, promo_desde, promo_hasta, '
+                + 'promo_descuento_pct, promo_pago_desde, promo_pago_hasta');
+        expect(e.descuentoPromo).toMatchObject({ pct: 10, nombre: 'Black Friday' });
+        expect(precioConPromo(145000, e, Date.now()).conDescuento).toBe(130500);
+    });
+
+    it('base sin la migración (42703 en las columnas nuevas): vuelve a leer sin ellas y sigue sin descuento, como antes', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        h.st.errorPorColumnas.bot_ofertas_ajustes = (cols) => (cols.includes('promo_descuento_pct')
+            ? { code: '42703', message: 'column bot_ofertas_ajustes.promo_descuento_pct does not exist' } : null);
+        // La base vieja no tiene esas columnas: la fila no las trae.
+        h.st.tablas.bot_ofertas_ajustes = [{ school_id: ESCUELA, promo_texto: TEXTO_PROMO_MONSTER, promo_desde: '2026-11-25', promo_hasta: '2026-11-27' }];
+        const e = await estadoDeOfertas(ESCUELA);
+        expect(h.st.selects.filter((s) => s.tabla === 'bot_ofertas_ajustes')).toHaveLength(2);
+        expect(e.descuentoPromo).toBeNull();
+        expect(e.promoOfertas).toContain('BLACK FRIDAY');
+        expect(e.claseDePrueba.motivo).not.toBe('error');
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
     });
 });

@@ -107,6 +107,24 @@ export interface EstadoOfertas {
     notaOfertas: string | null;
     /** Promoción de la escuela vigente HOY (ya filtrada por sus fechas); null si no hay. */
     promoOfertas: string | null;
+    /**
+     * Descuento de la promoción (`bot_ofertas_ajustes.promo_descuento_pct`) sobre el valor de las
+     * ofertas con valor, para pagos con comprobante entre `desde` y `hasta` (ISO, timestamptz).
+     * Es la configuración tal cual: si «ahora» o la fecha del comprobante cae en la ventana lo
+     * dicen `promoAplicaEn` / `precioConPromo`. null (o ausente) = sin descuento, como siempre.
+     */
+    descuentoPromo?: DescuentoPromo | null;
+}
+
+/** El descuento de la promoción de la escuela (Monster's Black Friday, 2026-11-25). */
+export interface DescuentoPromo {
+    /** Porcentaje entero (1–90). */
+    pct: number;
+    /** Inicio y fin de la ventana de PAGO (ISO; el fin es inclusivo hasta su segundo). */
+    desde: string;
+    hasta: string;
+    /** Nombre corto de la promoción sacado de su texto («Black Friday»); null si no se reconoce. */
+    nombre: string | null;
 }
 
 // ─── Fechas (puras) ──────────────────────────────────────────────────────────
@@ -205,6 +223,138 @@ export interface FilasCrudas {
     preguntasOfertas?: string | null;
     notaOfertas?: string | null;
     promo?: { texto: string | null; desde: string | null; hasta: string | null } | null;
+    /** Descuento de la promoción (columnas `promo_descuento_pct`, `promo_pago_desde/hasta`). */
+    descuento?: { pct: number | string | null; desde: string | null; hasta: string | null } | null;
+}
+
+// ─── Descuento de la promoción (puro) ────────────────────────────────────────
+
+/** Eventos de descuento conocidos, para nombrar la promo desde su texto. */
+const NOMBRES_DE_PROMO: [RegExp, string][] = [
+    [/\bblack\s*friday\b/i, 'Black Friday'],
+    [/\bcyber\s*monday\b/i, 'Cyber Monday'],
+    [/\bd[ií]a\s+sin\s+iva\b/i, 'Día sin IVA'],
+    [/\bhot\s*sale\b/i, 'Hot Sale'],
+];
+
+/**
+ * El nombre corto de la promoción a partir del texto de la escuela: un evento conocido
+ * («BLACK FRIDAY» → «Black Friday») o lo que va en negrilla tras «por nuestro/a» (≤ 30
+ * caracteres). null si no se reconoce (el texto dice entonces «de descuento de la promoción»). Pura.
+ */
+export function nombreDePromo(texto: string | null | undefined): string | null {
+    const t = String(texto ?? '');
+    for (const [re, nombre] of NOMBRES_DE_PROMO) if (re.test(t)) return nombre;
+    const m = t.match(/\bpor\s+(?:nuestr[oa]s?|el|la)\s+\*([^*\n]{3,30})\*/i);
+    if (!m) return null;
+    const crudo = m[1].trim();
+    // TODO EN MAYÚSCULAS → «Tal Cual»; lo demás se respeta.
+    return crudo === crudo.toLocaleUpperCase('es-CO')
+        ? crudo.toLocaleLowerCase('es-CO').replace(/(^|\s)(\p{L})/gu, (_, a: string, b: string) => a + b.toLocaleUpperCase('es-CO'))
+        : crudo;
+}
+
+/** El descuento configurado, o null si falta algo o es inválido (la base ya lo exige con CHECK). Pura. */
+export function descuentoDeFilas(filas: Pick<FilasCrudas, 'descuento' | 'promo'>): DescuentoPromo | null {
+    const d = filas.descuento;
+    const pct = Number(d?.pct);
+    if (!d || d.pct == null || !Number.isInteger(pct) || pct < 1 || pct > 90) return null;
+    const desde = d.desde ? Date.parse(String(d.desde)) : NaN;
+    const hasta = d.hasta ? Date.parse(String(d.hasta)) : NaN;
+    if (!Number.isFinite(desde) || !Number.isFinite(hasta) || hasta <= desde) return null;
+    return {
+        pct, desde: new Date(desde).toISOString(), hasta: new Date(hasta).toISOString(),
+        nombre: nombreDePromo(filas.promo?.texto),
+    };
+}
+
+const msDe = (cuando: Date | number): number => (typeof cuando === 'number' ? cuando : cuando.getTime());
+
+/** ¿`cuando` cae en la ventana de pago de la promoción? El fin cuenta hasta el final de su segundo (23:59:59.999). Pura. */
+export function promoAplicaEn(estado: Pick<EstadoOfertas, 'descuentoPromo'> | null | undefined, cuando: Date | number): boolean {
+    const d = estado?.descuentoPromo;
+    if (!d) return false;
+    const t = msDe(cuando);
+    return Number.isFinite(t) && t >= Date.parse(d.desde) && t < Date.parse(d.hasta) + 1000;
+}
+
+/**
+ * El valor con el descuento de la promoción si `cuando` está en su ventana (redondeado a
+ * pesos enteros). Fuera de la ventana o sin promo: `conDescuento` y `pct` null. Pura.
+ */
+export function precioConPromo(
+    valor: number, estado: Pick<EstadoOfertas, 'descuentoPromo'> | null | undefined, cuando: Date | number,
+): { valor: number; conDescuento: number | null; pct: number | null } {
+    const d = estado?.descuentoPromo;
+    if (!d || !(valor > 0) || !promoAplicaEn(estado, cuando)) return { valor, conDescuento: null, pct: null };
+    return { valor, conDescuento: Math.round(valor * (100 - d.pct) / 100), pct: d.pct };
+}
+
+const pesosCop = (n: number) => `$${Math.round(n).toLocaleString('es-CO')}`;
+
+/** «viernes 27 de noviembre, 11:59 p. m.»: el fin de la ventana de pago en Bogotá. Pura. */
+export function finDePromoLegible(d: Pick<DescuentoPromo, 'hasta'>, hoy?: string): string {
+    const t = Date.parse(d.hasta);
+    return `${fechaLegible(hoyBogota(t), hoy)}, ${horaLegible(horaBogota(t))}`;
+}
+
+/** «con el 10 % de Black Friday» / «con el 10 % de descuento de la promoción». Pura. */
+export function frasePromo(d: Pick<DescuentoPromo, 'pct' | 'nombre'>): string {
+    return d.nombre ? `con el ${d.pct} % de ${d.nombre}` : `con el ${d.pct} % de descuento de la promoción`;
+}
+
+/**
+ * La línea del valor: dentro de la ventana, «Valor: ~$145.000~ → *$130.500* con el 10 % de
+ * Black Friday (pagando hasta el viernes 27 de noviembre, 11:59 p. m.)»; fuera, «Valor: $145.000». Pura.
+ */
+export function lineaDeValor(
+    valor: number, estado: (Pick<EstadoOfertas, 'descuentoPromo'> & { hoy?: string }) | null | undefined, cuando: Date | number,
+): string {
+    const p = precioConPromo(valor, estado, cuando);
+    if (p.conDescuento == null || !estado?.descuentoPromo) return `Valor: ${pesosCop(valor)}`;
+    return `Valor: ~${pesosCop(valor)}~ → *${pesosCop(p.conDescuento)}* ${frasePromo(estado.descuentoPromo)} `
+        + `(pagando hasta el ${finDePromoLegible(estado.descuentoPromo, estado.hoy)})`;
+}
+
+/** Una oferta cuyo precio coincide con el monto de un comprobante. */
+export interface OfertaPorMonto { oferta: OfertaBot; conPromo: boolean; pct: number | null; valor: number }
+
+/**
+ * Las ofertas con valor cuyo precio es `monto` (±$1) a la fecha de un comprobante: el valor
+ * de lista siempre; el valor con descuento SOLO si `cuando` está en la ventana de la promo.
+ * Solo reconoce (para no tomarlo por un monto equivocado); nunca aprueba nada. Pura.
+ */
+export function ofertasPorMonto(
+    estado: Pick<EstadoOfertas, 'ofertas' | 'descuentoPromo'> | null | undefined, monto: number | null, cuando: Date | number,
+): OfertaPorMonto[] {
+    if (!estado || monto == null || !(monto > 0)) return [];
+    const out: OfertaPorMonto[] = [];
+    for (const o of estado.ofertas) {
+        if (!o.requierePago || o.valor == null || !(o.valor > 0)) continue;
+        const p = precioConPromo(o.valor, estado, cuando);
+        if (Math.abs(o.valor - monto) <= 1) out.push({ oferta: o, conPromo: false, pct: null, valor: o.valor });
+        else if (p.conDescuento != null && Math.abs(p.conDescuento - monto) <= 1) {
+            out.push({ oferta: o, conPromo: true, pct: p.pct, valor: o.valor });
+        }
+    }
+    return out;
+}
+
+/**
+ * El momento de un comprobante para la ventana de la promo: su fecha y hora (Bogotá) si el OCR
+ * las leyó; solo la fecha → el mediodía de ese día (la ventana va por días completos); sin
+ * fecha → la hora del mensaje (`respaldo`), o ahora. Pura.
+ */
+export function momentoDelComprobante(
+    fecha: string | null | undefined, hora: string | null | undefined, respaldo?: string | number | null,
+): number {
+    if (fecha && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+        const hm = hora && /^\d{1,2}:\d{2}/.test(hora.trim()) ? hora.trim().slice(0, hora.trim().indexOf(':') + 3).padStart(5, '0') : '12:00';
+        const t = Date.parse(`${fecha}T${hm}:00-05:00`);
+        if (Number.isFinite(t)) return t;
+    }
+    const r = typeof respaldo === 'number' ? respaldo : respaldo ? Date.parse(respaldo) : NaN;
+    return Number.isFinite(r) ? r : Date.now();
 }
 
 /** El texto de la promoción si `hoy` está dentro de sus fechas (sin fecha = sin límite por ese lado). Pura. */
@@ -312,6 +462,7 @@ export function armarEstado(schoolId: string, filas: FilasCrudas, ahora: number 
         preguntasOfertas: limpio(filas.preguntasOfertas),
         notaOfertas: limpio(filas.notaOfertas),
         promoOfertas: promoVigente(filas.promo, hoy),
+        descuentoPromo: descuentoDeFilas(filas),
     };
 }
 
@@ -320,7 +471,7 @@ export function estadoCerrado(schoolId: string, ahora: number = Date.now()): Est
     return {
         schoolId, hoy: hoyBogota(ahora), ofertas: [], bloqueos: [],
         claseDePrueba: { disponible: false, motivo: 'error', bloqueadaHasta: null, proximoBloqueo: null },
-        mensajeSinOfertas: null, preguntasOfertas: null, notaOfertas: null, promoOfertas: null,
+        mensajeSinOfertas: null, preguntasOfertas: null, notaOfertas: null, promoOfertas: null, descuentoPromo: null,
     };
 }
 
@@ -334,8 +485,14 @@ export function invalidarCacheOfertas(schoolId?: string): void {
     else cache.clear();
 }
 
+const COLUMNAS_AJUSTES = 'mensaje_sin_ofertas, preguntas_ofertas, nota_ofertas, promo_texto, promo_desde, promo_hasta';
+const COLUMNAS_AJUSTES_DESCUENTO = `${COLUMNAS_AJUSTES}, promo_descuento_pct, promo_pago_desde, promo_pago_hasta`;
+
 async function leerFilas(schoolId: string): Promise<FilasCrudas> {
-    const [ofertas, sesiones, bloqueos, trial, ajustes] = await Promise.all([
+    const leerAjustes = (cols: string) => supabase.from('bot_ofertas_ajustes')
+        .select(cols).eq('school_id', schoolId).maybeSingle();
+    // eslint-disable-next-line prefer-const
+    let [ofertas, sesiones, bloqueos, trial, ajustes] = await Promise.all([
         supabase.from('bot_ofertas')
             .select('id, tipo, titulo, descripcion, sede, publico, genero, estado, vigente_desde, vigente_hasta, prioridad, cupos, requiere_inscripcion, requiere_pago, valor, cta, mensaje_sin_cupos, anio_nacimiento_desde, anio_nacimiento_hasta, requiere_trayectoria')
             .eq('school_id', schoolId).eq('estado', 'activa'),
@@ -348,10 +505,10 @@ async function leerFilas(schoolId: string): Promise<FilasCrudas> {
         supabase.from('school_trial_class_settings')
             .select('enabled, whatsapp_enabled')
             .eq('school_id', schoolId).maybeSingle(),
-        supabase.from('bot_ofertas_ajustes')
-            .select('mensaje_sin_ofertas, preguntas_ofertas, nota_ofertas, promo_texto, promo_desde, promo_hasta')
-            .eq('school_id', schoolId).maybeSingle(),
+        leerAjustes(COLUMNAS_AJUSTES_DESCUENTO),
     ]);
+    // BFF nuevo con base sin la migración 20261125170908 (columnas del descuento): sin descuento, como antes.
+    if (ajustes.error && (ajustes.error as any).code === '42703') ajustes = await leerAjustes(COLUMNAS_AJUSTES);
     // Las tablas de ofertas pueden no existir todavía (BFF nuevo con base vieja):
     // eso equivale a «sin ofertas ni bloqueos», no a un error.
     // Solo «la tabla no existe»: una columna faltante (42703) u otro error NO
@@ -373,6 +530,11 @@ async function leerFilas(schoolId: string): Promise<FilasCrudas> {
             texto: (ajustes.data as any)?.promo_texto ?? null,
             desde: (ajustes.data as any)?.promo_desde ?? null,
             hasta: (ajustes.data as any)?.promo_hasta ?? null,
+        },
+        descuento: ajustes.error ? null : {
+            pct: (ajustes.data as any)?.promo_descuento_pct ?? null,
+            desde: (ajustes.data as any)?.promo_pago_desde ?? null,
+            hasta: (ajustes.data as any)?.promo_pago_hasta ?? null,
         },
     };
 }
@@ -470,13 +632,21 @@ function lugarComun(sesiones: SesionOferta[]): string | null {
  *     y el cierre (`cta`) — el texto de la escuela tal cual, con fechas vivas.
  *   - Sin ella: título, sede · público y las sesiones (formato corto).
  */
-export function textoDeOferta(o: OfertaBot, hoy?: string): string {
+export function textoDeOferta(
+    o: OfertaBot, hoy?: string,
+    /** Descuento de la promoción y el momento (por defecto, ahora): dentro de la ventana va la línea con el descuento. */
+    op: { descuentoPromo?: DescuentoPromo | null; ahora?: Date | number } = {},
+): string {
     const monto = o.requierePago && o.valor != null ? o.valor.toLocaleString('es-CO') : null;
     // Si el texto de la escuela ya dice el monto («$145.000»), no se repite la línea genérica.
     // Con bordes de dígito: «$145.000» no cuenta como «45.000».
     const reMonto = monto != null ? new RegExp(`(?<![\\d.])${monto.replace(/\./g, '\\.')}(?![.,]?\\d)`) : null;
     const montoEnTexto = reMonto != null && [o.descripcion, o.cta].some((t) => reMonto.test(t ?? ''));
-    const pago = monto != null && !montoEnTexto ? `Valor: $${monto}` : '';
+    const promo = { descuentoPromo: op.descuentoPromo ?? null, hoy };
+    const ahora = op.ahora ?? Date.now();
+    // Con la promo en su ventana la línea va siempre (aunque el texto ya diga el valor de lista).
+    const pago = monto != null && promoAplicaEn(promo, ahora) ? lineaDeValor(o.valor!, promo, ahora)
+        : monto != null && !montoEnTexto ? `Valor: $${monto}` : '';
     if (o.descripcion?.trim()) {
         const lugar = lugarComun(o.sesiones);
         const lineas = lineasDeSesiones(o.sesiones, hoy, { omitirLugar: Boolean(lugar) });
@@ -501,10 +671,11 @@ export function textoDeOferta(o: OfertaBot, hoy?: string): string {
  * y la nota común de la escuela si se pide. null si no hay ofertas.
  */
 export function textoDeOfertas(
-    ofertas: OfertaBot[], estado: Pick<EstadoOfertas, 'hoy' | 'notaOfertas'>, op: { conNota?: boolean } = {},
+    ofertas: OfertaBot[], estado: Pick<EstadoOfertas, 'hoy' | 'notaOfertas' | 'descuentoPromo'>,
+    op: { conNota?: boolean; ahora?: Date | number } = {},
 ): string | null {
     if (!ofertas.length) return null;
-    const bloques = ofertas.map((o) => textoDeOferta(o, estado.hoy));
+    const bloques = ofertas.map((o) => textoDeOferta(o, estado.hoy, { descuentoPromo: estado.descuentoPromo ?? null, ahora: op.ahora }));
     const ctas = [...new Set(ofertas.filter((o) => !o.descripcion?.trim()).map((o) => o.cta).filter(Boolean))] as string[];
     const nota = op.conNota && estado.notaOfertas ? [estado.notaOfertas] : [];
     return [bloques.join('\n\n'), ...ctas, ...nota].join('\n\n');
@@ -817,7 +988,7 @@ export function opcionesDeFechas(oferta: OfertaBot, hoy?: string): OpcionOferta[
 }
 
 /** Bloque <ofertas_vigentes> para el prompt del modelo ('' si no hay). */
-export function textoOfertasParaIa(estado: EstadoOfertas): string {
+export function textoOfertasParaIa(estado: EstadoOfertas, ahora: Date | number = Date.now()): string {
     if (!estado.ofertas.length) return '';
     const cuerpo = estado.ofertas.map((o) => {
         const anios = o.anioDesde != null || o.anioHasta != null
@@ -830,7 +1001,7 @@ export function textoOfertasParaIa(estado: EstadoOfertas): string {
         const extra = [
             o.descripcion,
             // Sin valor cargado NO es «gratis»: que el modelo no lo afirme (Monster solo dio el de mayores).
-            o.requierePago && o.valor != null ? `Valor: $${o.valor.toLocaleString('es-CO')}`
+            o.requierePago && o.valor != null ? valorParaIa(o.valor, estado, ahora)
                 : 'Valor: la escuela no lo indicó; si preguntan, di que la escuela lo confirma (nunca digas que es gratis)',
             o.cta ? `${o.descripcion?.trim() ? 'Cierre' : 'Cómo inscribirse'}: ${o.cta}` : null,
         ].filter(Boolean);
@@ -841,6 +1012,14 @@ export function textoOfertasParaIa(estado: EstadoOfertas): string {
     const promo = estado.promoOfertas
         ? `\n<promocion_vigente_hoy>\n${estado.promoOfertas}\n</promocion_vigente_hoy>` : '';
     return `<ofertas_vigentes hoy="${fechaLegible(estado.hoy)}">\n${cuerpo}\n</ofertas_vigentes>${preguntas}${promo}`;
+}
+
+/** El valor para el prompt: con la promo en su ventana, el de lista y el que se paga con el descuento. Pura. */
+function valorParaIa(valor: number, estado: EstadoOfertas, ahora: Date | number): string {
+    const p = precioConPromo(valor, estado, ahora);
+    if (p.conDescuento == null || !estado.descuentoPromo) return `Valor: ${pesosCop(valor)}`;
+    return `Valor: ${pesosCop(valor)}; ${frasePromo(estado.descuentoPromo)} queda en ${pesosCop(p.conDescuento)} `
+        + `pagando hasta el ${finDePromoLegible(estado.descuentoPromo, estado.hoy)} (el descuento ya está calculado: no hagas otras cuentas)`;
 }
 
 /**
