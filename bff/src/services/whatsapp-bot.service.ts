@@ -7730,6 +7730,18 @@ export const presentacionLarga = (escuela: string, clase: string | null = TEXTOS
             : `¡Hola! 👋 Soy *Mapi*, el ${MARCA_ASISTENTE} de *${escuela}*. Te ayudo con horarios, valores, pagos y tu ${clase}.\n${AVISO_PRIVACIDAD_DESCONOCIDO}`;
 
 /**
+ * ¿La presentación nombra la clase de prueba? Solo si hoy está abierta Y la escuela no está en temporada de
+ * convocatorias guiadas (preguntas + ofertas vigentes). Monster 2026-11-26: a quien llegaba por una convocatoria
+ * el saludo le decía «Te ayudo con… tu clase de prueba» porque aún quedaban cupos el fin de semana. Pura.
+ */
+export function presentacionNombraLaClase(
+    of: Pick<EstadoOfertas, 'claseDePrueba' | 'preguntasOfertas' | 'ofertas'> | null | undefined,
+): boolean {
+    if (of?.claseDePrueba?.disponible !== true) return false;
+    return !(of.preguntasOfertas && of.ofertas?.length);
+}
+
+/**
  * ¿El texto ya es una presentación del asistente? Cuenta la de antes del
  * 2026-10-29 («asistente automático») para no volver a presentarse en una
  * conversación que ya la recibió. Pura.
@@ -7782,8 +7794,8 @@ export async function saludoDePresentacion(
     const servicio = o.servicio ?? s?.ventaServicio ?? null;
     if (servicio) return presentacionLarga(escuela, undefined, servicio);
     if (!s) return presentacionLarga(escuela, TEXTOS_POR_DEFECTO.nombre);
-    // Sin clase de prueba hoy (bot-ofertas) la presentación no la nombra.
-    if (!(await claseDePruebaAbierta(s.schoolId))) return presentacionLarga(escuela, null);
+    // Sin clase de prueba hoy (bot-ofertas), o con convocatorias guiadas vigentes, la presentación no la nombra.
+    if (!presentacionNombraLaClase(await ofertasDeLaEscuela(s.schoolId))) return presentacionLarga(escuela, null);
     return presentacionLarga(escuela, (await textosClase(s.schoolId)).nombre);
 }
 

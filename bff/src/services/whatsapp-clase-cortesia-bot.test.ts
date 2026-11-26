@@ -86,7 +86,7 @@ vi.mock('./whatsapp-coexistence.service', () => ({
 
 import { handleBotTurn } from '../routes/whatsapp';
 import {
-    runBotTurn, _olvidarReservasDePaso, _limpiarCacheVocativos, promptConOfertas, presentacionLarga, SYSTEM_PROMPT,
+    runBotTurn, _olvidarReservasDePaso, _limpiarCacheVocativos, promptConOfertas, presentacionLarga, presentacionNombraLaClase, SYSTEM_PROMPT,
 } from './whatsapp-bot.service';
 import { BOTON_CC } from './whatsapp-clase-cortesia.service';
 import { invalidarCacheOfertas, armarEstado } from './bot-ofertas.service';
@@ -514,6 +514,21 @@ describe('clase de prueba cerrada por la escuela y convocatorias (bot-ofertas, M
         expect(presentacionLarga('Monster', null)).toContain('Te ayudo con horarios, valores, pagos e inscripciones.');
         expect(presentacionLarga('Monster', null)).not.toMatch(/clase/);
         expect(presentacionLarga('Monster', 'clase de prueba')).toContain('pagos y tu clase de prueba.');
+    });
+
+    it('con convocatorias guiadas vigentes la presentación no nombra la clase aunque haya cupos (Monster 2026-11-26)', () => {
+        const ahora = new Date('2026-11-26T15:00:00Z').getTime();
+        const abierta = armarEstado('s', {
+            ofertas: [{ ...OFERTA, vigente_desde: null, vigente_hasta: null }],
+            sesiones: [{ ...SESIONES[0], fecha: '2026-12-09' }],
+            bloqueos: [], ajustesClasePrueba: null, mensajeSinOfertas: null,
+        }, ahora);
+        expect(abierta.claseDePrueba.disponible).toBe(true);
+        expect(presentacionNombraLaClase(abierta)).toBe(true);
+        expect(presentacionNombraLaClase({ ...abierta, preguntasOfertas: '¿Año de nacimiento?' })).toBe(false);
+        expect(presentacionNombraLaClase({ ...abierta, preguntasOfertas: '¿Año?', ofertas: [] })).toBe(true);
+        expect(presentacionNombraLaClase({ ...abierta, claseDePrueba: { ...abierta.claseDePrueba, disponible: false } })).toBe(false);
+        expect(presentacionNombraLaClase(null)).toBe(false);
     });
 });
 
