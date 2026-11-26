@@ -184,6 +184,8 @@ interface Escenario {
     familia?: boolean;
     /** tool_context de los borradores anteriores (el estado de los flujos de varios turnos). */
     historial?: any[];
+    /** Los mensajes recientes de la conversación (`mensajesRecientes`): p. ej. el entrante con el anuncio. */
+    recientes?: any[];
 }
 
 function montar(e: Escenario = {}) {
@@ -199,6 +201,10 @@ function montar(e: Escenario = {}) {
         }
         if (hist.length && table === 'whatsapp_message_drafts' && ops.some(([m, a]) => m === 'select' && String(a[0]).startsWith('tool_context'))) {
             return { data: [...hist].reverse().map((p, i) => ({ tool_context: p, created_at: new Date(t0 - (i + 1) * 1000).toISOString() })), error: null };
+        }
+        if (e.recientes && table === 'whatsapp_messages'
+            && ops.some(([m, a]) => m === 'select' && String(a[0]).startsWith('wa_message_id, direction'))) {
+            return { data: e.recientes, error: null };
         }
         if (table === 'whatsapp_messages' && ops.some(([m]) => m === 'order')) {
             if (!e.ultimoSaliente && hist.length) return { data: { payload: hist.at(-1), created_at: new Date(t0 - 1000).toISOString() }, error: null };
@@ -470,6 +476,24 @@ describe('Monster, 26 de noviembre (antes del bloqueo)', () => {
         enFecha(DIA.nov26);
         const s = await turno({}, 'Sáb 5 dic', `${BOTON_CC.FRANJA}slot-dic`);
         expect(h.state.rpcCalls.map((c) => c.fn), s.texto).not.toContain('submit_school_lead');
+    });
+});
+
+describe('Monster, 26 de noviembre: llega por un ANUNCIO que nombra un torneo (…0983)', () => {
+    it('«Quiero inscribirme a la convocatoria de suba» → convocatoria guiada, nunca «no tengo los datos del torneo»', async () => {
+        enFecha(DIA.nov26);
+        const texto = '¡Hola! Quiero inscribirme a la convocatoria de suba';
+        const s = await turno({ embudo: true, recientes: [{
+            wa_message_id: 'wamid.ad1', direction: 'inbound', type: 'text', text_body: texto, ai_generated: false,
+            wa_timestamp: new Date().toISOString(), created_at: new Date().toISOString(),
+            payload: { referral: { source_id: 'ad-123', source_type: 'ad', headline: 'Convocatorias Monster´s: torneo Superliga',
+                body: 'Únete a nuestros equipos de competencia para el campeonato 2027' } },
+        }] }, texto);
+        const err = `\n${s.texto}\n${JSON.stringify(s.ids)}`;
+        expect(s.texto, err).not.toMatch(/datos del torneo|no tengo los datos/i);
+        expect(s.texto, err).toMatch(/¿En qué año nació|convocatoria|femenin|masculin/i);
+        expect(s.texto, err).not.toMatch(TEXTO_DE_CLASE);
+        expect(s.texto, err).not.toMatch(TEXTO_DE_CLINICA);
     });
 });
 

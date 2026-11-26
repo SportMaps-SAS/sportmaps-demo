@@ -888,7 +888,7 @@ export interface CtxAnuncio {
     ahora?: () => Date;
 }
 
-export type ResultadoAnuncio = 'anuncio_servicio' | 'anuncio_varios' | 'anuncio_persona' | 'anuncio_embudo';
+export type ResultadoAnuncio = 'anuncio_servicio' | 'anuncio_varios' | 'anuncio_persona' | 'anuncio_embudo' | 'anuncio_convocatoria';
 
 /** Marca del saliente: con esto el seguimiento y los frenos lo reconocen. */
 export const MARCA_DESTINO = 'destino_anuncio';
