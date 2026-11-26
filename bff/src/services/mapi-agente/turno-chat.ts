@@ -13,6 +13,8 @@ import { postBotMessageAndEscalate, setStatus } from '../inapp-support-bot.servi
 import { turnoAgente, type MensajeHistorial, type CrearMensaje } from './agente';
 import { asociarMensaje } from './borradores';
 import { validarPantalla } from './pantalla';
+import { responderSinModelo, textoParaApp, registrarCapa } from './directo/enrutador';
+import { topeMensualAlcanzado, TEXTO_TOPE } from './directo/tope';
 import type { Alcance } from './tipos';
 
 const MAX_HISTORIAL = 12;
@@ -43,10 +45,29 @@ export async function runTurnoAgenteEnChat(p: {
         .eq('ticket_id', p.ticketId).eq('author_type', 'agent');
     if ((agentes ?? 0) > 0) return true;
 
-    const [{ data: filas }, { data: perfil }, pantalla] = await Promise.all([
-        supabase.from('support_messages').select('author_type, body')
-            .eq('ticket_id', p.ticketId).eq('internal_note', false)
-            .order('created_at', { ascending: false }).limit(MAX_HISTORIAL),
+    const { data: filas } = await supabase.from('support_messages').select('author_type, body')
+        .eq('ticket_id', p.ticketId).eq('internal_note', false)
+        .order('created_at', { ascending: false }).limit(MAX_HISTORIAL);
+
+    // Capa 2 (docs/specs/mapi-consultas-sin-ia.md): la consulta frecuente se
+    // responde sin modelo, con la MISMA herramienta y el MISMO alcance. Queda en
+    // el hilo como cualquier respuesta, así el modelo la ve si el próximo mensaje va a él.
+    const ultimo = ((filas as any[]) ?? []).find((m) => m.author_type === 'user');
+    if (ultimo && String(ultimo.body ?? '').trim()) {
+        const directa = await responderSinModelo(p.alcance, { texto: String(ultimo.body) }, 'app');
+        if (directa.tipo !== 'al_modelo') {
+            await dejarRespuesta(p.ticketId, textoParaApp(directa));
+            return true;
+        }
+    }
+    // Tope mensual de turnos con modelo por escuela: texto fijo, sin modelo (las capas 1 y 2 siguen).
+    if (await topeMensualAlcanzado(p.alcance)) {
+        registrarCapa({ canal: 'app', capa: 'tope', resultado: 'texto_fijo' });
+        await dejarRespuesta(p.ticketId, TEXTO_TOPE);
+        return true;
+    }
+
+    const [{ data: perfil }, pantalla] = await Promise.all([
         supabase.from('profiles').select('full_name').eq('id', p.alcance.userId).maybeSingle(),
         validarPantalla(p.alcance, p.pantallaCruda).catch(() => null),
     ]);
@@ -73,12 +94,17 @@ export async function runTurnoAgenteEnChat(p: {
         return true;
     }
 
-    const { data: msg } = await supabase.from('support_messages')
-        .insert({ ticket_id: p.ticketId, author_type: 'bot', author_id: null, body: r.texto })
-        .select('id').single();
-    if ((msg as any)?.id) await asociarMensaje(r.borradores, (msg as any).id);
-
-    const { data: actual } = await supabase.from('support_tickets').select('status').eq('id', p.ticketId).maybeSingle();
-    if ((actual as any)?.status !== 'waiting_human') await setStatus(p.ticketId, 'bot_handled');
+    await dejarRespuesta(p.ticketId, r.texto, r.borradores);
     return true;
+}
+
+/** Deja la respuesta de Mapi en el hilo (y le asocia las tarjetas), como cualquier turno. */
+async function dejarRespuesta(ticketId: string, texto: string, borradores: string[] = []): Promise<void> {
+    const { data: msg } = await supabase.from('support_messages')
+        .insert({ ticket_id: ticketId, author_type: 'bot', author_id: null, body: texto })
+        .select('id').single();
+    if (borradores.length && (msg as any)?.id) await asociarMensaje(borradores, (msg as any).id);
+
+    const { data: actual } = await supabase.from('support_tickets').select('status').eq('id', ticketId).maybeSingle();
+    if ((actual as any)?.status !== 'waiting_human') await setStatus(ticketId, 'bot_handled');
 }

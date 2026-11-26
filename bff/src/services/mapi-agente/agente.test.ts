@@ -15,7 +15,7 @@ vi.mock('../../config/supabase', async () => {
 });
 vi.mock('../../data/app-map', () => ({ appMapParaRol: () => 'Menú › Deportistas' }));
 
-import { turnoAgente, textoSeguro, TEXTO_PROPUESTA, MAX_RONDAS, ejecutarLlamada, vistaParaModelo, marcarCorteMovil, neutralizarEtiquetas } from './agente';
+import { turnoAgente, textoSeguro, TEXTO_PROPUESTA, TEXTO_NEGATIVA_API, admiteRespaldo, MAX_RONDAS, ejecutarLlamada, vistaParaModelo, marcarCorteMovil, neutralizarEtiquetas } from './agente';
 import type { Alcance } from './tipos';
 
 const ESCUELA = '11111111-1111-1111-1111-111111111111';
@@ -46,9 +46,21 @@ beforeEach(() => {
     };
 });
 
+describe('admiteRespaldo (fallbacks del servidor)', () => {
+    it('Sonnet 5.5, Opus 5.x y Fable sí; Haiku 5.5 no (el parámetro lo haría fallar)', () => {
+        expect(admiteRespaldo('claude-sonnet-5-5')).toBe(true);
+        expect(admiteRespaldo('claude-opus-5-5')).toBe(true);
+        expect(admiteRespaldo('claude-fable-5-2')).toBe(true);
+        expect(admiteRespaldo('claude-haiku-5-5')).toBe(false);
+    });
+});
+
 describe('textoSeguro (§10.3: el «Listo» lo escribe el servidor)', () => {
     it('sin borrador deja el texto', () => {
         expect(textoSeguro('Mariana tiene 9 de 12 sesiones.', false)).toBe('Mariana tiene 9 de 12 sesiones.');
+        // Un estado no es afirmar que se ejecutó algo (eval mt-dos-pedidos-excusa-deuda, 11-26).
+        expect(textoSeguro('Valentina debe $120.000 y ese saldo ya está vencido.', false)).toBe('Valentina debe $120.000 y ese saldo ya está vencido.');
+        expect(textoSeguro('El cobro ya está pagado.', false)).toBe('El cobro ya está pagado.');
     });
     it.each(['Listo, quedó excusada.', 'Ya está hecho', 'Enviados los recordatorios', 'La excusa quedó registrada'])(
         'con borrador, «%s» se reemplaza', (t) => {
@@ -169,11 +181,11 @@ describe('turnoAgente', () => {
         expect(r).toMatchObject({ tipo: 'texto', rondas: MAX_RONDAS });
     });
 
-    it('Claude no responde o se niega → sin_agente (la ruta cae a modo soporte)', async () => {
+    it('Claude no responde → sin_agente; si se niega → texto fijo seguro, sin soporte', async () => {
         const falla = vi.fn().mockRejectedValue(new Error('503'));
         expect(await turnoAgente({ alcance: admin, ticketId: 't', historial, crearMensaje: falla })).toEqual({ tipo: 'sin_agente', motivo: 'llm_error' });
         const niega = vi.fn().mockResolvedValue(respuesta([], 'refusal'));
-        expect(await turnoAgente({ alcance: admin, ticketId: 't', historial, crearMensaje: niega })).toEqual({ tipo: 'sin_agente', motivo: 'refusal' });
+        expect(await turnoAgente({ alcance: admin, ticketId: 't', historial, crearMensaje: niega })).toMatchObject({ tipo: 'texto', texto: TEXTO_NEGATIVA_API, borradores: [] });
     });
 
     it('escalar_a_soporte termina el turno', async () => {

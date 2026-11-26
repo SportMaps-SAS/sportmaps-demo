@@ -218,6 +218,7 @@ import { CASOS } from './casos';
 import { CASOS_OLEADAS } from './casos-oleadas';
 import { CASOS_MULTITURNO, CASOS_CONFIRMAR } from './casos-multiturno';
 import { CASOS_PLATA, CASOS_WHATSAPP } from './casos-plata';
+import { CASOS_ALCANCE } from './casos-alcance';
 import {
     agregarCorridas, armarReporte, calificarCaso, corridasDe, fallasDeEfecto, imprimirReporte, reporteComoJson, resumenDeEfecto,
 } from './calificar';
@@ -315,7 +316,7 @@ async function todos(): Promise<CasoEval[]> {
             console.warn(`[mapi-evals] casos-ataques.ts no cargó (${String(err?.message ?? err).slice(0, 200)}): sigo sin él.`);
         }
     }
-    todosCache = [...CASOS, ...CASOS_OLEADAS, ...CASOS_MULTITURNO, ...CASOS_CONFIRMAR, ...CASOS_PLATA, ...CASOS_WHATSAPP, ...extra];
+    todosCache = [...CASOS, ...CASOS_OLEADAS, ...CASOS_MULTITURNO, ...CASOS_CONFIRMAR, ...CASOS_PLATA, ...CASOS_WHATSAPP, ...CASOS_ALCANCE, ...extra];
     return todosCache;
 }
 
