@@ -3205,6 +3205,22 @@ async function atenderAnuncioEnBot(
         const recientes = cache.recientes ??= await mensajesRecientes(conversationId);
         // Si una persona de la escuela está escribiendo, la conversación es suya.
         if (humanoReciente(recientes, SILENCIO_HUMANO_MIN)) return null;
+        // (Monster 2026-11-26, …0983) «Quiero inscribirme a la convocatoria de Suba» desde un anuncio que nombra la
+        // Superliga («torneo»): el destino por anuncio buscaba un servicio de torneo, no lo había y contestaba «no
+        // tengo los datos del torneo». Quien pide una convocatoria va a la convocatoria guiada de la escuela.
+        if (preguntaPorConvocatoria(text)) {
+            const of = await ofertasDeLaEscuela(integration.school_id);
+            if (of.preguntasOfertas && of.ofertas.length) {
+                const saludo = await saludoDePresentacion(conversationId, await nombreDeEscuela(integration.school_id));
+                if (await preguntarParaOfertasEnBot(integration, conversationId, contactWaId, {
+                    ofertas: of, encabezado: saludo, step: PASO_DESCONOCIDO_ESCOLAR, texto: text,
+                    contexto: { intencion: 'ofertas_preguntas', desde: 'anuncio' },
+                })) {
+                    await abrirEnBuzon(integration, conversationId, contactWaId, { motivo: 'prospecto' });
+                    return 'anuncio_convocatoria';
+                }
+            }
+        }
         return await atenderDestinoDeAnuncio(ctxAnuncio(integration, conversationId, contactWaId, recientes), text, fase);
     } catch (e: any) {
         console.warn('[whatsapp-bot] destino por anuncio falló', { conversationId, err: e?.message });
