@@ -342,6 +342,12 @@ export interface CtxEmbudo {
      */
     iniciarOfertas?: (prefill: Partial<DatosOferta>) => Promise<boolean>;
     /**
+     * (Monster 2026-11-26) ¿La persona pidió una CONVOCATORIA en esta conversación? Con convocatorias guiadas vigentes,
+     * el embudo termina en ellas aunque hoy haya clase de prueba: a quien pide una convocatoria no se le agenda (ni se
+     * le cobra) una clase de prueba. Sin él, como antes.
+     */
+    pidioConvocatoria?: () => Promise<boolean>;
+    /**
      * El embudo tenía una pregunta pendiente y SOLTÓ el turno porque lo que llegó es otra cosa (una
      * pregunta de precio u horario, un comentario). Quien llama contesta por el camino de siempre y
      * después recuerda el paso una vez (`recordatorioDePasoEmbudo`).
@@ -760,7 +766,12 @@ const ofertasDe = (ctx: CtxEmbudo) => (memoDe(ctx).ofertas ??= ctx.ofertas ? seg
 /** ¿Hoy NO hay clase de prueba? (null si no hay estado: como antes). */
 async function sinClaseHoy(ctx: CtxEmbudo): Promise<EstadoOfertas | null> {
     const of = await ofertasDe(ctx);
-    return of && !of.claseDePrueba.disponible ? of : null;
+    if (!of) return null;
+    if (!of.claseDePrueba.disponible) return of;
+    // Pidió una convocatoria y la escuela tiene convocatorias guiadas: termina en ellas, nunca en la clase de prueba.
+    if (of.preguntasOfertas && of.ofertas.length && ctx.pidioConvocatoria
+        && await seguro(() => ctx.pidioConvocatoria!())) return of;
+    return null;
 }
 
 /**

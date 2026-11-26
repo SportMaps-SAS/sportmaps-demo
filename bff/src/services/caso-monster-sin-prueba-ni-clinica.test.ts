@@ -497,6 +497,21 @@ describe('Monster, 26 de noviembre: llega por un ANUNCIO que nombra un torneo (�
     });
 });
 
+describe('Monster, 26 de noviembre: «Quiero inscribirme a la convocatoria de suba» SIN anuncio (enlace con texto, auditoría)', () => {
+    for (const embudo of [true, false]) {
+        it(`→ convocatoria guiada, nunca el registro de la clase de prueba${embudo ? ' [con embudo]' : ''}`, async () => {
+            enFecha(DIA.nov26);
+            const s = await turno({ embudo }, '¡Hola! Quiero inscribirme a la convocatoria de suba');
+            const err = `
+${s.texto}
+${JSON.stringify(s.ids)}`;
+            expect(s.texto, err).not.toMatch(/5 preguntas|nombre completo|Para empezar en el club se agenda/i);
+            expect(s.texto, err).toMatch(/¿En qué año nació|convocatoria|femenin|masculin|hombre o mujer/i);
+            expect(s.texto, err).not.toMatch(TEXTO_DE_CLASE);
+        });
+    }
+});
+
 describe('Monster, 1 de febrero de 2027: la clase vuelve', () => {
     it('desconocido (sin embudo): «quiero una clase de prueba» → ofrece las franjas de febrero', async () => {
         enFecha(DIA.feb01);

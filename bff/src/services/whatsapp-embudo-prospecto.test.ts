@@ -88,6 +88,8 @@ function crear(op: {
     ofertas?: EstadoOfertas;
     /** La conversación compartida de ofertas; sin la clave, el contexto no la trae. */
     iniciarOfertas?: (prefill: any) => Promise<boolean>;
+    /** ¿Pidió una convocatoria en la conversación? Sin la clave, el contexto no lo trae. */
+    pidioConvocatoria?: boolean;
 } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null };
     const ctx: CtxEmbudo = {
@@ -124,6 +126,7 @@ function crear(op: {
         ...(op.lugar !== undefined ? { lugarDeLaClase: vi.fn(async () => op.lugar ?? null) } : {}),
         ...(op.ofertas ? { ofertas: vi.fn(async () => op.ofertas!) } : {}),
         ...(op.iniciarOfertas ? { iniciarOfertas: vi.fn(op.iniciarOfertas) } : {}),
+        ...(op.pidioConvocatoria !== undefined ? { pidioConvocatoria: vi.fn(async () => op.pidioConvocatoria!) } : {}),
         leadDelContacto: vi.fn(async () => op.lead ?? null),
         leerEstado: async () => s.estado,
         ahora: () => AHORA,
@@ -1287,6 +1290,30 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
         });
         expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Sofía Ramírez Peña', quiere: 'convocatoria' }));
         expect(c.ctx.franjas).not.toHaveBeenCalled();
+    });
+
+    it('(Monster 2026-11-26) hoy SÍ hay clase de prueba, pero pidió una convocatoria → termina en la convocatoria, sin franjas ni cobro', async () => {
+        const abierta = { ...MONSTER, claseDePrueba: { ...MONSTER.claseDePrueba, disponible: true } };
+        const recorrer = async (c: ReturnType<typeof crear>) => {
+            await iniciarEmbudo(c.ctx);
+            await c.turno('⚫ Sede Suba', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+            await c.turno('Gabriela Medina');
+            await c.turno('22/05/2016');
+            await c.turno('Mujer', `${BOTON_EMBUDO.OPCION}sexo:0`);
+            await c.turno('Aún no tengo posición');
+            await c.turno('Estoy empezando', `${BOTON_EMBUDO.OPCION}trayectoria:0`);
+        };
+        const conv = crear({ ofertas: abierta, iniciarOfertas: async () => true, pidioConvocatoria: true });
+        await recorrer(conv);
+        expect(conv.ctx.iniciarOfertas).toHaveBeenCalledTimes(1);
+        expect(conv.ctx.franjas).not.toHaveBeenCalled();
+        expect(conv.s.enviados.map((e) => e.texto).join(' ')).not.toMatch(/clase de prueba|\$15\.000|se agenda/i);
+
+        // Quien NO pidió convocatoria sigue con la clase de prueba de ese día (este fin de semana sí hay).
+        const clase = crear({ ofertas: abierta, iniciarOfertas: async () => true, pidioConvocatoria: false });
+        await recorrer(clase);
+        expect(clase.ctx.iniciarOfertas).not.toHaveBeenCalled();
+        expect(clase.ctx.franjas).toHaveBeenCalled();
     });
 
     it('prefill: con clubes va la trayectoria y lo que contó; sin respuesta clara, la trayectoria no va', async () => {
