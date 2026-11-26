@@ -35,7 +35,7 @@ import {
     runBotTurn, deliver, atenderDesconocido, mensajesRecientes, SILENCIO_HUMANO_MIN,
     TEXTO_MIME_RECHAZADO, vocativosDeEscuela, revisarEscalacionesVencidas, revisarRetomas,
     reservarPasoUnaVez, enviarRespuestaStaff, abrirEnBuzon, mensajeConContenido, hablaDeLaEscuela,
-    atenderRespuestaDeFormularioEnBot, seguirPorChatTrasFormularioFallido,
+    atenderRespuestaDeFormularioEnBot, seguirPorChatTrasFormularioFallido, iniciarConvocatoriaDeCampana,
 } from '../services/whatsapp-bot.service';
 import { esRespuestaDeFormulario, sincronizarEstadoDeFlow } from '../services/whatsapp-flows.service';
 import { intencionDeProspecto } from '../services/whatsapp-atencion.service';
@@ -681,7 +681,10 @@ async function handleBotTurn(
     // campaña detrás, el mensaje sigue el camino de siempre. Un STOP que la
     // ingesta ya registró (optedOut) lo confirma el bot como siempre.
     if (esPosibleRespuestaDeCampana(msg) && !(optedOut && !msg.botonId)) {
-        const r = await atenderRespuestaDeCampana({ integration, conversationId, msg })
+        const r = await atenderRespuestaDeCampana({
+            integration, conversationId, msg,
+            iniciarConvocatoria: () => iniciarConvocatoriaDeCampana(integration, conversationId, msg.contactWaId),
+        })
             .catch(() => 'no_aplica' as const);
         if (r !== 'no_aplica') {
             req.log?.info({ conversationId, campana: r }, 'WhatsApp: respuesta a una campaña');

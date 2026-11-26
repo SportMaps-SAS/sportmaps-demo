@@ -6,7 +6,10 @@
  *   npx tsx scripts/wa-campana.ts estado   --escuela <id> [--campana <id>]
  *   npx tsx scripts/wa-campana.ts crear    --escuela <id> --nombre "Cierre 2026" --plantilla monster_cierre_2026 \
  *        [--intereses clase_prueba,inscripcion,clinica] [--sedes <branch_id,branch_id>] \
- *        [--respuesta-si "texto que sale al tocar «Sí»"] [--vence 2026-11-30T23:59:00-05:00] [--por <profile_id>]
+ *        [--respuesta-si "texto que sale al tocar «Sí»"] [--vence 2026-11-30T23:59:00-05:00] [--por <profile_id>] \
+ *        [--anuncio vacacional,vacaciones] [--anuncio-excluye clinica] [--destino convocatorias] [--servicio <item_id>]
+ *   (--anuncio: a quien escribió por un anuncio cuyo texto contiene alguna palabra; «*» = cualquier anuncio.
+ *    No se mezcla con --intereses ni --sedes. --destino convocatorias: el «Sí» arranca la convocatoria guiada.)
  *   npx tsx scripts/wa-campana.ts simular  --escuela <id> --campana <id>          # cuenta; no envía ni escribe
  *   npx tsx scripts/wa-campana.ts aprobar  --escuela <id> --campana <id> --por <profile_id> [--acepto-declaracion]
  *   npx tsx scripts/wa-campana.ts pausar   --escuela <id> --campana <id>
@@ -74,9 +77,16 @@ async function main() {
             const r = await crearCampana(escuela, arg('--por') ?? null, {
                 nombre: arg('--nombre') ?? '',
                 plantilla: arg('--plantilla') ?? '',
-                filtro: { intereses: lista(arg('--intereses')), branch_ids: lista(arg('--sedes')) },
+                filtro: {
+                    intereses: lista(arg('--intereses')), branch_ids: lista(arg('--sedes')),
+                    ...(arg('--anuncio') ? { anuncio: {
+                        contiene: lista(arg('--anuncio')).filter((x) => x !== '*'), excluye: lista(arg('--anuncio-excluye')),
+                    } } : {}),
+                    ...(arg('--destino') ? { destino: arg('--destino') as 'convocatorias' } : {}),
+                },
                 respuestaSi: arg('--respuesta-si') ?? null,
                 venceAt: arg('--vence') ?? null,
+                servicioId: arg('--servicio') ?? null,
             });
             if (!r.ok) salir(`  ✗ ${r.error}${r.detalle ? `: ${r.detalle}` : ''}`);
             console.log(`  ✓ Borrador creado: ${r.campana.id}`);

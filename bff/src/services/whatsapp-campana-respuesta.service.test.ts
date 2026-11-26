@@ -290,6 +290,39 @@ describe('botones', () => {
     });
 });
 
+describe('«Sí» a una retoma de convocatorias (filtro.destino, Monster 2026-11-26)', () => {
+    it('arranca la convocatoria guiada después del texto de la escuela; lead y aviso igual', async () => {
+        Object.assign(db.t.whatsapp_campanas[0], { filtro: { destino: 'convocatorias' }, respuesta_si: '¡Qué bueno! Te hago unas preguntas.' });
+        const iniciar = vi.fn(async () => true);
+        expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: iniciar })).toBe('si');
+        expect(iniciar).toHaveBeenCalledTimes(1);
+        expect(est.enviados.map((e) => e.texto)).toEqual(['¡Qué bueno! Te hago unas preguntas.']);
+        expect(est.leads).toHaveLength(1);
+        expect(db.t.notifications).toHaveLength(1);
+        expect(db.t.whatsapp_campana_envios[0].estado).toBe('respondio_si');
+    });
+
+    it('sin texto de la escuela: solo la convocatoria guiada; sin convocatorias vigentes, la línea neutra para la escuela', async () => {
+        Object.assign(db.t.whatsapp_campanas[0], { filtro: { destino: 'convocatorias' }, respuesta_si: null });
+        const iniciar = vi.fn(async () => true);
+        await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: iniciar });
+        expect(iniciar).toHaveBeenCalledTimes(1);
+        expect(est.enviados).toHaveLength(0);
+
+        db.t.whatsapp_campana_envios[0].estado = 'enviado';
+        const sinOfertas = vi.fn(async () => false);
+        await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: sinOfertas });
+        expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
+    });
+
+    it('una campaña sin destino no arranca la convocatoria aunque el webhook la inyecte', async () => {
+        const iniciar = vi.fn(async () => true);
+        await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: iniciar });
+        expect(iniciar).not.toHaveBeenCalled();
+        expect(est.enviados).toHaveLength(1);
+    });
+});
+
 describe('«Sí» a una campaña cuya oferta ya terminó (Monster 2026-11-25: «la clínica tampoco debe salir»)', () => {
     const ITEM = '16766d2e-f8b0-4285-88e3-b1e67dda6d45';
     const VAC = '33333333-3333-4333-8333-333333333333';

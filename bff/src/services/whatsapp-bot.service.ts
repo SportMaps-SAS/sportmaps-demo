@@ -2739,6 +2739,24 @@ function ctxPuerta(integration: WhatsAppIntegration, conversationId: string, con
     };
 }
 
+/**
+ * (2026-11-26) El «Sí» de una campaña de retoma de convocatorias (`filtro.destino = 'convocatorias'`): arranca la
+ * convocatoria guiada de la puerta, igual que el embudo. false = la escuela no tiene preguntas u ofertas vigentes, o
+ * falló (quien llama manda lo de siempre). Nunca lanza.
+ */
+export async function iniciarConvocatoriaDeCampana(
+    integration: WhatsAppIntegration, conversationId: string, contactWaId: string,
+): Promise<boolean> {
+    try {
+        const of = await ofertasDeLaEscuela(integration.school_id);
+        if (!of.preguntasOfertas || !of.ofertas.length) return false;
+        return await iniciarConvocatoria(ctxPuerta(integration, conversationId, contactWaId), {}, { ofertas: of });
+    } catch (e: any) {
+        console.warn('[whatsapp-bot] no se pudo arrancar la convocatoria de la campaña', { conversationId, err: e?.message });
+        return false;
+    }
+}
+
 /** Turno de la puerta única. Nunca lanza: si falla, sigue el camino de siempre. */
 async function atenderPuertaEnBot(
     integration: WhatsAppIntegration, conversationId: string, contactWaId: string, text: string, botonId: string | null,
