@@ -454,7 +454,7 @@ describe('puerta única: motor', () => {
         expect(m.texto).toContain('*Convocatorias Sede Suba*');
         expect(m.texto).toContain('Parque Pinar de Suba');
         expect(m.texto).toContain('Escríbenos el nombre, la fecha de nacimiento y la convocatoria');
-        expect(m.texto).toContain('¿A cuál fecha quieres inscribir a *Sofía*?');
+        expect(m.texto).toContain('¿Inscribo a *Sofía* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌');
         expect(m.texto).not.toMatch(/cortes[ií]a|clase de prueba/i);
         expect(f.leads).toEqual([expect.objectContaining({ deportista: 'Sofía Gómez Uribe', quiere: 'convocatoria' })]);
 
@@ -511,7 +511,7 @@ describe('puerta única: motor', () => {
         const f = falso({ ofertas: SIN_CLASE });
         expect(await f.turno('', BOTON_PUERTA.OFERTAS)).toBe(true);
         expect(f.ultimo().texto).toContain('*Convocatorias Sede Suba*');
-        expect(f.ultimo().texto).toContain('¿A cuál fecha quieres ir?');
+        expect(f.ultimo().texto).toContain('¿Te inscribo a la convocatoria? Es a *todas sus fechas*');
     });
 
     // ── Convocatoria guiada, una pregunta a la vez (flujo oficial de Monster, 2026-11-25) ──
@@ -596,14 +596,11 @@ describe('puerta única: motor', () => {
 
         expect(await f.turno('Quiero inscribirme', 'of_inscribirme')).toBe(true);
         expect(f.ultimo().texto).toContain('*nombre completo* del deportista');
+        // (2026-11-26) Con el nombre se confirma: la inscripción es a TODAS sus fechas, en orden (sin elegir una).
         expect(await f.turno('Sofía Gómez Uribe')).toBe(true);
-        const fechas = f.ultimo();
-        expect(fechas.texto).toContain('¿A cuál fecha vas a ir con *Sofía*?');
-        expect(fechas.botones).toEqual(['of_f_s1']);                  // solo la fila de su año
-        expect(fechas.lista).toBe('Elegir');
-
-        expect(await f.turno('Vie 11 dic · 4:00 p. m.', 'of_f_s1')).toBe(true);
         const fin = f.ultimo();
+        expect(fin.texto).toContain('*Fechas:*');
+        expect(fin.texto).not.toContain('¿A cuál fecha');
         expect(fin.step).toBe('puerta_info_listo');
         expect(fin.estado).toBeNull();
         expect(fin.texto).toContain('¡Listo! ✅');
@@ -639,9 +636,8 @@ describe('puerta única: motor', () => {
 
         await f.turno('Quiero inscribirme', 'of_inscribirme');
         await f.turno('Juan Pérez');
-        expect(f.ultimo().botones).toEqual(['of_f_m2']);
-        await f.turno('', 'of_f_m2');
         const fin = f.ultimo();
+        expect(fin.texto).toContain('*Fechas:*');
         expect(fin.texto).toContain('Valor: *$50.000*. La escuela te indica cómo pagar.');
         expect(f.avisos[0].detalle).toContain('Trayectoria: sí (Club X y torneo departamental, opuesto).');
         expect(f.avisos[0].detalle).toContain('Valor: $50.000');

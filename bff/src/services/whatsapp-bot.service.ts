@@ -2881,6 +2881,8 @@ function ctxEmbudo(integration: WhatsAppIntegration, conversationId: string, con
         alSoltar: (estado) => anotarPasoSoltado({ flujo: 'embudo', estado }),
         // (2026-11-25) Convocatorias: el embudo le entrega a la convocatoria guiada de la puerta lo que ya contó.
         // Sin clase de prueba hoy, el embudo no manda nada: el encabezado lo dice («Por ahora no tenemos…»).
+        pidioConvocatoria: async () => (await mensajesRecientes(conversationId))
+            .some((m: any) => m.direction === 'inbound' && preguntaPorConvocatoria(m.text_body ?? '')),
         iniciarOfertas: async (prefill) => {
             const of = await ofertasDeLaEscuela(schoolId);
             const encabezado = of.claseDePrueba.disponible ? '' : avisoSinClaseDePrueba(of, await textosClase(schoolId));

@@ -88,6 +88,8 @@ function crear(op: {
     ofertas?: EstadoOfertas;
     /** La conversación compartida de ofertas; sin la clave, el contexto no la trae. */
     iniciarOfertas?: (prefill: any) => Promise<boolean>;
+    /** ¿Pidió una convocatoria en la conversación? Sin la clave, el contexto no lo trae. */
+    pidioConvocatoria?: boolean;
 } = {}) {
     const s = { enviados: [] as Enviado[], estado: op.estado ?? null as EstadoEmbudo | null };
     const ctx: CtxEmbudo = {
@@ -124,6 +126,7 @@ function crear(op: {
         ...(op.lugar !== undefined ? { lugarDeLaClase: vi.fn(async () => op.lugar ?? null) } : {}),
         ...(op.ofertas ? { ofertas: vi.fn(async () => op.ofertas!) } : {}),
         ...(op.iniciarOfertas ? { iniciarOfertas: vi.fn(op.iniciarOfertas) } : {}),
+        ...(op.pidioConvocatoria !== undefined ? { pidioConvocatoria: vi.fn(async () => op.pidioConvocatoria!) } : {}),
         leadDelContacto: vi.fn(async () => op.lead ?? null),
         leerEstado: async () => s.estado,
         ahora: () => AHORA,
@@ -974,7 +977,7 @@ describe('embudo sin clase de prueba (bot-ofertas)', () => {
         expect(m.texto).toContain('*Convocatorias Superliga*');
         expect(m.texto).toContain('7:00 a 9:00 p. m. · ECCI · femenino');
         expect(m.texto).not.toContain('masculino');
-        expect(m.texto).toContain('¿A cuál fecha quieres inscribir a *Mariana*?');
+        expect(m.texto).toContain('¿Inscribo a *Mariana* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌');
         expect(m.texto).not.toMatch(/se agenda una|próximos horarios|\$15\.000/);
         expect(m.botones).toBeUndefined();
         expect(c.ctx.franjas).not.toHaveBeenCalled();
@@ -1002,12 +1005,12 @@ describe('embudo sin clase de prueba (bot-ofertas)', () => {
         await hastaHorarios(c);
         expect(await c.turno('¿Y cuánto cuesta?')).toBe(false);
         expect(await c.turno('Gracias')).toBe(true);
-        expect(c.ultimo().texto).toContain('escríbeme a cuál fecha quieres ir');
+        expect(c.ultimo().texto).toContain('respóndeme *sí* y le paso tu inscripción');
         const n = c.s.enviados.length;
         expect(await c.turno('ok')).toBe(true);
         expect(c.s.enviados).toHaveLength(n);
         expect(recordatorioDePasoEmbudo(AJ_MONSTER, { paso: 'elegir_oferta', datos: {} })?.texto)
-            .toBe('Cuando quieras seguimos con tu registro 🙌 Escríbeme a cuál fecha quieres ir y se lo paso a la escuela.');
+            .toBe('Cuando quieras seguimos con tu registro 🙌 Respóndeme *sí* y le paso tu inscripción a la escuela (es a todas las fechas de la convocatoria).');
     });
 
     it('sin clase y sin ofertas: el lead y la escuela le escribe (sin horarios ni clase)', async () => {
@@ -1221,7 +1224,7 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
             '• sábado 12 de diciembre, 8:00 a 10:00 a. m. · Universidad ECCI',
         ]);
         expect(t).not.toMatch(/masculino|Superliga|equipos mayores|2015|2017|2011|2009/);
-        expect(t).toContain(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`);
+        expect(t).toContain(`${NOTA}\n\n¿Inscribo a *Sofía* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌`);
         expect(t.length).toBeLessThanOrEqual(MAX_TEXTO_OFERTAS);
         expect(c.ctx.franjas).not.toHaveBeenCalled();
         expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Sofía Ramírez Peña', quiere: 'convocatoria' }));
@@ -1253,7 +1256,7 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
         ]);
         expect(m.texto).not.toContain(DESC_NORTE);
         expect(m.texto).not.toContain(DESC_SUBA);
-        expect(m.texto).toContain(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Andrés*?`);
+        expect(m.texto).toContain(`${NOTA}\n\n¿Inscribo a *Andrés* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌`);
     });
 
     it('reserva: hombre de 1998 sin saberse su trayectoria → sin pregunta extra, solo Norte', async () => {
@@ -1287,6 +1290,30 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
         });
         expect(c.ctx.guardarLead).toHaveBeenLastCalledWith(expect.objectContaining({ deportista: 'Sofía Ramírez Peña', quiere: 'convocatoria' }));
         expect(c.ctx.franjas).not.toHaveBeenCalled();
+    });
+
+    it('(Monster 2026-11-26) hoy SÍ hay clase de prueba, pero pidió una convocatoria → termina en la convocatoria, sin franjas ni cobro', async () => {
+        const abierta = { ...MONSTER, claseDePrueba: { ...MONSTER.claseDePrueba, disponible: true } };
+        const recorrer = async (c: ReturnType<typeof crear>) => {
+            await iniciarEmbudo(c.ctx);
+            await c.turno('⚫ Sede Suba', `${BOTON_EMBUDO.SEDE}${NORTE}`);
+            await c.turno('Gabriela Medina');
+            await c.turno('22/05/2016');
+            await c.turno('Mujer', `${BOTON_EMBUDO.OPCION}sexo:0`);
+            await c.turno('Aún no tengo posición');
+            await c.turno('Estoy empezando', `${BOTON_EMBUDO.OPCION}trayectoria:0`);
+        };
+        const conv = crear({ ofertas: abierta, iniciarOfertas: async () => true, pidioConvocatoria: true });
+        await recorrer(conv);
+        expect(conv.ctx.iniciarOfertas).toHaveBeenCalledTimes(1);
+        expect(conv.ctx.franjas).not.toHaveBeenCalled();
+        expect(conv.s.enviados.map((e) => e.texto).join(' ')).not.toMatch(/clase de prueba|\$15\.000|se agenda/i);
+
+        // Quien NO pidió convocatoria sigue con la clase de prueba de ese día (este fin de semana sí hay).
+        const clase = crear({ ofertas: abierta, iniciarOfertas: async () => true, pidioConvocatoria: false });
+        await recorrer(clase);
+        expect(clase.ctx.iniciarOfertas).not.toHaveBeenCalled();
+        expect(clase.ctx.franjas).toHaveBeenCalled();
     });
 
     it('prefill: con clubes va la trayectoria y lo que contó; sin respuesta clara, la trayectoria no va', async () => {
@@ -1330,7 +1357,7 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
             '¡Listo! ✨ Por su año (2014) a Sofía le corresponde *Infantil Femenino* en la Sede Norte.\n'
                 + 'Por ahora no estamos agendando clases de prueba (vuelven el lunes 1 de febrero de 2027).',
             textoOfertasParaPersona(sinCriterios, { genero: 'femenino' }),
-            '¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌',
+            '¿Inscribo a *Sofía* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌',
         ].join('\n\n'));
         expect(m.texto).toContain(DESC_MAYORES); // todas las de su género, como antes
         expect(m.texto).not.toContain(NOTA);
@@ -1351,7 +1378,7 @@ describe('embudo sin clase de prueba: la convocatoria que le aplica (criterios d
         expect(ofertas.texto).toContain(DESC_SUBA);
         expect(ofertas.texto).not.toContain(NOTA);
         expect(ofertas.texto.length).toBeLessThanOrEqual(4096);
-        expect(nota.texto).toBe(`${NOTA}\n\n¿A cuál fecha quieres inscribir a *Sofía*? Escríbeme el día y la hora y se lo paso a la escuela 🙌`);
+        expect(nota.texto).toBe(`${NOTA}\n\n¿Inscribo a *Sofía* a la convocatoria? Es a *todas sus fechas*, en orden. Respóndeme *sí* y se lo paso a la escuela 🙌`);
         expect(nota.estado).toMatchObject({ paso: 'elegir_oferta' });
     });
 

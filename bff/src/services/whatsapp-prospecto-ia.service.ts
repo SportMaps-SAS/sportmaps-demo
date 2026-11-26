@@ -284,8 +284,8 @@ export const MARCA_INSCRIPCION = '[INSCRIPCION]';
 /** Cómo inscribir a alguien en una oferta por este chat (solo con <ofertas_vigentes>). Pura. */
 export function reglasDeInscripcionAOferta(): string[] {
     return [
-        '- Si quiere inscribirse a algo de <ofertas_vigentes>, pídele en UN solo mensaje lo que todavía no te haya dado: nombre completo del deportista, fecha de nacimiento y a cuál fecha (día y hora) de <ofertas_vigentes> quiere ir. No pidas pagos ni prometas cupo.',
-        `- Cuando ya tengas los TRES datos, dile que ya le pasaste sus datos a la escuela y que la escuela te confirma el cupo por aquí. Y termina tu respuesta con una línea aparte, EXACTAMENTE así (la persona no la ve): ${MARCA_INSCRIPCION} nombre completo | fecha de nacimiento | fecha y hora elegidas`,
+        '- Si quiere inscribirse a algo de <ofertas_vigentes>, pídele en UN solo mensaje lo que todavía no te haya dado: nombre completo del deportista y fecha de nacimiento. La inscripción a una convocatoria es a TODAS sus fechas, en orden: NUNCA le pidas que elija una fecha ni le ofrezcas ir a una sola. No pidas pagos ni prometas cupo.',
+        `- Cuando ya tengas los DOS datos, dile que ya le pasaste su inscripción a la escuela (a todas las fechas de la convocatoria) y que la escuela te confirma el cupo por aquí. Y termina tu respuesta con una línea aparte, EXACTAMENTE así (la persona no la ve): ${MARCA_INSCRIPCION} nombre completo | fecha de nacimiento | todas las fechas`,
     ];
 }
 
