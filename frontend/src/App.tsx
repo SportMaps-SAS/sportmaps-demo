@@ -113,7 +113,6 @@ const ShopPage = lazy(() => import("./pages/ShopPage"));
 // ─── Parent pages (lazy) ──────────────────────────────────────────────────────
 // Acudiente V2: con VITE_ACUDIENTE_V2=false vuelven las pantallas anteriores (copias intactas).
 const MyChildrenPage = lazy(() => ACUDIENTE_V2 ? import("./pages/MyChildrenPage") : import("./pages/MyChildrenPageClassic"));
-const ChildProgressPage = lazy(() => import("./pages/ChildProgressPage"));
 const ChildAttendancePage = lazy(() => import("./pages/ChildAttendancePage"));
 const ChildReportsPage = lazy(() => import("./pages/ChildReportsPage"));
 const ChildMatchReportsPage = lazy(() => import("./pages/ChildMatchReportsPage"));

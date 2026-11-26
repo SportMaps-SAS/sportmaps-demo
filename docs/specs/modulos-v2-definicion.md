@@ -200,7 +200,7 @@ Es el módulo que convierte «pagar más rápido» en producto. Va en la **ola 1
 
 ### 4.4 Hijos (ficha del hijo)
 - **Contenido:** progreso, asistencia, informes mensuales, salud.
-- **Estado:** 🔒 **Progreso lee `academic_progress` (≈5 filas, nadie la carga).** Debe leer `performance_entries`. Sin esto la ficha muestra vacío.
+- **Estado:** ✅ (verificado en el código el 2026-11-26) Progreso lee `performance_entries` vía el BFF (`parent/v2/hijos/useHijosData.ts`) y `/children/:id/progress` usa `AcademicProgressPage`, que también lo lee; `academic_progress` queda como «evaluaciones anteriores». `ChildProgressPage` (la que leía solo la tabla legada) no tenía ruta y se borró. Pendiente aparte: `/evaluations` (`CoachEvaluationsPage`, sin enlace en ningún menú) todavía **escribe** en `academic_progress`.
 - **Falta:** informe grupal post-entreno (`/children/:id/post-entreno-informe`).
 
 ### 4.5 Pagos
