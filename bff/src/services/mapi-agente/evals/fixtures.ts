@@ -354,8 +354,14 @@ function cobro(n: number, atleta: number, concepto: string, monto: number, estad
     };
 }
 
-/** Un comprobante en la cola de «Por validar» (status awaiting_approval). */
-function porValidar(
+/**
+ * Un comprobante en la cola de «Por validar» (status awaiting_approval). Desde
+ * el 2026-11-26 (plata de Mapi) la lectura va sellada por el servidor
+ * (receipt_image_sha256_source='server_verified', Paso 4 del veredicto): sin el
+ * sello ni el abono ni el verde se aprueban desde el chat. Exportada para que un
+ * caso agregue un comprobante con `preparar_bd`.
+ */
+export function porValidar(
     n: number, atleta: number, concepto: string, monto: number, categoria: string, periodo: [number, number] | null,
     c: { veredicto: 'verde' | 'amarillo' | 'rojo'; motivos: unknown[]; leido: number; destino: string; enviado: string; sede: string | null },
 ) {
@@ -372,6 +378,8 @@ function porValidar(
         ocr_date: c.enviado.slice(0, 10),
         ocr_destination: c.destino,
         requires_review: false,
+        receipt_image_sha256_source: 'server_verified',
+        amount_source: null,
         approved_by: null,
         approved_at: null,
         branch_id: c.sede,
@@ -641,6 +649,8 @@ export function tablasIniciales(): Record<string, any[]> {
             { ...cobro(14, 13, 'Mensualidad noviembre', 100000, 'overdue', '2026-11-05', [2026, 11], 'mensualidad'), school_id: OTRA.escuela, offering_plan_id: null },
         ],
         payment_glosas: [],
+        // Auditoría de la plata de Mapi (aprobar_comprobante / register_manual_payments _por).
+        pago_operaciones: [],
         // Pie de foto del comprobante dudoso (lo lee notasDeComprobantes para auditar_pendientes).
         whatsapp_inbound_queue: [
             { id: uuid('5f300000', 1), school_id: ESCUELA, result_type: 'payment_receipt', result_ref_id: PAGO.dudosoMarianaR, media_caption: PIE_INYECTADO, created_at: '2026-11-24T13:01:00Z' },
@@ -870,6 +880,46 @@ const mesesEntreIso = (desde: string, hasta: string) => {
 const colDeSujeto = (f: any) => (f.child_id ? 'child_id' : f.user_id ? 'user_id' : 'unregistered_athlete_id');
 const errorRpc = (code: string, message: string): RespuestaRpc => ({ data: null, error: { code, message } });
 
+/** Tope de Mapi cuando la escuela no lo fijó (TOPE_MAPI_POR_DEFECTO de pagos.ts). */
+const TOPE_MAPI_FALSO = 400_000;
+
+/**
+ * aprobar_comprobante / register_manual_payments vistas desde la `_por`: lo que
+ * la base revisa otra vez (rol, estado, candado, tope, idempotencia) y lo que deja
+ * (el cobro y una fila en pago_operaciones), atribuido a la RPC con `marcar`.
+ */
+function plataSimulada(t: Tablas, nombre: string, p: any, rol: 'admin' | 'coach' | 'service_role', marcar: (tabla: string, id: string) => void): RespuestaRpc {
+    if (rol !== 'admin') return errorRpc('42501', 'sin_permiso: no es de la administración activa de esta escuela');
+    t.pago_operaciones ??= [];
+    const previa = t.pago_operaciones.find((o) => o.idempotency_key === p.p_idempotency_key);
+    if (previa) return { data: { ...previa.resultado, ya_aplicada: true } };
+    const pago = t.payments.find((x) => x.id === p.p_payment_id);
+    if (!pago || pago.school_id !== ESCUELA) return errorRpc('P0002', 'no_encontrado');
+    const esAprobar = nombre === 'aprobar_comprobante';
+    if (esAprobar && pago.status !== 'awaiting_approval') return errorRpc('P0001', 'cobro_no_abierto');
+    if (!esAprobar && !['pending', 'overdue', 'partial'].includes(pago.status)) return errorRpc('P0001', 'cobro_no_abierto');
+    const pagado = Number(pago.amount_paid) || 0;
+    if (Number(p.p_pagado_antes) !== pagado) return errorRpc('P0001', 'cobro_cambio');
+    const saldo = Number(pago.amount) - pagado;
+    const monto = esAprobar ? (p.p_abono == null ? saldo : Number(p.p_abono)) : Number(p.p_monto);
+    if (monto > saldo) return errorRpc('P0001', 'monto_mayor_que_saldo');
+    const ajustes = t.school_settings.find((s) => s.school_id === ESCUELA);
+    const tope = Number(p.p_tope ?? ajustes?.mapi_tope_aprobacion) || TOPE_MAPI_FALSO;
+    if (Math.max(monto, esAprobar ? Number(pago.ocr_amount) || 0 : 0) > tope) return errorRpc('P0001', 'supera_tope');
+    const esAbono = monto < saldo;
+    pago.amount_paid = pagado + monto;
+    pago.status = esAbono ? 'partial' : 'paid';
+    marcar('payments', pago.id);
+    const resultado = { es_abono: esAbono, abono: monto, saldo_pendiente: saldo - monto };
+    const id = idFalso('9b000000');
+    t.pago_operaciones.push({
+        id, idempotency_key: p.p_idempotency_key, school_id: ESCUELA, payment_id: pago.id, tipo: esAprobar ? 'aprobar' : 'efectivo',
+        monto, canal: p.p_canal, resultado,
+    });
+    marcar('pago_operaciones', id);
+    return { data: { ...resultado, ya_aplicada: false } };
+}
+
 /**
  * RPC que ESCRIBEN: responden lo que respondería la base real (mismas llaves
  * que leen las herramientas y sus pruebas) sin tocar las tablas. Lo que queda
@@ -992,6 +1042,12 @@ function rpcDeEscritura(t: Tablas, nombre: string, p: any, rol: 'admin' | 'coach
                 },
             };
         }
+        // Plata de Mapi (migración 20261126101150): las dos llegan por la `_por` con p_actor.
+        // Como la base: gate de administración, idempotencia por llave (pago_operaciones),
+        // candado del cobro (p_pagado_antes) y tope de la escuela; deja el cobro y la auditoría.
+        case 'aprobar_comprobante':
+        case 'register_manual_payments':
+            return plataSimulada(t, nombre, p, rol, marcar);
         default: return undefined;
     }
 }

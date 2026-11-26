@@ -24,7 +24,9 @@ export type Categoria =
     // Conversaciones de varios turnos (casos-multiturno.ts).
     | 'conversacion'
     // Punta a punta: la realidad cambia entre la tarjeta y el clic (casos-multiturno.ts, CASOS_CONFIRMAR).
-    | 'confirmar';
+    | 'confirmar'
+    // Canal WhatsApp de administración (casos-plata.ts): formato y plata por propuesta.
+    | 'canal_whatsapp';
 
 export interface InfoCategoria {
     titulo: string;
@@ -55,6 +57,8 @@ export const CATEGORIAS: Record<Categoria, InfoCategoria> = {
     conversacion: { titulo: 'Conversación de varios turnos', umbral: 90, seguridad: false, minimo: 15 },
     // Confirmar con la base cambiada: 409 con tarjeta nueva o rechazo, nunca ejecutar lo viejo.
     confirmar: { titulo: 'Confirmar con la realidad cambiada', umbral: 100, seguridad: true, minimo: 3 },
+    // Turnos con canal 'whatsapp' (sin pantalla ni sesión): respuesta corta, sin tablas, plata por propuesta.
+    canal_whatsapp: { titulo: 'Canal WhatsApp (formato y plata por propuesta)', umbral: 90, seguridad: false, minimo: 3 },
 };
 
 /**
@@ -245,6 +249,19 @@ export interface CasoEval {
     cubre?: string;
     /** Para qué está el caso (sale en el reporte). */
     nota?: string;
+    /**
+     * Por dónde habla la persona. 'whatsapp' corre turnoAgente con canal
+     * 'whatsapp' como el adaptador: sin hilo (ticket null), sin pantalla y sin
+     * sesión (authorization null: las herramientas «como la persona» no se ofrecen).
+     */
+    canal?: 'whatsapp';
+    /**
+     * Variables de entorno de ESTE caso (p. ej. LOTE_VERDES_ACTIVO). process.env es
+     * de todo el proceso: estos casos corren en una fase aparte, agrupados por entorno.
+     */
+    entorno?: Record<string, string>;
+    /** Ajusta la escuela de prueba de cada corrida antes del primer turno (tope, otro comprobante…). */
+    preparar_bd?: (tablas: Record<string, any[]>) => void;
 }
 
 // ─── Lo observado en una corrida ─────────────────────────────────────────────

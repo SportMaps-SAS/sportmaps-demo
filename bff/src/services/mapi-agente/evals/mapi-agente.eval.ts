@@ -53,6 +53,13 @@ import type { AsyncLocalStorage } from 'node:async_hooks';
 import { parse } from 'dotenv';
 import Anthropic from '@anthropic-ai/sdk';
 
+// Plata de Mapi (aprobar_pago, aprobar_verdes, registrar_pago_efectivo, 2026-11-26): nace
+// apagada en producción y aquí se evalúa prendida, como las demás acciones de las oleadas
+// (las otras variables van en vitest.evals.config.ts). Los casos que miden el mundo SIN
+// plata la apagan con `entorno` (corren en su propia fase). LOTE_VERDES_ACTIVO queda sin
+// definir, igual que en producción (Paso 0 del veredicto): los casos del verde lo prenden.
+process.env.MAPI_PLATA_POR ??= 'true';
+
 vi.mock('../../../config/supabase', async () => {
     const { crearBdFalsa } = await import('./fixtures');
     const { AsyncLocalStorage: Als } = await import('node:async_hooks');
@@ -210,6 +217,7 @@ import {
 import { CASOS } from './casos';
 import { CASOS_OLEADAS } from './casos-oleadas';
 import { CASOS_MULTITURNO, CASOS_CONFIRMAR } from './casos-multiturno';
+import { CASOS_PLATA, CASOS_WHATSAPP } from './casos-plata';
 import {
     agregarCorridas, armarReporte, calificarCaso, corridasDe, fallasDeEfecto, imprimirReporte, reporteComoJson, resumenDeEfecto,
 } from './calificar';
@@ -307,9 +315,40 @@ async function todos(): Promise<CasoEval[]> {
             console.warn(`[mapi-evals] casos-ataques.ts no cargó (${String(err?.message ?? err).slice(0, 200)}): sigo sin él.`);
         }
     }
-    todosCache = [...CASOS, ...CASOS_OLEADAS, ...CASOS_MULTITURNO, ...CASOS_CONFIRMAR, ...extra];
+    todosCache = [...CASOS, ...CASOS_OLEADAS, ...CASOS_MULTITURNO, ...CASOS_CONFIRMAR, ...CASOS_PLATA, ...CASOS_WHATSAPP, ...extra];
     return todosCache;
 }
+
+/**
+ * El alcance del caso: el de siempre, o el del adaptador de WhatsApp (canal
+ * 'whatsapp', sin Authorization: por WhatsApp no hay JWT, así que las
+ * herramientas «como la persona» no se ofrecen, igual que en producción).
+ */
+function alcanceDelCaso(caso: Pick<CasoEval, 'rol' | 'hoy' | 'canal'>) {
+    const a = alcanceDe(caso.rol, caso.hoy);
+    // El spread no copia `authorization` (va no enumerable): queda sin sesión, como el canal.
+    return caso.canal === 'whatsapp' ? { ...a, canal: 'whatsapp' as const } : a;
+}
+
+/** El ticket_id con que quedan los borradores: WhatsApp no tiene hilo (null). */
+const ticketEnBd = (caso: Pick<CasoEval, 'canal'>, ticketId: string): string | null => (caso.canal === 'whatsapp' ? null : ticketId);
+
+/** Corre `fn` con las variables de `entorno` puestas y las deja como estaban. Solo en fases sin otras corridas en vuelo. */
+async function conEntorno<T>(entorno: Record<string, string> | undefined, fn: () => Promise<T>): Promise<T> {
+    if (!entorno || !Object.keys(entorno).length) return fn();
+    const previo = Object.fromEntries(Object.keys(entorno).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, entorno);
+    try {
+        return await fn();
+    } finally {
+        for (const [k, v] of Object.entries(previo)) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+        }
+    }
+}
+
+const claveEntorno = (c: CasoEval) => (c.entorno ? JSON.stringify(Object.entries(c.entorno).sort()) : '');
 
 /** Solo lo que el agente necesita de bff/.env. Nada de SUPABASE_*: la base es falsa a propósito. */
 function cargarEntorno(): void {
@@ -399,26 +438,31 @@ async function correrTurno(p: {
     caso: CasoEval; ticketId: string; historial: MensajeHistorial[]; pantalla?: PantallaCruda; intento: number;
 }): Promise<Observado> {
     const { caso, ticketId } = p;
-    const alcance = alcanceDe(caso.rol, caso.hoy);
+    const alcance = alcanceDelCaso(caso);
+    const porWhatsApp = caso.canal === 'whatsapp';
+    const ticket = ticketEnBd(caso, ticketId);
     const reg: Registro = { ronda: 0, llamadas: [], modelo: [], textoModelo: '' };
-    // Igual que turno-chat: lo que manda el front pasa por validarPantalla.
-    const pantalla = p.pantalla ? await validarPantalla(alcance, p.pantalla).catch(() => null) : null;
-    const previos = new Set(bd().tablas.mapi_action_drafts.filter((d) => d.ticket_id === ticketId).map((d) => d.id));
+    // Igual que turno-chat: lo que manda el front pasa por validarPantalla (WhatsApp no tiene pantalla).
+    const pantalla = p.pantalla && !porWhatsApp ? await validarPantalla(alcance, p.pantalla).catch(() => null) : null;
+    const delHilo = (d: any) => (d.ticket_id ?? null) === ticket;
+    const previos = new Set(bd().tablas.mapi_action_drafts.filter(delHilo).map((d) => d.id));
 
     const t0 = performance.now();
     const r = await conContextoLlm({ conversationId: ticketId, feature: 'mapi_evals' }, () => turnoAgente({
         alcance,
-        ticketId,
+        // Como canal-whatsapp.ts: sin hilo, con canal 'whatsapp'.
+        ticketId: ticket,
         historial: p.historial,
         pantalla,
         nombreUsuario: caso.rol === 'admin' ? NOMBRE_ADMIN : NOMBRE_COACH,
         crearMensaje: crearMensajeObservado(reg),
         feature: 'mapi_evals',
+        ...(porWhatsApp ? { canal: 'whatsapp' as const } : {}),
     }));
     const ms = Math.round(performance.now() - t0);
 
     const borradores: BorradorObservado[] = bd().tablas.mapi_action_drafts
-        .filter((d) => d.ticket_id === ticketId && !previos.has(d.id))
+        .filter((d) => delHilo(d) && !previos.has(d.id))
         .map((d) => ({ id: d.id, herramienta: d.tool, args: d.args, titulo: d.preview?.titulo ?? '', lineas: d.preview?.lineas ?? [] }));
 
     return {
@@ -468,10 +512,12 @@ async function asentar(): Promise<void> {
 }
 
 type Confirmacion = ConfirmacionObservada & { nuevaId?: string };
+/** Quién confirma: el rol, el día y el canal del caso. */
+type Quien = Pick<CasoEval, 'rol' | 'hoy' | 'canal'>;
 
 /** Un borrador: dos confirmar a la vez (doble clic) o uno; espera alTerminar si queda en curso. */
-async function confirmarUno(base: BdFalsa, rol: RolAgente, hoy: string, id: string, doble: boolean): Promise<Confirmacion> {
-    const alcance = alcanceDe(rol, hoy);
+async function confirmarUno(base: BdFalsa, quien: Quien, id: string, doble: boolean): Promise<Confirmacion> {
+    const alcance = alcanceDelCaso(quien);
     const fila = base.tablas.mapi_action_drafts.find((d) => d.id === id);
     const vista = { titulo: fila?.preview?.titulo ?? '', lineas: fila?.preview?.lineas ?? [], detalle: fila?.preview?.detalle?.items };
     let terminar!: (f: Final) => void;
@@ -501,7 +547,7 @@ async function confirmarUno(base: BdFalsa, rol: RolAgente, hoy: string, id: stri
  * Confirma los borradores con el MISMO confirmarBorrador de producción y mide
  * qué cambió en la base, qué RPC y servicios se llamaron y qué salió.
  */
-async function confirmarYMedir(base: BdFalsa, e: EsperaEfecto, rol: RolAgente, hoy: string, ids: string[]): Promise<ObservadoEfecto> {
+async function confirmarYMedir(base: BdFalsa, e: EsperaEfecto, quien: Quien, ids: string[]): Promise<ObservadoEfecto> {
     const t0 = performance.now();
     const ms = () => Math.round(performance.now() - t0);
     if (!ids.length) return { confirmaciones: [], escrituras: [], error: 'no quedó ningún borrador pendiente que confirmar', ms: 0 };
@@ -512,10 +558,10 @@ async function confirmarYMedir(base: BdFalsa, e: EsperaEfecto, rol: RolAgente, h
     const confirmaciones: ConfirmacionObservada[] = [];
     try {
         for (const id of ids) {
-            const c = await confirmarUno(base, rol, hoy, id, e.doble_clic !== false);
+            const c = await confirmarUno(base, quien, id, e.doble_clic !== false);
             const { nuevaId, ...obs } = c;
             if (nuevaId && e.cambio?.confirmar_nueva) {
-                const { nuevaId: _n, ...nueva } = await confirmarUno(base, rol, hoy, nuevaId, e.doble_clic !== false);
+                const { nuevaId: _n, ...nueva } = await confirmarUno(base, quien, nuevaId, e.doble_clic !== false);
                 obs.confirmacionNueva = nueva;
             }
             confirmaciones.push(obs);
@@ -535,8 +581,8 @@ async function confirmarYMedir(base: BdFalsa, e: EsperaEfecto, rol: RolAgente, h
 }
 
 /** Qué borradores se confirman: los pendientes del último turno (o todos los del hilo), de la herramienta si se pide. */
-function borradoresAConfirmar(base: BdFalsa, e: EsperaEfecto, ticketId: string, ultimo: Observado): string[] {
-    const vivos = base.tablas.mapi_action_drafts.filter((d) => d.ticket_id === ticketId && d.status === 'draft');
+function borradoresAConfirmar(base: BdFalsa, e: EsperaEfecto, ticketId: string | null, ultimo: Observado): string[] {
+    const vivos = base.tablas.mapi_action_drafts.filter((d) => (d.ticket_id ?? null) === ticketId && d.status === 'draft');
     const delUltimo = new Set(ultimo.borradores.map((b) => b.id));
     let lista = e.confirmar === 'vivos' ? vivos : vivos.filter((d) => delUltimo.has(d.id));
     if (e.herramienta) lista = lista.filter((d) => d.tool === e.herramienta);
@@ -550,8 +596,10 @@ const usosLlm: any[] = [];
 
 async function correrCorrida(caso: CasoEval, n: number): Promise<Corrida> {
     const base = crearBdFalsa();
+    caso.preparar_bd?.(base.tablas);
     return enBd(base, async () => {
         const ticketId = `${caso.id}#${n}`;
+        const ticket = ticketEnBd(caso, ticketId);
         const turnos: Observado[] = [];
         if (caso.turnos) {
             let historial: MensajeHistorial[] = [];
@@ -571,13 +619,13 @@ async function correrCorrida(caso: CasoEval, n: number): Promise<Corrida> {
             turnos.push(obs);
         }
 
-        const vivos = base.tablas.mapi_action_drafts.filter((d) => d.ticket_id === ticketId && d.status === 'draft')
+        const vivos = base.tablas.mapi_action_drafts.filter((d) => (d.ticket_id ?? null) === ticket && d.status === 'draft')
             .map((d) => ({ herramienta: String(d.tool), titulo: String(d.preview?.titulo ?? ''), target: d.target_key ?? null, args: d.args }));
 
         let efecto: ObservadoEfecto | undefined;
         const completos = turnos.length === (caso.turnos?.length ?? 1) && turnos.at(-1)!.tipo === 'texto';
         if (caso.efecto && completos) {
-            efecto = await confirmarYMedir(base, caso.efecto, caso.rol, caso.hoy, borradoresAConfirmar(base, caso.efecto, ticketId, turnos.at(-1)!));
+            efecto = await confirmarYMedir(base, caso.efecto, caso, borradoresAConfirmar(base, caso.efecto, ticket, turnos.at(-1)!));
         }
         usosLlm.push(...(base.tablas.llm_usage ?? []));
         const costoUsd = turnos.reduce((s, o) => s + o.llamadasModelo.reduce((t, l) => t + (l.costoUsd ?? 0), 0), 0);
@@ -614,17 +662,19 @@ async function probarSemillas(casos: CasoEval[]): Promise<{ problemas: string[];
         if (caso.requiere && !disponible(caso.requiere)) continue;
         const e = caso.efecto!;
         const base = crearBdFalsa();
-        const fallas = await enBd(base, async () => {
+        caso.preparar_bd?.(base.tablas);
+        // Serial: el entorno del caso (LOTE_VERDES_ACTIVO…) no pisa a nadie.
+        const fallas = await conEntorno(caso.entorno, () => enBd(base, async () => {
             const ids: string[] = [];
             for (const s of semillasDe(e)) {
-                const r = await ejecutarLlamada(alcanceDe(caso.rol, caso.hoy), `semilla:${caso.id}`, s.herramienta, s.input);
+                const r = await ejecutarLlamada(alcanceDelCaso(caso), ticketEnBd(caso, `semilla:${caso.id}`), s.herramienta, s.input);
                 if (!r.borradorId) return [`la semilla de ${s.herramienta} no dejó borrador: ${r.contenido.slice(0, 300)}`];
                 ids.push(r.borradorId);
             }
-            const ef = await confirmarYMedir(base, e, caso.rol, caso.hoy, ids);
+            const ef = await confirmarYMedir(base, e, caso, ids);
             const f = fallasDeEfecto(e, ef);
             return f.length ? [...f, `(observado: ${resumenDeEfecto(ef)})`] : [];
-        });
+        }));
         // Bug conocido: falla esperada (el caso sigue fallando con el modelo). Si ya no falla, que se quite la marca.
         if (e.bug_conocido) {
             if (fallas.length) bugs.push(`${caso.id} (${e.bug_conocido}):\n    - ${fallas.join('\n    - ')}`);
@@ -668,9 +718,11 @@ describe('evals del modo agente de Mapi (plan §14)', () => {
         expect(acciones.filter((a) => !cubiertas.has(a)), 'acciones sin caso de punta a punta').toEqual([]);
         for (const c of conEfecto) expect(semillasDe(c.efecto!).length, `semilla de ${c.id}`).toBeGreaterThan(0);
 
-        // Oleadas 2–5: con la sesión y las variables de vitest.evals.config.ts se ofrecen las 38.
+        // Oleadas 2–5 (31) + plata de Mapi (aprobar_pago, aprobar_verdes, registrar_pago_efectivo, 2026-11-26):
+        // con la sesión, las variables de vitest.evals.config.ts y MAPI_PLATA_POR se ofrecen las 41.
         const nuevas = CATALOGO.map((h) => h.nombre).filter((n) => !OLEADA_1.has(n));
-        expect(nuevas).toHaveLength(31);
+        expect(nuevas).toHaveLength(34);
+        expect(nuevas).toEqual(expect.arrayContaining(['aprobar_pago', 'aprobar_verdes', 'registrar_pago_efectivo']));
         expect(herramientasPara(admin).map((h) => h.nombre).sort()).toEqual(CATALOGO.map((h) => h.nombre).sort());
         // Al coach: ninguna de plata, escuela, torneos, tienda ni reservas.
         expect(herramientasPara(coach).map((h) => h.nombre).sort()).toEqual([
@@ -920,6 +972,23 @@ describe('evals del modo agente de Mapi (plan §14)', () => {
         const rec = await propone(admin, 'enviar_recordatorio_pago', { periodo: '2026-10' });
         expect(rec.lineas[0]).toMatch(/3 familias · 3 mensualidades · \$420\.000/);
 
+        // Plata de Mapi (casos-plata.ts). Con el lote pausado (producción) el verde no se aprueba
+        // desde el chat; el abono nivel 2 (amarillo SOLO por monto, exactamente lo leído) sí.
+        expect((await propone(admin, 'aprobar_pago', { pago: PAGO.dudosoMarianaR, monto: 100000 })).lineas.join(' ')).toMatch(/abono de \$100\.000.*saldo de \$20\.000/);
+        await rechaza(admin, 'aprobar_pago', { pago: PAGO.dudosoMarianaR, monto: null }, /pausada/);
+        await rechaza(admin, 'aprobar_pago', { pago: PAGO.verdeSamuel, monto: null }, /pausada/);
+        await rechaza(admin, 'aprobar_verdes', { sede: null }, /No hay comprobantes de nivel 2/);
+        expect((await propone(admin, 'registrar_pago_efectivo', { deportista: CLAVE.valentina, cobro: null, monto: 120000 })).titulo).toMatch(/\$120\.000 en efectivo de Valentina/);
+        await rechaza(admin, 'registrar_pago_efectivo', { deportista: CLAVE.santiago, cobro: null, monto: 120000 }, /2 cobros pendientes/);
+        await rechaza(admin, 'registrar_pago_efectivo', { deportista: CLAVE.valentina, cobro: null, monto: 200000 }, /saldo de ese cobro es \$120\.000/);
+        await rechaza(coach, 'aprobar_pago', { pago: PAGO.dudosoMarianaR, monto: 100000 }, NO_DISPONIBLE);
+        await rechaza(coach, 'registrar_pago_efectivo', { deportista: CLAVE.marianaLopez, cobro: null, monto: 120000 }, NO_DISPONIBLE);
+        await conEntorno({ LOTE_VERDES_ACTIVO: 'true' }, async () => {
+            expect((await propone(admin, 'aprobar_pago', { pago: PAGO.verdeSamuel, monto: null })).lineas.join(' ')).toMatch(/pago completo: \$150\.000/);
+            expect((await propone(admin, 'aprobar_verdes', { sede: null })).titulo).toBe('Aprobar 1 pago en verde');
+            await rechaza(admin, 'aprobar_verdes', { sede: 'sur' }, /No hay comprobantes de nivel 2/);
+        });
+
         // Los borradores de esta verificación no cuentan para los casos.
         bd().tablas.mapi_action_drafts.length = 0;
 
@@ -995,21 +1064,40 @@ describe('evals del modo agente de Mapi (plan §14)', () => {
             console.log(`[mapi-evals] ${c.estado === 'pasa' ? '✓' : '✗'} ${w.caso.id}${REPETIR > 1 ? `#${w.n}` : ''} (${(c.turnos.reduce((s, o) => s + o.ms, 0) / 1000).toFixed(1)} s${c.efecto ? `, confirmar ${c.efecto.confirmaciones.map((x) => x.tipos.join('+')).join(',')}` : ''})`);
 
         // Una corrida sola primero: si la API rechaza la llamada (400, key, sin crédito), se corta aquí y no se gastan las demás.
-        const todasCorridas: Corrida[] = [];
-        if (trabajo.length) {
-            const [primero, ...resto] = trabajo;
-            const c0 = await correrCorrida(primero.caso, primero.n);
-            marcar(primero, c0);
-            if (c0.turnos[0]?.tipo === 'sin_agente' || c0.turnos[0]?.tipo === 'error') {
-                throw new Error(`La primera corrida no obtuvo respuesta del modelo (${c0.turnos[0].motivo}). Corrida cortada.`);
-            }
-            const restoRes = await enParalelo(resto, CONCURRENCIA, async (w) => {
-                const c = await correrCorrida(w.caso, w.n);
-                marcar(w, c);
-                return c;
-            });
-            todasCorridas.push(c0, ...restoRes);
+        // Los casos con `entorno` corren después, en una fase por entorno (process.env es de todo el proceso).
+        const porCorrida = new Map<(typeof trabajo)[number], Corrida>();
+        const fases = new Map<string, typeof trabajo>();
+        for (const w of trabajo) {
+            const k = claveEntorno(w.caso);
+            fases.set(k, [...(fases.get(k) ?? []), w]);
         }
+        const ordenFases = [...fases.keys()].sort((a, b) => (a === '' ? -1 : b === '' ? 1 : a.localeCompare(b)));
+        let primeraHecha = false;
+        for (const k of ordenFases) {
+            const lote = fases.get(k)!;
+            await conEntorno(lote[0].caso.entorno, async () => {
+                let resto = lote;
+                if (!primeraHecha) {
+                    const [primero, ...demas] = lote;
+                    const c0 = await correrCorrida(primero.caso, primero.n);
+                    marcar(primero, c0);
+                    if (c0.turnos[0]?.tipo === 'sin_agente' || c0.turnos[0]?.tipo === 'error') {
+                        throw new Error(`La primera corrida no obtuvo respuesta del modelo (${c0.turnos[0].motivo}). Corrida cortada.`);
+                    }
+                    porCorrida.set(primero, c0);
+                    primeraHecha = true;
+                    resto = demas;
+                }
+                if (k) console.log(`[mapi-evals] fase con entorno ${k}: ${resto.length} corridas`);
+                await enParalelo(resto, CONCURRENCIA, async (w) => {
+                    const c = await correrCorrida(w.caso, w.n);
+                    marcar(w, c);
+                    porCorrida.set(w, c);
+                    return c;
+                });
+            });
+        }
+        const todasCorridas: Corrida[] = trabajo.map((w) => porCorrida.get(w)!);
         const gastoNuevo = todasCorridas.reduce((s, c) => s + c.costoUsd, 0);
 
         const resultados: ResultadoCaso[] = aCorrer.map((caso) => {

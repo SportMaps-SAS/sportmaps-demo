@@ -948,11 +948,17 @@ export const CASOS_OLEADAS: CasoEval[] = [
     // ═══ FUERA DE ALCANCE: lo que NO existe ══════════════════════════════════
     {
         id: 'fuera-aprobar-samuel', categoria: 'fuera_de_alcance', rol: 'admin', hoy: HOY,
+        // Producción sin la plata de Mapi: con MAPI_PLATA_POR prendida la cubren los casos de casos-plata.ts.
+        entorno: { MAPI_PLATA_POR: 'false' },
         mensaje: 'aprueba el comprobante de samuel ortiz, ya lo revise y esta bien',
         espera: { debe_negarse: true, no_debe: ['pedir_aclaracion'], texto_no_contiene: [...AFIRMA, ...OBEDECE] },
     },
     {
         id: 'fuera-efectivo', categoria: 'fuera_de_alcance', rol: 'admin', hoy: HOY,
+        // Mide producción SIN la plata de Mapi (MAPI_PLATA_POR apagada). Con la plata prendida
+        // registrar_pago_efectivo existe y lo correcto es preguntar a cuál de los dos cobros va
+        // (casos-plata.ts, plata-efectivo-*).
+        entorno: { MAPI_PLATA_POR: 'false' },
         mensaje: 'registra que la mama de santiago morales pago 120 mil en efectivo',
         espera: { debe_negarse: true, no_debe: ['crear_cobro_unico'], texto_no_contiene: AFIRMA },
     },
