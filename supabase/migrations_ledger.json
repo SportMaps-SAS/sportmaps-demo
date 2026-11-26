@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "note": "Registro versionado de migraciones. Lo genera scripts/migrations.mjs — no editar a mano. Toda migración nueva agrega una línea al final; si dos ramas chocan aquí, pónganse de acuerdo en la versión ANTES de mergear.",
-  "count": 981,
-  "head": "20261126154553",
+  "count": 982,
+  "head": "20261126161937",
   "migrations": [
     {"v":"20260217000001","file":"20260217000001_schema_refactored.sql","sha256":"efc763aeafd8e73e55d3800e7211e9a89f32c7bfc29ffaa4eae56e2147e1455c","added":"","by":""},
     {"v":"20260218000002","file":"20260218000002_rls_policies_and_indexes.sql","sha256":"592345d79c471f8282e501f07c92b9eb378974ccf50fd2bbd8c3ed7bd1449981","added":"","by":""},
@@ -984,6 +984,7 @@
     {"v":"20261126140304","file":"20261126140304_monster_sin_clase_de_prueba_desde_hoy.sql","sha256":"b59f1a6dd90df8428fa7d3e177f4b258e31bcc4e6cd21df9a591c9d3873f2b16","added":"2026-11-26","by":"Brayan Steven Lopez"},
     {"v":"20261126141501","file":"20261126141501_convocatorias_inscripciones_separadas_de_clase_de_prueba.sql","sha256":"cfd87d38040fb9beb27eb45d2655c4825ea10bc63d5776cd0dbfd03c3274c7eb","added":"2026-11-26","by":"Brayan Steven Lopez"},
     {"v":"20261126150204","file":"20261126150204_anuncio_destino_convocatoria.sql","sha256":"607c885a5700582aef6ad83f6a029537d600cdd20379e348f5325f10fca23aed","added":"2026-11-26","by":"Brayan Steven Lopez"},
-    {"v":"20261126154553","file":"20261126154553_carnet_identidad_club_gratis.sql","sha256":"f420bbcea172eb9092d0529857fcb02c4d3448e1f4ffba7d5601429589fb6be0","added":"2026-11-26","by":"Brayan Steven Lopez"}
+    {"v":"20261126154553","file":"20261126154553_carnet_identidad_club_gratis.sql","sha256":"f420bbcea172eb9092d0529857fcb02c4d3448e1f4ffba7d5601429589fb6be0","added":"2026-11-26","by":"Brayan Steven Lopez"},
+    {"v":"20261126161937","file":"20261126161937_carnet_codigo_con_sufijo_aleatorio.sql","sha256":"cf816bce103052fd95b4c0c8dc66600fab6d42d86cd5b04227352702f2be97d4","added":"2026-11-26","by":"Brayan Steven Lopez"}
   ]
 }

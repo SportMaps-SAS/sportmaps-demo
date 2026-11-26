@@ -1,6 +1,7 @@
 /**
  * «Verificar por código» (spec §5.3, D4): alguien digita el código impreso
- * `SM-AAAA-NNNNN` y la RPC pública verificar_carnet_por_codigo responde solo
+ * `SM-AAAA-NNNNN-XXXX` (el sufijo aleatorio cierra la enumeración, migración
+ * 20261126161937) y la RPC pública verificar_carnet_por_codigo responde solo
  * válido / no válido + nombre enmascarado + club. El nombre completo solo
  * sale por el QR (token).
  */
@@ -13,18 +14,24 @@ import { supabase } from '@/integrations/supabase/client';
 import type { VerificacionPorCodigo } from '@/lib/cards/contratos';
 import { cn } from '@/lib/utils';
 
-export const CODIGO_RE = /^SM-\d{4}-\d{5}$/;
+/** Sufijo: 4 caracteres de un alfabeto sin ambiguos (sin 0/O, 1/I/L). */
+export const CODIGO_RE = /^SM-\d{4}-\d{5}-[2-9A-HJKMNP-Z]{4}$/;
+/** Formato anterior (sin sufijo): la base ya no lo acepta; se manda igual y responde «formato». */
+const CODIGO_VIEJO_RE = /^SM-\d{4}-\d{5}$/;
 
 /**
- * Lo que la persona digitó → `SM-AAAA-NNNNN`, o null si no se puede armar.
- * Acepta minúsculas, espacios, sin guiones o sin el «SM»: «sm 2026 00012»,
- * «2026-12» (completa con ceros a la izquierda).
+ * Lo que la persona digitó → `SM-AAAA-NNNNN-XXXX`, o null si no se puede armar.
+ * Acepta minúsculas, espacios, sin guiones o sin el «SM»: «sm 2026 12 k7qp»,
+ * «2026-12-K7QP» (completa con ceros a la izquierda). Sin sufijo devuelve el
+ * formato viejo: la RPC responde «formato» y se pide el código completo.
  */
 export function normalizarCodigo(entrada: string): string | null {
   const limpio = String(entrada ?? '').toUpperCase().replace(/\s+/g, '').replace(/^SM-?/, '');
-  const m = limpio.match(/^(\d{4})-?(\d{1,5})$/);
+  const m = limpio.match(/^(\d{4})-?(\d{1,5})(?:-?([A-Z0-9]{4}))?$/);
   if (!m) return null;
-  const codigo = `SM-${m[1]}-${m[2].padStart(5, '0')}`;
+  const base = `SM-${m[1]}-${m[2].padStart(5, '0')}`;
+  if (!m[3]) return CODIGO_VIEJO_RE.test(base) ? base : null;
+  const codigo = `${base}-${m[3]}`;
   return CODIGO_RE.test(codigo) ? codigo : null;
 }
 
@@ -33,7 +40,7 @@ export type Veredicto = { tono: 'ok' | 'alerta' | 'error'; titulo: string; detal
 export function veredictoCodigo(r: VerificacionPorCodigo | null | undefined): Veredicto {
   if (!r) return { tono: 'error', titulo: 'No pudimos verificar el código', detalle: 'Revisa tu conexión e inténtalo de nuevo.' };
   if (!r.found) {
-    if (r.motivo === 'formato') return { tono: 'error', titulo: 'Ese código no tiene el formato correcto', detalle: 'Se escribe así: SM-2026-00123.' };
+    if (r.motivo === 'formato') return { tono: 'error', titulo: 'Ese código no tiene el formato correcto', detalle: 'Escríbelo completo, con los 4 caracteres del final: SM-2026-00123-K7QP.' };
     return { tono: 'error', titulo: 'Ese código no corresponde a ningún carnet', detalle: 'Revisa que esté bien escrito.' };
   }
   const quien = [r.nombre, r.club?.name].filter(Boolean).join(' · ') || null;
@@ -84,7 +91,7 @@ export function VerificarPorCodigo({ codigoInicial = '', className }: { codigoIn
             id="codigo-carnet"
             value={texto}
             onChange={(e) => { setTexto(e.target.value); setErrorFormato(false); }}
-            placeholder="SM-2026-00123"
+            placeholder="SM-2026-00123-K7QP"
             autoCapitalize="characters"
             autoComplete="off"
             spellCheck={false}
@@ -99,7 +106,7 @@ export function VerificarPorCodigo({ codigoInicial = '', className }: { codigoIn
           </Button>
         </div>
         <p id="codigo-carnet-ayuda" className={cn('text-xs', errorFormato ? 'text-destructive' : 'text-muted-foreground')}>
-          {errorFormato ? 'Escríbelo así: SM-2026-00123.' : 'Está impreso en el carnet, debajo del nombre.'}
+          {errorFormato ? 'Escríbelo completo: SM-2026-00123-K7QP.' : 'Está impreso en el carnet, debajo del nombre.'}
         </p>
       </form>
 
