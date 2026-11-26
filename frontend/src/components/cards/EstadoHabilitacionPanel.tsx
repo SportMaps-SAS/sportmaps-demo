@@ -31,7 +31,7 @@ const PUNTO: Record<EstadoCriterio, string> = {
   verde: 'bg-emerald-500',
   amarillo: 'bg-amber-400',
   rojo: 'bg-red-500',
-  no_aplica: 'bg-gray-300',
+  no_aplica: 'bg-muted-foreground/40',
 };
 
 export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacionPanelProps) {
@@ -44,7 +44,7 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
 
   if (q.isLoading) {
     return (
-      <div className="w-full max-w-sm rounded-xl border bg-white p-4 text-sm text-muted-foreground flex items-center gap-2">
+      <div className="w-full max-w-sm rounded-xl border bg-card p-4 text-sm text-muted-foreground flex items-center gap-2">
         <Loader2 className="h-4 w-4 animate-spin" /> Revisando si puede entrar…
       </div>
     );
@@ -52,7 +52,7 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
 
   if (q.isError) {
     return (
-      <div className="w-full max-w-sm rounded-xl border bg-white p-4 space-y-2 text-sm">
+      <div className="w-full max-w-sm rounded-xl border bg-card p-4 space-y-2 text-sm">
         <p className="text-red-700">No se pudo revisar el estado. Revisa la conexión.</p>
         <Button variant="outline" size="sm" className="gap-2" onClick={() => q.refetch()}>
           <RefreshCw className="h-3.5 w-3.5" /> Reintentar
@@ -66,7 +66,7 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
 
   if (v.tipo === 'evento_no_valido') {
     return (
-      <div className="w-full max-w-sm rounded-xl border bg-white p-4 space-y-2 text-sm">
+      <div className="w-full max-w-sm rounded-xl border bg-card p-4 space-y-2 text-sm">
         <p>Ese evento no es de esta escuela.</p>
         <Button variant="outline" size="sm" onClick={() => setEvento(null)}>Verificar sin evento</Button>
       </div>
@@ -89,7 +89,7 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
       </div>
 
       {v.eventos.length > 0 && (
-        <div className="rounded-xl border bg-white p-3 space-y-1.5">
+        <div className="rounded-xl border bg-card p-3 space-y-1.5">
           <Label htmlFor="habil-evento" className="text-xs text-muted-foreground">Verificar para</Label>
           <select
             id="habil-evento"
@@ -104,8 +104,8 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
       )}
 
       {v.emergencia.length > 0 && (
-        <div className="rounded-xl border bg-white p-3 text-sm">
-          <p className="mb-1.5 flex items-center gap-1.5 font-semibold text-gray-700">
+        <div className="rounded-xl border bg-card p-3 text-sm">
+          <p className="mb-1.5 flex items-center gap-1.5 font-semibold text-foreground">
             <HeartPulse className="h-4 w-4 text-red-500" aria-hidden /> Datos de emergencia
           </p>
           <dl className="space-y-1">
@@ -120,7 +120,7 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
       )}
 
       {v.conDetalle && v.criterios.length > 0 && (
-        <ul className="rounded-xl border bg-white divide-y text-sm" data-testid="criterios">
+        <ul className="rounded-xl border bg-card divide-y text-sm" data-testid="criterios">
           {v.criterios.map((c) => (
             <li key={c.clave} className="flex items-start gap-3 p-3">
               <span className={cn('mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full', PUNTO[c.estado])} aria-hidden />
@@ -134,10 +134,10 @@ export function EstadoHabilitacionPanel({ qrToken, eventId }: EstadoHabilitacion
       )}
 
       {v.conDetalle && sujeto && (
-        <div className="rounded-xl border bg-white p-3 space-y-3">
+        <div className="rounded-xl border bg-card p-3 space-y-3">
           <button
             type="button"
-            className="flex w-full items-center justify-between text-sm font-semibold text-gray-700"
+            className="flex w-full items-center justify-between text-sm font-semibold text-foreground"
             onClick={() => setCargando((x) => !x)}
             aria-expanded={cargando}
           >

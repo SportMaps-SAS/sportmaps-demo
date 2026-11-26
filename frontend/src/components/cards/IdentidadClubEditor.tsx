@@ -13,7 +13,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Loader2, Palette, RotateCcw, Save, Shield, Upload, Lock, AlertTriangle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useSchoolContext } from '@/hooks/useSchoolContext';
-import { useEntitlements } from '@/hooks/useEntitlements';
 import { useToast } from '@/hooks/use-toast';
 import { bffClient } from '@/lib/api/bffClient';
 import { Button } from '@/components/ui/button';
@@ -119,8 +118,8 @@ function useEscuelaIdentidad(schoolId: string) {
 
 export function IdentidadClubEditor({ schoolId, onGuardado, renderVistaPrevia, compacto }: IdentidadClubEditorProps) {
   const { toast } = useToast();
-  const entitlements = useEntitlements();
-  const tieneComplemento = entitlements.marcaPropia;
+  // Colores y escudo del carnet: gratis para todas las escuelas (2026-11-26).
+  const tieneComplemento = true;
   const { escuela, cargando, refrescar } = useEscuelaIdentidad(schoolId);
 
   // Valores guardados (con marca forzada: lo que el club tiene configurado).
@@ -280,7 +279,7 @@ export function IdentidadClubEditor({ schoolId, onGuardado, renderVistaPrevia, c
     }
   };
 
-  if (cargando || entitlements.isLoading) {
+  if (cargando) {
     return (
       <div className="flex items-center justify-center py-10 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin" />

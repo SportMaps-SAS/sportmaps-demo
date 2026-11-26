@@ -19,9 +19,9 @@ import { slugifyFileName, type PdfLayoutMode } from '@/lib/cards/cardLayout';
 import { CardTemplatesManager } from '@/components/cards/CardTemplatesManager';
 import { AthleteCard3D, datosDeEjemplo } from '@/components/cards/AthleteCard3D';
 import { resolverIdentidad, type BrandingSettingsCarnet } from '@/lib/cards/clubIdentity';
-import { useEntitlements } from '@/hooks/useEntitlements';
 import { StatFilterBar } from '@/components/common/StatFilterBar';
 import { TableRefreshBar } from '@/components/common/TableRefreshBar';
+import { VolverCarnetsV2 } from '@/components/school/carnets-v2/VolverCarnetsV2';
 
 type AthleteKind = 'child' | 'profile' | 'unregistered';
 
@@ -581,6 +581,7 @@ export default function SchoolCardsAdminPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      <VolverCarnetsV2 />
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
@@ -1161,7 +1162,6 @@ function Pager({ offset, pageCount, total, busy, onChange }: {
  * club, avisando que la familia hoy lo ve con el diseño de SportMaps.
  */
 function VistaPreviaCarnet3D({ schoolId }: { schoolId: string | null | undefined }) {
-  const { marcaPropia, isLoading } = useEntitlements();
   const [school, setSchool] = useState<{ name: string; logo_url: string | null; branding_settings: BrandingSettingsCarnet | null } | null>(null);
 
   useEffect(() => {
@@ -1179,8 +1179,8 @@ function VistaPreviaCarnet3D({ schoolId }: { schoolId: string | null | undefined
   }, [schoolId]);
 
   const datos = useMemo(
-    () => (school ? datosDeEjemplo(resolverIdentidad(school, marcaPropia, { forzarMarca: true })) : null),
-    [school, marcaPropia],
+    () => (school ? datosDeEjemplo(resolverIdentidad(school, true)) : null),
+    [school],
   );
 
   return (
@@ -1204,13 +1204,6 @@ function VistaPreviaCarnet3D({ schoolId }: { schoolId: string | null | undefined
           <p>
             Para imprimir y para el PDF por equipo se siguen usando las plantillas de abajo.
           </p>
-          {!isLoading && !marcaPropia && (
-            <p className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800">
-              <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              Así quedaría con los colores y el escudo de tu club. Hoy las familias lo ven con el diseño de SportMaps:
-              activa el complemento de marca para que lo vean con tu identidad.
-            </p>
-          )}
         </div>
       </CardContent>
     </Card>

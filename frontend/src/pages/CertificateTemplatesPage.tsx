@@ -259,8 +259,8 @@ export default function CertificateTemplatesPage() {
     <div className="container mx-auto p-4 md:p-6 space-y-6">
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <Link to="/certificates" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-1">
-            <ArrowLeft className="h-4 w-4" /> Constancias
+          <Link to="/carnets-constancias" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-1">
+            <ArrowLeft className="h-4 w-4" /> Carnets, constancias y QR
           </Link>
           <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
             <FileText className="h-7 w-7 text-primary" />

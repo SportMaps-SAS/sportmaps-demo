@@ -15,7 +15,7 @@ Un carnet digital de jugador con efecto 3D (inclinación, brillo holográfico, g
 |---|---|---|
 | D1 | Mapa de calor | **No se inventa.** El reverso muestra la **posición asignada en las alineaciones**, rotulada **«Zona de juego»**. Estadísticas del partido en vivo solo si existen; si no, reverso genérico (D2). |
 | D2 | Multideporte | Por fases. En F4: **fútbol** + **reverso genérico** (asistencia y evaluaciones) que sirve para cualquier deporte. Voleibol, gimnasia y MMA, en una fase posterior. El componente queda con un **registro por deporte** para agregar deportes sin reescribirlo. |
-| D3 | Plan | El **carnet 3D** (inclinación, brillo, giro) es **gratis para todos** con el **diseño base de SportMaps**. **Colores y escudo del club** siguen en el **complemento pago**. Sin complemento, el admin ve en la vista previa cómo quedaría con su identidad + llamado a activar el complemento. |
+| D3 | Plan | **Cambiado el 2026-11-26:** el carnet 3D **y** los **colores y el escudo del club** son **gratis para todas las escuelas** (migración `20261126154553`: `update_school_branding` ya no exige `school_has_branding_feature`). **Marca propia** queda para la app con la marca de la escuela (`school_shows_own_brand`) y apagar el «Powered by» (whitelabel). |
 | D4 | Código | **`SM-AAAA-NNNNN`** (5 dígitos). Va **impreso** en el carnet; el **QR sigue apuntando al token secreto** (`qr_token`). |
 | D5 | Escudo SVG | Se **convierte a PNG en el BFF** al subirlo (el SVG nunca se sirve tal cual). |
 | D6 | Archivo del escudo | Límite **2 MB** (el actual). La conversión a **WebP debe conservar la transparencia** (prueba automática). |

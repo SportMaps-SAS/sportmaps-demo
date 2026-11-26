@@ -14,6 +14,7 @@ import { useSchoolContext } from '@/hooks/useSchoolContext';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 import { bffClient } from '@/lib/api/bffClient';
+import { VolverCarnetsV2 } from '@/components/school/carnets-v2/VolverCarnetsV2';
 
 type QrRow = {
   id: string;
@@ -284,6 +285,7 @@ export default function SchoolJoinQRsPage() {
 
   return (
     <div className="container mx-auto p-6 space-y-6">
+      <VolverCarnetsV2 />
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">

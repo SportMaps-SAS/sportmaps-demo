@@ -102,26 +102,12 @@ export function filasDatosDeportista(d: CardData | null | undefined): Array<{ et
     .map((f) => ({ etiqueta: f.etiqueta, valor: String(f.valor) }));
 }
 
-/** ¿Se pintan colores y escudo del club? (D3). Ante cualquier duda: no. */
+/**
+ * ¿Se pintan colores y escudo del club? Desde el 2026-11-26 siempre (gratis para
+ * todas las escuelas); se conserva la firma por compatibilidad.
+ */
 export async function resolverConMarca(school: { id: string; slug?: string | null } | null | undefined): Promise<boolean> {
-  if (!school?.id) return false;
-  try {
-    if (school.slug) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await supabase.rpc('get_school_by_slug' as any, { p_slug: school.slug });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const r = data as any;
-      if (!error && r?.ok === true) return r.school?.id === school.id;
-      if (!error) return false;
-    }
-    const { data: sess } = await supabase.auth.getSession();
-    if (!sess.session) return false;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await supabase.rpc('school_shows_own_brand' as any, { p_school_id: school.id });
-    return !error && data === true;
-  } catch {
-    return false;
-  }
+  return !!school?.id;
 }
 
 /** card_back_data: sin sesión ni se llama (anon no tiene EXECUTE). */
