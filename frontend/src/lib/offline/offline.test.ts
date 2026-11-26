@@ -41,6 +41,17 @@ describe('lista blanca de consultas', () => {
     expect(esConsultaOffline([])).toBe(false);
   });
 
+  it('Fase 4: entra el Inicio del deportista, pero NO cobros, informes ni lo que traga errores', () => {
+    expect(esConsultaOffline(['athlete-v2-teams', 'u1'])).toBe(true);
+    expect(esConsultaOffline(['athlete-v2-attendance', 'u1'])).toBe(true);
+    expect(esConsultaOffline(['athlete-v2-callups', 'u1'])).toBe(true);
+    expect(esConsultaOffline(['athlete-v2-autoeval', 'u1'])).toBe(true);
+    expect(esConsultaOffline(['athlete-v2-kudos', 'u1', 20])).toBe(true);
+    for (const k of ['athlete-v2-cobros', 'athlete-v2-informes', 'athlete-v2-fichas', 'athlete-v2-plan', 'athlete-v2-torneos-abiertos', 'athlete-performance-entries']) {
+      expect(esConsultaOffline([k, 'u1'])).toBe(false);
+    }
+  });
+
   it('un prefijo parecido no cuenta (v2-asis-roster-x ≠ v2-asis-roster)', () => {
     expect(esConsultaOffline(['v2-asis-roster-x'])).toBe(false);
   });
