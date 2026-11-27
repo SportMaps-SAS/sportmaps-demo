@@ -204,15 +204,15 @@ export interface PrecioModelo {
  * Precios de lista en USD. El primero cuyo `patron` coincide con el modelo gana.
  *
  *  - Claude: tabla de precios de Anthropic (skill claude-api, caché del
- *    2026-09-25). Escritura de caché de 5 min = 1,25 × entrada; lectura según
- *    la tabla (Sonnet 5.5 y Opus 5.5: $0,20; Haiku 4.5: 0,1 × entrada).
+ *    2026-11-03). Escritura de caché de 5 min = 1,25 × entrada; lectura según
+ *    la tabla (Sonnet 5.5: $0,10, bajó el 11-03; Opus 5.5: $0,20; Haiku: 0,1 × entrada).
  *  - Gemini, Groq y OpenAI: POR CONFIRMAR (`confirmado: false`). Son precios de
  *    referencia; que alguien los revise en la página de cada proveedor y
  *    cambie `confirmado` a true. `gemini-flash-latest` es un ALIAS que Google
  *    mueve al Flash vigente, así que su precio puede cambiar sin aviso.
  */
 export const PRECIOS_POR_MILLON: PrecioModelo[] = [
-    { nombre: 'Claude Sonnet 5.5', patron: /claude-sonnet-5-5/i, input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, confirmado: true },
+    { nombre: 'Claude Sonnet 5.5', patron: /claude-sonnet-5-5/i, input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, confirmado: true },
     { nombre: 'Claude Opus 5.5', patron: /claude-opus-5-5/i, input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, confirmado: true },
     // Respuesta a prospectos (2026-10-28). Hasta 100K tokens de prompt; lectura de
     // caché 0,1 × y escritura de 5 min 1,25 × la entrada.

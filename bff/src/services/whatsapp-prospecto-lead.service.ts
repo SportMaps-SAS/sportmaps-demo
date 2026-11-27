@@ -116,6 +116,12 @@ export interface ParamsLeadWa {
          * monto, id de la respuesta). Va a `source_detail.formulario`; no pisa `respuestas`.
          */
         formulario?: Record<string, unknown> | null;
+        /**
+         * Inscripción a una CONVOCATORIA (bot-ofertas, tipo 'convocatoria'): los datos
+         * estructurados van a `source_detail.convocatoria` (RPC listar_inscripciones_convocatoria).
+         * Se fusionan con lo que ya tenía (ver `detalleDeConvocatoria`).
+         */
+        convocatoria?: ConvocatoriaDeLead | null;
     };
     /**
      * Servicio del catálogo por el que preguntó (anuncio de la clínica, «info del
@@ -136,6 +142,67 @@ export function detalleDeAnuncio(
     return {
         ...(p.servicio ? { servicio_interes: { ...p.servicio, at: ahora } } : {}),
         ...(p.anuncio && !previo?.anuncio ? { anuncio: { ...p.anuncio, at: ahora } } : {}),
+    };
+}
+
+// ─── Inscripción a una convocatoria (2026-11-26) ─────────────────────────────
+//
+// Monster's lleva las inscripciones a convocatorias en Excel y correo: necesita verlas
+// APARTE de la clase de prueba y con sus datos en columnas. El bot deja lo que sabe en
+// `source_detail.convocatoria` (contrato de la RPC listar_inscripciones_convocatoria,
+// mig. 20261126141501); el estado lo mueve la escuela (marcar_inscripcion_convocatoria).
+
+export type EstadoInscripcionConvocatoria = 'pendiente' | 'confirmada' | 'pagada' | 'descartada';
+
+/** Lo que el bot sabe de la inscripción (las claves, en snake_case, son las de la base). */
+export interface ConvocatoriaDeLead {
+    titulo?: string | null;
+    oferta_id?: string | null;
+    sede?: string | null;
+    genero?: string | null;
+    anio?: number | null;
+    trayectoria?: boolean | null;
+    detalle?: string | null;
+    /** «viernes 4 de diciembre, 1:00 p. m. · Parque Pinar de Suba», en orden. */
+    fechas?: string[];
+    valor?: number | null;
+    valor_con_descuento?: number | null;
+    promo_pct?: number | null;
+}
+
+const esObjeto = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * `source_detail.convocatoria` fusionado (pura):
+ *   - misma convocatoria (mismo `oferta_id`, o mismo título si falta el id): lo nuevo que
+ *     no es null/vacío pisa lo anterior; el estado que puso la escuela (confirmada, pagada,
+ *     descartada) y su nota NO se tocan;
+ *   - otra convocatoria (otro `oferta_id`/título): arranca en 'pendiente' y la anterior
+ *     queda en `anterior` (no se pierde lo que la escuela había marcado).
+ */
+export function detalleDeConvocatoria(
+    nueva: ConvocatoriaDeLead, previa: unknown, ahora: string,
+): Record<string, unknown> {
+    const prev = esObjeto(previa) ? previa : null;
+    const igual = (a: unknown, b: unknown) => a == null || b == null || a === b;
+    const misma = !!prev && (nueva.oferta_id && prev.oferta_id
+        ? nueva.oferta_id === prev.oferta_id
+        : igual(nueva.titulo, prev.titulo));
+    const limpio: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(nueva)) {
+        if (v === undefined || v === null || (Array.isArray(v) && !v.length)) continue;
+        limpio[k] = v;
+    }
+    if (misma) {
+        const estado = typeof prev!.estado === 'string' && prev!.estado ? prev!.estado : 'pendiente';
+        return { ...prev, ...limpio, estado, registrada_at: prev!.registrada_at ?? ahora, actualizada_at: ahora };
+    }
+    const anterior = prev ? (({ anterior: _a, ...resto }) => resto)(prev) : null;
+    return {
+        ...limpio,
+        estado: 'pendiente',
+        registrada_at: ahora,
+        ...(anterior ? { anterior } : {}),
     };
 }
 
@@ -239,6 +306,8 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                     ultima_actividad: ahora,
                     ...(p.estado === 'respondido' ? { respondido_at: sd.respondido_at ?? ahora } : {}),
                     ...(c?.detalle ?? {}),
+                    ...(p.completo?.convocatoria
+                        ? { convocatoria: detalleDeConvocatoria(p.completo.convocatoria, sd.convocatoria, ahora) } : {}),
                     ...detalleDeAnuncio(p, sd, ahora),
                 },
                 updated_at: ahora,
@@ -277,6 +346,8 @@ export async function registrarLeadDeProspecto(p: ParamsLeadWa): Promise<{ leadI
                 ultima_actividad: ahora,
                 ...(p.estado === 'respondido' ? { respondido_at: ahora } : {}),
                 ...(c?.detalle ?? {}),
+                ...(p.completo?.convocatoria
+                    ? { convocatoria: detalleDeConvocatoria(p.completo.convocatoria, null, ahora) } : {}),
                 ...detalleDeAnuncio(p, null, ahora),
             },
         });

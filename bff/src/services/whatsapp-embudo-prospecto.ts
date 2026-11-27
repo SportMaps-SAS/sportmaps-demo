@@ -76,6 +76,7 @@ import {
     type AjustesClasePrueba, type AjustesWhatsAppEscuela, type BotonSede, type PreguntaProspecto,
 } from './whatsapp-ajustes-escuela.service';
 import type { ResultadoCupo } from './clase-prueba-agenda.service';
+import type { ConvocatoriaDeLead } from './whatsapp-prospecto-lead.service';
 import {
     estadoDeOfertas, claseDePruebaPermitidaEn, textoOfertasParaPersona, sumarDias,
     fechaLegible as fechaLegibleDeOferta, elegirOfertas, textoDeOfertas, datosDeRespuesta,
@@ -253,6 +254,8 @@ export interface LeadEmbudo {
     respuestas: Record<string, string>;
     /** Qué busca. Sin él, 'clase_prueba' (lo de siempre); con las ofertas, su tipo («convocatoria»). */
     quiere?: TipoOferta | 'oferta' | null;
+    /** Inscripción a una convocatoria: lo que se sabe (`source_detail.convocatoria`). */
+    convocatoria?: ConvocatoriaDeLead | null;
 }
 
 export type MotivoPersona = 'sin_grupo' | 'sin_horarios' | 'sin_cuentas_de_pago' | 'no_entendio' | 'error' | 'pide_persona'
@@ -666,6 +669,21 @@ export function leadCompletoDeEmbudo(l: LeadEmbudo) {
         deportista: l.deportista, fechaNacimiento: l.fechaNacimiento,
         edad: l.anio ? hoy - l.anio : null, categoriaSugerida: l.grupo, quiere: l.quiere ?? 'clase_prueba',
         branchId: l.branchId, teamId: l.teamId, genero: l.genero, respuestas: l.respuestas, via: 'embudo' as const,
+        ...(l.convocatoria ? { convocatoria: l.convocatoria } : {}),
+    };
+}
+
+/**
+ * Lo que el embudo sabe de una inscripción a convocatoria (título solo si se le mostró
+ * UNA; sede, género y año de lo que contó). Pura.
+ */
+export function convocatoriaDeEmbudo(d: DatosEmbudo, titulos: string[] = []): ConvocatoriaDeLead {
+    const unicos = [...new Set(titulos.filter(Boolean))];
+    return {
+        titulo: unicos.length === 1 ? unicos[0] : null,
+        sede: d.sedeTitulo ? sinEmojis(d.sedeTitulo) : null,
+        genero: d.genero === 'f' ? 'femenino' : d.genero === 'm' ? 'masculino' : null,
+        anio: d.anio ?? null,
     };
 }
 
@@ -1452,7 +1470,7 @@ async function ofrecerSinClaseDePrueba(
         ? textoDeOfertas(elegidas, of, { conNota: true })
         : textoOfertasParaPersona(of, { genero });
     const quiere = ofertas ? interesDeOfertas(elegidas ? { ofertas: elegidas } : of) : null;
-    const datos = await conLeadDeOfertas(ctx, d, grupo, quiere);
+    const datos = await conLeadDeOfertas(ctx, d, grupo, quiere, elegidas ? elegidas.map((x) => x.titulo) : []);
     if (!ofertas) {
         const cierre = of.mensajeSinOfertas
             ? `${of.mensajeSinOfertas}\n\nYa le pasé tus datos a la escuela y te escriben por aquí 🙌`
@@ -1480,10 +1498,14 @@ async function ofrecerSinClaseDePrueba(
 /** Guarda el lead (si ya contó algo) con lo que quiere y deja los datos listos para el paso de las ofertas. */
 async function conLeadDeOfertas(
     ctx: CtxEmbudo, d: DatosEmbudo, grupo: GrupoEmbudo | null, quiere: TipoOferta | 'oferta' | null,
+    titulos: string[] = [],
 ): Promise<DatosEmbudo> {
     const tieneDatos = !!(d.nombre || Object.keys(d.respuestas ?? {}).length);
     const leadId = tieneDatos
-        ? (await seguro(() => ctx.guardarLead({ ...leadDeDatos(d, grupo), ...(quiere ? { quiere } : {}) }))) ?? d.leadId ?? null
+        ? (await seguro(() => ctx.guardarLead({
+            ...leadDeDatos(d, grupo), ...(quiere ? { quiere } : {}),
+            ...(quiere === 'convocatoria' ? { convocatoria: convocatoriaDeEmbudo(d, titulos) } : {}),
+        }))) ?? d.leadId ?? null
         : d.leadId ?? null;
     return {
         ...d, leadId, teamId: grupo?.teamId ?? d.teamId ?? null, grupo: grupo?.nombre ?? d.grupo ?? null,
@@ -1514,7 +1536,11 @@ async function pasoElegirOferta(ctx: CtxEmbudo, estado: EstadoEmbudo, texto: str
     const of = mostradas ? null : await ofertasDe(ctx);
     const quiere = mostradas ? interesDeOfertas({ ofertas: mostradas }) : of?.ofertas.length ? interesDeOfertas(of) : 'oferta';
     const datos: DatosEmbudo = { ...d, respuestas: { ...(d.respuestas ?? {}), oferta_elegida: eleccion } };
-    await seguro(() => ctx.guardarLead({ ...leadDeDatos(datos, grupoDeDatos(datos)), quiere }));
+    await seguro(() => ctx.guardarLead({
+        ...leadDeDatos(datos, grupoDeDatos(datos)), quiere,
+        ...(quiere === 'convocatoria'
+            ? { convocatoria: convocatoriaDeEmbudo(d, (mostradas ?? []).map((m) => m.titulo)) } : {}),
+    }));
     const nombre = primerNombre(d.nombre);
     await ctx.enviar(`¡Listo! 🙌 Le pasé a la escuela que quieres inscribir${nombre ? ` a *${nombre}*` : ''} en: «${eleccion}». `
         + 'La escuela te confirma el cupo por aquí.', PASO_EMBUDO.INSCRIPCION_OFERTA, null, undefined, undefined,

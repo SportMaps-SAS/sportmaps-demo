@@ -73,10 +73,10 @@ describe('tokensDeRespuesta', () => {
 });
 
 describe('precios y costo', () => {
-    it('Sonnet 5.5: $2 entrada, $10 salida, $0,20 caché leída, $2,50 caché escrita por millón', () => {
+    it('Sonnet 5.5: $2 entrada, $10 salida, $0,10 caché leída (desde el 11-03), $2,50 caché escrita por millón', () => {
         expect(costoUsd({ model: 'claude-sonnet-5-5', input_tokens: 1_000_000 })).toBeCloseTo(2);
         expect(costoUsd({ model: 'claude-sonnet-5-5', output_tokens: 1_000_000 })).toBeCloseTo(10);
-        expect(costoUsd({ model: 'claude-sonnet-5-5', cache_read_tokens: 1_000_000 })).toBeCloseTo(0.2);
+        expect(costoUsd({ model: 'claude-sonnet-5-5', cache_read_tokens: 1_000_000 })).toBeCloseTo(0.1);
         expect(costoUsd({ model: 'claude-sonnet-5-5', cache_write_tokens: 1_000_000 })).toBeCloseTo(2.5);
     });
     it('Opus 5.5 y Haiku 4.5 tienen su propio precio', () => {

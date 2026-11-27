@@ -1042,6 +1042,26 @@ export function ventaCedeAlEmbudo(recientes: FilaReciente[], item: ItemConFicha,
 }
 
 /**
+ * (2026-11-26, auditoría Monster …5131 / …8713) LA INTENCIÓN ACTUAL MANDA sobre un estado viejo: con una venta
+ * abierta (el Vacacional, 7 días), quien escribe ahora «¡Hola! Quiero inscribirme a la convocatoria de suba»
+ * recibía «Para separar tu cupo en el Vacacional… $100.000». Si el mensaje del turno pide una convocatoria
+ * (`pideConvocatoria`: `preguntaPorConvocatoria` del bot, inyectada para no atar este módulo a la cortesía), la
+ * escuela tiene convocatorias guiadas vigentes y el mensaje NO nombra el servicio de la venta, la venta cede
+ * (como cede al embudo y a `pideElClub`) y el turno sigue al camino de la convocatoria. `item` null: la venta
+ * que se iba a iniciar o continuar sin servicio fijo aún. Pura.
+ */
+export function ventaCedeALaConvocatoria(
+    textos: (string | null | undefined)[],
+    item: ItemConFicha | null,
+    o: { pideConvocatoria: (t: string) => boolean; hayConvocatoriasGuiadas: boolean },
+): boolean {
+    if (!o.hayConvocatoriasGuiadas) return false;
+    const t = textos.filter((x): x is string => !!x && !!x.trim());
+    if (!t.some((x) => o.pideConvocatoria(x))) return false;
+    return !item || !t.some((x) => nombraElServicio(x, item));
+}
+
+/**
  * ¿Ya salió algún mensaje de esta venta (ficha, campaña, texto de la escuela o un
  * saliente marcado)? Si no, el primer contacto lo atiende la ficha del destino
  * por anuncio. Pura.

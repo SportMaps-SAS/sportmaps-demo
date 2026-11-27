@@ -30,7 +30,8 @@ import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabase';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
-export const DESTINOS = ['clase_prueba', 'servicio', 'persona'] as const;
+/** (2026-11-26) 'convocatoria': la convocatoria guiada de la escuela (bot_ofertas). */
+export const DESTINOS = ['clase_prueba', 'servicio', 'persona', 'convocatoria'] as const;
 export type Destino = typeof DESTINOS[number];
 
 export interface MotivoDePago {

@@ -1198,12 +1198,14 @@ router.put(
               await applyAthleteFilter(
                 supabase.from('payments').update({ status: 'cancelled', updated_at: new Date().toISOString() })
                   .eq('school_id', schoolId).not('team_id', 'is', null).is('offering_plan_id', null).eq('status', 'pending')
+                  .or(PLAN_PERIOD_CHARGE_FILTER) // solo mensualidad: torneo, inscripción, etc. no se tocan
               );
             } else if (oldTeamId && oldTeamId !== enrollment.team_id) {
               // Equipo cambió: cancelar pagos pending del equipo anterior
               await applyAthleteFilter(
                 supabase.from('payments').update({ status: 'cancelled', updated_at: new Date().toISOString() })
                   .eq('school_id', schoolId).eq('team_id', oldTeamId).eq('status', 'pending')
+                  .or(PLAN_PERIOD_CHARGE_FILTER) // solo mensualidad: torneo, inscripción, etc. no se tocan
               );
               // Crear pago nuevo para el equipo nuevo (solo si tiene cuota > 0).
               // Igual que en el cambio de plan: el cobro va al mes en que se
@@ -1223,6 +1225,7 @@ router.put(
               await applyAthleteFilter(
                 supabase.from('payments').update({ status: 'cancelled', updated_at: new Date().toISOString() })
                   .eq('school_id', schoolId).eq('team_id', oldTeamId || enrollment.team_id).eq('status', 'pending')
+                  .or(PLAN_PERIOD_CHARGE_FILTER) // solo mensualidad: torneo, inscripción, etc. no se tocan
               );
             } else {
               // Mismo equipo: actualizar SOLO el monto de los cobros pendientes.
@@ -1238,6 +1241,7 @@ router.put(
                   applyAthleteFilter(
                     supabase.from('payments').select('id, discount_pct, sibling_discount_applied, amount')
                       .eq('school_id', schoolId).eq('team_id', oldTeamId || enrollment.team_id).eq('status', 'pending')
+                      .or(PLAN_PERIOD_CHARGE_FILTER) // solo mensualidad: torneo, inscripción, etc. no se tocan
                   ),
                   teamFee,
                 );

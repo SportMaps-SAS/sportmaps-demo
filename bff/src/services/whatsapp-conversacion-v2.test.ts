@@ -613,6 +613,10 @@ describe('puerta única: motor', () => {
         for (const dato of ['Convocatorias Sede Suba', 'viernes 11 de diciembre', 'Deportista: Sofía Gómez Uribe.', 'Género: femenino.',
             'Año de nacimiento: 2013 a 2014.', 'Sede: Sede Suba.']) expect(f.avisos[0].detalle).toContain(dato);
         expect(f.leads).toEqual([expect.objectContaining({ deportista: 'Sofía Gómez Uribe', quiere: 'convocatoria' })]);
+        expect(f.leads[0].convocatoria).toMatchObject({
+            titulo: 'Convocatorias Sede Suba', oferta_id: 'suba', sede: 'Sede Suba', genero: 'femenino',
+            fechas: ['viernes 11 de diciembre, 4:00 p. m. · Parque Pinar de Suba'], valor: null, valor_con_descuento: null,
+        });
     });
 
     it('hombre 1998 con trayectoria: mayores SOLO masculino, el detalle llega a la escuela y la confirmación trae el valor', async () => {
@@ -670,6 +674,43 @@ describe('puerta única: motor', () => {
         expect(f.avisos[0].detalle).toContain('Valor: $50.000. Promo aplicada: 10 % → $45.000 (si paga hasta el viernes 27 de noviembre, 11:59 p. m.; indicarle cómo pagar).');
         // La lista de ofertas que vio también trae el descuento (mismo «ahora»).
         expect(textosDesde(f, 0)).toContain('Valor: ~$50.000~ → *$45.000*');
+        // (2026-11-26) El lead lleva la inscripción estructurada para la pantalla «Convocatorias» de la escuela.
+        expect(f.leads).toHaveLength(1);
+        expect(f.leads[0]).toMatchObject({ deportista: 'Juan Pérez', quiere: 'convocatoria' });
+        expect(f.leads[0].convocatoria).toEqual({
+            titulo: 'Convocatorias equipos mayores', oferta_id: 'may', sede: 'Sede Norte', genero: 'masculino',
+            anio: expect.any(Number), trayectoria: true, detalle: 'Club X y torneo departamental, opuesto',
+            fechas: ['miércoles 9 de diciembre, 8:00 a 10:00 p. m. · Universidad ECCI'],
+            valor: 50000, valor_con_descuento: 45000, promo_pct: 10,
+        });
+    });
+
+    it('lead de la inscripción: TODAS las fechas en orden aunque la escuela las cargue desordenadas; fuera de la promo, sin descuento', async () => {
+        const filas: FilasCrudas = {
+            ...FILAS_GUIADA,
+            sesiones: [
+                { id: 'm4', oferta_id: 'may', fecha: '2026-12-16', hora_inicio: '20:00:00', hora_fin: '22:00:00', lugar: 'Universidad ECCI', genero: 'masculino' },
+                { id: 'm3', oferta_id: 'may', fecha: '2026-12-04', hora_inicio: '13:00:00', hora_fin: null, lugar: 'Parque Pinar de Suba', genero: 'masculino' },
+                ...FILAS_GUIADA.sesiones,
+            ],
+        };
+        const f = falso({ ofertas: armarEstado('s1', filas, DIC_3), ahora: new Date('2026-11-28T10:00:00-05:00') });
+        await iniciarConvocatoria(f.ctx, {});
+        await f.turno('Masculino', 'of_g_masculino');
+        await f.turno('2008 o antes', 'of_a_x_2008');
+        await f.turno('Sí', 'of_t_si');
+        await f.turno('Club X');
+        await f.turno('Quiero inscribirme', 'of_inscribirme');
+        await f.turno('Juan Pérez');
+        expect(f.leads).toHaveLength(1);
+        expect(f.leads[0].convocatoria).toMatchObject({
+            oferta_id: 'may', valor: 50000, valor_con_descuento: null, promo_pct: null,
+            fechas: [
+                'viernes 4 de diciembre, 1:00 p. m. · Parque Pinar de Suba',
+                'miércoles 9 de diciembre, 8:00 a 10:00 p. m. · Universidad ECCI',
+                'miércoles 16 de diciembre, 8:00 a 10:00 p. m. · Universidad ECCI',
+            ],
+        });
     });
 
     it('promo: confirmando FUERA de la ventana (28-nov 00:00) todo como siempre', async () => {

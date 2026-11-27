@@ -315,6 +315,40 @@ describe('«Sí» a una retoma de convocatorias (filtro.destino, Monster 2026-11
         expect(est.enviados.map((e) => e.texto)).toEqual([TEXTO_CAMPANA_TERMINADA]);
     });
 
+    // (Auditoría 2026-11-26, bug 3) Con el Vacacional EN VENTA, el texto de la retoma («…tu experiencia en el voleibol»,
+    // «después del vacacional…») calzaba con él: `item` dejaba de ser null y el «Sí» salía como la venta del Vacacional
+    // (marca de venta y [Separar mi cupo]) en vez de la convocatoria guiada.
+    describe('con el Vacacional de voleibol EN VENTA (fixture real de Monster)', () => {
+        const VAC = 'fff41827-cd2f-404a-b0ff-f42dc66c59a8';
+        const dias = (k: number) => new Date(Date.now() + k * 86_400_000).toISOString();
+        beforeEach(() => {
+            venta.esperados = [];
+            db.t.school_tournament_items = [{
+                id: VAC, school_id: ESC, name: 'Vacacional de voleibol — Sede Suba', kind: 'vacacional',
+                price: '100000.00', active: true, event_id: null, starts_at: dias(-9), ends_at: dias(15),
+                allow_installments: false, abono_minimo_pct: null, precio_afiliado: null, precios_por_fecha: null,
+                opciones: [{ clave: '1', precio: 100000, etiqueta: '1 semana', precio_afiliado: 80000 }],
+            }];
+        });
+        const RETOMAS: [string, string][] = [
+            ['Retoma convocatorias 2027 — Monster´s Volley', '¡Queremos conocerte y conocer tu experiencia en el voleibol! Para orientarte hacia la convocatoria que mejor se adapte a tu perfil, te hago unas preguntas.'],
+            ['Retoma convocatorias — familias del vacacional', '¡Gracias por acompañarnos en el Vacacional de voleibol — Sede Suba! En diciembre abrimos convocatorias para los equipos 2027: te hago unas preguntas.'],
+        ];
+        for (const [nombre, respuesta_si] of RETOMAS) {
+            it(`«${nombre}» → la convocatoria guiada, nunca la venta del Vacacional`, async () => {
+                Object.assign(db.t.whatsapp_campanas[0], { filtro: { destino: 'convocatorias' }, nombre, respuesta_si, estado: 'enviada', vence_at: null, servicio_id: null });
+                const iniciar = vi.fn(async () => true);
+                expect(await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: iniciar })).toBe('si');
+                expect(iniciar).toHaveBeenCalledTimes(1);
+                expect(est.enviados.map((e) => e.texto)).toEqual([respuesta_si]);
+                expect(est.enviados.every((e) => !e.botones)).toBe(true);
+                const pagos = db.rpcLlamadas.filter((l) => l.fn === 'wa_record_outbound_message').map((l) => l.args.p_payload);
+                expect(pagos.every((pl) => pl.venta_servicio_id === undefined)).toBe(true);
+                expect(venta.esperados).toHaveLength(0);
+            });
+        }
+    });
+
     it('una campaña sin destino no arranca la convocatoria aunque el webhook la inyecte', async () => {
         const iniciar = vi.fn(async () => true);
         await atenderRespuestaDeCampana({ integration: INTEG, conversationId: 'conv-1', msg: boton('si'), iniciarConvocatoria: iniciar });

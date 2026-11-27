@@ -186,6 +186,12 @@ interface Escenario {
     historial?: any[];
     /** Los mensajes recientes de la conversación (`mensajesRecientes`): p. ej. el entrante con el anuncio. */
     recientes?: any[];
+    /** Servicios ACTIVOS del catálogo (`serviciosDeAnuncio`). Por defecto ninguno. */
+    servicios?: any[];
+    /** Mapeos de anuncio (`whatsapp_anuncio_destino`) por source_id. */
+    mapeos?: Record<string, { destino: string; servicio_id?: string | null }>;
+    /** Bloqueos de la escuela (por defecto el de diciembre–enero). */
+    bloqueos?: any[];
 }
 
 function montar(e: Escenario = {}) {
@@ -225,11 +231,17 @@ function montar(e: Escenario = {}) {
         if (table === 'school_tournament_items') {
             // `serviciosDeAnuncio` filtra active=true: la clínica está inactiva.
             const soloActivos = ops.some(([m, a]) => m === 'eq' && a[0] === 'active' && a[1] === true);
-            return { data: schoolId === MONSTER && !soloActivos ? [CLINICA] : [], error: null };
+            if (soloActivos) return { data: schoolId === MONSTER ? (e.servicios ?? []) : [], error: null };
+            return { data: schoolId === MONSTER ? [CLINICA, ...(e.servicios ?? [])] : [], error: null };
         }
         if (table === 'whatsapp_campanas') return { data: schoolId === MONSTER ? CAMPANA : null, error: null };
         if (table === 'whatsapp_campana_envios') return { data: { id: 'env-1', estado: 'enviado' }, error: null };
-        if (table === 'bot_oferta_bloqueos') return { data: conConfig ? [BLOQUEO] : [], error: null };
+        if (table === 'bot_oferta_bloqueos') return { data: conConfig ? (e.bloqueos ?? [BLOQUEO]) : [], error: null };
+        if (table === 'whatsapp_anuncio_destino') {
+            const src = ops.find(([m, a]) => m === 'eq' && a[0] === 'source_id')?.[1]?.[1];
+            const fila = src && e.mapeos?.[src];
+            return { data: fila ? [{ destino: fila.destino, servicio_id: fila.servicio_id ?? null }] : [], error: null };
+        }
         if (table === 'bot_ofertas') return { data: conConfig ? OFERTAS : [], error: null };
         if (table === 'bot_oferta_sesiones') return { data: conConfig ? SESIONES : [], error: null };
         if (table === 'bot_ofertas_ajustes') {
@@ -528,5 +540,182 @@ describe('Dynasty (sin configuraciones): como antes', () => {
         expect(s.ids, s.texto).toEqual(expect.arrayContaining([`${BOTON_CC.FRANJA}slot-dic`, `${BOTON_CC.FRANJA}slot-feb`]));
         expect(s.texto).not.toMatch(/no tenemos clases de/i);
         expect(s.texto).not.toMatch(TEXTO_DE_CLINICA);
+    });
+});
+
+// ─── Auditoría 2026-11-26: anuncios de convocatoria y silencio con la escuela ─────────────────────────────────
+// Anuncios, mapeos y vacacional tal cual la base de Monster (fixture de la auditoría del 26-nov). Bloqueo real de
+// la clase de prueba: desde el 26-nov.
+
+const BLOQUEO_REAL = { tipo: 'clase_prueba', desde: '2026-11-26', hasta: '2027-01-31', motivo: 'Sin clases de prueba: se ofrecen las convocatorias' };
+const VACACIONAL_ID = 'fff41827-cd2f-404a-b0ff-f42dc66c59a8';
+const VACACIONAL = {
+    id: VACACIONAL_ID, school_id: MONSTER, name: 'Vacacional de voleibol — Sede Suba', kind: 'vacacional', price: 100000, active: true,
+    event_id: null, starts_at: '2026-11-17T08:00:00-05:00', ends_at: '2026-12-11T11:00:00-05:00', capacity: 40, created_at: '2026-11-10T00:00:00Z',
+    description: '🏐 *Vacacional de voleibol · Sede Suba*\n📍 Parque Pinar de Suba 2\n📅 Hasta el 11 de diciembre · martes, miércoles y jueves\n⏰ 8:00 a 11:00 a. m.',
+    allow_installments: false, precio_afiliado: null, precios_por_fecha: null, abono_minimo_pct: null, precios_afiliado_por_fecha: null,
+    opciones: [
+        { clave: '1', precio: 100000, etiqueta: '1 semana', precio_afiliado: 80000 },
+        { clave: '2', precio: 140000, etiqueta: '2 semanas', precio_afiliado: 120000 },
+        { clave: '3', precio: 170000, etiqueta: '3 semanas', precio_afiliado: 150000 },
+    ],
+};
+const CUERPO_TORNEO = 'Monsters Volley está conformando sus equipos de competencia 2027. 🏐🔥\n\n🏆 Superliga\n🏆 Torneo Nacional\n🏆 Torneo Distrital\n\n👩‍🦰 Femenino y 👨 Masculino\n\n📅 Convocatorias: del 1 al 13 de diciembre y del 12 al 31 de enero\n📲 Escríbenos por WhatsApp: 318 868 2241\n\n#MonstersVolley #Superliga2027 #VoleibolBogotá #VoleibolFemenino #VoleibolMasculino';
+const CUERPO_SUPERLIGA = '¿Juegas competitivo? La Superliga no se mira desde la tribuna. 🏐\nConvocatorias Monsters Volley 2027: del 1 al 13 de dic y del 12 al 31 de ene.\nEscríbenos y asegura tu prueba 👉 318 8682241';
+const CUERPO_BF = 'El mejor regalo es empezar el 2027 en un club de calidad. 🏐\n\nQueremos que seas parte de la familia Monsters, por eso aprovecha el Black Friday y disfruta de un 10% de descuento \n\nEntrena, compite y crece en un club que te acompaña en cada paso.\n\n📅 Convocatorias: del 1 al 13 de diciembre y del 12 al 31 de enero\n⏳ Oferta válida solo en Black Friday\n📲 Escríbenos por WhatsApp: 318 868 2241\n\n#BlackFriday #FamiliaMonsters #MonstersVolley #VoleibolBogotá #Convocatorias2027';
+const CUERPO_VAC = '“No tengo experiencia.” “Soy muy bajito.” “Ya estoy muy grande.” 🙅🏽‍♂️\n\nTu lista de excusas se acaba aquí. Últimos cupos para el Vacacional de Fin de Año de Monsters Volley 🏐🔥\n\n📍 Sede Suba\n🗓️ Martes, miércoles y jueves · 8:00 a. m. a 11:00 a. m.\n\nEsta es tu señal. Escríbenos y reserva tu lugar 👇';
+const ANUNCIOS = {
+    torneoA: { source_id: '120251602660860783', source_type: 'ad', headline: 'Convocatoria abierta equipos competencia', body: CUERPO_TORNEO },
+    torneoB: { source_id: '120251602566180783', source_type: 'ad', headline: 'Convocatoria abierta equipos competencia', body: CUERPO_TORNEO },
+    superliga: { source_id: '120251602548730783', source_type: 'ad', headline: 'Convocatoria Superliga abierta', body: CUERPO_SUPERLIGA },
+    blackFriday: { source_id: '120251602630020783', source_type: 'ad', headline: 'Aprovecha el black friday', body: CUERPO_BF },
+    vacacional: { source_id: '120251493046980783', source_type: 'ad', headline: 'VACACIONAL DE FIN DE AÑO', body: CUERPO_VAC },
+} as const;
+/** Mapeo real: el anuncio del vacacional va al vacacional; los de convocatoria, sin mapeo. */
+const MAPEOS_REALES = { [ANUNCIOS.vacacional.source_id]: { destino: 'servicio', servicio_id: VACACIONAL_ID } };
+
+const entranteDeAnuncio = (texto: string, referral: Record<string, unknown>) => [{
+    wa_message_id: `wamid.ad${n++}`, direction: 'inbound', type: 'text', text_body: texto, ai_generated: false,
+    wa_timestamp: new Date().toISOString(), created_at: new Date().toISOString(), payload: { referral },
+}];
+const escenarioReal = (texto: string, referral: Record<string, unknown>, extra: Partial<Escenario> = {}): Escenario => ({
+    embudo: true, bloqueos: [BLOQUEO_REAL], servicios: [VACACIONAL], mapeos: MAPEOS_REALES,
+    recientes: entranteDeAnuncio(texto, referral), ...extra,
+});
+
+const PREGUNTA_GUIADA = /¿La convocatoria es para \*femenino\* o \*masculino\*\?|¿En qué año nació el deportista\?/;
+const NO_TENGO_DATOS = /datos del torneo|no tengo los datos/i;
+const EMBUDO_DE_LA_CLASE = /5 preguntas|nombre completo\* del deportista|Para empezar en el club se agenda/i;
+const FICHA_VACACIONAL = /Parque Pinar de Suba 2|1 semana|\$100\.000/;
+const A_PERSONA = /te llamen o te escriban por aquí/;
+const PIDE_COMPROBANTE = /foto del comprobante/;
+
+function sinClaseNiTorneo(s: ReturnType<typeof salidas>) {
+    const err = `\nSALIDAS:\n${s.texto}\nBOTONES: ${JSON.stringify(s.ids)}`;
+    if (process.env.VER_SALIDAS) console.log(`${expect.getState().currentTestName}${err}`);
+    expect(s.texto, err).not.toMatch(NO_TENGO_DATOS);
+    expect(s.texto, err).not.toMatch(EMBUDO_DE_LA_CLASE);
+    expect(s.ids.filter((id) => IDS_DE_CLASE.test(id)), err).toEqual([]);
+    expect(s.texto, err).not.toMatch(TEXTO_DE_CLASE);
+    expect(s.texto, err).not.toMatch(TEXTO_DE_CLINICA);
+    expect(h.state.rpcCalls.map((c) => c.fn), err).not.toContain('tomar_cupo_clase_prueba');
+    return err;
+}
+
+describe('Monster 26-nov: anuncios de convocatoria que nombran «Torneo Nacional / Distrital» (auditoría A)', () => {
+    for (const clave of ['torneoA', 'torneoB'] as const) {
+        const ad = ANUNCIOS[clave];
+        for (const texto of ['hola', 'Buenos días. Donde entrenan ? Y cuáles son los costos ?', 'Quiero una clase de prueba']) {
+            it(`${ad.source_id} × «${texto}» → convocatoria guiada`, async () => {
+                enFecha(DIA.nov26);
+                const s = await turno(escenarioReal(texto, ad), texto);
+                const err = sinClaseNiTorneo(s);
+                expect(s.texto, err).toMatch(PREGUNTA_GUIADA);
+            });
+        }
+        it(`${ad.source_id} × «quiero hablar con alguien» → una persona (una línea), sin convocatoria`, async () => {
+            enFecha(DIA.nov26);
+            const s = await turno(escenarioReal('quiero hablar con alguien', ad), 'quiero hablar con alguien');
+            const err = sinClaseNiTorneo(s);
+            expect(s.texto, err).toMatch(A_PERSONA);
+            expect(s.texto, err).not.toMatch(PREGUNTA_GUIADA);
+        });
+        it(`${ad.source_id} × «ya pagué» → pide el comprobante, ni torneo ni convocatoria`, async () => {
+            enFecha(DIA.nov26);
+            const s = await turno(escenarioReal('ya pagué', ad), 'ya pagué');
+            const err = sinClaseNiTorneo(s);
+            expect(s.texto, err).toMatch(PIDE_COMPROBANTE);
+            expect(s.texto, err).not.toMatch(PREGUNTA_GUIADA);
+            expect(s.texto, err).not.toMatch(FICHA_VACACIONAL);
+        });
+    }
+});
+
+describe('Monster 26-nov: anuncios «Convocatoria Superliga abierta» / «Aprovecha el black friday» sin mapeo (auditoría A)', () => {
+    for (const clave of ['superliga', 'blackFriday'] as const) {
+        const ad = ANUNCIOS[clave];
+        for (const texto of ['Hola, quiero más información', 'hola']) {
+            it(`${ad.headline} × «${texto}» → convocatoria guiada, nunca el embudo de la clase`, async () => {
+                enFecha(DIA.nov26);
+                const s = await turno(escenarioReal(texto, ad), texto);
+                const err = sinClaseNiTorneo(s);
+                expect(s.texto, err).toMatch(PREGUNTA_GUIADA);
+                expect(s.texto, err).not.toMatch(FICHA_VACACIONAL);
+            });
+        }
+    }
+});
+
+describe('Monster 26-nov: anuncio del vacacional (mapeado a un servicio vigente) (auditoría A)', () => {
+    it('«Hola, quiero más información» → la ficha del vacacional, como siempre', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno(escenarioReal('Hola, quiero más información', ANUNCIOS.vacacional), 'Hola, quiero más información');
+        expect(s.texto, s.texto).toMatch(FICHA_VACACIONAL);
+        expect(s.texto, s.texto).not.toMatch(PREGUNTA_GUIADA);
+    });
+    it('«quiero hablar con alguien» → una persona, sin la ficha', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno(escenarioReal('quiero hablar con alguien', ANUNCIOS.vacacional), 'quiero hablar con alguien');
+        const err = sinClaseNiTorneo(s);
+        expect(s.texto, err).toMatch(A_PERSONA);
+        expect(s.texto, err).not.toMatch(FICHA_VACACIONAL);
+    });
+    it('«ya pagué» → pide el comprobante, sin la ficha', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno(escenarioReal('ya pagué', ANUNCIOS.vacacional), 'ya pagué');
+        const err = sinClaseNiTorneo(s);
+        expect(s.texto, err).toMatch(PIDE_COMPROBANTE);
+        expect(s.texto, err).not.toMatch(FICHA_VACACIONAL);
+        expect(s.texto, err).not.toMatch(PREGUNTA_GUIADA);
+    });
+});
+
+describe('Mapeo de anuncio «convocatoria» (whatsapp_anuncio_destino.destino)', () => {
+    const conMapeo = (texto: string) => escenarioReal(texto, ANUNCIOS.vacacional,
+        { mapeos: { [ANUNCIOS.vacacional.source_id]: { destino: 'convocatoria' } } });
+    it('con convocatorias vigentes → convocatoria guiada (aunque el anuncio hable del vacacional)', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno(conMapeo('hola'), 'hola');
+        const err = sinClaseNiTorneo(s);
+        expect(s.texto, err).toMatch(PREGUNTA_GUIADA);
+        expect(s.texto, err).not.toMatch(FICHA_VACACIONAL);
+    });
+    it('«quiero hablar con alguien» → una persona', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno(conMapeo('quiero hablar con alguien'), 'quiero hablar con alguien');
+        expect(s.texto, s.texto).toMatch(A_PERSONA);
+        expect(s.texto, s.texto).not.toMatch(PREGUNTA_GUIADA);
+    });
+    it('sin convocatorias vigentes (20-dic) → línea neutra y la escuela, nunca la clase de prueba', async () => {
+        enFecha(DIA.dic20);
+        const s = await turno(conMapeo('hola'), 'hola');
+        const err = sinClaseNiTorneo(s);
+        expect(s.texto, err).toMatch(/La escuela te responde por aquí/);
+        expect(s.texto, err).not.toMatch(PREGUNTA_GUIADA);
+    });
+});
+
+describe('Silencio con la escuela: lo que ella pega a mano a 3+ contactos (marcado automático) cuenta como humano (auditoría B, …8431)', () => {
+    const haceMin = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+    const PEGADO = '¡Queremos conocerte y conocer tu experiencia en el voleibol!\n\nPara orientarte hacia la convocatoria que mejor se adapte a tu perfil, cuéntanos: año de nacimiento, trayectoria, posición y género.';
+    const conversacion = (eco: { hace: number; tras: number }) => [
+        { wa_message_id: 'wamid.in0', direction: 'inbound', type: 'text', text_body: 'Hola, quiero inscribirme', ai_generated: false,
+            wa_timestamp: haceMin(eco.hace + eco.tras), created_at: haceMin(eco.hace + eco.tras), payload: {} },
+        { wa_message_id: 'wamid.eco1', direction: 'outbound', type: 'text', text_body: PEGADO, ai_generated: false,
+            wa_timestamp: haceMin(eco.hace), created_at: haceMin(eco.hace),
+            payload: { to: '573209998877', from: '573188682241', text: { body: PEGADO }, automatico: true } },
+        { wa_message_id: 'wamid.in1', direction: 'inbound', type: 'text', text_body: 'hola', ai_generated: false,
+            wa_timestamp: new Date().toISOString(), created_at: new Date().toISOString(), payload: {} },
+    ];
+    it('eco marcado automático hace 1 min (6 min después del entrante) → el bot calla', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno({ embudo: true, bloqueos: [BLOQUEO_REAL], servicios: [VACACIONAL], recientes: conversacion({ hace: 1, tras: 6 }) }, 'hola');
+        expect(s.textos.filter((t) => t.trim()), s.texto).toEqual([]);
+    });
+    it('el saludo de la app (eco automático 3 s después del entrante) no calla al bot', async () => {
+        enFecha(DIA.nov26);
+        const s = await turno({ embudo: true, bloqueos: [BLOQUEO_REAL], servicios: [VACACIONAL],
+            recientes: conversacion({ hace: 1, tras: 0.05 }) }, 'hola');
+        expect(s.textos.filter((t) => t.trim()).length, s.texto).toBeGreaterThan(0);
     });
 });

@@ -42,6 +42,8 @@ import { alcanceDesdeIdentidad, agenteApagadoGlobal } from './alcance';
 import { CATALOGO } from './registro';
 import type { Alcance, VistaPrevia } from './tipos';
 import { escuelasConMapi, esRespuestaBotonMapi, type Identidad } from './canal-whatsapp-entrada';
+import { responderSinModelo, esBotonDeConsulta, registrarCapa, type RespuestaDirecta } from './directo/enrutador';
+import { topeMensualAlcanzado, TEXTO_TOPE } from './directo/tope';
 
 export { mapiWhatsAppActivo, escuelasConMapi, esRespuestaBotonMapi, type Identidad } from './canal-whatsapp-entrada';
 
@@ -427,7 +429,9 @@ async function auditar(id: string, a: AuditoriaWhatsApp): Promise<void> {
 
 export type ResultadoMapiWa =
     | 'mapi_turno' | 'mapi_boton' | 'mapi_sin_permiso' | 'mapi_elegir_escuela' | 'mapi_escuela_elegida'
-    | 'mapi_asentimiento' | 'mapi_imita_boton' | 'mapi_tope' | 'mapi_media' | 'mapi_audio_fallido' | 'mapi_error';
+    | 'mapi_asentimiento' | 'mapi_imita_boton' | 'mapi_tope' | 'mapi_media' | 'mapi_audio_fallido' | 'mapi_error'
+    /** Respondido sin modelo (menú, botón de consulta o palabras clave; docs/specs/mapi-consultas-sin-ia.md). */
+    | 'mapi_directo';
 
 /** Lo que cambia entre producción y el modo pruebas. */
 interface Sesion {
@@ -483,7 +487,9 @@ export async function atenderMapiPorWhatsApp(p: {
 }
 
 async function atender(s: Sesion, msg: ParsedInboundMessage): Promise<ResultadoMapiWa> {
-    if (esRespuestaBotonMapi(msg)) return atenderBoton(s, msg);
+    // Confirmar / Cancelar / Ver lista / escuela. Los botones de CONSULTA (menú, elegir)
+    // siguen el camino de un mensaje: escuela del turno + alcance revalidado.
+    if (esRespuestaBotonMapi(msg) && !esBotonDeConsulta(msg.botonId)) return atenderBoton(s, msg);
     if (!s.identidades.length) return 'mapi_sin_permiso';
 
     // Escuela: la de la suscripción. Con varias, se elige con botones.
@@ -541,6 +547,17 @@ async function atenderMensaje(s: Sesion, ident: Identidad, msg: ParsedInboundMes
         return 'mapi_media';
     }
 
+    // Capa 1: botón del menú o de «elegir». Solo consultas: nunca confirma ni ejecuta una acción.
+    if (esRespuestaBotonMapi(msg) && esBotonDeConsulta(msg.botonId)) {
+        if (contar(`turno:${s.numero}`, s.ahora, true) > turnosPorHora()) {
+            await s.enviar([texto(TEXTOS.topeTurnos, 'mapi_tope')]);
+            return 'mapi_tope';
+        }
+        const r = await responderSinModelo(alcance, { boton: String(msg.botonId) }, 'whatsapp');
+        await s.enviar(r.tipo === 'al_modelo' ? [texto(TEXTOS.queNecesitas, 'mapi_directo')] : salidasDirectas(r));
+        return 'mapi_directo';
+    }
+
     let textoUsuario = msg.textBody ?? '';
     const salidasPrevias: Salida[] = [];
     if (msg.type === 'audio') {
@@ -567,6 +584,19 @@ async function atenderMensaje(s: Sesion, ident: Identidad, msg: ParsedInboundMes
     }
     if (contar(`turno:${s.numero}`, s.ahora, true) > turnosPorHora()) {
         await s.enviar([...salidasPrevias, texto(TEXTOS.topeTurnos, 'mapi_tope')]);
+        return 'mapi_tope';
+    }
+
+    // Capa 2: consulta frecuente por palabras clave, sin modelo (misma herramienta, mismo alcance).
+    const directa = await responderSinModelo(alcance, { texto: textoUsuario }, 'whatsapp');
+    if (directa.tipo !== 'al_modelo') {
+        await s.enviar([...salidasPrevias, ...salidasDirectas(directa)]);
+        return 'mapi_directo';
+    }
+    // Tope mensual de turnos con modelo por escuela: texto fijo; las capas 1 y 2 siguen.
+    if (await topeMensualAlcanzado(alcance)) {
+        registrarCapa({ canal: 'whatsapp', capa: 'tope', resultado: 'texto_fijo' });
+        await s.enviar([...salidasPrevias, texto(TEXTO_TOPE, 'mapi_tope_mes')]);
         return 'mapi_tope';
     }
 
@@ -599,6 +629,24 @@ async function atenderMensaje(s: Sesion, ident: Identidad, msg: ParsedInboundMes
     salidas.push(...await tarjetasDeBorradores(r.borradores, s.numero, s.ahora, s.prefijo));
     await s.enviar(salidas);
     return 'mapi_turno';
+}
+
+/**
+ * Respuesta sin modelo → mensajes de WhatsApp. El menú y «elegir» salen con
+ * botones (≤ 3) o como lista (más de 3); sus ids son `mapi:m:` / `mapi:q:`, que
+ * `parsearBotonMapi` nunca toma por un Confirmar. Todo con `paso` mapi…, así
+ * queda en el historial que lee el modelo.
+ */
+export function salidasDirectas(r: Exclude<RespuestaDirecta, { tipo: 'al_modelo' }>): Salida[] {
+    const cuerpo = aFormatoWhatsApp(r.texto);
+    const opciones = r.tipo === 'elegir' ? r.opciones : (r.botones ?? []);
+    if (!opciones.length) return [texto(cuerpo, 'mapi_directo')];
+    return [{
+        tipo: 'botones',
+        cuerpo,
+        botones: opciones.map((o) => ({ id: o.id, title: o.titulo, ...(o.descripcion ? { descripcion: o.descripcion } : {}) })),
+        paso: r.tipo === 'elegir' ? 'mapi_elegir' : 'mapi_menu',
+    }];
 }
 
 /** llm_usage.conversation_id es uuid: uno derivado del número, sin guardar el número (§12.6). */

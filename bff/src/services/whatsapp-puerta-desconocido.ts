@@ -52,6 +52,7 @@ import {
     type EstadoOfertas, type TipoOferta, type OfertaBot, type DatosOferta, type PasoOferta, type OpcionOferta,
 } from './bot-ofertas.service';
 import { etiquetaDeOfertas } from './whatsapp-bienvenida';
+import type { ConvocatoriaDeLead } from './whatsapp-prospecto-lead.service';
 
 export const FLUJO_PUERTA = 'puerta_desconocido';
 
@@ -165,6 +166,8 @@ export interface LeadCompleto {
     grupoSugerido: string | null;
     /** Con las ofertas, su tipo («convocatoria»; «oferta» si son de varios tipos). */
     quiere: Exclude<QueQuiere, 'ofertas'> | TipoOferta | 'oferta' | null;
+    /** Inscripción a una convocatoria: sus datos estructurados (`source_detail.convocatoria`). */
+    convocatoria?: ConvocatoriaDeLead | null;
 }
 
 export interface GrupoSugerido { linea: string | null; nombre: string | null }
@@ -1079,9 +1082,16 @@ async function confirmarInscripcion(
         pendiente_escuela: `inscripción: ${[oferta?.titulo, cuando].filter(Boolean).join(' · ')}`.slice(0, 300),
     });
     if (nombre) {
+        const convocatoria = oferta?.tipo === 'convocatoria'
+            ? datosDeInscripcion(ofertas, d, oferta, fechas.length
+                ? fechas.map((f) => f.replace(/^• /, ''))
+                : sesion ? [fechaDeSesion(sesion, ofertas.hoy)] : fechaEscrita ? [fechaEscrita] : [],
+            conDescuento, conDescuento != null ? promo?.pct ?? null : null)
+            : null;
         await seguro(() => ctx.guardarLead({
             deportista: nombre, fechaNacimiento: d.fechaNacimiento ?? null, edad: d.edad ?? null,
             acudiente: d.acudiente ?? null, grupoSugerido: oferta?.titulo ?? null, quiere: oferta?.tipo ?? 'oferta',
+            ...(convocatoria ? { convocatoria } : {}),
         }));
     }
     await ctx.avisarEscuela('otro', [
@@ -1096,6 +1106,31 @@ async function confirmarInscripcion(
             : valor ? `Valor: ${valor} (indicarle cómo pagar).` : '',
     ].filter(Boolean).join(' '));
     return true;
+}
+
+/**
+ * Lo que queda en `source_detail.convocatoria` (la pantalla «Convocatorias» de la escuela):
+ * la oferta elegida, lo que respondió en la convocatoria guiada, las fechas en orden y el
+ * valor (con la promo si aplicó). Pura.
+ */
+export function datosDeInscripcion(
+    ofertas: Pick<OfertasDePuerta, 'hoy'>, d: DatosPuerta, oferta: OfertaBot, fechas: string[],
+    valorConDescuento: number | null, promoPct: number | null,
+): ConvocatoriaDeLead {
+    const o = d.oferta ?? DATOS_OFERTA_VACIOS;
+    return {
+        titulo: oferta.titulo,
+        oferta_id: oferta.id,
+        sede: oferta.sede ?? o.sede ?? null,
+        genero: o.genero ?? (oferta.genero && oferta.genero !== 'mixto' ? oferta.genero : null),
+        anio: o.anio ?? anioDelRegistro(d, ofertas.hoy),
+        trayectoria: o.trayectoria ?? null,
+        detalle: o.detalle ?? null,
+        fechas,
+        valor: oferta.requierePago && oferta.valor != null ? oferta.valor : null,
+        valor_con_descuento: valorConDescuento,
+        promo_pct: valorConDescuento != null ? promoPct : null,
+    };
 }
 
 /** Lo que contó en la convocatoria guiada, para el aviso a la escuela. Pura. */

@@ -560,8 +560,32 @@ export function humanoReciente(filas: FilaReciente[], minutos: number, ahora = D
     // «atendiendo» unos minutos, no los 15 completos (…1042 y …6297, 07-oct:
     // el bot cedió por una imagen y nadie volvió a escribir).
     const desdeAdjunto = ahora - Math.min(minutos, SILENCIO_SOLO_ADJUNTO_MIN) * 60_000;
-    return filas.some((f) => esHumanoDeLaEscuela(f)
+    return filas.some((f) => (esHumanoDeLaEscuela(f) || ecoRepetidoDeLaEscuela(f, filas))
         && momento(f) >= (esSoloAdjunto(f) ? desdeAdjunto : desde));
+}
+
+/**
+ * Segundos tras un entrante dentro de los que un eco marcado `automatico` se toma por el saludo / la ausencia
+ * de la app WhatsApp Business (mide 1–8 s en Dynasty; misma ventana que `escritoPorLaEscuela` del modo discreto).
+ */
+export const SALUDO_DE_APP_MS = 30_000;
+
+/**
+ * (Monster 2026-11-26, …8431) Un ECO del celular de la escuela marcado `automatico` solo porque el mismo texto
+ * llegó a 3+ contactos (whatsapp-buzon: `echosAutomaticos`): lo que la escuela PEGA a mano (las preguntas de la
+ * convocatoria, la inversión, el Black Friday). Para el SILENCIO del bot es una persona escribiendo: el bot habló
+ * 13 s después de ella. No cuenta solo el saludo / la ausencia de la app (sale segundos después de un entrante),
+ * ni lo que generó un job o el bot (`step`, campaña, plantilla, sin `to` de Meta). La marca `automatico` no se
+ * toca: el buzón y las métricas la siguen leyendo igual. Pura.
+ */
+export function ecoRepetidoDeLaEscuela(f: FilaReciente, filas: readonly FilaReciente[]): boolean {
+    if (f.direction !== 'outbound' || f.ai_generated !== false || !esAutomaticoDeApp(f)) return false;
+    const p = f.payload ?? {};
+    // Eco de Coexistence (o historial): el payload crudo de Meta trae el destinatario. Los jobs no.
+    const esEco = Boolean(p.to || p.to_user_id);
+    if (!esEco || p.step || p.campana_id || f.type === 'template') return false;
+    const t = momento(f);
+    return !filas.some((x) => x.direction === 'inbound' && momento(x) <= t && t - momento(x) <= SALUDO_DE_APP_MS);
 }
 
 /** Minutos que «calla» al bot un mensaje de la escuela que es solo imagen, ubicación o sticker. */

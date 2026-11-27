@@ -966,3 +966,29 @@ export function appMapParaRol(roles: string[], consulta?: string): string {
     if (!bloques.length) return '';
     return ['MAPA DE LA APP (rutas del menú y botones reales; úsalo para "¿dónde/cómo hago X?"):', ...bloques, SOPORTE].join('\n\n');
 }
+
+/** Palabras de «¿cómo hago…?» que no dicen QUÉ se quiere hacer. */
+const VACIAS_AYUDA = new Set([
+    'como', 'hago', 'hacer', 'hace', 'hacemos', 'puedo', 'puede', 'podemos', 'donde', 'para', 'una', 'uno', 'unos', 'unas',
+    'los', 'las', 'del', 'que', 'esta', 'este', 'veo', 'ver', 'encuentro', 'app', 'aplicacion', 'sportmaps', 'mapi', 'por', 'con',
+    'cual', 'parte', 'debo', 'tengo', 'quiero',
+]);
+
+/**
+ * La ÚNICA tarea del mapa que responde «¿cómo hago X?» sin modelo
+ * (docs/specs/mapi-consultas-sin-ia.md, capa 2). Exige certeza: TODA palabra con
+ * contenido de la pregunta aparece en el título o las palabras clave de la
+ * tarea (con la misma tolerancia de la selección del prompt), y ninguna otra
+ * tarea del rol cumple lo mismo. Ante la menor duda, null (va al modelo).
+ */
+export function tareaUnicaDelMapa(rol: string, consulta: string): AppMapEntry | null {
+    const r = APP_MAP[ALIAS[rol] ?? rol];
+    if (!r) return null;
+    const q = [...new Set(palabras(consulta))].filter((w) => !VACIAS_AYUDA.has(w));
+    if (!q.length || q.length > 5) return null;
+    const candidatas = r.tareas.filter((t) => {
+        const fuerte = palabras(`${t.tarea} ${(t.palabrasClave || []).join(' ')}`);
+        return q.every((w) => fuerte.some((y) => coincide(w, y)));
+    });
+    return candidatas.length === 1 ? candidatas[0] : null;
+}

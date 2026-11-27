@@ -49,6 +49,7 @@ vi.mock('./whatsapp-atencion.service', () => ({
 
 import {
     camposDeLeadCompleto, sinColumnasDeEmbudo, esColumnaInexistente, registrarLeadDeProspecto, leadDelEmbudo,
+    detalleDeConvocatoria,
 } from './whatsapp-prospecto-lead.service';
 
 const NORTE = '11111111-1111-4111-8111-111111111111';
@@ -142,5 +143,49 @@ describe('leadDelEmbudo', () => {
     it('sin la migración lee el grupo de source_detail.embudo', async () => {
         h.lead = { sinColumnas: true, fila: { id: 'lead-1', full_name: 'Mariana', trial_slot_id: null, source_detail: { embudo: { team_id: 't-1', branch_id: NORTE } } } };
         expect(await leadDelEmbudo('monster', '573001112233')).toMatchObject({ leadId: 'lead-1', teamId: 't-1', branchId: NORTE, consentimiento: null });
+    });
+});
+
+// Inscripción a convocatoria (2026-11-26): `source_detail.convocatoria` para la pantalla de la escuela.
+describe('detalleDeConvocatoria / source_detail.convocatoria', () => {
+    const AHORA = '2026-11-26T15:00:00.000Z';
+    const SUPERLIGA = {
+        titulo: 'Convocatorias equipos mayores', oferta_id: 'may', sede: 'Sede Norte', genero: 'masculino', anio: 2008,
+        trayectoria: true, detalle: 'Club X', fechas: ['miércoles 9 de diciembre, 8:00 a 10:00 p. m. · Universidad ECCI'],
+        valor: 50000, valor_con_descuento: 45000, promo_pct: 10,
+    };
+
+    it('nueva: estado pendiente y registrada_at', () => {
+        expect(detalleDeConvocatoria(SUPERLIGA, null, AHORA)).toEqual({ ...SUPERLIGA, estado: 'pendiente', registrada_at: AHORA });
+    });
+
+    it('misma convocatoria: no pisa el estado ni la nota de la escuela; lo null no borra lo que había', () => {
+        const previa = { ...SUPERLIGA, estado: 'pagada', estado_at: 'x', estado_por: 'u-1', nota_escuela: 'pagó en efectivo', registrada_at: 'r' };
+        const r = detalleDeConvocatoria({ oferta_id: 'may', titulo: SUPERLIGA.titulo, detalle: null, fechas: [], valor_con_descuento: null }, previa, AHORA);
+        expect(r).toMatchObject({ estado: 'pagada', estado_por: 'u-1', nota_escuela: 'pagó en efectivo', registrada_at: 'r', detalle: 'Club X', valor_con_descuento: 45000 });
+        expect(r.fechas).toEqual(SUPERLIGA.fechas);
+    });
+
+    it('otra convocatoria: arranca pendiente y la anterior queda en `anterior`', () => {
+        const previa = { ...SUPERLIGA, estado: 'descartada', anterior: { titulo: 'vieja' } };
+        const r = detalleDeConvocatoria({ titulo: 'Convocatorias Sede Suba', oferta_id: 'suba' }, previa, AHORA) as any;
+        expect(r).toMatchObject({ titulo: 'Convocatorias Sede Suba', oferta_id: 'suba', estado: 'pendiente', registrada_at: AHORA });
+        expect(r.anterior).toMatchObject({ titulo: SUPERLIGA.titulo, estado: 'descartada' });
+        expect(r.anterior).not.toHaveProperty('anterior');
+    });
+
+    it('registrarLeadDeProspecto: insert con source_detail.convocatoria; update fusiona sin tocar el resto', async () => {
+        await registrarLeadDeProspecto({ ...PARAMS, completo: { deportista: 'Juan Pérez', quiere: 'convocatoria', convocatoria: SUPERLIGA } });
+        expect(h.escrituras[0].fila.source_detail).toMatchObject({ quiere: 'convocatoria', convocatoria: { ...SUPERLIGA, estado: 'pendiente' } });
+
+        h.escrituras = [];
+        h.previo = { id: 'lead-1', status: 'contacted', trial_slot_id: null,
+            source_detail: { etapa: 'respondido', contacto: 'Kevs', convocatoria: { titulo: SUPERLIGA.titulo, estado: 'confirmada' } } };
+        await registrarLeadDeProspecto({ ...PARAMS, completo: { deportista: 'Juan Pérez', quiere: 'convocatoria', convocatoria: SUPERLIGA } });
+        expect(h.escrituras[0].fila.source_detail.convocatoria).toMatchObject({ ...SUPERLIGA, estado: 'confirmada' });
+
+        h.escrituras = [];
+        await registrarLeadDeProspecto({ ...PARAMS, completo: { deportista: 'Juan Pérez', quiere: 'precios' } });
+        expect(h.escrituras[0].fila.source_detail.convocatoria).toEqual({ titulo: SUPERLIGA.titulo, estado: 'confirmada' });
     });
 });
