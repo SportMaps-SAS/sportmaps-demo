@@ -1466,8 +1466,11 @@ router.patch('/session/:sessionId/finalize', requireAuth, requireRole('owner', '
   async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const { sessionId } = req.params;
-      const { data: session, error: fetchErr } = await supabase.from('attendance_sessions').select('id, finalized, team_id, offering_id').eq('id', sessionId).single();
+      const { data: session, error: fetchErr } = await supabase.from('attendance_sessions').select('id, finalized, team_id, offering_id, school_id').eq('id', sessionId).single();
       if (fetchErr || !session) return res.status(404).json({ error: 'Sesión no encontrada.' });
+      // SEG-33: igual que reopen, solo sesiones de la escuela del caller.
+      if (session.school_id !== req.schoolId)
+        return res.status(404).json({ error: 'Sesión no encontrada.' });
       if (session.team_id && !(await assertCoachHasTeamAccess(req, session.team_id))) {
         return res.status(403).json(TEAM_ACCESS_DENIED);
       }

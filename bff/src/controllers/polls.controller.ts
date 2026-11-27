@@ -2,6 +2,14 @@ import { Request, Response } from 'express';
 import { supabase, SUPABASE_URL, SUPABASE_ANON_KEY } from '../config/supabase';
 import { createClient } from '@supabase/supabase-js';
 import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
+import { auditLog } from '../middlewares/authMiddleware';
+import {
+  cancelBookingViaRpc,
+  cancelRefusalBody,
+  identityOfBookingRow,
+  shouldLogMissingCredit,
+} from '../services/session-booking-cancel.service';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TIPOS
@@ -31,6 +39,94 @@ interface ConfirmAttendanceBody {
   guest_phone?: string;
   poll_token?: string;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ALCANCE (SEG-33)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// El BFF escribe con service_role (salta RLS): este helper es el gate. Ata la
+// encuesta a req.schoolId (nunca a la cabecera cruda), la sesión a la encuesta
+// y a la escuela, y la reserva a la sesión. El ancla de la reserva es la
+// SESIÓN, no session_bookings.school_id. Todo lo que no cuadra da 404 (nunca
+// 403): no se revela si el id existe en otra escuela.
+
+type PollScopeBooking = {
+  id: string;
+  status: string;
+  session_id: string;
+  school_id: string | null;
+  user_id: string | null;
+  child_id: string | null;
+  unregistered_athlete_id: string | null;
+  hour_bank_reservation_id: string | null;
+};
+
+type PollScope =
+  | {
+      ok: true;
+      schoolId: string;
+      poll: { id: string; school_id: string; status: string };
+      session?: { id: string; poll_id: string; school_id: string };
+      booking?: PollScopeBooking;
+    }
+  | { ok: false; status: 400 | 404; error: string };
+
+async function cargarAlcanceEncuesta(
+  req: Request,
+  ids: { pollId: string; sessionId?: string; bookingId?: string },
+): Promise<PollScope> {
+  const schoolId = req.schoolId;
+  if (!schoolId) return { ok: false, status: 400, error: 'Falta escuela' };
+
+  const { data: poll, error: pollErr } = await supabase
+    .from('attendance_polls')
+    .select('id, school_id, status')
+    .eq('id', ids.pollId)
+    .eq('school_id', schoolId)
+    .maybeSingle();
+  if (pollErr) throw pollErr;
+  if (!poll) return { ok: false, status: 404, error: 'Encuesta no encontrada' };
+
+  if (!ids.sessionId) return { ok: true, schoolId, poll };
+
+  const { data: session, error: sessErr } = await supabase
+    .from('attendance_sessions')
+    .select('id, poll_id, school_id')
+    .eq('id', ids.sessionId)
+    .eq('poll_id', ids.pollId)
+    .eq('school_id', schoolId)
+    .maybeSingle();
+  if (sessErr) throw sessErr;
+  if (!session) return { ok: false, status: 404, error: 'Sesion no encontrada' };
+
+  if (!ids.bookingId) return { ok: true, schoolId, poll, session };
+
+  const { data: booking, error: bookErr } = await supabase
+    .from('session_bookings')
+    .select('id, status, session_id, school_id, user_id, child_id, unregistered_athlete_id, hour_bank_reservation_id')
+    .eq('id', ids.bookingId)
+    .eq('session_id', ids.sessionId)
+    .maybeSingle();
+  if (bookErr) throw bookErr;
+  if (!booking) return { ok: false, status: 404, error: 'Confirmacion no encontrada' };
+
+  return { ok: true, schoolId, poll, session, booking: booking as PollScopeBooking };
+}
+
+const ManualConfirmationSchema = z.object({
+  session_id: z.string().optional(),
+  user_id: z.string().uuid().optional(),
+  guest_name: z.string().trim().min(1).max(120).optional(),
+  guest_phone: z.string().trim().max(40).optional().nullable(),
+}).refine(
+  (d) => (!!d.user_id) !== (!!d.guest_name),
+  { message: 'Debe venir user_id o guest_name, no ambos' },
+);
+
+const UpdateConfirmationSchema = z.object({
+  status: z.enum(['attended', 'no_show']),
+  session_id: z.string().optional(),
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CONTROLLER
@@ -270,7 +366,8 @@ export const pollsController = {
             .from('session_bookings')
             .select('*', { count: 'exact', head: true })
             .eq('session_id', session_id)
-            .eq('unregistered_athlete_id', existingGuest.id);
+            .eq('unregistered_athlete_id', existingGuest.id)
+            .neq('status', 'cancelled');
 
           if ((dupCount ?? 0) > 0) {
             return res.status(409).json({ error: 'Ya confirmaste esta clase' });
@@ -302,7 +399,8 @@ export const pollsController = {
           .from('session_bookings')
           .select('*', { count: 'exact', head: true })
           .eq('session_id', session_id)
-          .eq('user_id', finalUserId);
+          .eq('user_id', finalUserId)
+          .neq('status', 'cancelled');
 
         if ((existingBooking ?? 0) > 0) {
           return res.status(409).json({ error: 'Ya confirmaste esta clase' });
@@ -377,6 +475,8 @@ export const pollsController = {
         `)
         .eq('id', pollId)
         .eq('school_id', schoolId)
+        // SEG-33: quitar una confirmación la deja 'cancelled' (ya no se borra).
+        .neq('attendance_sessions.session_bookings.status', 'cancelled')
         .maybeSingle();
 
       if (error) throw error;
@@ -391,19 +491,24 @@ export const pollsController = {
   },
 
   /**
-   * Cerrar poll
+   * Cerrar poll (SEG-33: solo una encuesta de la escuela del caller)
    */
   closePoll: async (req: Request, res: Response) => {
     try {
-      const { pollId } = req.params;
+      const { pollId } = req.params as Record<string, string>;
+      const scope = await cargarAlcanceEncuesta(req, { pollId });
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
       const { data, error } = await supabase
         .from('attendance_polls')
         .update({ status: 'closed' })
         .eq('id', pollId)
+        .eq('school_id', scope.schoolId)
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Encuesta no encontrada' });
       return res.status(200).json(data);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
@@ -411,17 +516,20 @@ export const pollsController = {
   },
 
   /**
-   * Eliminar poll
+   * Eliminar poll (SEG-33: solo una encuesta de la escuela del caller)
    */
   deletePoll: async (req: Request, res: Response) => {
     try {
-      const { pollId } = req.params;
-      
+      const { pollId } = req.params as Record<string, string>;
+      const scope = await cargarAlcanceEncuesta(req, { pollId });
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
       const { data: sessions } = await supabase
         .from('attendance_sessions')
         .select('id')
-        .eq('poll_id', pollId);
-      
+        .eq('poll_id', pollId)
+        .eq('school_id', scope.schoolId);
+
       const sessionIds = sessions?.map(s => s.id) || [];
 
       if (sessionIds.length > 0) {
@@ -435,7 +543,11 @@ export const pollsController = {
         }
       }
 
-      const { error } = await supabase.from('attendance_polls').delete().eq('id', pollId);
+      const { error } = await supabase
+        .from('attendance_polls')
+        .delete()
+        .eq('id', pollId)
+        .eq('school_id', scope.schoolId);
       if (error) throw error;
 
       return res.status(204).send();
@@ -445,46 +557,81 @@ export const pollsController = {
   },
 
   /**
-   * Registro manual de asistencia (Admin/Coach)
+   * Registro manual de asistencia (Admin/Coach).
+   * SEG-33: la sesión sale de la URL y debe ser de la encuesta y de la escuela
+   * del caller; `user_id` exige membresía activa en esa escuela.
    */
   addManualConfirmation: async (req: Request, res: Response) => {
     try {
-      const { session_id, user_id, guest_name, guest_phone } = req.body;
-      const schoolId = req.headers['x-school-id'] as string;
+      const { pollId, sessionId } = req.params as Record<string, string>;
 
-      if (!session_id || (!user_id && !guest_name)) {
-        return res.status(400).json({ error: 'Datos insuficientes' });
+      const parsed = ManualConfirmationSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Datos insuficientes', details: parsed.error.flatten() });
+      }
+      const body = parsed.data;
+      if (body.session_id && body.session_id !== sessionId) {
+        return res.status(400).json({ error: 'La sesion del cuerpo no coincide con la de la URL' });
       }
 
-      let finalUserId = user_id;
-      let finalUnregisteredId = null;
+      const scope = await cargarAlcanceEncuesta(req, { pollId, sessionId });
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+      const sessionSchoolId = scope.session!.school_id;
 
-      if (!user_id && guest_name) {
+      if (body.user_id) {
+        const { data: members, error: memberErr } = await supabase
+          .from('school_members')
+          .select('profile_id')
+          .eq('profile_id', body.user_id)
+          .eq('school_id', sessionSchoolId)
+          .eq('status', 'active')
+          .limit(1);
+        if (memberErr) throw memberErr;
+        if (!members || members.length === 0) {
+          return res.status(404).json({ error: 'Persona no encontrada' });
+        }
+
+        const { count: existing } = await supabase
+          .from('session_bookings')
+          .select('*', { count: 'exact', head: true })
+          .eq('session_id', sessionId)
+          .eq('user_id', body.user_id)
+          .neq('status', 'cancelled');
+        if ((existing ?? 0) > 0) {
+          return res.status(409).json({ error: 'Esta persona ya confirmo esta clase' });
+        }
+      }
+
+      let finalUnregisteredId: string | null = null;
+
+      if (!body.user_id && body.guest_name) {
         const { data: guest, error: guestErr } = await supabase
           .from('unregistered_athletes')
           .insert({
-            full_name: guest_name,
-            phone: guest_phone,
-            school_id: schoolId,
+            full_name: body.guest_name,
+            phone: body.guest_phone || null,
+            school_id: sessionSchoolId,
             poll_token: 'manual-' + uuidv4()
           })
           .select()
           .single();
-        
+
         if (guestErr) throw guestErr;
         finalUnregisteredId = guest.id;
       }
 
+      const bookingData: Record<string, any> = {
+        school_id: sessionSchoolId,
+        session_id: sessionId,
+        status: 'confirmed',
+        booking_type: 'reservation',
+      };
+      if (body.user_id) bookingData.user_id = body.user_id;
+      if (finalUnregisteredId) bookingData.unregistered_athlete_id = finalUnregisteredId;
+
       const { data, error } = await supabase
         .from('session_bookings')
-        .insert({
-          school_id: schoolId,
-          session_id,
-          user_id: finalUserId,
-          unregistered_athlete_id: finalUnregisteredId,
-          status: 'confirmed',
-          booking_type: 'reservation'
-        })
+        .insert(bookingData)
         .select()
         .single();
 
@@ -496,21 +643,46 @@ export const pollsController = {
   },
 
   /**
-   * Actualizar estado de asistencia
+   * Actualizar estado de asistencia.
+   * SEG-33 (P1 = b): atada a escuela, encuesta y sesión, y solo
+   * confirmed -> attended / no_show. Cancelar va por DELETE (devuelve el
+   * crédito); revivir a confirmed nunca (saltaría el crédito).
    */
   updateConfirmation: async (req: Request, res: Response) => {
     try {
-      const { bookingId } = req.params;
-      const { status } = req.body;
+      const { pollId, sessionId, bookingId } = req.params as Record<string, string>;
+
+      const parsed = UpdateConfirmationSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Estado no permitido: solo attended o no_show' });
+      }
+      if (parsed.data.session_id && parsed.data.session_id !== sessionId) {
+        return res.status(400).json({ error: 'No se puede mover una confirmacion a otra sesion' });
+      }
+
+      const scope = await cargarAlcanceEncuesta(req, { pollId, sessionId, bookingId });
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
+      const transicionInvalida = 'Solo se puede marcar asistencia sobre confirmaciones activas';
+      if (scope.booking!.status !== 'confirmed') {
+        return res.status(400).json({ error: transicionInvalida });
+      }
 
       const { data, error } = await supabase
         .from('session_bookings')
-        .update({ status })
+        .update({ status: parsed.data.status })
         .eq('id', bookingId)
+        .eq('session_id', sessionId)
+        .eq('status', 'confirmed')
         .select()
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
+      if (!data) return res.status(400).json({ error: transicionInvalida });
+
+      await auditLog(req, 'poll_confirmation_status_changed', 'session_bookings', bookingId,
+        { status: 'confirmed' }, { status: parsed.data.status, poll_id: pollId, session_id: sessionId });
+
       return res.status(200).json(data);
     } catch (error: any) {
       return res.status(500).json({ error: error.message });
@@ -518,13 +690,33 @@ export const pollsController = {
   },
 
   /**
-   * Eliminar asistencia
+   * Quitar una confirmación.
+   * SEG-33 (P2): ya no borra la fila; cancela por la RPC atómica que devuelve
+   * el crédito, atada a escuela, encuesta y sesión de la URL.
    */
   deleteConfirmation: async (req: Request, res: Response) => {
     try {
-      const { bookingId } = req.params;
-      const { error } = await supabase.from('session_bookings').delete().eq('id', bookingId);
-      if (error) throw error;
+      const { pollId, sessionId, bookingId } = req.params as Record<string, string>;
+      const scope = await cargarAlcanceEncuesta(req, { pollId, sessionId, bookingId });
+      if (!scope.ok) return res.status(scope.status).json({ error: scope.error });
+
+      const booking = scope.booking!;
+      const fallback = 'Solo se pueden quitar confirmaciones activas';
+      if (booking.status !== 'confirmed') {
+        return res.status(400).json({ error: fallback });
+      }
+
+      const out = await cancelBookingViaRpc(bookingId, identityOfBookingRow(booking));
+      if (!out.cancelled) {
+        return res.status(400).json(cancelRefusalBody(out, fallback));
+      }
+      if (shouldLogMissingCredit(out, !!booking.hour_bank_reservation_id)) {
+        req.log?.error({ bookingId, out }, 'cancel-booking: el crédito no se devolvió (confirmación de encuesta)');
+      }
+
+      await auditLog(req, 'poll_confirmation_cancelled', 'session_bookings', bookingId,
+        { status: 'confirmed' },
+        { status: 'cancelled', poll_id: pollId, session_id: sessionId, credit_returned: !!out.credit_returned });
 
       return res.status(204).send();
     } catch (error: any) {
