@@ -222,7 +222,52 @@ La base es **una sola** para dev/stg/prod; una ráfaga al reconectar es exactame
 
 **Límite honesto:** el valor real es el caso «se vio la tarjeta/formulario y la señal se cayó antes de tocar». Las **lecturas** del deportista y del acudiente siguen sin persistirse offline (la Fase 1 fue solo del entrenador, D4): si abre la app sin señal, la tarjeta no aparece.
 
-**Pendiente de la Fase 3:** probar en un teléfono real; decidir si las lecturas del deportista (carnet, calendario) entran como Fase 4 (lectura pura, D4); `LiveQueue`/`ActionQueue` siguen sin migrar a propósito.
+**Pendiente de la Fase 3:** probar en un teléfono real; `LiveQueue`/`ActionQueue` siguen sin migrar a propósito.
+
+### Fase 4 — Lecturas del deportista (lectura pura)
+
+Se amplió la lista blanca (`OFFLINE_QUERY_PREFIXES`) con el Inicio del deportista V2: `athlete-v2-teams`, `-attendance`, `-callups`, `-autoeval`, `-kudos`. Sin código nuevo de persistencia: la restauración/guardado de la Fase 1 ya es por usuario (`rq:{userId}`), vence a las 36 h, se borra al cerrar sesión y usa `networkMode: 'offlineFirst'`. Con esto, abrir el Inicio sin señal muestra lo último visto (equipos, asistencia, convocatorias, la tarjeta «¿Qué tan duro fue?» y felicitaciones), y esa tarjeta se puede contestar y queda en la bandeja de la Fase 3.
+
+**Fuera a propósito:**
+- `athlete-v2-cobros` (plata) y `athlete-v2-informes` (desempeño/salud).
+- `athlete-v2-fichas`, `-plan` y `-torneos-abiertos`: sus consultas **tragan el error y devuelven `[]`**; sin señal, ese `[]` «exitoso» pisaría la copia buena por 36 h.
+- **Acudiente:** sus lecturas son datos de menores fuera del roster del día; no entra sin decisión de producto (§ privacidad).
+- Carnet y calendario del deportista: ver la Fase 5 (el carnet entró con otro mecanismo; el calendario sigue sin revisar).
+
+**Límite honesto:** la tarjeta de autoevaluación mostrada desde la copia puede estar ya vencida (plazo); si se contesta, el servidor la rechaza y queda visible con su motivo en «Pendientes». `OFFLINE_CACHE_VERSION` no se sube: la forma de los datos no cambió.
+
+### Fase 5 — Carnet del deportista sin señal (lectura pura)
+
+El caso real: llegar a la entrada del club sin datos. `AthleteCardV2` no usa React Query (carga con `useState`), así que **no** entra por la lista blanca: usa las copias de arranque (`lib/offline/carnetOffline.ts` sobre `arranqueSinRed.ts`).
+
+| Decisión | Detalle |
+|---|---|
+| Qué se guarda | La última respuesta de `my_athlete_id_cards`, **solo filas `relation='self'`** (nunca el carnet de un hijo). Nombre, escuela, equipo, vigencia y el `qr_token` que la pantalla ya mostraba. |
+| Qué NO | El reverso del carnet 3D (`card_back_data`: salud, contacto de emergencia) y la imagen 3D: sin señal se ve el carnet plano con su QR. |
+| Cuándo se usa | Solo si la carga falló **por falta de señal** (`faltoLaSenal`); un rechazo del servidor sigue mostrando el error. |
+| Vigencia | `is_expired` lo calcula el servidor: en la copia se **recalcula con la hora del teléfono** (`aplicarVigencia`; `valid_until` vale todo ese día). Un carnet vencido nunca sale «Vigente». |
+| Aviso | Banda «Sin señal: este es tu carnet guardado el …; si la escuela lo anuló después, lo sabremos cuando vuelva la señal». |
+| Privacidad | Por usuario, vence a los 14 días (copias de arranque), se borra al cerrar sesión (`sm_offline_boot:`). Pruebas: otra cuenta no la lee, hijo no se guarda, cierre de sesión la borra. |
+
+**Límite honesto:** un carnet **anulado** después de la copia se sigue viendo sin señal (el lector del club valida contra el servidor, así que no abre puertas por sí solo). «Descargar imagen» y «Compartir» necesitan red. La foto y el logo son URLs: sin señal pueden no cargar (el QR y el nombre sí).
+
+#### Auditoría de seguridad de las fases 1–5 (2026-11-26)
+
+Revisión sobre el código, no sobre producción. Lo que se cerró y lo que queda abierto, sin maquillar.
+
+| # | Hallazgo | Estado |
+|---|---|---|
+| S1 | **Salida forzada no borraba lo guardado.** Solo `signOut()` limpiaba; un `SIGNED_OUT` por token revocado, cierre desde otra pestaña/dispositivo o cambio de clave dejaba lecturas, carnet y perfil (datos de menores) en el teléfono. | **Cerrado:** `AuthContext` llama `limpiarDatosOffline()` en todo `SIGNED_OUT` real (idempotente; nunca en el «sin red» del refresco). |
+| S2 | **La bandeja no vencía.** No se borra al salir (es trabajo sin enviar), pero una acción rechazada o atascada se quedaba para siempre con datos de menores. | **Cerrado:** `MAX_EDAD_ACCION_MS` = 30 días, se borra con o sin error. Prueba nueva. |
+| S3 | Caché cruzada entre usuarios (`supabase-api` por URL sin token). | **Ya cerrado antes:** el SW ya no intercepta `supabase.co` (`sw.js:96`); las lecturas van por la copia por usuario. |
+| S4 | Reenvío de la bandeja como vector de escalada (alguien edita el IndexedDB y manda otra cosa). | **Sin riesgo nuevo:** el servidor decide. `submit_post_training_coach_rating` y `submit_post_training_self_eval` validan adentro con `auth.uid()` (coach del equipo / acudiente del hijo / ficha vinculada / la propia cuenta), sesión cerrada, asistencia y plazo. La acción lleva su `userId` y otra cuenta no la envía. |
+| S5 | Copias separadas por usuario. | Verificado con pruebas: otra cuenta no lee `rq:`, copias de arranque ni el carnet; el carnet de un hijo no se guarda. |
+| S6 | **IndexedDB/localStorage sin cifrar.** Quien tenga el teléfono desbloqueado, o un XSS, lee lo guardado. | **Abierto, inherente.** Se mitiga con lista blanca estricta, vencimientos (36 h lecturas, 14 días copias, 30 días bandeja) y borrado al salir. Cifrar con una clave que viva en el mismo navegador no aporta. |
+| S7 | **Sin `Content-Security-Policy` de scripts** (`vercel.json` solo trae `frame-ancestors`). Un XSS leería lo guardado. | **Abierto, recomendado aparte:** una CSP mal puesta rompe la app (Supabase, Wompi, Mercado Pago, Bold, mapas, Meta). Va como tarea propia, primero en modo `Report-Only`. |
+| S8 | Permisos revocados mientras no hay señal: la pantalla sigue mostrando lo guardado hasta 36 h / 14 días. | **Aceptado:** es solo la copia visible; cualquier acción la decide el servidor al sincronizar. |
+| S9 | `qr_token` del carnet en localStorage. | **Aceptado:** es el mismo dato que la pantalla muestra y que cualquier script de la página ya puede pedir con la sesión. Vence a los 14 días y se borra al salir. |
+
+**Calendario del deportista:** sin revisar. `AthleteTrainingV2` ya reutiliza `athlete-v2-teams` (Fase 4); `useAthleteTrainingToday` (`TrainingPage`) queda pendiente de revisar qué datos trae.
 
 ---
 

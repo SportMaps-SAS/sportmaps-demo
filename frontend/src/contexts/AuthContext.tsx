@@ -348,6 +348,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        // Cierre de sesión que NO pasó por signOut() (token revocado, cierre desde otra pestaña o
+        // dispositivo, cambio de clave): igual se borra lo guardado para el modo offline. Si no, las
+        // copias de menores (lecturas, carnet, perfil) quedaban en el teléfono tras una salida forzada.
+        // Es idempotente con la limpieza de signOut(). Solo en SIGNED_OUT real, nunca en el
+        // «sin red» de abajo.
+        if (event === 'SIGNED_OUT') void limpiarDatosOffline();
+
         // INITIAL_SESSION sin sesión pero con la sesión AÚN guardada = el refresco del token falló
         // por falta de red: no se borra al usuario ni su perfil (lo resuelve getSession arriba).
         if (!session && event !== 'SIGNED_OUT' && leerSesionGuardada()) return;

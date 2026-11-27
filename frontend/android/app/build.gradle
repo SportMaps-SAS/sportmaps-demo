@@ -19,8 +19,8 @@ android {
         // versionCode 1 ya se consumio en el AAB firmado del 2026-07-21. Play
         // rechaza reusar un versionCode ya subido, asi que arrancamos en 2 y
         // SIEMPRE se incrementa en cada AAB que se sube.
-        versionCode 3
-        versionName "1.0"
+        versionCode 4
+        versionName "1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

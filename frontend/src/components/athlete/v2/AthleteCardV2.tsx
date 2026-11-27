@@ -15,7 +15,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { AlertTriangle, CheckCircle2, Download, IdCard, Loader2, QrCode, RefreshCw, Share2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Download, IdCard, Loader2, QrCode, RefreshCw, Share2, WifiOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -28,6 +28,10 @@ import { pickCurrentCards, slugifyFileName } from '@/lib/cards/cardLayout';
 import type { CardData } from '@/components/cards/AthleteIdCard';
 import { estadoCarnet, venceCarnet } from '@/components/cards/myCardsModel';
 import { iniciales } from '@/components/parent/v2/parentHomeLogic';
+import { useAuth } from '@/contexts/AuthContext';
+import { OFFLINE_ENABLED } from '@/lib/offline/offlineConfig';
+import { faltoLaSenal } from '@/lib/offline/autoevalOffline';
+import { guardarCarnets, leerCarnets } from '@/lib/offline/carnetOffline';
 
 interface CardRow {
   card_id: string;
@@ -55,18 +59,35 @@ export function AthleteCardV2() {
   const [grande, setGrande] = useState(false);
   const [guardando, setGuardando] = useState(false);
 
+  const { user } = useAuth();
+  const userId = user?.id;
+  /** Cuándo se guardó la copia que se está mostrando (null = datos frescos del servidor). */
+  const [copiaDe, setCopiaDe] = useState<number | null>(null);
+
   const cargar = async () => {
     setState('loading');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await supabase.rpc('my_athlete_id_cards' as any);
     if (error) {
+      // Sin señal (no un rechazo del servidor): se muestra la última copia de ESTE usuario.
+      const copia = faltoLaSenal(error) && OFFLINE_ENABLED ? leerCarnets<CardRow>(userId) : null;
+      if (copia) {
+        setRows(copia.rows);
+        setCopiaDe(copia.guardadoEn);
+        setState('ready');
+        return;
+      }
       setState('error');
       return;
     }
-    setRows(((data as CardRow[]) ?? []).filter((r) => r.relation === 'self'));
+    const propios = ((data as CardRow[]) ?? []).filter((r) => r.relation === 'self');
+    setRows(propios);
+    setCopiaDe(null);
     setState('ready');
+    guardarCarnets(userId, propios);
   };
-  useEffect(() => { void cargar(); }, []);
+  useEffect(() => { void cargar(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const carnets = useMemo(() => pickCurrentCards(rows).map((c) => c.card), [rows]);
   const carnet = carnets.find((c) => c.school_id === escuela) ?? carnets[0] ?? null;
@@ -150,6 +171,15 @@ export function AthleteCardV2() {
 
       {state === 'ready' && carnet && (
         <>
+          {copiaDe !== null && (
+            <div role="status" className="flex items-start gap-3 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <WifiOff className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              <p>
+                Sin señal: este es tu carnet guardado el {new Date(copiaDe).toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}.
+                Si la escuela lo anuló después, lo sabremos cuando vuelva la señal.
+              </p>
+            </div>
+          )}
           {carnets.length > 1 && (
             <div role="tablist" aria-label="Escuela" className="flex gap-1 overflow-x-auto rounded-xl bg-muted p-1">
               {carnets.map((c) => (

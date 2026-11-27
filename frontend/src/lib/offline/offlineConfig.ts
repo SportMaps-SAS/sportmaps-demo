@@ -47,6 +47,15 @@ export const OFFLINE_QUERY_PREFIXES: readonly (readonly string[])[] = [
   ['v2-ses-rango'],
   ['v2-ses-listas'],
   ['semana-equipos-escuela'],
+  // Inicio del deportista V2 (Fase 4, solo lectura). Cada clave lleva el userId y la copia es por
+  // usuario. Quedan FUERA a propósito: cobros (plata), informes (datos de salud/desempeño),
+  // y `fichas`/`plan`/`torneos-abiertos`, cuyas consultas tragan el error y devuelven `[]`: sin
+  // señal, ese `[]` «exitoso» pisaría la copia buena.
+  ['athlete-v2-teams'],
+  ['athlete-v2-attendance'],
+  ['athlete-v2-callups'],
+  ['athlete-v2-autoeval'],
+  ['athlete-v2-kudos'],
 ];
 
 /** ¿La `queryKey` pertenece a la lista blanca? (prefijo exacto, elemento a elemento). */

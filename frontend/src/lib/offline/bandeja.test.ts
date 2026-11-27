@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Bandeja, MAX_INTENTOS_SERVIDOR, type AlmacenBandeja, type AccionEnBandeja } from './bandeja';
+import { Bandeja, MAX_EDAD_ACCION_MS, MAX_INTENTOS_SERVIDOR, type AlmacenBandeja, type AccionEnBandeja } from './bandeja';
 import { clasificarErrorEvaluar, esErrorDeRed } from './bandejaEvaluar';
 import { armarPendientes, resumenBanda } from './pendientesModel';
 import type { ResultadoEnvio } from '@/components/coach/v2/colaAsistencia';
@@ -31,6 +31,28 @@ function nueva(opts: {
 
 const entrada = (id: string, extra: Record<string, unknown> = {}) => ({
   id, tipo: 'evaluar', schoolId: 's1', payload: { n: 1, ...extra }, etiqueta: `Sub 11 · ${id}`,
+});
+
+describe('Bandeja — vencimiento (datos de menores no se quedan para siempre)', () => {
+  it('una acción más vieja que el tope se borra del teléfono, con o sin error; la reciente se queda', async () => {
+    const almacen = almacenEnMemoria();
+    const reloj = { t: 1_000_000 };
+    const { b } = nueva({ almacen, reloj });
+    await b.encolar(entrada('evaluar:vieja'));
+    await b.encolar(entrada('evaluar:rechazada'));
+    // La rechazada queda con su error (se conserva visible) hasta que cumple el tope.
+    const clave = [...almacen.datos.keys()].find((k) => k.endsWith('evaluar:rechazada'))!;
+    almacen.datos.set(clave, { ...(almacen.datos.get(clave) as object), error: 'No autorizado' });
+    reloj.t += MAX_EDAD_ACCION_MS - 1_000;
+    await b.encolar(entrada('evaluar:reciente'));
+    await b.cargar();
+    expect(b.size).toBe(3); // aún dentro del tope
+    reloj.t += 2_000; // las dos primeras pasan el tope
+    await b.cargar();
+    await Promise.resolve();
+    expect(b.todas().map((a) => a.id)).toEqual(['evaluar:reciente']);
+    expect([...almacen.datos.keys()].some((k) => k.endsWith('evaluar:vieja') || k.endsWith('evaluar:rechazada'))).toBe(false);
+  });
 });
 
 describe('Bandeja — guardar y enviar', () => {

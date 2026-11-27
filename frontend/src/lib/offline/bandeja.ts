@@ -22,6 +22,8 @@ import { candadoNavegador, type Candado, type ResultadoEnvio } from '@/component
 import { idbDel, idbGet, idbListPrefix, idbSet } from './idbStore';
 
 export const MAX_INTENTOS_SERVIDOR = 6;
+/** Una acción sin enviar más vieja que esto se borra del teléfono (datos de menores; ver `cargar`). */
+export const MAX_EDAD_ACCION_MS = 30 * 24 * 60 * 60 * 1000;
 const PREFIJO = 'ob:';
 
 export interface AccionEnBandeja<P = unknown> {
@@ -139,7 +141,13 @@ export class Bandeja {
   /** Relee lo que hay en el almacén (otra pestaña pudo cambiarlo). */
   async cargar(notificar = false): Promise<void> {
     const todas = await this.almacen.list<AccionEnBandeja>(`${PREFIJO}${this.o.userId}:`);
-    const validas = todas.filter((a) => a && typeof a.id === 'string' && typeof a.tipo === 'string');
+    const t = this.now();
+    // Vencimiento: la bandeja NO se borra al cerrar sesión (es trabajo sin enviar), pero lo que
+    // lleva son datos de menores (evaluaciones, autoevaluaciones). Sin tope, una acción rechazada
+    // o atascada quedaría en el teléfono para siempre. Pasado el tope se borra, con o sin error.
+    const vencidas = todas.filter((a) => a && typeof a.created_at === 'number' && t - a.created_at > MAX_EDAD_ACCION_MS);
+    for (const v of vencidas) { void this.almacen.del(this.clave(v.id)).catch(() => undefined); }
+    const validas = todas.filter((a) => a && typeof a.id === 'string' && typeof a.tipo === 'string' && !vencidas.includes(a));
     validas.sort((x, y) => x.created_at - y.created_at || x.id.localeCompare(y.id));
     const cambio = JSON.stringify(validas) !== JSON.stringify(this.items);
     this.items = validas;
